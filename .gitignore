@@ -1,0 +1,29 @@
+# Build artifacts
+Dumper/x64/
+Dumper/UExplorerCore/
+*.obj
+*.iobj
+*.ipdb
+*.pdb
+*.tlog/
+*.dll.recipe
+
+# Visual Studio
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Binaries
+*.dll
+*.exe
+
+# IDE
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

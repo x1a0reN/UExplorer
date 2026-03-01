@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(\"D:/vcpkg-2024.12.16/vcpkg\" list)",
+      "Bash(\"D:/Program Files/Visual Studio 2026/MSBuild/Current/Bin/MSBuild.exe\" \"D:/Projects/UExplorer/Dumper/UExplorerCore.vcxproj\" /p:Configuration=Release /p:Platform=x64 /m)",
+      "Bash(cmd.exe /c \"\"\"D:\\\\Program Files\\\\Visual Studio 2026\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\"\" \"\"D:\\\\Projects\\\\UExplorer\\\\Dumper\\\\UExplorerCore.vcxproj\"\" /p:Configuration=Release /p:Platform=x64 /m\")",
+      "Bash(powershell.exe -Command \"& ''D:\\\\Program Files\\\\Visual Studio 2026\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe'' ''D:\\\\Projects\\\\UExplorer\\\\Dumper\\\\UExplorerCore.vcxproj'' /t:ClCompile /p:Configuration=Release /p:Platform=x64 /p:MultiProcessorCompilation=false /m:1\")"
+    ]
+  }
+}

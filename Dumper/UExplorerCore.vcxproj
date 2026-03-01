@@ -1,0 +1,201 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectGuid>{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}</ProjectGuid>
+    <RootNamespace>UExplorerCore</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <ProjectName>UExplorerCore</ProjectName>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v145</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v145</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings" />
+  <ImportGroup Label="Shared" />
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>_DEBUG;_CONSOLE;UEXPLORER_CORE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpplatest</LanguageStandard>
+      <LanguageStandard_C>stdc17</LanguageStandard_C>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)Engine\Public;$(ProjectDir)Generator\Public;$(ProjectDir)Utils;$(ProjectDir)Platform\Public;$(ProjectDir)Server;$(ProjectDir)API;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalDependencies>ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>NDEBUG;_CONSOLE;UEXPLORER_CORE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpplatest</LanguageStandard>
+      <LanguageStandard_C>stdc17</LanguageStandard_C>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)Engine\Public;$(ProjectDir)Generator\Public;$(ProjectDir)Utils;$(ProjectDir)Platform\Public;$(ProjectDir)Server;$(ProjectDir)API;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalDependencies>ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <!-- Source Files -->
+  <ItemGroup>
+    <!-- Engine -->
+    <ClCompile Include="Engine\Private\Blueprint\BlueprintDecompiler.cpp" />
+    <ClCompile Include="Engine\Private\OffsetFinder\OffsetFinder.cpp" />
+    <ClCompile Include="Engine\Private\OffsetFinder\Offsets.cpp" />
+    <ClCompile Include="Engine\Private\Unreal\NameArray.cpp" />
+    <ClCompile Include="Engine\Private\Unreal\ObjectArray.cpp" />
+    <ClCompile Include="Engine\Private\Unreal\UnrealObjects.cpp" />
+    <ClCompile Include="Engine\Private\Unreal\UnrealTypes.cpp" />
+    <!-- Generator -->
+    <ClCompile Include="Generator\Private\Generators\CppGenerator.cpp" />
+    <ClCompile Include="Generator\Private\Generators\DumpspaceGenerator.cpp" />
+    <ClCompile Include="Generator\Private\Generators\Generator.cpp" />
+    <ClCompile Include="Generator\Private\Generators\IDAMappingGenerator.cpp" />
+    <ClCompile Include="Generator\Private\Generators\MappingGenerator.cpp" />
+    <ClCompile Include="Generator\Private\HashStringTable.cpp" />
+    <ClCompile Include="Generator\Private\Managers\CollisionManager.cpp" />
+    <ClCompile Include="Generator\Private\Managers\DependencyManager.cpp" />
+    <ClCompile Include="Generator\Private\Managers\EnumManager.cpp" />
+    <ClCompile Include="Generator\Private\Managers\MemberManager.cpp" />
+    <ClCompile Include="Generator\Private\Managers\PackageManager.cpp" />
+    <ClCompile Include="Generator\Private\Managers\StructManager.cpp" />
+    <ClCompile Include="Generator\Private\Wrappers\EnumWrapper.cpp" />
+    <ClCompile Include="Generator\Private\Wrappers\MemberWrappers.cpp" />
+    <ClCompile Include="Generator\Private\Wrappers\StructWrapper.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Platform -->
+    <ClCompile Include="Platform\Private\Arch_x86.cpp" />
+    <ClCompile Include="Platform\Private\PlatformWindows.cpp" />
+    <!-- Utils -->
+    <ClCompile Include="Settings.cpp" />
+    <ClCompile Include="Utils\Compression\zstd.c" />
+    <ClCompile Include="Utils\Dumpspace\DSGen.cpp" />
+    <!-- New: Entry Point -->
+    <ClCompile Include="Main.cpp" />
+    <!-- New: HTTP Server -->
+    <ClCompile Include="Server\HttpServer.cpp" />
+    <!-- New: API Routes -->
+    <ClCompile Include="API\Router.cpp" />
+    <ClCompile Include="API\StatusApi.cpp" />
+    <ClCompile Include="API\ObjectsApi.cpp" />
+    <ClCompile Include="API\ClassesApi.cpp" />
+    <ClCompile Include="API\EnumsApi.cpp" />
+    <ClCompile Include="API\DumpApi.cpp" />
+    <ClCompile Include="API\MemoryApi.cpp" />
+    <ClCompile Include="API\WorldApi.cpp" />
+    <ClCompile Include="API\CallApi.cpp" />
+    <ClCompile Include="API\BlueprintApi.cpp" />
+    <ClCompile Include="API\WatchApi.cpp" />
+    <ClCompile Include="API\HookApi.cpp" />
+  </ItemGroup>
+  <!-- Header Files -->
+  <ItemGroup>
+    <!-- Engine Headers -->
+    <ClInclude Include="Engine\Public\Blueprint\BlueprintDecompiler.h" />
+    <ClInclude Include="Engine\Public\Blueprint\EExprToken.h" />
+    <ClInclude Include="Engine\Public\OffsetFinder\OffsetFinder.h" />
+    <ClInclude Include="Engine\Public\OffsetFinder\Offsets.h" />
+    <ClInclude Include="Engine\Public\Unreal\Enums.h" />
+    <ClInclude Include="Engine\Public\Unreal\NameArray.h" />
+    <ClInclude Include="Engine\Public\Unreal\ObjectArray.h" />
+    <ClInclude Include="Engine\Public\Unreal\UnrealContainers.h" />
+    <ClInclude Include="Engine\Public\Unreal\UnrealObjects.h" />
+    <ClInclude Include="Engine\Public\Unreal\UnrealTypes.h" />
+    <!-- Generator Headers -->
+    <ClInclude Include="Generator\Public\Generators\CppGenerator.h" />
+    <ClInclude Include="Generator\Public\Generators\DumpspaceGenerator.h" />
+    <ClInclude Include="Generator\Public\Generators\EmbeddedIdaScript.h" />
+    <ClInclude Include="Generator\Public\Generators\Generator.h" />
+    <ClInclude Include="Generator\Public\Generators\IDAMappingGenerator.h" />
+    <ClInclude Include="Generator\Public\Generators\MappingGenerator.h" />
+    <ClInclude Include="Generator\Public\HashStringTable.h" />
+    <ClInclude Include="Generator\Public\Managers\CollisionManager.h" />
+    <ClInclude Include="Generator\Public\Managers\DependencyManager.h" />
+    <ClInclude Include="Generator\Public\Managers\EnumManager.h" />
+    <ClInclude Include="Generator\Public\Managers\MemberManager.h" />
+    <ClInclude Include="Generator\Public\Managers\PackageManager.h" />
+    <ClInclude Include="Generator\Public\Managers\StructManager.h" />
+    <ClInclude Include="Generator\Public\PredefinedMembers.h" />
+    <ClInclude Include="Generator\Public\Wrappers\EnumWrapper.h" />
+    <ClInclude Include="Generator\Public\Wrappers\MemberWrappers.h" />
+    <ClInclude Include="Generator\Public\Wrappers\StructWrapper.h" />
+    <!-- Platform Headers -->
+    <ClInclude Include="Platform\Private\Arch_x86.h" />
+    <ClInclude Include="Platform\Private\PlatformWindows.h" />
+    <ClInclude Include="Platform\Public\Architecture.h" />
+    <ClInclude Include="Platform\Public\Platform.h" />
+    <!-- Utils Headers -->
+    <ClInclude Include="Settings.h" />
+    <ClInclude Include="TmpUtils.h" />
+    <ClInclude Include="Utils\Compression\zstd.h" />
+    <ClInclude Include="Utils\Dumpspace\DSGen.h" />
+    <ClInclude Include="Utils\Encoding\UnicodeNames.h" />
+    <ClInclude Include="Utils\Encoding\UtfN.hpp" />
+    <ClInclude Include="Utils\Json\json.hpp" />
+    <ClInclude Include="Utils\Utils.h" />
+    <!-- New: Server Headers -->
+    <ClInclude Include="Server\HttpServer.h" />
+    <!-- New: API Headers -->
+    <ClInclude Include="API\Router.h" />
+    <ClInclude Include="API\StatusApi.h" />
+    <ClInclude Include="API\ObjectsApi.h" />
+    <ClInclude Include="API\ClassesApi.h" />
+    <ClInclude Include="API\EnumsApi.h" />
+    <ClInclude Include="API\DumpApi.h" />
+    <ClInclude Include="API\MemoryApi.h" />
+    <ClInclude Include="API\WorldApi.h" />
+    <ClInclude Include="API\CallApi.h" />
+    <ClInclude Include="API\BlueprintApi.h" />
+    <ClInclude Include="API\WatchApi.h" />
+    <ClInclude Include="API\HookApi.h" />
+    <ClInclude Include="API\ApiCommon.h" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets" />
+</Project>
