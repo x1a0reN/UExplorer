@@ -699,8 +699,9 @@ D:\Projects\UExplorer\
 - [x] Dumpspace 生成器 API（后台任务，2.7s 完成，输出到 Dumpspace/）
 - [x] IDA 映射生成器 API（后台任务，40ms 完成，输出到 IDAMappings/）
 - [x] Dump 任务管理 API（/dump/jobs, /dump/jobs/:id 状态查询）
-- [ ] Dashboard 页面
-- [ ] SDK Dump Center 页面
+- [x] Dashboard 页面（Tauri + React）
+- [x] Tauri 应用构建成功（exe: 8.1MB）
+- [ ] SDK Dump Center 页面 — 前端
 - [ ] DLL 注入/劫持机制（Tauri 端）
 
 ### Phase 3: Explorer 基础（当前阶段）
