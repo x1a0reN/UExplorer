@@ -3,6 +3,23 @@ use tauri::command;
 
 #[cfg(windows)]
 use std::process::Command;
+#[cfg(windows)]
+use windows::core::{PCSTR, PCWSTR};
+#[cfg(windows)]
+use windows::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
+#[cfg(windows)]
+use windows::Win32::System::Diagnostics::Debug::WriteProcessMemory;
+#[cfg(windows)]
+use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
+#[cfg(windows)]
+use windows::Win32::System::Memory::{
+    VirtualAllocEx, VirtualFreeEx, MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE,
+};
+#[cfg(windows)]
+use windows::Win32::System::Threading::{
+    CreateRemoteThread, OpenProcess, ResumeThread, WaitForSingleObject, CREATE_SUSPENDED,
+    PROCESS_ALL_ACCESS,
+};
 
 // Process info structure
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -45,7 +62,10 @@ fn scan_processes_internal() -> Result<Vec<ProcessInfo>, String> {
         .map_err(|e| format!("Failed to run PowerShell: {}", e))?;
 
     if !output.status.success() {
-        return Err(format!("PowerShell failed: {}", String::from_utf8_lossy(&output.stderr)));
+        return Err(format!(
+            "PowerShell failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
     }
 
     let json_str = String::from_utf8_lossy(&output.stdout);
@@ -62,7 +82,10 @@ fn scan_processes_internal() -> Result<Vec<ProcessInfo>, String> {
     let mut processes = Vec::new();
 
     for proc in procs {
-        let name = proc.get("ProcessName").and_then(|v| v.as_str()).unwrap_or("");
+        let name = proc
+            .get("ProcessName")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         let path = proc.get("Path").and_then(|v| v.as_str()).unwrap_or("");
         let pid = proc.get("Id").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
 
@@ -98,9 +121,19 @@ fn is_likely_game_process(name: &str, path: &str) -> bool {
     }
 
     let excludes = [
-        "steam", "epic", "launcher", "updater", "helper",
-        "service", "renderer", "crashreporter", "ue4prereq",
-        "vc redist", "vcredist", "directx", ".net",
+        "steam",
+        "epic",
+        "launcher",
+        "updater",
+        "helper",
+        "service",
+        "renderer",
+        "crashreporter",
+        "ue4prereq",
+        "vc redist",
+        "vcredist",
+        "directx",
+        ".net",
     ];
 
     for ex in excludes {
@@ -121,7 +154,7 @@ fn is_likely_game_process(name: &str, path: &str) -> bool {
     true
 }
 
-// DLL Injection using CreateRemoteThread via PowerShell
+// DLL Injection using CreateRemoteThread via Windows API
 #[command]
 fn inject_dll(pid: u32, dll_path: String) -> Result<InjectionResult, String> {
     #[cfg(windows)]
@@ -144,43 +177,137 @@ fn inject_dll_internal(pid: u32, dll_path: String) -> Result<InjectionResult, St
         });
     }
 
-    // Build PowerShell script for remote thread injection
-    let ps_script = include_str!("inject_dll.ps1")
-        .replace("{PID}", &pid.to_string())
-        .replace("{DLL_PATH}", &dll_path);
+    // Convert DLL path to wide string (UTF-16)
+    let dll_path_wide: Vec<u16> = dll_path.encode_utf16().chain(std::iter::once(0)).collect();
 
-    let output = Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-ExecutionPolicy", "Bypass",
-            "-Command", &ps_script
-        ])
-        .output()
-        .map_err(|e| format!("Failed to run PowerShell: {}", e))?;
+    unsafe {
+        let h_process = match OpenProcess(PROCESS_ALL_ACCESS, false, pid) {
+            Ok(handle) => handle,
+            Err(e) => {
+                return Ok(InjectionResult {
+                    success: false,
+                    message: format!("Failed to open process (PID: {}): {}", pid, e),
+                });
+            }
+        };
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
+        // Allocate memory in target process for DLL path
+        let mem_size = dll_path_wide.len() * std::mem::size_of::<u16>();
+        let remote_mem = VirtualAllocEx(
+            h_process,
+            None,
+            mem_size,
+            MEM_COMMIT | MEM_RESERVE,
+            PAGE_READWRITE,
+        );
+        if remote_mem.is_null() {
+            let _ = CloseHandle(h_process);
+            return Ok(InjectionResult {
+                success: false,
+                message: "Failed to allocate memory in target process".to_string(),
+            });
+        }
 
-    if output.status.success() && stdout.contains("SUCCESS") {
-        Ok(InjectionResult {
-            success: true,
-            message: format!("Successfully injected DLL into process {}", pid),
-        })
-    } else {
-        Ok(InjectionResult {
-            success: false,
-            message: format!("Injection failed: {} {}", stdout.trim(), stderr.trim()),
-        })
+        // Write DLL path to allocated memory
+        let mut bytes_written = 0usize;
+        let write_result = WriteProcessMemory(
+            h_process,
+            remote_mem,
+            dll_path_wide.as_ptr() as *const _,
+            mem_size,
+            Some(&mut bytes_written),
+        );
+
+        if write_result.is_err() || bytes_written != mem_size {
+            let _ = VirtualFreeEx(h_process, remote_mem, 0, MEM_RELEASE);
+            let _ = CloseHandle(h_process);
+            return Ok(InjectionResult {
+                success: false,
+                message: "Failed to write DLL path to target process".to_string(),
+            });
+        }
+
+        // Get LoadLibraryW address from kernel32.dll
+        let kernel32_name: Vec<u16> = "kernel32.dll\0".encode_utf16().collect();
+        let kernel32 = match GetModuleHandleW(PCWSTR(kernel32_name.as_ptr())) {
+            Ok(module) => module,
+            Err(_) => {
+                let _ = VirtualFreeEx(h_process, remote_mem, 0, MEM_RELEASE);
+                let _ = CloseHandle(h_process);
+                return Ok(InjectionResult {
+                    success: false,
+                    message: "Failed to get kernel32 handle".to_string(),
+                });
+            }
+        };
+
+        let load_library = GetProcAddress(kernel32, PCSTR(c"LoadLibraryW".as_ptr() as *const u8));
+        let Some(load_library) = load_library else {
+            let _ = VirtualFreeEx(h_process, remote_mem, 0, MEM_RELEASE);
+            let _ = CloseHandle(h_process);
+            return Ok(InjectionResult {
+                success: false,
+                message: "Failed to get LoadLibraryW address".to_string(),
+            });
+        };
+
+        let start_routine = std::mem::transmute(load_library);
+
+        // Create remote thread
+        let h_thread = match CreateRemoteThread(
+            h_process,
+            None,
+            0,
+            Some(start_routine),
+            Some(remote_mem),
+            CREATE_SUSPENDED.0,
+            None,
+        ) {
+            Ok(handle) => handle,
+            Err(_) => {
+                let _ = VirtualFreeEx(h_process, remote_mem, 0, MEM_RELEASE);
+                let _ = CloseHandle(h_process);
+                return Ok(InjectionResult {
+                    success: false,
+                    message: "Failed to create remote thread".to_string(),
+                });
+            }
+        };
+
+        // Resume the thread to start execution
+        let _ = ResumeThread(h_thread);
+
+        // Wait for thread to complete (10 second timeout)
+        let wait_result = WaitForSingleObject(h_thread, 10000);
+
+        // Cleanup
+        let _ = CloseHandle(h_thread);
+        let _ = VirtualFreeEx(h_process, remote_mem, 0, MEM_RELEASE);
+        let _ = CloseHandle(h_process);
+
+        if wait_result == WAIT_OBJECT_0 {
+            Ok(InjectionResult {
+                success: true,
+                message: format!("Successfully injected DLL into process {}", pid),
+            })
+        } else {
+            Ok(InjectionResult {
+                success: false,
+                message: "Injection timeout - DLL may not have loaded".to_string(),
+            })
+        }
     }
+}
+
+#[cfg(not(windows))]
+fn inject_dll_internal(_pid: u32, _dll_path: String) -> Result<InjectionResult, String> {
+    Err("DLL injection is only supported on Windows".to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![
-            scan_ue_processes,
-            inject_dll,
-        ])
+        .invoke_handler(tauri::generate_handler![scan_ue_processes, inject_dll,])
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
