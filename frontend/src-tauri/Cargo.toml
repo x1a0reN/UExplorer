@@ -31,3 +31,7 @@ windows = { version = "0.58", features = [
     "Win32_System_Memory",
     "Win32_System_Threading",
 ] }
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

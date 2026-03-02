@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
 use tauri::command;
+use tauri::Manager;
+use std::net::{SocketAddr, TcpStream};
+use std::time::Duration;
 
 #[cfg(windows)]
 use std::process::Command;
@@ -304,11 +307,28 @@ fn inject_dll_internal(_pid: u32, _dll_path: String) -> Result<InjectionResult, 
     Err("DLL injection is only supported on Windows".to_string())
 }
 
+fn is_dev_server_running() -> bool {
+    let addr: SocketAddr = match "127.0.0.1:5173".parse() {
+        Ok(addr) => addr,
+        Err(_) => return false,
+    };
+    TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![scan_ue_processes, inject_dll,])
         .setup(|app| {
+            // If local Vite dev server is unavailable, force fallback to embedded assets.
+            if !is_dev_server_running() {
+                if let Some(window) = app.get_webview_window("main") {
+                    if let Ok(url) = tauri::Url::parse("tauri://localhost/") {
+                        let _ = window.navigate(url);
+                    }
+                }
+            }
+
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
