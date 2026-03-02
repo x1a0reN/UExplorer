@@ -15,6 +15,14 @@ export interface StatusData {
   game_version: string;
   gobjects_address: string;
   object_count: number;
+  pid: number;
+  architecture: string;
+}
+
+export interface WorldData {
+  name: string;
+  address: string;
+  actor_count: number;
 }
 
 export interface ObjectItem {
@@ -128,6 +136,11 @@ class UExplorerApi {
   async healthCheck(): Promise<boolean> {
     const response = await this.request<{ status: string }>('/status/health');
     return response.success && response.data?.status === 'ok';
+  }
+
+  // World endpoints
+  async getWorld(): Promise<ApiResponse<WorldData>> {
+    return this.request<WorldData>('/world');
   }
 
   // Objects endpoints

@@ -5,8 +5,24 @@
 #include "Unreal/NameArray.h"
 #include "Settings.h"
 
+#include <windows.h>
+#include <filesystem>
+
 namespace UExplorer::API
 {
+
+static std::string GetProcessArchitecture()
+{
+#ifdef _WIN64
+	BOOL bIsWow64 = FALSE;
+	IsWow64Process(GetCurrentProcess(), &bIsWow64);
+	if (bIsWow64)
+		return "x86 (WOW64)";
+	return "x64";
+#else
+	return "x86";
+#endif
+}
 
 void RegisterStatusRoutes(HttpServer& server)
 {
@@ -22,6 +38,8 @@ void RegisterStatusRoutes(HttpServer& server)
 		data["game_version"] = Settings::Generator::GameVersion;
 		data["object_count"] = ObjectArray::Num();
 		data["gobjects_address"] = std::format("0x{:X}", reinterpret_cast<uintptr_t>(ObjectArray::DEBUGGetGObjects()));
+		data["pid"] = GetCurrentProcessId();
+		data["architecture"] = GetProcessArchitecture();
 		return { 200, "application/json", MakeResponse(data) };
 	});
 }

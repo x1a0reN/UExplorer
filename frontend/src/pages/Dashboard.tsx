@@ -7,6 +7,7 @@ interface DashboardProps {
 
 export default function Dashboard({ onNavigate }: DashboardProps) {
   const [status, setStatus] = useState<StatusData | null>(null);
+  const [actorCount, setActorCount] = useState<number>(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -24,6 +25,13 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
     } else {
       setError(response.error || 'Failed to connect');
     }
+
+    // Also fetch actor count
+    const worldResponse = await api.getWorld();
+    if (worldResponse.success && worldResponse.data) {
+      setActorCount(worldResponse.data.actor_count);
+    }
+
     setLoading(false);
   };
 
@@ -94,6 +102,14 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
                   <div className="text-white font-medium">{status.game_name}</div>
                 </div>
                 <div className="text-right">
+                  <div className="text-white/40 text-xs uppercase">PID</div>
+                  <div className="text-white font-mono">{status.pid}</div>
+                </div>
+                <div className="text-right">
+                  <div className="text-white/40 text-xs uppercase">Arch</div>
+                  <div className="text-white font-mono">{status.architecture}</div>
+                </div>
+                <div className="text-right">
                   <div className="text-white/40 text-xs uppercase">UE Version</div>
                   <div className="text-primary font-mono">{status.game_version}</div>
                 </div>
@@ -140,10 +156,10 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
           color="orange"
         />
         <StatCard
-          label="Total Objects"
-          value={status ? status.object_count : 0}
+          label="Actors"
+          value={actorCount}
           onClick={() => onNavigate('objects')}
-          color="cyan"
+          color="red"
         />
       </div>
 
@@ -291,7 +307,7 @@ interface StatCardProps {
   label: string;
   value: number;
   onClick: () => void;
-  color: 'blue' | 'purple' | 'yellow' | 'green' | 'orange' | 'cyan';
+  color: 'blue' | 'purple' | 'yellow' | 'green' | 'orange' | 'cyan' | 'red';
 }
 
 const colorMap = {
@@ -301,6 +317,7 @@ const colorMap = {
   green: { bg: 'bg-green-500/10', text: 'text-green-400', border: 'border-green-500/20' },
   orange: { bg: 'bg-orange-500/10', text: 'text-orange-400', border: 'border-orange-500/20' },
   cyan: { bg: 'bg-cyan-500/10', text: 'text-cyan-400', border: 'border-cyan-500/20' },
+  red: { bg: 'bg-red-500/10', text: 'text-red-400', border: 'border-red-500/20' },
 };
 
 function StatCard({ label, value, onClick, color }: StatCardProps) {

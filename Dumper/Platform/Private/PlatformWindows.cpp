@@ -3,6 +3,13 @@
 #include "PlatformWindows.h"
 #include "Arch_x86.h"
 
+// Manually declare Windows API functions to avoid include issues
+#ifdef _WIN64
+using NtQueryVirtualMemory_t = LONG(*)(HANDLE ProcessHandle, PVOID BaseAddress, LONG VirtualMemoryInformationClass, PVOID VirtualMemoryInformation, ULONG VirtualMemoryInformationLength, PULONG ReturnLength);
+#else
+// For 32-bit, use VirtualQuery from kernel32
+#endif
+
 // Private implementation to ensure that there is no accidental usage of platform-specific functions
 namespace
 {
