@@ -39,7 +39,7 @@ fn scan_processes_internal() -> Result<Vec<ProcessInfo>, String> {
         .args([
             "-NoProfile",
             "-Command",
-            "Get-Process | Where-Object {$_.Path -match '\\.exe$'} | Select-Object Id, ProcessName, Path | ConvertTo-Json"
+            "Get-Process | Where-Object {$_.Path -match '\\.exe$'} | Select-Object Id, ProcessName, Path | ConvertTo-Json -Compress"
         ])
         .output()
         .map_err(|e| format!("Failed to run PowerShell: {}", e))?;
@@ -50,16 +50,21 @@ fn scan_processes_internal() -> Result<Vec<ProcessInfo>, String> {
 
     let json_str = String::from_utf8_lossy(&output.stdout);
 
-    // Parse the JSON output
-    let procs: Vec<serde_json::Value> = serde_json::from_str(&json_str)
-        .map_err(|e| format!("Failed to parse JSON: {}", e))?;
+    // Handle both single object and array
+    let procs: Vec<serde_json::Value> = if json_str.trim().starts_with('[') {
+        serde_json::from_str(&json_str).map_err(|e| format!("Failed to parse JSON: {}", e))?
+    } else if json_str.trim().starts_with('{') {
+        vec![serde_json::from_str(&json_str).map_err(|e| format!("Failed to parse JSON: {}", e))?]
+    } else {
+        return Ok(Vec::new());
+    };
 
     let mut processes = Vec::new();
 
     for proc in procs {
-        let name = proc["ProcessName"].as_str().unwrap_or("");
-        let path = proc["Path"].as_str().unwrap_or("");
-        let pid = proc["Id"].as_u64().unwrap_or(0) as u32;
+        let name = proc.get("ProcessName").and_then(|v| v.as_str()).unwrap_or("");
+        let path = proc.get("Path").and_then(|v| v.as_str()).unwrap_or("");
+        let pid = proc.get("Id").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
 
         let name_lower = name.to_lowercase();
 
@@ -88,12 +93,10 @@ fn scan_processes_internal() -> Result<Vec<ProcessInfo>, String> {
 fn is_likely_game_process(name: &str, path: &str) -> bool {
     let lower = name.to_lowercase();
 
-    // Check if it's a game executable (not system/launcher)
     if !lower.ends_with(".exe") {
         return false;
     }
 
-    // Exclude common non-game processes
     let excludes = [
         "steam", "epic", "launcher", "updater", "helper",
         "service", "renderer", "crashreporter", "ue4prereq",
@@ -106,7 +109,6 @@ fn is_likely_game_process(name: &str, path: &str) -> bool {
         }
     }
 
-    // Check path - games usually in specific folders
     let path_lower = path.to_lowercase();
     let game_indicators = ["games", "game", "binaries", "builds"];
 
@@ -116,11 +118,10 @@ fn is_likely_game_process(name: &str, path: &str) -> bool {
         }
     }
 
-    // Default to true if it looks like a game
     true
 }
 
-// Inject DLL using PowerShell
+// DLL Injection using CreateRemoteThread via PowerShell
 #[command]
 fn inject_dll(pid: u32, dll_path: String) -> Result<InjectionResult, String> {
     #[cfg(windows)]
@@ -143,41 +144,24 @@ fn inject_dll_internal(pid: u32, dll_path: String) -> Result<InjectionResult, St
         });
     }
 
-    // Use PowerShell to inject DLL using Add-Type and [System.Reflection.Assembly]::Load
-    // This is a simplified approach - for production, use proper injection
-    let ps_command = format!(
-        r#"
-        $dllPath = '{}'
-        $pid = {}
-
-        # Get the process
-        $proc = Get-Process -Id $pid -ErrorAction SilentlyContinue
-        if (-not $proc) {{
-            Write-Error "Process not found"
-            exit 1
-        }}
-
-        # Use reflection to load the DLL into the process
-        # This is a basic approach - proper injection would require more complex code
-        Add-Type -AssemblyName System.Reflection
-        try {{
-            [System.Reflection.Assembly]::Load([System.IO.File]::ReadAllBytes($dllPath))
-            Write-Output "DLL loaded successfully"
-        }} catch {{
-            Write-Error $_.Exception.Message
-            exit 1
-        }}
-        "#,
-        dll_path.replace("'", "''"),
-        pid
-    );
+    // Build PowerShell script for remote thread injection
+    let ps_script = include_str!("inject_dll.ps1")
+        .replace("{PID}", &pid.to_string())
+        .replace("{DLL_PATH}", &dll_path);
 
     let output = Command::new("powershell")
-        .args(["-NoProfile", "-Command", &ps_command])
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy", "Bypass",
+            "-Command", &ps_script
+        ])
         .output()
         .map_err(|e| format!("Failed to run PowerShell: {}", e))?;
 
-    if output.status.success() {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    if output.status.success() && stdout.contains("SUCCESS") {
         Ok(InjectionResult {
             success: true,
             message: format!("Successfully injected DLL into process {}", pid),
@@ -185,7 +169,7 @@ fn inject_dll_internal(pid: u32, dll_path: String) -> Result<InjectionResult, St
     } else {
         Ok(InjectionResult {
             success: false,
-            message: format!("Injection failed: {}", String::from_utf8_lossy(&output.stderr)),
+            message: format!("Injection failed: {} {}", stdout.trim(), stderr.trim()),
         })
     }
 }
