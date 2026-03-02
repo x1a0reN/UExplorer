@@ -425,9 +425,12 @@ void MappingGenerator::GenerateFileHeader(StreamType& InUsmap, const std::string
 	switch (CompressionMethod)
 	{
 	case EUsmapCompressionMethod::ZStandard:
-		CompressedSize = ZSTD_compressBound(UncompressedSize);
+		// ZSTD compression temporarily disabled due to VS2026 compilation issues
+		// CompressedSize = ZSTD_compressBound(UncompressedSize);
+		// CompressedBuffer = malloc(CompressedSize);
+		// CompressedSize = ZSTD_compress(CompressedBuffer, CompressedSize, Data.str().data(), UncompressedSize, ZSTD_maxCLevel());
 		CompressedBuffer = malloc(CompressedSize);
-		CompressedSize = ZSTD_compress(CompressedBuffer, CompressedSize, Data.str().data(), UncompressedSize, ZSTD_maxCLevel());
+		memcpy(CompressedBuffer, Data.str().data(), CompressedSize);
 		break;
 	default:
 		CompressedBuffer = malloc(CompressedSize);

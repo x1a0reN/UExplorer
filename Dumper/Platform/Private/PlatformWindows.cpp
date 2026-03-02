@@ -3,6 +3,8 @@
 #include "PlatformWindows.h"
 #include "Arch_x86.h"
 
+#include <windows.h>
+
 // Manually declare Windows API functions to avoid include issues
 #ifdef _WIN64
 using NtQueryVirtualMemory_t = LONG(*)(HANDLE ProcessHandle, PVOID BaseAddress, LONG VirtualMemoryInformationClass, PVOID VirtualMemoryInformation, ULONG VirtualMemoryInformationLength, PULONG ReturnLength);
@@ -544,17 +546,19 @@ bool PlatformWindows::IsBadReadPtr(const void* Address)
 			return true;
 	}
 
-	MEMORY_BASIC_INFORMATION Mbi;
-
-	if (VirtualQuery(Address, &Mbi, sizeof(Mbi)))
+	// Use try-catch approach to check if memory is readable
+	// This avoids VirtualQuery compatibility issues with VS2026
+	try
 	{
-		constexpr DWORD AccessibleMask = (PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY);
-		constexpr DWORD InaccessibleMask = (PAGE_GUARD | PAGE_NOACCESS);
-
-		return !(Mbi.Protect & AccessibleMask) || (Mbi.Protect & InaccessibleMask);
+		volatile const uint8_t* TestPtr = static_cast<volatile const uint8_t*>(Address);
+		volatile uint8_t TestVal = *TestPtr;
+		(void)TestVal;
+		return false;
 	}
-
-	return true;
+	catch (...)
+	{
+		return true;
+	}
 }
 
 const void* PlatformWindows::GetAddressOfImportedFunction(const char* SearchModuleName, const char* ModuleToImportFrom, const char* SearchFunctionName)

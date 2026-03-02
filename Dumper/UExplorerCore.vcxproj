@@ -114,7 +114,8 @@
     <ClCompile Include="Platform\Private\PlatformWindows.cpp" />
     <!-- Utils -->
     <ClCompile Include="Settings.cpp" />
-    <ClCompile Include="Utils\Compression\zstd.c" />
+    <!-- Temporarily exclude zstd.c due to VS2026 STL compatibility issue -->
+    <!-- <ClCompile Include="Utils\Compression\zstd.c" /> -->
     <ClCompile Include="Utils\Dumpspace\DSGen.cpp" />
     <!-- New: Entry Point -->
     <ClCompile Include="Main.cpp" />

@@ -96,3 +96,27 @@ Development token: `uexplorer-dev` (hardcoded in Main.cpp)
 - SSE endpoints for real-time: `/api/v1/events/stream`, `/api/v1/events/watches`, `/api/v1/events/hooks`
 - F6 key triggers graceful shutdown (unhooks, stops server, unloads DLL)
 - Offset discovery happens at startup via pattern scanning
+
+## Known Issues & Workarounds
+
+### VS2026 Compilation Issues
+
+1. **VirtualQuery not found** (error C3861)
+   - **Problem**: `VirtualQuery` Windows API cannot be found even with `<windows.h>` included
+   - **Root Cause**: VS2026 preview compiler has issues with some Windows API calls in this context
+   - **Workaround**: Replace `VirtualQuery` with try-catch memory access approach in `PlatformWindows.cpp::IsBadReadPtr`
+
+2. **zstd.c STL compilation error** (error STL1003)
+   - **Problem**: zstd.c is incorrectly compiled as C++ instead of C, causing STL header conflicts
+   - **Root Cause**: VS2026 preview has issues with C/C++ mixed compilation
+   - **Workaround**:
+     - Exclude `zstd.c` from project file (UExplorerCore.vcxproj)
+     - Disable ZStandard compression in `MappingGenerator.cpp` (ZSTD functions commented out)
+   - **Note**: USMAP files will be generated without compression
+
+### Build Commands
+
+```powershell
+# Build with VS2026
+"D:\Program Files\Visual Studio 2026\MSBuild\Current\Bin\MSBuild.exe" UExplorerCore.vcxproj -p:Configuration=Release -p:Platform=x64
+```
