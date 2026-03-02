@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import api, { type StatusData } from '../api';
+import ProcessSelector from '../components/ProcessSelector';
 
 interface DashboardProps {
   onNavigate: (page: 'objects' | 'functions' | 'memory' | 'sdkdump') => void;
@@ -10,6 +11,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
   const [actorCount, setActorCount] = useState<number>(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [showProcessSelector, setShowProcessSelector] = useState(false);
 
   useEffect(() => {
     loadStatus();
@@ -56,6 +58,13 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
             <p className="text-white/40 text-sm mt-1 font-medium">Connection overview and game statistics</p>
           </div>
           <div className="flex gap-3">
+            <button
+              onClick={() => setShowProcessSelector(true)}
+              className="h-9 px-4 rounded-md bg-white/5 hover:bg-white/10 border border-white/10 text-sm font-medium text-white transition-all flex items-center gap-2"
+            >
+              <span className="material-symbols-outlined text-[18px]">extension</span>
+              Inject DLL
+            </button>
             <button
               onClick={loadStatus}
               className="h-9 px-4 rounded-md bg-white/5 hover:bg-white/10 border border-white/10 text-sm font-medium text-white transition-all flex items-center gap-2"
@@ -298,6 +307,16 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
           </div>
         </div>
       </div>
+
+      {/* Process Selector Modal */}
+      <ProcessSelector
+        isOpen={showProcessSelector}
+        onClose={() => setShowProcessSelector(false)}
+        onInjectSuccess={(pid) => {
+          console.log('DLL injected successfully, PID:', pid);
+          loadStatus();
+        }}
+      />
     </div>
   );
 }

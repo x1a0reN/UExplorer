@@ -267,6 +267,32 @@ class UExplorerApi {
   async getHookLog(id: number): Promise<ApiResponse<{ entries: unknown[] }>> {
     return this.request<{ entries: unknown[] }>(`/hooks/${id}/log`);
   }
+
+  // Process management (via Tauri commands)
+  async scanUEProcesses(): Promise<{ pid: number; name: string; path: string }[]> {
+    const { invoke } = await import('@tauri-apps/api/core');
+    try {
+      const processes = await invoke<{ pid: number; name: string; path: string }[]>('scan_ue_processes');
+      return processes;
+    } catch (error) {
+      console.error('Failed to scan processes:', error);
+      return [];
+    }
+  }
+
+  async injectDLL(pid: number, dllPath: string): Promise<{ success: boolean; message: string }> {
+    const { invoke } = await import('@tauri-apps/api/core');
+    try {
+      const result = await invoke<{ success: boolean; message: string }>('inject_dll', {
+        pid,
+        dllPath,
+      });
+      return result;
+    } catch (error) {
+      console.error('Failed to inject DLL:', error);
+      return { success: false, message: String(error) };
+    }
+  }
 }
 
 export const api = new UExplorerApi();
