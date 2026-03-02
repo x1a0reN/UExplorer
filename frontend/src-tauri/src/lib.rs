@@ -320,16 +320,17 @@ pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![scan_ue_processes, inject_dll,])
         .setup(|app| {
-            // If local Vite dev server is unavailable, force fallback to embedded assets.
-            if !is_dev_server_running() {
-                if let Some(window) = app.get_webview_window("main") {
-                    if let Ok(url) = tauri::Url::parse("tauri://localhost/") {
-                        let _ = window.navigate(url);
+            if cfg!(debug_assertions) {
+                // Debug app.exe depends on devUrl; if local Vite is not running,
+                // fallback to embedded assets to avoid browser error page.
+                if !is_dev_server_running() {
+                    if let Some(window) = app.get_webview_window("main") {
+                        if let Ok(url) = tauri::Url::parse("tauri://localhost/index.html") {
+                            let _ = window.navigate(url);
+                        }
                     }
                 }
-            }
 
-            if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
                         .level(log::LevelFilter::Info)
