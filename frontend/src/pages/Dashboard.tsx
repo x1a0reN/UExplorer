@@ -1,6 +1,22 @@
 import { useState, useEffect } from 'react';
 import api, { type StatusData } from '../api';
 import ProcessSelector from '../components/ProcessSelector';
+import {
+  Activity,
+  Cpu,
+  Database,
+  Box,
+  TerminalSquare,
+  Layers,
+  Wifi,
+  WifiOff,
+  ChevronRight,
+  Download,
+  Search,
+  RefreshCw,
+  Zap,
+  Settings2
+} from 'lucide-react';
 
 interface DashboardProps {
   onNavigate: (page: 'objects' | 'functions' | 'memory' | 'sdkdump') => void;
@@ -39,276 +55,196 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
 
   if (loading) {
     return (
-      <div className="flex-1 flex items-center justify-center">
+      <div className="flex-1 flex items-center justify-center h-full">
         <div className="flex flex-col items-center gap-4">
-          <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
-          <span className="text-white/40 text-sm">Connecting...</span>
+          <RefreshCw className="w-6 h-6 text-white/40 animate-spin stroke-[1.5]" />
+          <span className="text-white/40 text-[13px] font-medium tracking-tight">Connecting to engine...</span>
         </div>
       </div>
     );
   }
 
+  const isConnected = !error && status;
+
   return (
-    <div className="flex-1 overflow-auto">
-      {/* Context Header */}
-      <div className="px-8 py-6 pb-2">
-        <div className="flex items-end justify-between">
+    <div className="flex-1 overflow-y-auto overflow-x-hidden relative scroll-smooth">
+      <div className="max-w-5xl mx-auto p-8 space-y-8 pb-16">
+
+        {/* Header Section */}
+        <div className="flex items-end justify-between mt-2">
           <div>
-            <h2 className="text-3xl font-bold text-white tracking-tight">Dashboard</h2>
-            <p className="text-white/40 text-sm mt-1 font-medium">Connection overview and game statistics</p>
+            <h2 className="text-[28px] font-semibold text-white tracking-tight mb-1">Overview</h2>
+            <p className="text-white/50 text-[13px] font-medium tracking-tight">Real-time statistics from the Unreal Engine runtime environment.</p>
           </div>
-          <div className="flex gap-3">
+          <div className="flex items-center gap-3">
             <button
               onClick={() => setShowProcessSelector(true)}
-              className="h-9 px-4 rounded-md bg-white/5 hover:bg-white/10 border border-white/10 text-sm font-medium text-white transition-all flex items-center gap-2"
+              className="px-4 py-2 rounded-[10px] bg-white/5 hover:bg-white/10 border border-white/10 text-[13px] font-medium text-white transition-all flex items-center gap-2 cursor-pointer shadow-sm active:scale-95"
             >
-              <span className="material-symbols-outlined text-[18px]">extension</span>
+              <Zap className="w-4 h-4 text-white/70" />
               Inject DLL
             </button>
             <button
               onClick={loadStatus}
-              className="h-9 px-4 rounded-md bg-white/5 hover:bg-white/10 border border-white/10 text-sm font-medium text-white transition-all flex items-center gap-2"
+              className="px-4 py-2 rounded-[10px] bg-white/5 hover:bg-white/10 border border-white/10 text-[13px] font-medium text-white transition-all flex items-center gap-2 cursor-pointer shadow-sm active:scale-95"
             >
-              <span className="material-symbols-outlined text-[18px]">refresh</span>
-              Reload
+              <RefreshCw className="w-4 h-4 text-white/70" />
+              Refresh
             </button>
             <button
               onClick={() => onNavigate('sdkdump')}
-              className="h-9 px-4 rounded-md bg-primary hover:bg-primary/90 text-sm font-medium text-white shadow-lg shadow-primary/25 transition-all flex items-center gap-2"
+              className="px-4 py-2 rounded-[10px] bg-primary hover:bg-primary-dark text-[13px] font-medium text-white shadow-lg shadow-primary/20 transition-all flex items-center gap-2 cursor-pointer active:scale-95 border border-primary-dark"
             >
-              <span className="material-symbols-outlined text-[18px]">download</span>
-              Export All
+              <Download className="w-4 h-4" />
+              Export SDK
             </button>
           </div>
         </div>
-      </div>
 
-      {/* Connection Status Card */}
-      <div className="mx-8 mt-6 bg-surface-dark rounded-xl border border-white/5 p-6">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            {/* Status Indicator */}
-            <div className="relative">
-              <div className={`w-3 h-3 rounded-full ${error ? 'bg-[#ff5f57]' : 'bg-[#28c840]'}`}></div>
-              {error && (
-                <div className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full animate-pulse"></div>
-              )}
-            </div>
-            <div>
-              <div className="text-white font-medium">
-                {error ? 'Disconnected' : 'Connected'}
+        {/* Bento Grid layout */}
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-5 auto-rows-[minmax(130px,auto)]">
+
+          {/* Main Status Card - Spans 8 cols */}
+          <div className="md:col-span-8 apple-glass-panel rounded-[32px] p-7 flex flex-col justify-between group relative overflow-hidden">
+            {isConnected && <div className="absolute top-0 right-0 w-64 h-64 bg-primary/10 rounded-full blur-[80px] -mr-20 -mt-20 pointer-events-none"></div>}
+
+            <div className="flex items-start justify-between relative z-10">
+              <div className="flex items-center gap-4">
+                <div className={`w-12 h-12 rounded-[16px] flex items-center justify-center shadow-lg ${isConnected ? 'bg-[#28C840]/10 border border-[#28C840]/20' : 'bg-[#FF5F56]/10 border border-[#FF5F56]/20'}`}>
+                  {isConnected ? <Wifi className="w-5 h-5 text-[#28C840]" /> : <WifiOff className="w-5 h-5 text-[#FF5F56]" />}
+                </div>
+                <div>
+                  <h3 className="text-white/90 font-semibold text-[16px] tracking-tight">{isConnected ? 'Engine Connected' : 'Disconnected'}</h3>
+                  <p className="text-white/40 text-[13px] font-medium mt-0.5">{isConnected ? 'Dumping service is active and listening.' : error || 'Waiting for game process...'}</p>
+                </div>
               </div>
-              <div className="text-white/40 text-sm">
-                Port 27015 • Token: uexplorer-dev
+              <div className="px-3 py-1 rounded-[8px] bg-white/5 border border-white/10 text-[11px] font-mono font-medium text-white/60 shadow-sm">
+                PORT 27015
               </div>
             </div>
-          </div>
-          <div className="flex items-center gap-6">
+
             {status && (
-              <>
-                <div className="text-right">
-                  <div className="text-white/40 text-xs uppercase">Process</div>
-                  <div className="text-white font-medium">{status.game_name}</div>
+              <div className="grid grid-cols-4 gap-6 mt-8 pt-6 border-t border-white/10 relative z-10">
+                <div>
+                  <div className="text-white/40 text-[11px] font-bold uppercase tracking-widest mb-1.5">Process</div>
+                  <div className="text-white font-semibold text-[14px] truncate tracking-tight shadow-sm" title={status.game_name}>{status.game_name}</div>
                 </div>
-                <div className="text-right">
-                  <div className="text-white/40 text-xs uppercase">PID</div>
-                  <div className="text-white font-mono">{status.pid}</div>
+                <div>
+                  <div className="text-white/40 text-[11px] font-bold uppercase tracking-widest mb-1.5">PID</div>
+                  <div className="text-white/80 font-mono text-[14px]">{status.pid}</div>
                 </div>
-                <div className="text-right">
-                  <div className="text-white/40 text-xs uppercase">Arch</div>
-                  <div className="text-white font-mono">{status.architecture}</div>
+                <div>
+                  <div className="text-white/40 text-[11px] font-bold uppercase tracking-widest mb-1.5">Version</div>
+                  <div className="text-primary font-mono text-[14px]">{status.game_version}</div>
                 </div>
-                <div className="text-right">
-                  <div className="text-white/40 text-xs uppercase">UE Version</div>
-                  <div className="text-primary font-mono">{status.game_version}</div>
+                <div>
+                  <div className="text-white/40 text-[11px] font-bold uppercase tracking-widest mb-1.5">Arch</div>
+                  <div className="text-white/80 font-mono text-[14px]">{status.architecture}</div>
                 </div>
-                <div className="text-right">
-                  <div className="text-white/40 text-xs uppercase">GObjects</div>
-                  <div className="text-white font-mono">{status.gobjects_address}</div>
-                </div>
-              </>
+              </div>
             )}
           </div>
-        </div>
-      </div>
 
-      {/* Stats Grid - 6 columns */}
-      <div className="mx-8 mt-6 grid grid-cols-6 gap-4">
-        <StatCard
-          label="Classes"
-          value={status ? Math.floor(status.object_count * 0.3) : 0}
-          onClick={() => onNavigate('objects')}
-          color="blue"
-        />
-        <StatCard
-          label="Structs"
-          value={status ? Math.floor(status.object_count * 0.15) : 0}
-          onClick={() => onNavigate('objects')}
-          color="purple"
-        />
-        <StatCard
-          label="Enums"
-          value={status ? Math.floor(status.object_count * 0.02) : 0}
-          onClick={() => onNavigate('objects')}
-          color="yellow"
-        />
-        <StatCard
-          label="Functions"
-          value={status ? Math.floor(status.object_count * 0.2) : 0}
-          onClick={() => onNavigate('functions')}
-          color="green"
-        />
-        <StatCard
-          label="Packages"
-          value={status ? Math.floor(status.object_count * 0.05) : 0}
-          onClick={() => onNavigate('objects')}
-          color="orange"
-        />
-        <StatCard
-          label="Actors"
-          value={actorCount}
-          onClick={() => onNavigate('objects')}
-          color="red"
-        />
-      </div>
-
-      {/* Quick Actions - Table style like code.html */}
-      <div className="mx-8 mt-6">
-        <div className="text-xs font-bold text-white/40 uppercase tracking-wider mb-4 px-1">Quick Actions</div>
-        <div className="border border-white/5 rounded-xl overflow-hidden bg-surface-dark/50">
-          <table className="w-full text-left text-sm">
-            <thead>
-              <tr className="border-b border-white/5 bg-surface-dark/80 text-white/50 uppercase text-[11px] font-semibold tracking-wider">
-                <th className="px-6 py-4 w-1/2">Action</th>
-                <th className="px-6 py-4">Description</th>
-                <th className="px-6 py-4 text-right">Shortcut</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-white/5">
-              <tr
-                className="group hover:bg-white/[0.02] transition-colors cursor-pointer"
-                onClick={() => onNavigate('sdkdump')}
-              >
-                <td className="px-6 py-4">
-                  <div className="flex items-center gap-3">
-                    <span className="material-symbols-outlined text-primary">code</span>
-                    <span className="text-white font-medium">Generate SDK</span>
-                  </div>
-                </td>
-                <td className="px-6 py-4 text-white/60">
-                  Export C++ headers, USMAP, or IDA scripts
-                </td>
-                <td className="px-6 py-4 text-right">
-                  <kbd className="px-2 py-0.5 rounded border border-white/10 bg-white/5 text-[10px] font-mono text-white/50">Ctrl+Shift+G</kbd>
-                </td>
-              </tr>
-              <tr
-                className="group hover:bg-white/[0.02] transition-colors cursor-pointer"
-                onClick={() => onNavigate('objects')}
-              >
-                <td className="px-6 py-4">
-                  <div className="flex items-center gap-3">
-                    <span className="material-symbols-outlined text-primary">search</span>
-                    <span className="text-white font-medium">Object Browser</span>
-                  </div>
-                </td>
-                <td className="px-6 py-4 text-white/60">
-                  Browse and search all game objects
-                </td>
-                <td className="px-6 py-4 text-right">
-                  <kbd className="px-2 py-0.5 rounded border border-white/10 bg-white/5 text-[10px] font-mono text-white/50">Ctrl+O</kbd>
-                </td>
-              </tr>
-              <tr
-                className="group hover:bg-white/[0.02] transition-colors cursor-pointer"
-                onClick={() => onNavigate('functions')}
-              >
-                <td className="px-6 py-4">
-                  <div className="flex items-center gap-3">
-                    <span className="material-symbols-outlined text-primary">functions</span>
-                    <span className="text-white font-medium">Function Browser</span>
-                  </div>
-                </td>
-                <td className="px-6 py-4 text-white/60">
-                  View and call game functions
-                </td>
-                <td className="px-6 py-4 text-right">
-                  <kbd className="px-2 py-0.5 rounded border border-white/10 bg-white/5 text-[10px] font-mono text-white/50">Ctrl+F</kbd>
-                </td>
-              </tr>
-              <tr
-                className="group hover:bg-white/[0.02] transition-colors cursor-pointer"
-                onClick={() => onNavigate('memory')}
-              >
-                <td className="px-6 py-4">
-                  <div className="flex items-center gap-3">
-                    <span className="material-symbols-outlined text-primary">memory</span>
-                    <span className="text-white font-medium">Memory Tools</span>
-                  </div>
-                </td>
-                <td className="px-6 py-4 text-white/60">
-                  View memory, run console commands
-                </td>
-                <td className="px-6 py-4 text-right">
-                  <kbd className="px-2 py-0.5 rounded border border-white/10 bg-white/5 text-[10px] font-mono text-white/50">Ctrl+M</kbd>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Bottom Panel - Connection Settings */}
-      <div className="mt-auto border-t border-white/5 bg-[#252527] p-6 pb-8 mx-8 mt-6 rounded-t-xl">
-        <div className="flex items-start justify-between">
-          <div>
-            <div className="flex items-center gap-2 mb-2">
-              <span className="material-symbols-outlined text-primary text-[20px]">tune</span>
-              <h3 className="text-sm font-bold text-white uppercase tracking-wider">Connection Configuration</h3>
-            </div>
-            <p className="text-xs text-white/40 max-w-lg leading-relaxed">
-              Configure HTTP server settings for DLL communication. These settings are used to connect to the injected game process.
-            </p>
+          {/* Quick Stats - Spans 4 cols */}
+          <div className="md:col-span-4 grid grid-rows-2 gap-5">
+            <BentoStatItem
+              icon={Cpu}
+              label="Global Objects"
+              value={status ? status.object_count.toLocaleString() : '0'}
+              color="text-blue-400"
+              bg="bg-blue-400/10 border border-blue-400/20"
+            />
+            <BentoStatItem
+              icon={Activity}
+              label="World Actors"
+              value={actorCount ? actorCount.toLocaleString() : '0'}
+              color="text-purple-400"
+              bg="bg-purple-400/10 border border-purple-400/20"
+            />
           </div>
-          <div className="flex gap-6">
-            {/* Port Setting */}
-            <div className="flex flex-col gap-2">
-              <label className="text-[10px] font-bold text-white/50 uppercase">Port</label>
-              <div className="flex items-center bg-[#1e1e1e] rounded-lg border border-white/5 p-1 w-32">
-                <button className="w-8 h-8 flex items-center justify-center text-white/40 hover:text-white hover:bg-white/5 rounded transition-colors">
-                  <span className="material-symbols-outlined text-[16px]">remove</span>
-                </button>
-                <input className="bg-transparent text-center w-full text-xs font-mono text-white outline-none" type="text" value="27015" readOnly />
-                <button className="w-8 h-8 flex items-center justify-center text-white/40 hover:text-white hover:bg-white/5 rounded transition-colors">
-                  <span className="material-symbols-outlined text-[16px]">add</span>
-                </button>
-              </div>
-            </div>
-            {/* Token Setting */}
-            <div className="flex flex-col gap-2">
-              <label className="text-[10px] font-bold text-white/50 uppercase">Token</label>
-              <input
-                className="bg-[#1e1e1e] border border-white/5 rounded-lg px-3 py-2 text-xs font-mono text-white outline-none w-40"
-                type="text"
-                value="uexplorer-dev"
-                readOnly
+
+          {/* Sub Categories - 3 cols each */}
+          <BentoCategoryBox
+            icon={Box}
+            label="Classes"
+            value={status ? Math.floor(status.object_count * 0.3) : 0}
+            color="text-indigo-400"
+            bg="bg-indigo-400/10 border-indigo-400/20"
+            onClick={() => onNavigate('objects')}
+          />
+          <BentoCategoryBox
+            icon={Database}
+            label="Structs"
+            value={status ? Math.floor(status.object_count * 0.15) : 0}
+            color="text-orange-400"
+            bg="bg-orange-400/10 border-orange-400/20"
+            onClick={() => onNavigate('objects')}
+          />
+          <BentoCategoryBox
+            icon={Layers}
+            label="Enums"
+            value={status ? Math.floor(status.object_count * 0.02) : 0}
+            color="text-yellow-400"
+            bg="bg-yellow-400/10 border-yellow-400/20"
+            onClick={() => onNavigate('objects')}
+          />
+          <BentoCategoryBox
+            icon={TerminalSquare}
+            label="Functions"
+            value={status ? Math.floor(status.object_count * 0.2) : 0}
+            color="text-green-400"
+            bg="bg-green-400/10 border-green-400/20"
+            onClick={() => onNavigate('functions')}
+          />
+
+          {/* Quick Actions List - Spans 8 cols */}
+          <div className="md:col-span-8 apple-glass-panel rounded-[32px] p-7">
+            <h3 className="text-white/90 font-semibold tracking-tight text-[16px] mb-5">Quick Actions</h3>
+            <div className="space-y-3">
+              <ActionListItem
+                icon={Search}
+                title="Object Browser"
+                desc="Search through classes, structs, and enumerations"
+                shortcut="Ctrl+O"
+                onClick={() => onNavigate('objects')}
+              />
+              <ActionListItem
+                icon={TerminalSquare}
+                title="Function Browser"
+                desc="Inspect and hook engine functions"
+                shortcut="Ctrl+F"
+                onClick={() => onNavigate('functions')}
+              />
+              <ActionListItem
+                icon={Download}
+                title="Export Center"
+                desc="Generate C++ SDK, USMAP, or IDA mapping scripts"
+                shortcut="Ctrl+Shift+G"
+                onClick={() => onNavigate('sdkdump')}
               />
             </div>
-            {/* Auto-Reconnect Toggle */}
-            <div className="flex flex-col gap-2">
-              <label className="text-[10px] font-bold text-white/50 uppercase">Auto-Reconnect</label>
-              <div className="flex items-center h-10 px-1">
-                <label className="relative inline-flex items-center cursor-pointer">
-                  <input defaultChecked className="sr-only peer" type="checkbox" />
-                  <div className="w-11 h-6 bg-white/10 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-primary"></div>
-                </label>
+          </div>
+
+          {/* Internal Metrics - 4 cols */}
+          <div className="md:col-span-4 apple-glass-panel rounded-[32px] p-7 flex flex-col justify-between">
+            <div className="flex items-center gap-3 mb-6">
+              <div className="w-8 h-8 rounded-[10px] bg-white/5 border border-white/10 flex items-center justify-center">
+                <Settings2 className="w-4 h-4 text-white/60" />
               </div>
+              <h3 className="text-white/90 font-semibold tracking-tight text-[16px]">Core Offsets</h3>
+            </div>
+
+            <div className="space-y-4 flex-1 flex flex-col justify-end">
+              <OffsetRow label="GObjects" value={status?.gobjects_address || '0x0000000'} />
+              <OffsetRow label="GNames" value={status?.gnames_address || '0x0000000'} />
+              <OffsetRow label="UWorld" value="Not Resolving" dimmed />
             </div>
           </div>
+
         </div>
       </div>
 
-      {/* Process Selector Modal */}
+      {/* Modals */}
       <ProcessSelector
         isOpen={showProcessSelector}
         onClose={() => setShowProcessSelector(false)}
@@ -321,34 +257,63 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
   );
 }
 
-// Stat Card Component
-interface StatCardProps {
-  label: string;
-  value: number;
-  onClick: () => void;
-  color: 'blue' | 'purple' | 'yellow' | 'green' | 'orange' | 'cyan' | 'red';
+function BentoStatItem({ icon: Icon, label, value, color, bg }: any) {
+  return (
+    <div className="apple-glass-panel rounded-[24px] p-6 flex flex-col justify-between group h-full">
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-white/50 text-[13px] font-semibold tracking-tight">{label}</div>
+        <div className={`w-9 h-9 rounded-full ${bg} flex items-center justify-center`}>
+          <Icon className={`w-4 h-4 ${color} stroke-[2.5]`} />
+        </div>
+      </div>
+      <div>
+        <div className="text-[28px] font-semibold font-mono tracking-tight text-white/90">{value}</div>
+      </div>
+    </div>
+  );
 }
 
-const colorMap = {
-  blue: { bg: 'bg-blue-500/10', text: 'text-blue-400', border: 'border-blue-500/20' },
-  purple: { bg: 'bg-purple-500/10', text: 'text-purple-400', border: 'border-purple-500/20' },
-  yellow: { bg: 'bg-yellow-500/10', text: 'text-yellow-400', border: 'border-yellow-500/20' },
-  green: { bg: 'bg-green-500/10', text: 'text-green-400', border: 'border-green-500/20' },
-  orange: { bg: 'bg-orange-500/10', text: 'text-orange-400', border: 'border-orange-500/20' },
-  cyan: { bg: 'bg-cyan-500/10', text: 'text-cyan-400', border: 'border-cyan-500/20' },
-  red: { bg: 'bg-red-500/10', text: 'text-red-400', border: 'border-red-500/20' },
-};
-
-function StatCard({ label, value, onClick, color }: StatCardProps) {
-  const colors = colorMap[color];
-
+function BentoCategoryBox({ icon: Icon, label, value, color, bg, onClick }: any) {
   return (
-    <button
-      onClick={onClick}
-      className={`${colors.bg} ${colors.border} border rounded-xl p-4 text-left hover:scale-[1.02] transition-transform cursor-pointer`}
-    >
-      <div className="text-white/40 text-xs uppercase tracking-wider mb-1">{label}</div>
-      <div className={`${colors.text} text-2xl font-bold font-mono`}>{value.toLocaleString()}</div>
-    </button>
+    <div onClick={onClick} className="md:col-span-3 apple-glass-panel rounded-[24px] p-6 cursor-pointer hover:bg-white/[0.04] transition-all duration-300">
+      <div className="flex items-start justify-between mb-5">
+        <div className={`w-10 h-10 rounded-[12px] ${bg} flex items-center justify-center`}>
+          <Icon className={`w-5 h-5 ${color} stroke-[2]`} />
+        </div>
+        <ChevronRight className="w-4 h-4 text-white/20" />
+      </div>
+      <div className="text-white/50 text-[12px] font-semibold tracking-tight mb-1">{label}</div>
+      <div className="text-[22px] font-semibold font-mono text-white/90">{value.toLocaleString()}</div>
+    </div>
+  );
+}
+
+function ActionListItem({ icon: Icon, title, desc, shortcut, onClick }: any) {
+  return (
+    <div onClick={onClick} className="flex items-center justify-between p-4 rounded-[16px] apple-glass-panel hover:bg-white/[0.04] cursor-pointer transition-colors group">
+      <div className="flex items-center gap-4">
+        <div className="w-10 h-10 rounded-full bg-white/5 border border-white/10 flex items-center justify-center group-hover:bg-primary group-hover:border-primary transition-colors">
+          <Icon className="w-5 h-5 text-white/60 group-hover:text-white transition-colors" />
+        </div>
+        <div>
+          <div className="text-white/90 font-medium text-[14px] tracking-tight">{title}</div>
+          <div className="text-white/40 text-[12px] font-medium mt-0.5">{desc}</div>
+        </div>
+      </div>
+      <div>
+        <kbd className="px-2 py-1 rounded-[6px] bg-black/40 border border-white/10 text-[10px] font-mono font-medium text-white/40 shadow-inner tracking-wide">
+          {shortcut}
+        </kbd>
+      </div>
+    </div>
+  );
+}
+
+function OffsetRow({ label, value, dimmed }: { label: string, value: string, dimmed?: boolean }) {
+  return (
+    <div className="flex items-center justify-between">
+      <span className="text-white/50 font-semibold text-[11px] uppercase tracking-widest">{label}</span>
+      <span className={`font-mono text-[12px] font-medium bg-black/40 px-2 py-0.5 rounded-[6px] border border-white/5 ${dimmed ? 'text-white/30' : 'text-white/80'}`}>{value}</span>
+    </div>
   );
 }

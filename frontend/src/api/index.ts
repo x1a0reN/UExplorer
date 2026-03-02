@@ -14,6 +14,7 @@ export interface StatusData {
   game_name: string;
   game_version: string;
   gobjects_address: string;
+  gnames_address?: string;
   object_count: number;
   pid: number;
   architecture: string;

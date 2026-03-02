@@ -1,22 +1,27 @@
 @import "tailwindcss";
 
-/* Custom theme */
 @theme {
-  --color-primary: #3b82f6;
-  --color-primary-dark: #2563eb;
-  --color-background-light: #f5f5f7;
-  --color-background-dark: #1e1e1e;
-  --color-surface-dark: #2c2c2e;
-  --color-surface-dark-lighter: #3a3a3c;
-  --color-border-dark: #48484a;
+  --color-primary: #0A84FF;
+  --color-primary-dark: #0060DF;
+  
+  --color-bg-base: #000000;
+  --color-bg-elevated: #1C1C1E;
+  
+  --color-glass-surface: rgba(255, 255, 255, 0.05);
+  --color-glass-surface-hover: rgba(255, 255, 255, 0.1);
+  --color-glass-border: rgba(255, 255, 255, 0.1);
+  
+  --color-text-primary: #FFFFFF;
+  --color-text-secondary: #98989D;
+  --color-text-tertiary: #636366;
 }
 
-/* Google Fonts */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
-/* Base styles */
 :root {
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  color: var(--color-text-primary);
+  background: var(--color-bg-base);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -27,36 +32,49 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
+  background-color: #000000;
+  color: #ffffff;
+  overflow: hidden; /* App handles its own scrolling */
 }
 
-/* Custom scrollbar */
+/* Custom scrollbar for deep dark mode */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 12px;
+  height: 12px;
 }
-
 ::-webkit-scrollbar-track {
   background: transparent;
 }
-
 ::-webkit-scrollbar-thumb {
-  background: #555;
-  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.15);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  border-radius: 9999px;
 }
-
 ::-webkit-scrollbar-thumb:hover {
-  background: #777;
+  background: rgba(255, 255, 255, 0.25);
+  border: 3px solid transparent;
+  background-clip: padding-box;
 }
 
-/* Glass panel utility */
-.glass-panel {
-  background: rgba(44, 44, 46, 0.7);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+/* Apple-style layout & effects */
+.apple-glass {
+  background: rgba(40, 40, 40, 0.4);
+  backdrop-filter: blur(40px);
+  -webkit-backdrop-filter: blur(40px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.apple-glass-panel {
+  background: rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(40px);
+  -webkit-backdrop-filter: blur(40px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+.apple-glass-panel:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
-/* Mono font */
 .font-mono {
-  font-family: 'JetBrains Mono', 'Menlo', 'Monaco', 'Courier New', monospace;
+  font-family: 'JetBrains Mono', monospace;
 }

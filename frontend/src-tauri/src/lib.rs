@@ -1,17 +1,19 @@
 use serde::{Deserialize, Serialize};
-use tauri::command;
-use tauri::Manager;
 use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;
+use tauri::command;
+use tauri::Manager;
 
 #[cfg(windows)]
-use std::process::Command;
-#[cfg(windows)]
-use windows::core::{PCSTR, PCWSTR};
+use windows::core::{PCSTR, PCWSTR, PWSTR};
 #[cfg(windows)]
 use windows::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
 #[cfg(windows)]
 use windows::Win32::System::Diagnostics::Debug::WriteProcessMemory;
+#[cfg(windows)]
+use windows::Win32::System::Diagnostics::ToolHelp::{
+    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
+};
 #[cfg(windows)]
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 #[cfg(windows)]
@@ -20,8 +22,8 @@ use windows::Win32::System::Memory::{
 };
 #[cfg(windows)]
 use windows::Win32::System::Threading::{
-    CreateRemoteThread, OpenProcess, ResumeThread, WaitForSingleObject, CREATE_SUSPENDED,
-    PROCESS_ALL_ACCESS,
+    CreateRemoteThread, OpenProcess, QueryFullProcessImageNameW, ResumeThread, WaitForSingleObject,
+    CREATE_SUSPENDED, PROCESS_ALL_ACCESS, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 
 // Process info structure
@@ -39,7 +41,7 @@ pub struct InjectionResult {
     pub message: String,
 }
 
-// Scan all running processes using PowerShell and filter for Unreal Engine processes
+// Scan all running processes via Windows API and filter likely Unreal/game processes.
 #[command]
 fn scan_ue_processes() -> Result<Vec<ProcessInfo>, String> {
     #[cfg(windows)]
@@ -54,59 +56,39 @@ fn scan_ue_processes() -> Result<Vec<ProcessInfo>, String> {
 
 #[cfg(windows)]
 fn scan_processes_internal() -> Result<Vec<ProcessInfo>, String> {
-    // Use PowerShell to get process list with paths
-    let output = Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-Command",
-            "Get-Process | Where-Object {$_.Path -match '\\.exe$'} | Select-Object Id, ProcessName, Path | ConvertTo-Json -Compress"
-        ])
-        .output()
-        .map_err(|e| format!("Failed to run PowerShell: {}", e))?;
-
-    if !output.status.success() {
-        return Err(format!(
-            "PowerShell failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-
-    let json_str = String::from_utf8_lossy(&output.stdout);
-
-    // Handle both single object and array
-    let procs: Vec<serde_json::Value> = if json_str.trim().starts_with('[') {
-        serde_json::from_str(&json_str).map_err(|e| format!("Failed to parse JSON: {}", e))?
-    } else if json_str.trim().starts_with('{') {
-        vec![serde_json::from_str(&json_str).map_err(|e| format!("Failed to parse JSON: {}", e))?]
-    } else {
-        return Ok(Vec::new());
-    };
-
     let mut processes = Vec::new();
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+            .map_err(|e| format!("CreateToolhelp32Snapshot failed: {e}"))?;
 
-    for proc in procs {
-        let name = proc
-            .get("ProcessName")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let path = proc.get("Path").and_then(|v| v.as_str()).unwrap_or("");
-        let pid = proc.get("Id").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+        let mut entry = PROCESSENTRY32W::default();
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
 
-        let name_lower = name.to_lowercase();
+        if Process32FirstW(snapshot, &mut entry).is_ok() {
+            loop {
+                let pid = entry.th32ProcessID;
+                if pid > 0 {
+                    let name = utf16_z_to_string(&entry.szExeFile);
+                    let path = query_process_path(pid).unwrap_or_default();
+                    let name_lower = name.to_lowercase();
 
-        // Filter for Unreal Engine processes
-        let is_ue = name_lower.contains("ue4")
-            || name_lower.contains("ue5")
-            || name_lower.contains("unreal")
-            || is_likely_game_process(name, path);
+                    let is_ue = name_lower.contains("ue4")
+                        || name_lower.contains("ue5")
+                        || name_lower.contains("unreal")
+                        || is_likely_game_process(&name, &path);
 
-        if is_ue && pid > 0 {
-            processes.push(ProcessInfo {
-                pid,
-                name: name.to_string(),
-                path: path.to_string(),
-            });
+                    if is_ue {
+                        processes.push(ProcessInfo { pid, name, path });
+                    }
+                }
+
+                if Process32NextW(snapshot, &mut entry).is_err() {
+                    break;
+                }
+            }
         }
+
+        let _ = CloseHandle(snapshot);
     }
 
     // Sort by name
@@ -116,13 +98,39 @@ fn scan_processes_internal() -> Result<Vec<ProcessInfo>, String> {
 }
 
 #[cfg(windows)]
+fn utf16_z_to_string(buf: &[u16]) -> String {
+    let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+    String::from_utf16_lossy(&buf[..end])
+}
+
+#[cfg(windows)]
+fn query_process_path(pid: u32) -> Option<String> {
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let mut path_buf = vec![0u16; 32768];
+        let mut size = path_buf.len() as u32;
+
+        let ok = QueryFullProcessImageNameW(
+            handle,
+            PROCESS_NAME_WIN32,
+            PWSTR(path_buf.as_mut_ptr()),
+            &mut size,
+        )
+        .is_ok();
+
+        let _ = CloseHandle(handle);
+        if !ok || size == 0 {
+            return None;
+        }
+
+        Some(String::from_utf16_lossy(&path_buf[..size as usize]))
+    }
+}
+
+#[cfg(windows)]
 fn is_likely_game_process(name: &str, path: &str) -> bool {
     let lower = name.to_lowercase();
-
-    if !lower.ends_with(".exe") {
-        return false;
-    }
-
+    let path_lower = path.to_lowercase();
     let excludes = [
         "steam",
         "epic",
@@ -140,12 +148,11 @@ fn is_likely_game_process(name: &str, path: &str) -> bool {
     ];
 
     for ex in excludes {
-        if lower.contains(ex) || path.to_lowercase().contains(ex) {
+        if lower.contains(ex) || path_lower.contains(ex) {
             return false;
         }
     }
 
-    let path_lower = path.to_lowercase();
     let game_indicators = ["games", "game", "binaries", "builds"];
 
     for indicator in game_indicators {
