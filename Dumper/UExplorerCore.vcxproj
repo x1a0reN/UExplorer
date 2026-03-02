@@ -133,6 +133,7 @@
     <ClCompile Include="API\BlueprintApi.cpp" />
     <ClCompile Include="API\WatchApi.cpp" />
     <ClCompile Include="API\HookApi.cpp" />
+    <ClCompile Include="API\EventsApi.cpp" />
   </ItemGroup>
   <!-- Header Files -->
   <ItemGroup>
@@ -194,6 +195,7 @@
     <ClInclude Include="API\BlueprintApi.h" />
     <ClInclude Include="API\WatchApi.h" />
     <ClInclude Include="API\HookApi.h" />
+    <ClInclude Include="API\EventsApi.h" />
     <ClInclude Include="API\ApiCommon.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

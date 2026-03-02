@@ -1,6 +1,8 @@
 #include "WinMemApi.h"
 
 #include "ObjectsApi.h"
+#include <algorithm>
+#include <format>
 #include "ApiCommon.h"
 
 #include "Unreal/ObjectArray.h"
@@ -8,6 +10,8 @@
 #include "Unreal/UnrealTypes.h"
 #include "Unreal/UnrealContainers.h"
 #include "Unreal/Enums.h"
+
+#include <set>
 
 namespace UExplorer::API
 {
@@ -192,11 +196,158 @@ void RegisterObjectsRoutes(HttpServer& server)
 		return { 200, "application/json", MakeResponse(data) };
 	});
 
+	// GET /api/v1/objects/search — multi-condition search (must be before :index)
+	server.Get("/api/v1/objects/search", [](const HttpRequest& req) -> HttpResponse {
+		try {
+		auto params = ParseQuery(req.Query);
+		std::string nameFilter = params.count("q") ? params["q"] : "";
+		std::string classFilter = params.count("class") ? params["class"] : "";
+		std::string packageFilter = params.count("package") ? params["package"] : "";
+		int offset = 0, limit = 50;
+		try { if (params.count("offset")) offset = std::stoi(params["offset"]); } catch (...) {}
+		try { if (params.count("limit")) limit = std::stoi(params["limit"]); } catch (...) {}
+		if (limit > 500) limit = 500;
+
+		json items = json::array();
+		int32 total = ObjectArray::Num();
+		int matched = 0, count = 0, skipped = 0;
+
+		for (int32 i = 0; i < total; i++)
+		{
+			UEObject obj = ObjectArray::GetByIndex(i);
+			if (!obj) continue;
+
+			std::string name;
+			try { name = obj.GetName(); }
+			catch (...) { continue; }
+			if (!nameFilter.empty() && name.find(nameFilter) == std::string::npos)
+				continue;
+
+			std::string className;
+			if (!classFilter.empty())
+			{
+				try {
+					UEObject cls = obj.GetClass();
+					className = cls ? cls.GetName() : "";
+				} catch (...) { className = ""; }
+				if (className.find(classFilter) == std::string::npos)
+					continue;
+			}
+
+			if (!packageFilter.empty())
+			{
+				bool found = false;
+				UEObject outer = obj.GetOuter();
+				while (outer)
+				{
+					std::string outerName;
+					try { outerName = outer.GetName(); }
+					catch (...) { break; }
+					if (outerName == packageFilter || outerName.find(packageFilter) != std::string::npos)
+					{
+						found = true;
+						break;
+					}
+					outer = outer.GetOuter();
+				}
+				if (!found && obj.GetName() != packageFilter)
+					continue;
+			}
+
+			matched++;
+			if (skipped < offset) { skipped++; continue; }
+			if (count >= limit) continue;
+
+			json item;
+			item["index"] = i;
+			item["name"] = name;
+			item["class"] = className;
+			item["address"] = std::format("0x{:X}", reinterpret_cast<uintptr_t>(obj.GetAddress()));
+			items.push_back(std::move(item));
+			count++;
+		}
+
+		json data;
+		data["items"] = items;
+		data["matched"] = matched;
+		data["offset"] = offset;
+		data["limit"] = limit;
+		return { 200, "application/json", MakeResponse(data) };
+		}
+		catch (const std::exception& e) {
+			return { 500, "application/json", MakeError(std::string("Search error: ") + e.what()) };
+		}
+		catch (...) {
+			return { 500, "application/json", MakeError("Search error: unknown") };
+		}
+	});
+
+	// GET /api/v1/objects/by-address/:addr (must be before :index)
+	server.Get("/api/v1/objects/by-address/:addr", [](const HttpRequest& req) -> HttpResponse {
+		std::string addrStr = GetPathSegment(req.Path, 4);
+		if (addrStr.empty())
+			return { 400, "application/json", MakeError("Missing address") };
+
+		uintptr_t targetAddr = std::stoull(addrStr, nullptr, 16);
+		if (!targetAddr)
+			return { 400, "application/json", MakeError("Invalid address") };
+
+		int32 total = ObjectArray::Num();
+		for (int32 i = 0; i < total; i++)
+		{
+			UEObject obj = ObjectArray::GetByIndex(i);
+			if (!obj) continue;
+			if (reinterpret_cast<uintptr_t>(obj.GetAddress()) == targetAddr)
+			{
+				json data;
+				data["index"] = i;
+				data["name"] = obj.GetName();
+				data["full_name"] = obj.GetFullName();
+				data["class"] = obj.GetClass().GetName();
+				data["address"] = std::format("0x{:X}", targetAddr);
+				return { 200, "application/json", MakeResponse(data) };
+			}
+		}
+		return { 404, "application/json", MakeError("Object not found at address") };
+	});
+
+	// GET /api/v1/objects/by-path/:path (must be before :index)
+	server.Get("/api/v1/objects/by-path/:path", [](const HttpRequest& req) -> HttpResponse {
+		std::string path = GetPathSegment(req.Path, 4);
+		if (path.empty())
+			return { 400, "application/json", MakeError("Missing path") };
+
+		int32 total = ObjectArray::Num();
+		for (int32 i = 0; i < total; i++)
+		{
+			UEObject obj = ObjectArray::GetByIndex(i);
+			if (!obj) continue;
+			try {
+				if (obj.GetName() == path || obj.GetFullName() == path)
+				{
+					json data;
+					data["index"] = i;
+					data["name"] = obj.GetName();
+					data["full_name"] = obj.GetFullName();
+					data["class"] = obj.GetClass().GetName();
+					data["address"] = std::format("0x{:X}", reinterpret_cast<uintptr_t>(obj.GetAddress()));
+					return { 200, "application/json", MakeResponse(data) };
+				}
+			} catch (...) {}
+		}
+		return { 404, "application/json", MakeError("Object not found at path") };
+	});
+
 	// GET /api/v1/objects/:index — single object detail
 	server.Get("/api/v1/objects/:index", [](const HttpRequest& req) -> HttpResponse {
 		std::string idxStr = GetPathSegment(req.Path, 3);
 		if (idxStr.empty())
 			return { 400, "application/json", MakeError("Missing object index") };
+
+		// Check for non-numeric index (shouldn't match this route)
+		bool isNumeric = !idxStr.empty() && std::all_of(idxStr.begin(), idxStr.end(), ::isdigit);
+		if (!isNumeric)
+			return { 404, "application/json", MakeError("Not found") };
 
 		int32 idx = std::stoi(idxStr);
 		if (idx < 0 || idx >= ObjectArray::Num())
@@ -325,6 +476,264 @@ void RegisterObjectsRoutes(HttpServer& server)
 		catch (...) {
 			return { 500, "application/json", MakeError("Property write failed") };
 		}
+	});
+
+	// GET /api/v1/objects/search — multi-condition search
+	server.Get("/api/v1/objects/search", [](const HttpRequest& req) -> HttpResponse {
+		try {
+		auto params = ParseQuery(req.Query);
+		std::string nameFilter = params.count("q") ? params["q"] : "";
+		std::string classFilter = params.count("class") ? params["class"] : "";
+		std::string packageFilter = params.count("package") ? params["package"] : "";
+		int offset = 0, limit = 50;
+		try { if (params.count("offset")) offset = std::stoi(params["offset"]); } catch (...) {}
+		try { if (params.count("limit")) limit = std::stoi(params["limit"]); } catch (...) {}
+		if (limit > 500) limit = 500;
+
+		json items = json::array();
+		int32 total = ObjectArray::Num();
+		int matched = 0, count = 0, skipped = 0;
+
+		for (int32 i = 0; i < total; i++)
+		{
+			UEObject obj = ObjectArray::GetByIndex(i);
+			if (!obj) continue;
+
+			// Name filter
+			std::string name;
+			try { name = obj.GetName(); }
+			catch (...) { continue; }
+			if (!nameFilter.empty() && name.find(nameFilter) == std::string::npos)
+				continue;
+
+			// Class filter
+			std::string className;
+			if (!classFilter.empty())
+			{
+				try {
+					UEObject cls = obj.GetClass();
+					className = cls ? cls.GetName() : "";
+				} catch (...) { className = ""; }
+				if (className.find(classFilter) == std::string::npos)
+					continue;
+			}
+
+			// Package filter
+			if (!packageFilter.empty())
+			{
+				bool found = false;
+				UEObject outer = obj.GetOuter();
+				while (outer)
+				{
+					std::string outerName;
+					try { outerName = outer.GetName(); }
+					catch (...) { break; }
+					if (outerName == packageFilter || outerName.find(packageFilter) != std::string::npos)
+					{
+						found = true;
+						break;
+					}
+					outer = outer.GetOuter();
+				}
+				if (!found && obj.GetName() != packageFilter)
+					continue;
+			}
+
+			matched++;
+			if (skipped < offset) { skipped++; continue; }
+			if (count >= limit) continue;
+
+			json item;
+			item["index"] = i;
+			item["name"] = name;
+			item["class"] = className;
+			item["address"] = std::format("0x{:X}", reinterpret_cast<uintptr_t>(obj.GetAddress()));
+			items.push_back(std::move(item));
+			count++;
+		}
+
+		json data;
+		data["items"] = items;
+		data["matched"] = matched;
+		data["offset"] = offset;
+		data["limit"] = limit;
+		return { 200, "application/json", MakeResponse(data) };
+		}
+		catch (const std::exception& e) {
+			return { 500, "application/json", MakeError(std::string("Search error: ") + e.what()) };
+		}
+		catch (...) {
+			return { 500, "application/json", MakeError("Search error: unknown") };
+		}
+	});
+
+	// GET /api/v1/objects/by-address/:addr — find object by address
+	server.Get("/api/v1/objects/by-address/:addr", [](const HttpRequest& req) -> HttpResponse {
+		std::string addrStr = GetPathSegment(req.Path, 4);
+		if (addrStr.empty())
+			return { 400, "application/json", MakeError("Missing address") };
+
+		uintptr_t targetAddr = std::stoull(addrStr, nullptr, 16);
+		if (!targetAddr)
+			return { 400, "application/json", MakeError("Invalid address") };
+
+		// Search all objects for matching address
+		int32 total = ObjectArray::Num();
+		for (int32 i = 0; i < total; i++)
+		{
+			UEObject obj = ObjectArray::GetByIndex(i);
+			if (!obj) continue;
+			if (reinterpret_cast<uintptr_t>(obj.GetAddress()) == targetAddr)
+			{
+				json data;
+				data["index"] = i;
+				data["name"] = obj.GetName();
+				data["full_name"] = obj.GetFullName();
+				data["address"] = std::format("0x{:X}", targetAddr);
+				try {
+					UEObject cls = obj.GetClass();
+					data["class"] = cls ? cls.GetName() : "Unknown";
+				} catch (...) { data["class"] = "Unknown"; }
+				return { 200, "application/json", MakeResponse(data) };
+			}
+		}
+
+		return { 404, "application/json", MakeError("No object found at address " + addrStr) };
+	});
+
+	// GET /api/v1/objects/by-path/:path — find object by full path
+	server.Get("/api/v1/objects/by-path/:path", [](const HttpRequest& req) -> HttpResponse {
+		std::string targetPath = GetPathSegment(req.Path, 4);
+		if (targetPath.empty())
+			return { 400, "application/json", MakeError("Missing path") };
+
+		// Search all objects for matching full path
+		int32 total = ObjectArray::Num();
+		for (int32 i = 0; i < total; i++)
+		{
+			UEObject obj = ObjectArray::GetByIndex(i);
+			if (!obj) continue;
+			try {
+				if (obj.GetFullName() == targetPath)
+				{
+					json data;
+					data["index"] = i;
+					data["name"] = obj.GetName();
+					data["full_name"] = obj.GetFullName();
+					data["address"] = std::format("0x{:X}", reinterpret_cast<uintptr_t>(obj.GetAddress()));
+					try {
+						UEObject cls = obj.GetClass();
+						data["class"] = cls ? cls.GetName() : "Unknown";
+					} catch (...) { data["class"] = "Unknown"; }
+					return { 200, "application/json", MakeResponse(data) };
+				}
+			} catch (...) {}
+		}
+
+		return { 404, "application/json", MakeError("No object found with path " + targetPath) };
+	});
+
+	// GET /api/v1/packages — list all packages
+	server.Get("/api/v1/packages", [](const HttpRequest& req) -> HttpResponse {
+		auto params = ParseQuery(req.Query);
+		int offset = params.count("offset") ? std::stoi(params["offset"]) : 0;
+		int limit = params.count("limit") ? std::stoi(params["limit"]) : 50;
+		if (limit > 500) limit = 500;
+		std::string filter = params.count("q") ? params["q"] : "";
+
+		json items = json::array();
+		int32 total = ObjectArray::Num();
+		int matched = 0, count = 0, skipped = 0;
+		std::set<std::string> seen; // deduplicate
+
+		for (int32 i = 0; i < total; i++)
+		{
+			UEObject obj = ObjectArray::GetByIndex(i);
+			if (!obj || !obj.IsA(EClassCastFlags::Package)) continue;
+
+			std::string name;
+			try { name = obj.GetName(); }
+			catch (...) { continue; }
+
+			if (!filter.empty() && name.find(filter) == std::string::npos)
+				continue;
+
+			if (seen.count(name)) continue;
+			seen.insert(name);
+			matched++;
+
+			if (skipped < offset) { skipped++; continue; }
+			if (count >= limit) continue;
+
+			json item;
+			item["name"] = name;
+			item["index"] = i;
+			item["address"] = std::format("0x{:X}", reinterpret_cast<uintptr_t>(obj.GetAddress()));
+			items.push_back(std::move(item));
+			count++;
+		}
+
+		json data;
+		data["items"] = items;
+		data["total"] = matched;
+		data["offset"] = offset;
+		data["limit"] = limit;
+		return { 200, "application/json", MakeResponse(data) };
+	});
+
+	// GET /api/v1/packages/:name/contents — list all types in a package
+	server.Get("/api/v1/packages/:name/contents", [](const HttpRequest& req) -> HttpResponse {
+		std::string packageName = GetPathSegment(req.Path, 3);
+		if (packageName.empty())
+			return { 400, "application/json", MakeError("Missing package name") };
+
+		json items = json::array();
+		int32 total = ObjectArray::Num();
+
+		for (int32 i = 0; i < total; i++)
+		{
+			UEObject obj = ObjectArray::GetByIndex(i);
+			if (!obj) continue;
+
+			// Check if this object belongs to the package
+			UEObject outer = obj.GetOuter();
+			bool belongs = false;
+			while (outer)
+			{
+				std::string outerName;
+				try { outerName = outer.GetName(); }
+				catch (...) { break; }
+				if (outerName == packageName)
+				{
+					belongs = true;
+					break;
+				}
+				outer = outer.GetOuter();
+			}
+
+			if (!belongs && obj.GetName() != packageName)
+				continue;
+
+			// Skip package itself
+			if (obj.IsA(EClassCastFlags::Package))
+				continue;
+
+			json item;
+			item["index"] = i;
+			item["name"] = obj.GetName();
+			try {
+				UEObject cls = obj.GetClass();
+				item["class"] = cls ? cls.GetName() : "Unknown";
+			} catch (...) { item["class"] = "Unknown"; }
+			item["address"] = std::format("0x{:X}", reinterpret_cast<uintptr_t>(obj.GetAddress()));
+			items.push_back(std::move(item));
+		}
+
+		json data;
+		data["package"] = packageName;
+		data["items"] = items;
+		data["count"] = items.size();
+		return { 200, "application/json", MakeResponse(data) };
 	});
 }
 

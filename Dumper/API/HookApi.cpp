@@ -3,9 +3,11 @@
 #include "HookApi.h"
 #include "ApiCommon.h"
 #include "GameThreadQueue.h"
+#include "EventsApi.h"
 
 #include "Unreal/ObjectArray.h"
 #include "Unreal/UnrealObjects.h"
+#include "Unreal/UnrealTypes.h"
 #include "Unreal/Enums.h"
 #include "OffsetFinder/Offsets.h"
 
@@ -54,17 +56,174 @@ static constexpr size_t MAX_LOG_SIZE = 2000;
 static std::mutex g_MonitorMutex;
 static std::set<void*> g_MonitoredFunctions;
 
-// ── Inline detour infrastructure ─────────────────────────────
-// Patch the actual ProcessEvent function body with a JMP to our hook.
-// This intercepts ALL calls regardless of VTable state.
-typedef void (*ProcessEventFn)(void*, void*, void*);
-static ProcessEventFn g_OriginalPE = nullptr;           // trampoline that calls original code
-static void* g_OriginalPEAddr = nullptr;                // address of the real ProcessEvent
-static uint8_t g_SavedBytes[32] = {};                   // original bytes we overwrote
-static int g_SavedBytesLen = 0;                         // how many bytes we saved
-static void* g_Trampoline = nullptr;                    // allocated trampoline memory
-static bool g_HookInstalled = false;
-static std::atomic<int64_t> g_TotalPECalls{0};          // debug: count ALL ProcessEvent calls
+// ── VTable Hook infrastructure ───────────────────────────────
+// Hook GameViewportClient::PostRender instead of ProcessEvent
+// This avoids code integrity detection that restores inline detour patches
+static void* g_GVCPtr = nullptr;              // GameViewportClient instance
+static void** g_GVCVft = nullptr;             // Original VTable pointer
+static void* g_OrigPostRender = nullptr;      // Original PostRender function
+static bool g_VTableHookInstalled = false;
+
+// Our PostRender hook - processes game thread queue every frame
+typedef void (*PostRenderFn)(void*, void*);
+static void HookedPostRender(void* InGVCCDO, void* InCanvas)
+{
+	// Process any pending game-thread dispatch calls
+	GameThread::ProcessQueue();
+
+	// Call original PostRender
+	auto Orig = reinterpret_cast<PostRenderFn>(g_OrigPostRender);
+	if (Orig)
+		Orig(InGVCCDO, InCanvas);
+}
+
+static bool InstallPostRenderHook()
+{
+	if (g_VTableHookInstalled) return true;
+
+	// Find GameViewportClient class
+	UEObject GVCClass;
+	for (int i = 0; i < ObjectArray::Num() && i < 10000; i++)
+	{
+		UEObject obj = ObjectArray::GetByIndex(i);
+		if (!obj) continue;
+		std::string name = obj.GetName();
+		if (name == "GameViewportClient")
+		{
+			GVCClass = obj;
+			break;
+		}
+	}
+
+	if (!GVCClass)
+	{
+		std::cerr << "[HookApi] GameViewportClient class not found" << std::endl;
+		return false;
+	}
+
+	// Get CDO (default object)
+	UEObject CDO = GVCClass.Cast<UEClass>().GetDefaultObject();
+	if (!CDO)
+	{
+		std::cerr << "[HookApi] GameViewportClient CDO not found" << std::endl;
+		return false;
+	}
+
+	g_GVCPtr = CDO.GetAddress();
+	if (!g_GVCPtr)
+	{
+		std::cerr << "[HookApi] Invalid GVC pointer" << std::endl;
+		return false;
+	}
+
+	// Get VTable from CDO
+	g_GVCVft = *reinterpret_cast<void***>(g_GVCPtr);
+	if (!g_GVCVft)
+	{
+		std::cerr << "[HookApi] Invalid GVC VTable" << std::endl;
+		return false;
+	}
+
+	// Get PostRender index
+	int32 postRenderIdx = Off::InSDK::PostRender::GVCPostRenderIndex;
+	if (postRenderIdx < 0)
+	{
+		std::cerr << "[HookApi] PostRender index not found" << std::endl;
+		return false;
+	}
+
+	// Save original function
+	g_OrigPostRender = g_GVCVft[postRenderIdx];
+	if (!g_OrigPostRender)
+	{
+		std::cerr << "[HookApi] Original PostRender not found" << std::endl;
+		return false;
+	}
+
+	// Make page writable
+	DWORD oldProtect;
+	if (!VirtualProtect(g_GVCVft + postRenderIdx, sizeof(void*), PAGE_READWRITE, &oldProtect))
+	{
+		std::cerr << "[HookApi] VirtualProtect failed" << std::endl;
+		return false;
+	}
+
+	// Hook VTable
+	g_GVCVft[postRenderIdx] = reinterpret_cast<void*>(&HookedPostRender);
+
+	// Restore protection
+	VirtualProtect(g_GVCVft + postRenderIdx, sizeof(void*), oldProtect, &oldProtect);
+
+	g_VTableHookInstalled = true;
+
+	// Get global UObject::ProcessEvent for game thread queue
+	void* globalPE = nullptr;
+	UEClass UObjectClass = ObjectArray::FindClassFast("Object");
+	if (UObjectClass) {
+		UEObject UObjectCDO = UObjectClass.GetDefaultObject();
+		if (UObjectCDO) {
+			void* cdoAddr = UObjectCDO.GetAddress();
+			void** cdoVft = *reinterpret_cast<void***>(cdoAddr);
+			int32 peIdx = Off::InSDK::ProcessEvent::PEIndex;
+			if (peIdx > 0 && peIdx < 200 && cdoVft) {
+				globalPE = cdoVft[peIdx];
+				std::cerr << "[HookApi] Global ProcessEvent: " << std::hex << globalPE << std::dec << std::endl;
+			}
+		}
+	}
+
+	// Enable game thread queue with the global ProcessEvent
+	if (globalPE) {
+		auto PE = reinterpret_cast<void(*)(void*, void*, void*)>(globalPE);
+		GameThread::Enable(PE);
+	} else {
+		std::cerr << "[HookApi] Warning: Could not get global ProcessEvent" << std::endl;
+		GameThread::Enable([](void*, void*, void*) {});
+	}
+
+	std::cerr << "[HookApi] VTable hook installed: PostRender index=" << postRenderIdx << std::endl;
+	return true;
+}
+
+static void UninstallPostRenderHook()
+{
+	if (!g_VTableHookInstalled) return;
+
+	std::cerr << "[HookApi] Uninstalling PostRender hook..." << std::endl;
+
+	// Disable game thread queue first to stop processing
+	GameThread::Disable();
+
+	// Try to restore VTable
+	int32 postRenderIdx = Off::InSDK::PostRender::GVCPostRenderIndex;
+	if (postRenderIdx >= 0 && g_GVCVft && g_OrigPostRender)
+	{
+		DWORD oldProtect;
+		if (VirtualProtect(g_GVCVft + postRenderIdx, sizeof(void*), PAGE_READWRITE, &oldProtect))
+		{
+			g_GVCVft[postRenderIdx] = g_OrigPostRender;
+			VirtualProtect(g_GVCVft + postRenderIdx, sizeof(void*), oldProtect, &oldProtect);
+			std::cerr << "[HookApi] VTable restored" << std::endl;
+		}
+		else
+		{
+			std::cerr << "[HookApi] VirtualProtect failed, skipping VTable restore" << std::endl;
+		}
+	}
+
+	g_VTableHookInstalled = false;
+	g_GVCPtr = nullptr;
+	g_GVCVft = nullptr;
+	g_OrigPostRender = nullptr;
+
+	std::cerr << "[HookApi] Hook uninstalled" << std::endl;
+}
+
+// ── Monitored function hook (inline detour on ProcessEvent) ───
+// Still keep this for monitoring specific functions
+static void* g_OriginalPE = nullptr;
+static bool g_MonitorHookInstalled = false;
+static std::atomic<int64_t> g_TotalPECalls{0};
 
 static int64_t HookNowMs()
 {
@@ -72,76 +231,7 @@ static int64_t HookNowMs()
 		std::chrono::system_clock::now().time_since_epoch()).count();
 }
 
-// ── Minimal x64 instruction length decoder ──────────────────
-// Handles common function prologue instructions. Returns 0 on failure.
-static int GetInstructionLength(const uint8_t* code)
-{
-	const uint8_t* p = code;
-	bool hasRex = (*p >= 0x40 && *p <= 0x4F);
-	if (hasRex) p++;
-
-	uint8_t op = *p++;
-	switch (op)
-	{
-	case 0x50: case 0x51: case 0x52: case 0x53: // push r64
-	case 0x54: case 0x55: case 0x56: case 0x57:
-	case 0x58: case 0x59: case 0x5A: case 0x5B: // pop r64
-	case 0x5C: case 0x5D: case 0x5E: case 0x5F:
-	case 0x90: case 0xCC: case 0xC3:             // nop, int3, ret
-		return (int)(p - code);
-
-	case 0x89: case 0x8B: case 0x8D: // mov r/m, lea
-	case 0x31: case 0x33: case 0x85: // xor, test
-	case 0x3B: case 0x39: case 0x29: case 0x01: // cmp, sub, add
-	{
-		uint8_t modrm = *p++;
-		uint8_t mod = (modrm >> 6) & 3;
-		uint8_t rm = modrm & 7;
-		if (mod == 3) return (int)(p - code);
-		if (mod == 0 && rm == 5) return (int)(p - code) + 4;    // [rip+disp32]
-		if (rm == 4) p++; // SIB byte
-		if (mod == 0) return (int)(p - code);
-		if (mod == 1) return (int)(p - code) + 1;
-		if (mod == 2) return (int)(p - code) + 4;
-		return 0;
-	}
-
-	case 0x83: // op r/m, imm8
-	{
-		uint8_t modrm = *p++;
-		uint8_t mod = (modrm >> 6) & 3;
-		uint8_t rm = modrm & 7;
-		if (mod == 3) return (int)(p - code) + 1;
-		if (rm == 4) p++;
-		if (mod == 0) return (int)(p - code) + 1;
-		if (mod == 1) return (int)(p - code) + 2;
-		if (mod == 2) return (int)(p - code) + 5;
-		return 0;
-	}
-	case 0x81: // op r/m, imm32
-	{
-		uint8_t modrm = *p++;
-		uint8_t mod = (modrm >> 6) & 3;
-		uint8_t rm = modrm & 7;
-		if (mod == 3) return (int)(p - code) + 4;
-		if (rm == 4) p++;
-		if (mod == 0) return (int)(p - code) + 4;
-		if (mod == 1) return (int)(p - code) + 5;
-		if (mod == 2) return (int)(p - code) + 8;
-		return 0;
-	}
-
-	case 0xB8: case 0xB9: case 0xBA: case 0xBB: // mov r, imm
-	case 0xBC: case 0xBD: case 0xBE: case 0xBF:
-		if (hasRex && (code[0] & 0x08)) return (int)(p - code) + 8;
-		return (int)(p - code) + 4;
-
-	default:
-		return 0;
-	}
-}
-
-// ── Our ProcessEvent hook (x64 ABI: rcx=this, rdx=Function, r8=Params) ──
+// ── Our ProcessEvent hook for monitoring (if needed) ──
 static void HookedProcessEvent(void* Object, void* Function, void* Params)
 {
 	g_TotalPECalls.fetch_add(1, std::memory_order_relaxed);
@@ -157,16 +247,11 @@ static void HookedProcessEvent(void* Object, void* Function, void* Params)
 	{
 		std::string funcName, callerName;
 		try {
-			UEObject funcObj(Function);
-			funcName = funcObj ? funcObj.GetName() : "Unknown";
-			UEObject callerObj(Object);
-			callerName = callerObj ? callerObj.GetName() : "Unknown";
-		} catch (...) {
-			funcName = "?"; callerName = "?";
-		}
+			UEFunction f(static_cast<uint8_t*>(Function));
+			funcName = f.GetName();
+		} catch (...) {}
 
 		int64_t now = HookNowMs();
-
 		{
 			std::lock_guard<std::mutex> hlk(g_HookMutex);
 			for (auto& [id, h] : g_Hooks)
@@ -183,181 +268,155 @@ static void HookedProcessEvent(void* Object, void* Function, void* Params)
 			if (g_HookLog.size() > MAX_LOG_SIZE)
 				g_HookLog.pop_front();
 		}
+
+		// Broadcast SSE event
+		try {
+			json evt;
+			evt["function"] = funcName;
+			evt["timestamp"] = now;
+			BroadcastHookEvent(funcName, evt.dump());
+		} catch (...) {}
 	}
 
-	// Process any pending game-thread dispatch calls
-	GameThread::ProcessQueue();
-
-	// Call original ProcessEvent via saved pointer
-	g_OriginalPE(Object, Function, Params);
+	// Call original ProcessEvent
+	if (g_OriginalPE)
+		reinterpret_cast<void(*)(void*, void*, void*)>(g_OriginalPE)(Object, Function, Params);
 }
 
-// ── Install inline detour on ProcessEvent ────────────────────
+// ── Hook API implementation ─────────────────────────────────
+
+static bool InstallHook(const std::string& functionPath)
+{
+	// Parse function path (e.g., "Class.Function")
+	size_t dotPos = functionPath.rfind('.');
+	if (dotPos == std::string::npos) return false;
+
+	std::string className = functionPath.substr(0, dotPos);
+	std::string funcName = functionPath.substr(dotPos + 1);
+
+	// Find class
+	UEClass cls;
+	for (int i = 0; i < ObjectArray::Num() && i < 10000; i++)
+	{
+		UEObject obj = ObjectArray::GetByIndex(i);
+		if (!obj) continue;
+		if (obj.GetName() == className && obj.IsA(EClassCastFlags::Class))
+		{
+			cls = obj.Cast<UEClass>();
+			break;
+		}
+	}
+
+	if (!cls) return false;
+
+	// Find function
+	UEFunction func = cls.GetFunction(className, funcName);
+	if (!func) return false;
+
+	void* funcAddr = func.GetAddress();
+	if (!funcAddr) return false;
+
+	// Add to monitored set
+	{
+		std::lock_guard<std::mutex> lk(g_MonitorMutex);
+		g_MonitoredFunctions.insert(funcAddr);
+	}
+
+	return true;
+}
+
+static void UninstallHook(int id)
+{
+	std::lock_guard<std::mutex> lk(g_HookMutex);
+	auto it = g_Hooks.find(id);
+	if (it != g_Hooks.end())
+	{
+		for (void* addr : it->second.FunctionAddresses)
+		{
+			std::lock_guard<std::mutex> mlk(g_MonitorMutex);
+			g_MonitoredFunctions.erase(addr);
+		}
+		g_Hooks.erase(it);
+	}
+}
+
 static bool InstallPEHook()
 {
-	if (g_HookInstalled) return true;
-	if (Off::InSDK::ProcessEvent::PEIndex == 0) return false;
-
-	int peIdx = Off::InSDK::ProcessEvent::PEIndex;
-
-	// 1) Discover the original ProcessEvent address from VTable
-	UEObject firstObj = ObjectArray::GetByIndex(0);
-	if (!firstObj) return false;
-
-	void** firstVft = *reinterpret_cast<void***>(firstObj.GetAddress());
-	g_OriginalPEAddr = firstVft[peIdx];
-	if (!g_OriginalPEAddr) return false;
-
-	uint8_t* target = reinterpret_cast<uint8_t*>(g_OriginalPEAddr);
-
-	// 2) Calculate how many bytes we need to overwrite (>= 14 for absolute jmp)
-	constexpr int JMP_SIZE = 14; // FF 25 00 00 00 00 + 8-byte addr
-	int totalLen = 0;
-	while (totalLen < JMP_SIZE)
-	{
-		int len = GetInstructionLength(target + totalLen);
-		if (len == 0)
-		{
-			std::cerr << "[UExplorer] Failed to decode instruction at PE+"
-				<< totalLen << " (byte=0x"
-				<< std::hex << (int)target[totalLen] << std::dec << ")" << std::endl;
-			return false;
-		}
-		totalLen += len;
-	}
-	if (totalLen > (int)sizeof(g_SavedBytes)) return false;
-
-	// 3) Allocate trampoline: saved bytes + 14-byte jump back
-	size_t trampolineSize = totalLen + JMP_SIZE;
-	g_Trampoline = VirtualAlloc(nullptr, trampolineSize,
-		MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-	if (!g_Trampoline) return false;
-
-	uint8_t* tramp = reinterpret_cast<uint8_t*>(g_Trampoline);
-
-	// Copy original prologue bytes to trampoline
-	std::memcpy(tramp, target, totalLen);
-
-	// Append absolute jump back to original+totalLen
-	uint8_t* jumpBack = tramp + totalLen;
-	jumpBack[0] = 0xFF; jumpBack[1] = 0x25;
-	jumpBack[2] = 0x00; jumpBack[3] = 0x00;
-	jumpBack[4] = 0x00; jumpBack[5] = 0x00;
-	uint64_t returnAddr = reinterpret_cast<uint64_t>(target) + totalLen;
-	std::memcpy(jumpBack + 6, &returnAddr, 8);
-
-	g_OriginalPE = reinterpret_cast<ProcessEventFn>(g_Trampoline);
-	g_SavedBytesLen = totalLen;
-	std::memcpy(g_SavedBytes, target, totalLen);
-
-	// 4) Overwrite original function start with jump to our hook
-	DWORD oldProtect;
-	if (!VirtualProtect(target, totalLen, PAGE_EXECUTE_READWRITE, &oldProtect))
-	{
-		VirtualFree(g_Trampoline, 0, MEM_RELEASE);
-		g_Trampoline = nullptr;
-		return false;
-	}
-
-	// Write: FF 25 00 00 00 00 [8-byte hookAddr]
-	target[0] = 0xFF; target[1] = 0x25;
-	target[2] = 0x00; target[3] = 0x00;
-	target[4] = 0x00; target[5] = 0x00;
-	uint64_t hookAddr = reinterpret_cast<uint64_t>(&HookedProcessEvent);
-	std::memcpy(target + 6, &hookAddr, 8);
-
-	// NOP remaining bytes
-	for (int i = JMP_SIZE; i < totalLen; i++)
-		target[i] = 0x90;
-
-	VirtualProtect(target, totalLen, oldProtect, &oldProtect);
-
-	g_HookInstalled = true;
-	GameThread::Enable(reinterpret_cast<void(*)(void*,void*,void*)>(g_OriginalPE));
-
-	std::cerr << "[UExplorer] ProcessEvent inline detour installed (original=0x"
-		<< std::hex << reinterpret_cast<uintptr_t>(g_OriginalPEAddr)
-		<< ", trampoline=0x" << reinterpret_cast<uintptr_t>(g_Trampoline)
-		<< ", overwritten=" << std::dec << totalLen << " bytes)" << std::endl;
-	return true;
+	// Don't install inline detour anymore - use VTable hook instead
+	// Just ensure PostRender hook is installed
+	return InstallPostRenderHook();
 }
 
 static void UninstallPEHook()
 {
-	if (!g_HookInstalled || !g_OriginalPEAddr) return;
-
-	// Restore original bytes
-	uint8_t* target = reinterpret_cast<uint8_t*>(g_OriginalPEAddr);
-	DWORD oldProtect;
-	if (VirtualProtect(target, g_SavedBytesLen, PAGE_EXECUTE_READWRITE, &oldProtect))
-	{
-		std::memcpy(target, g_SavedBytes, g_SavedBytesLen);
-		VirtualProtect(target, g_SavedBytesLen, oldProtect, &oldProtect);
-	}
-
-	// Free trampoline
-	if (g_Trampoline)
-	{
-		VirtualFree(g_Trampoline, 0, MEM_RELEASE);
-		g_Trampoline = nullptr;
-	}
-
-	g_HookInstalled = false;
-	g_OriginalPE = nullptr;
-	g_OriginalPEAddr = nullptr;
-	g_SavedBytesLen = 0;
-	GameThread::Disable();
-	std::cerr << "[UExplorer] ProcessEvent inline detour removed" << std::endl;
+	UninstallPostRenderHook();
 }
+
+static bool AddHook(const std::string& functionPath, int& outId)
+{
+	if (!InstallHook(functionPath)) return false;
+
+	std::lock_guard<std::mutex> lk(g_HookMutex);
+	int id = ++g_HookCounter;
+
+	HookEntry entry;
+	entry.Id = id;
+	entry.FunctionPath = functionPath;
+	entry.Enabled = true;
+	entry.HitCount = 0;
+	entry.LastHitTime = 0;
+	entry.CreatedTime = HookNowMs();
+
+	// Find function address
+	size_t dotPos = functionPath.rfind('.');
+	if (dotPos != std::string::npos)
+	{
+		std::string className = functionPath.substr(0, dotPos);
+		std::string funcName = functionPath.substr(dotPos + 1);
+
+		for (int i = 0; i < ObjectArray::Num() && i < 10000; i++)
+		{
+			UEObject obj = ObjectArray::GetByIndex(i);
+			if (!obj) continue;
+			if (obj.GetName() == className && obj.IsA(EClassCastFlags::Class))
+			{
+				UEClass cls = obj.Cast<UEClass>();
+				UEFunction func = cls.GetFunction(className, funcName);
+				if (func)
+				{
+					entry.FunctionAddresses.push_back(func.GetAddress());
+				}
+				break;
+			}
+		}
+	}
+
+	g_Hooks[id] = entry;
+	outId = id;
+	return true;
+}
+
+// ── HTTP Routes ───────────────────────────────────────────
 
 void RegisterHookRoutes(HttpServer& server)
 {
-	// POST /api/v1/hooks/add — add a function hook
+	// POST /api/v1/hooks/add — add a hook
 	server.Post("/api/v1/hooks/add", [](const HttpRequest& req) -> HttpResponse {
 		try {
 			json body = json::parse(req.Body);
-			std::string funcPath = body.value("function_path", "");
-			if (funcPath.empty())
-				return { 400, "application/json", MakeError("Missing 'function_path'") };
+			std::string functionPath = body.value("function_path", "");
 
-			// Find ALL matching UFunctions by name
-			std::vector<void*> funcAddrs;
-			int32 total = ObjectArray::Num();
-			for (int32 i = 0; i < total; i++)
-			{
-				UEObject obj = ObjectArray::GetByIndex(i);
-				if (!obj) continue;
-				if (!obj.IsA(EClassCastFlags::Function)) continue;
-				try {
-					if (obj.GetName() == funcPath || obj.GetFullName().find(funcPath) != std::string::npos)
-						funcAddrs.push_back(obj.GetAddress());
-				} catch (...) {}
-			}
-			if (funcAddrs.empty())
-				return { 404, "application/json", MakeError("Function not found: " + funcPath) };
+			if (functionPath.empty())
+				return { 400, "application/json", MakeError("Missing function_path") };
 
-			// Install PE hook if not already
-			if (!g_HookInstalled && !InstallPEHook())
-				return { 500, "application/json", MakeError("Failed to install ProcessEvent hook") };
-
-			int64_t now = HookNowMs();
-			int id = ++g_HookCounter;
-
-			{
-				std::lock_guard<std::mutex> lk(g_HookMutex);
-				g_Hooks[id] = { id, funcPath, funcAddrs, true, 0, 0, now };
-			}
-			{
-				std::lock_guard<std::mutex> lk(g_MonitorMutex);
-				for (void* fa : funcAddrs)
-					g_MonitoredFunctions.insert(fa);
-			}
+			int hookId;
+			if (!AddHook(functionPath, hookId))
+				return { 400, "application/json", MakeError("Failed to add hook") };
 
 			json data;
-			data["id"] = id;
-			data["function_path"] = funcPath;
-			data["matched_functions"] = (int)funcAddrs.size();
-			data["hook_installed"] = g_HookInstalled;
+			data["id"] = hookId;
+			data["function_path"] = functionPath;
+			data["enabled"] = true;
 			return { 200, "application/json", MakeResponse(data) };
 		}
 		catch (const json::exception& e) {
@@ -371,47 +430,25 @@ void RegisterHookRoutes(HttpServer& server)
 	// DELETE /api/v1/hooks/:id — remove a hook
 	server.Delete("/api/v1/hooks/:id", [](const HttpRequest& req) -> HttpResponse {
 		try {
-			int id = std::stoi(GetPathSegment(req.Path, 3));
-			std::vector<void*> removedAddrs;
+			auto params = ParseQuery(req.Query);
+			int id = std::stoi(params["id"]);
 
-			{
-				std::lock_guard<std::mutex> lk(g_HookMutex);
-				auto it = g_Hooks.find(id);
-				if (it == g_Hooks.end())
-					return { 404, "application/json", MakeError("Hook not found") };
-				removedAddrs = it->second.FunctionAddresses;
-				g_Hooks.erase(it);
-			}
-
-			// Remove from monitored set if no other hook uses these addresses
-			{
-				std::set<void*> stillUsed;
-				{
-					std::lock_guard<std::mutex> hlk(g_HookMutex);
-					for (auto& [hid, h] : g_Hooks) {
-						if (!h.Enabled) continue;
-						for (void* a : h.FunctionAddresses) stillUsed.insert(a);
-					}
-				}
-				std::lock_guard<std::mutex> mlk(g_MonitorMutex);
-				for (void* a : removedAddrs) {
-					if (!stillUsed.count(a)) g_MonitoredFunctions.erase(a);
-				}
-			}
+			UninstallHook(id);
 
 			json data;
-			data["removed"] = id;
+			data["removed"] = true;
 			return { 200, "application/json", MakeResponse(data) };
 		}
 		catch (...) {
-			return { 400, "application/json", MakeError("Invalid hook ID") };
+			return { 400, "application/json", MakeError("Invalid hook id") };
 		}
 	});
 
-	// PATCH /api/v1/hooks/:id — enable/disable a hook
+	// PATCH /api/v1/hooks/:id — enable/disable hook
 	server.Patch("/api/v1/hooks/:id", [](const HttpRequest& req) -> HttpResponse {
 		try {
-			int id = std::stoi(GetPathSegment(req.Path, 3));
+			auto params = ParseQuery(req.Query);
+			int id = std::stoi(params["id"]);
 			json body = json::parse(req.Body);
 			bool enabled = body.value("enabled", true);
 
@@ -421,25 +458,6 @@ void RegisterHookRoutes(HttpServer& server)
 				return { 404, "application/json", MakeError("Hook not found") };
 
 			it->second.Enabled = enabled;
-
-			// Update monitored set
-			{
-				std::lock_guard<std::mutex> mlk(g_MonitorMutex);
-				if (enabled) {
-					for (void* a : it->second.FunctionAddresses)
-						g_MonitoredFunctions.insert(a);
-				}
-				else {
-					std::set<void*> stillUsed;
-					for (auto& [hid, h] : g_Hooks) {
-						if (hid != id && h.Enabled)
-							for (void* a : h.FunctionAddresses) stillUsed.insert(a);
-					}
-					for (void* a : it->second.FunctionAddresses) {
-						if (!stillUsed.count(a)) g_MonitoredFunctions.erase(a);
-					}
-				}
-			}
 
 			json data;
 			data["id"] = id;
@@ -453,74 +471,74 @@ void RegisterHookRoutes(HttpServer& server)
 
 	// GET /api/v1/hooks/list — list all hooks
 	server.Get("/api/v1/hooks/list", [](const HttpRequest&) -> HttpResponse {
-		try {
-			std::lock_guard<std::mutex> lk(g_HookMutex);
-			json items = json::array();
-			for (auto& [id, h] : g_Hooks)
-			{
-				json item;
-				item["id"] = h.Id;
-				item["function_path"] = h.FunctionPath;
-				item["matched_functions"] = (int)h.FunctionAddresses.size();
-				item["enabled"] = h.Enabled;
-				item["hit_count"] = h.HitCount;
-				item["last_hit"] = h.LastHitTime;
-				item["created"] = h.CreatedTime;
-				items.push_back(std::move(item));
-			}
-			json data;
-			data["hooks"] = items;
-			data["count"] = (int)g_Hooks.size();
-			data["hook_installed"] = g_HookInstalled;
-			data["debug_total_pe_calls"] = g_TotalPECalls.load();
-			if (g_OriginalPEAddr)
-				data["debug_original_pe"] = std::format("0x{:X}", reinterpret_cast<uintptr_t>(g_OriginalPEAddr));
-			if (g_Trampoline)
-				data["debug_trampoline"] = std::format("0x{:X}", reinterpret_cast<uintptr_t>(g_Trampoline));
-			return { 200, "application/json", MakeResponse(data) };
+		json data;
+		json hooks = json::array();
+
+		std::lock_guard<std::mutex> lk(g_HookMutex);
+		for (const auto& [id, h] : g_Hooks)
+		{
+			json hook;
+			hook["id"] = h.Id;
+			hook["function_path"] = h.FunctionPath;
+			hook["enabled"] = h.Enabled;
+			hook["hit_count"] = h.HitCount;
+			hook["last_hit_time"] = h.LastHitTime;
+			hooks.push_back(hook);
 		}
-		catch (...) {
-			return { 500, "application/json", MakeError("Failed to list hooks") };
-		}
+		data["hooks"] = hooks;
+		data["monitored_count"] = g_MonitoredFunctions.size();
+		data["total_pe_calls"] = g_TotalPECalls.load();
+		data["vtable_hook_installed"] = g_VTableHookInstalled;
+		data["game_thread_enabled"] = GameThread::g_Enabled;
+
+		return { 200, "application/json", MakeResponse(data) };
 	});
 
-	// GET /api/v1/hooks/:id/log — get hook call log
+	// GET /api/v1/hooks/:id/log — get hook log
 	server.Get("/api/v1/hooks/:id/log", [](const HttpRequest& req) -> HttpResponse {
 		try {
-			std::string idStr = GetPathSegment(req.Path, 3);
 			auto params = ParseQuery(req.Query);
-			int limit = 100;
-			if (params.count("limit")) limit = std::stoi(params["limit"]);
-			if (limit > 1000) limit = 1000;
+			int id = std::stoi(params["id"]);
+
+			json entries = json::array();
+			int64_t now = HookNowMs();
 
 			std::lock_guard<std::mutex> lk(g_LogMutex);
-			json items = json::array();
-			int count = 0;
-			// Return most recent entries first
-			for (auto it = g_HookLog.rbegin(); it != g_HookLog.rend() && count < limit; ++it, ++count)
+			for (const auto& e : g_HookLog)
 			{
-				json item;
-				item["function"] = it->FunctionName;
-				item["caller"] = it->CallerName;
-				item["timestamp"] = it->Timestamp;
-				items.push_back(std::move(item));
+				if (e.HookId == id || id == 0)
+				{
+					json entry;
+					entry["timestamp"] = e.Timestamp;
+					entry["function_name"] = e.FunctionName;
+					entry["caller_name"] = e.CallerName;
+					entries.push_back(entry);
+				}
 			}
 
 			json data;
-			data["entries"] = items;
-			data["count"] = count;
-			data["total"] = (int)g_HookLog.size();
+			data["entries"] = entries;
 			return { 200, "application/json", MakeResponse(data) };
 		}
 		catch (...) {
-			return { 500, "application/json", MakeError("Failed to read hook log") };
+			return { 400, "application/json", MakeError("Invalid request") };
 		}
 	});
 }
 
-bool EnsurePEHookInstalled()
+void InitHooks()
 {
-	return InstallPEHook();
+	// Install PostRender VTable hook on startup
+	InstallPostRenderHook();
+}
+
+void ShutdownHooks()
+{
+	UninstallPostRenderHook();
+
+	std::lock_guard<std::mutex> lk(g_HookMutex);
+	g_Hooks.clear();
+	g_MonitoredFunctions.clear();
 }
 
 } // namespace UExplorer::API

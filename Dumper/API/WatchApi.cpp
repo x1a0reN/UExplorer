@@ -1,5 +1,6 @@
 #include "WatchApi.h"
 #include "ApiCommon.h"
+#include "EventsApi.h"
 
 #include "Unreal/ObjectArray.h"
 #include "Unreal/UnrealObjects.h"
@@ -129,15 +130,28 @@ void RegisterWatchRoutes(HttpServer& server)
 			for (auto& [id, w] : g_Watches)
 			{
 				json cur = ReadPropByName(w.ObjectIndex, w.PropertyName);
+				bool changed = false;
 				if (cur != w.LastValue) {
 					w.LastValue = cur;
 					w.LastChangeTime = WatchNowMs();
+					changed = true;
+
+					// Broadcast SSE event for value change
+					try {
+						json evt;
+						evt["id"] = w.Id;
+						evt["property"] = w.PropertyName;
+						evt["value"] = cur;
+						evt["timestamp"] = w.LastChangeTime;
+						BroadcastWatchEvent(w.Id, evt.dump());
+					} catch (...) {}
 				}
 				json item;
 				item["id"] = w.Id;
 				item["object_index"] = w.ObjectIndex;
 				item["property"] = w.PropertyName;
 				item["value"] = cur;
+				item["changed"] = changed;
 				item["last_change"] = w.LastChangeTime;
 				item["created"] = w.CreatedTime;
 				items.push_back(std::move(item));

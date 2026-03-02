@@ -180,15 +180,25 @@ static bool ProbeReadable(const void* Addr, size_t Size)
 
 std::string BlueprintDecompiler::ResolveObjectName(uint64_t Ptr)
 {
+	// Reject null and obviously invalid pointers
 	if (Ptr == 0)
 		return "None";
 
+	// Reject pointers that look like small offsets or corrupted data
+	// These are NOT valid object addresses - they look like uninitialized data
+	if (Ptr < 0x10000 || Ptr > 0x7FFFFFFFFFFF)
+		return std::format("0x{:X}", Ptr);
+
 	void* Addr = reinterpret_cast<void*>(Ptr);
+
+	// Check if pointer is in a readable memory region
 	if (Platform::IsBadReadPtr(Addr))
 		return std::format("0x{:X}", Ptr);
 
-	// Probe the first 64 bytes to catch bad pointers before UEObject touches them
-	if (!ProbeReadable(Addr, 64))
+	// Additional validation: check if it looks like a valid UObject
+	// A valid UObject should have a VTable pointer at offset 0
+	uint64_t vtablePtr = *reinterpret_cast<uint64_t*>(Addr);
+	if (vtablePtr < 0x10000 || vtablePtr > 0x7FFFFFFFFFFF)
 		return std::format("0x{:X}", Ptr);
 
 	try

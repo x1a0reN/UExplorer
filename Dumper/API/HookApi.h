@@ -6,6 +6,10 @@ namespace UExplorer::API
 {
 void RegisterHookRoutes(HttpServer& server);
 
-// Ensure ProcessEvent VTable hook is installed (for GameThread dispatch)
-bool EnsurePEHookInstalled();
+// Initialize hooks on DLL load
+void InitHooks();
+
+// Cleanup hooks on DLL unload
+void ShutdownHooks();
+
 } // namespace UExplorer::API

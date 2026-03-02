@@ -3,10 +3,69 @@
 
 #include "Unreal/ObjectArray.h"
 #include "Unreal/UnrealObjects.h"
+#include "Unreal/UnrealTypes.h"
 #include "Unreal/Enums.h"
 
 namespace UExplorer::API
 {
+
+// Helper: read a single property value from an object as JSON
+static json ReadPropertyValue(uint8* objAddr, const UEProperty& prop)
+{
+	uint8* addr = objAddr + prop.GetOffset();
+	EClassCastFlags type = prop.GetCastFlags();
+
+	try {
+		if (type & EClassCastFlags::BoolProperty)
+		{
+			UEBoolProperty bp = prop.Cast<UEBoolProperty>();
+			bool val = (*(addr + bp.GetByteOffset()) & bp.GetFieldMask()) != 0;
+			return val;
+		}
+		if (type & EClassCastFlags::ByteProperty)
+			return (int)*reinterpret_cast<uint8*>(addr);
+		if (type & EClassCastFlags::IntProperty)
+			return *reinterpret_cast<int32*>(addr);
+		if (type & EClassCastFlags::Int64Property)
+			return *reinterpret_cast<int64*>(addr);
+		if (type & EClassCastFlags::UInt64Property)
+			return *reinterpret_cast<uint64*>(addr);
+		if (type & EClassCastFlags::FloatProperty)
+			return *reinterpret_cast<float*>(addr);
+		if (type & EClassCastFlags::DoubleProperty)
+			return *reinterpret_cast<double*>(addr);
+		if (type & EClassCastFlags::NameProperty)
+		{
+			FName* fn = reinterpret_cast<FName*>(addr);
+			return fn->ToString();
+		}
+		if (type & EClassCastFlags::StrProperty)
+		{
+			UC::FString* fs = reinterpret_cast<UC::FString*>(addr);
+			if (fs->IsValid())
+				return fs->ToString();
+			return "";
+		}
+		if (type & EClassCastFlags::TextProperty)
+			return "(FText)";
+		if (type & EClassCastFlags::ObjectProperty)
+		{
+			void* ptr = *reinterpret_cast<void**>(addr);
+			if (!ptr) return nullptr;
+			UEObject ref(ptr);
+			if (ref) return ref.GetName();
+			return std::format("0x{:X}", reinterpret_cast<uintptr_t>(ptr));
+		}
+		if (type & EClassCastFlags::ArrayProperty)
+		{
+			int32 num = *reinterpret_cast<int32*>(addr + sizeof(void*));
+			return std::format("TArray[{}]", num);
+		}
+	}
+	catch (...) {}
+
+	return std::format("({})", prop.GetCppType());
+}
 
 // Helper: serialize a single property to JSON
 static json SerializeProperty(const UEProperty& prop)
@@ -296,6 +355,103 @@ void RegisterClassesRoutes(HttpServer& server)
 		}
 		catch (...) {
 			return { 500, "application/json", MakeError("Failed to serialize struct") };
+		}
+	});
+
+	// GET /api/v1/classes/:name/instances — live instances of a class
+	server.Get("/api/v1/classes/:name/instances", [](const HttpRequest& req) -> HttpResponse {
+		std::string name = GetPathSegment(req.Path, 3);
+		auto params = ParseQuery(req.Query);
+		int offset = params.count("offset") ? std::stoi(params["offset"]) : 0;
+		int limit = params.count("limit") ? std::stoi(params["limit"]) : 50;
+		if (limit > 500) limit = 500;
+
+		UEClass cls = ObjectArray::FindClassFast(name);
+		if (!cls)
+			return { 404, "application/json", MakeError("Class not found: " + name) };
+
+		json items = json::array();
+		int32 total = ObjectArray::Num();
+		int matched = 0, count = 0, skipped = 0;
+
+		for (int32 i = 0; i < total; i++)
+		{
+			UEObject obj = ObjectArray::GetByIndex(i);
+			if (!obj) continue;
+
+			// Check if object is an instance of this class
+			try {
+				UEObject objClass = obj.GetClass();
+				if (!objClass) continue;
+				if (objClass.GetName() != name && !objClass.IsA(cls))
+					continue;
+			} catch (...) { continue; }
+
+			// Skip CDO (Class Default Object)
+			try {
+				UEObject outer = obj.GetOuter();
+				if (outer && outer.GetName() == name)
+					continue; // Skip CDO
+			} catch (...) {}
+
+			matched++;
+			if (skipped < offset) { skipped++; continue; }
+			if (count >= limit) continue;
+
+			json item;
+			item["index"] = i;
+			item["name"] = obj.GetName();
+			item["address"] = std::format("0x{:X}", reinterpret_cast<uintptr_t>(obj.GetAddress()));
+			items.push_back(std::move(item));
+			count++;
+		}
+
+		json data;
+		data["class"] = name;
+		data["items"] = items;
+		data["matched"] = matched;
+		data["offset"] = offset;
+		data["limit"] = limit;
+		return { 200, "application/json", MakeResponse(data) };
+	});
+
+	// GET /api/v1/classes/:name/cdo — Class Default Object properties
+	server.Get("/api/v1/classes/:name/cdo", [](const HttpRequest& req) -> HttpResponse {
+		std::string name = GetPathSegment(req.Path, 3);
+		UEClass cls = ObjectArray::FindClassFast(name);
+		if (!cls)
+			return { 404, "application/json", MakeError("Class not found: " + name) };
+
+		try {
+			UEObject cdo = cls.GetDefaultObject();
+			if (!cdo)
+				return { 500, "application/json", MakeError("Failed to get CDO") };
+
+			uint8* cdoAddr = reinterpret_cast<uint8*>(cdo.GetAddress());
+			json props = json::array();
+
+			for (const auto& prop : cls.GetProperties())
+			{
+				try {
+					json p;
+					p["name"] = prop.GetName();
+					p["type"] = prop.GetCppType();
+					p["offset"] = prop.GetOffset();
+					p["size"] = prop.GetSize();
+					p["value"] = ReadPropertyValue(cdoAddr, prop);
+					props.push_back(std::move(p));
+				}
+				catch (...) {}
+			}
+
+			json data;
+			data["class"] = name;
+			data["cdo_address"] = std::format("0x{:X}", reinterpret_cast<uintptr_t>(cdoAddr));
+			data["properties"] = props;
+			return { 200, "application/json", MakeResponse(data) };
+		}
+		catch (...) {
+			return { 500, "application/json", MakeError("Failed to read CDO") };
 		}
 	});
 }

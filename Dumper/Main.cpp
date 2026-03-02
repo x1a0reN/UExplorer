@@ -7,6 +7,7 @@
 #include "Generators/Generator.h"
 #include "Server/HttpServer.h"
 #include "API/Router.h"
+#include "API/HookApi.h"
 #include "Settings.h"
 
 static std::atomic<bool> g_Running{ true };
@@ -86,6 +87,10 @@ DWORD MainThread(HMODULE Module)
 
 	// Cleanup
 	std::cerr << "[UExplorer] Shutting down...\n";
+
+	// Shutdown hooks first (before server stops, while game thread is still running)
+	UExplorer::API::ShutdownHooks();
+
 	if (g_Server) g_Server->Stop();
 
 	fclose(stderr);

@@ -168,402 +168,286 @@
 
 ---
 
-## 三、页面功能设计
+## 三、页面功能设计（6 页精简版）
 
-### Page 1: Dashboard（仪表盘 / 首页）
-
-连接状态总览和快捷入口。
-
-**功能区域：**
-
-1. **连接状态栏**
-   - 连接指示灯（已连接 / 断开 / 重连中）
-   - 游戏进程信息：进程名、PID、架构（x64）
-   - UE 版本号（如 UE 5.3.2）
-   - 注入模式标识（DLL 劫持 / 远程注入）
-   - GObjects 地址 + 对象数量
-   - GNames 地址
-
-2. **统计卡片**（可点击跳转到对应页面的过滤视图）
-   - Classes 数量
-   - Structs 数量
-   - Enums 数量
-   - Functions 数量
-   - Packages 数量
-   - Actors 数量（当前世界）
-
-3. **快捷操作**
-   - 一键生成 SDK（C++ / USMAP / JSON）
-   - 打开 Object Browser
-   - 打开 Console
-   - 打开 Class Inspector
-
-4. **活动日志**
-   - 时间戳 + 事件描述的滚动列表
-   - 可过滤（连接事件、Dump 事件、错误等）
-
-5. **连接管理**
-   - 目标进程选择器（进程列表 / 手动输入 PID）
-   - 注入方式选择（劫持 / 注入）
-   - DLL 路径配置
-   - 自动重连开关
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│  顶部导航栏：Dashboard │ Objects │ Functions │ Memory │ SDK Dump │ Settings
+└────────────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
-### Page 2: SDK Dump Center（SDK 生成中心）
+### Page 1: Dashboard（首页/仪表盘）
 
-主要功能页面，控制所有 Dump/生成操作。
+**定位：** 快速总览和快捷入口
+
+**覆盖 DLL API：** Status API
 
 **功能区域：**
 
-1. **格式选择器**
-   - C++ SDK / USMAP / Dumpspace JSON / IDA Script / Flat JSON
-   - 每种格式有独立的选项面板（可折叠）
+1. **连接状态栏**（顶部）
+   - 连接指示灯（已连接绿色/断开红色）
+   - 游戏进程：进程名、PID、架构（x64）
+   - UE 版本号（如 UE 4.26.2）
+   - GObjects 数量
 
-2. **通用选项**
-   - 输出目录选择（Tauri 文件对话框）
-   - 包过滤器：全部包含 / 仅包含指定包 / 排除指定包（带自动补全）
-   - 是否包含蓝图生成类
+2. **核心统计卡片**（中间）
+   - Classes 数量（可点击跳转到 Objects 页面，类型过滤为 Class）
+   - Structs 数量（跳转到 Objects，类型过滤为 Struct）
+   - Enums 数量（跳转到 Objects，类型过滤为 Enum）
+   - Functions 数量（跳转到 Functions 页面）
+   - Packages 数量（跳转到 Objects，类型过滤为 Package）
+   - Actors 数量（跳转到 Objects，类型过滤为 Actor）
 
-3. **C++ SDK 专属选项**
-   - Padding 风格：`uint8 UnknownData_OFFSET[N]` / `char pad[N]`
-   - static_assert 生成（偏移验证 / 大小验证）
-   - ProcessEvent 包装函数生成
-   - 预定义结构体覆盖（FVector, FRotator, FTransform 等使用引擎原始定义）
-   - 命名空间名称配置
-   - 字符串混淆函数配置（XOR string）
-
-4. **生成进度**
-   - 进度条（百分比 + 当前处理的包名）
-   - 预计剩余时间
-   - 可取消
-
-5. **任务历史**
-   - 列表显示：序号、格式、状态、类数量、耗时
-   - 操作：下载、查看输出目录、重试（失败时）
-   - 支持排队多个任务
-
-6. **预览模式**
-   - 选择单个类/包，预览生成的输出内容
-   - 语法高亮显示
+3. **快捷操作区**（底部）
+   - 一键生成 SDK（弹出格式选择：C++/USMAP/Dumpspace/IDA）
+   - 打开对象浏览器
+   - 打开函数浏览器
+   - 打开内存工具
 
 ---
 
-### Page 3: Object Browser（对象浏览器）
+### Page 2: Objects（对象浏览器）
 
-实时对象探索器，类似 UE4SS Live View 但更强大。
+**定位：** 所有对象/类/结构体/枚举/Actor 的查看和编辑
+
+**覆盖 DLL API：** Objects API、Classes API、Enums API、World API、Memory API（写属性）、Watch API
 
 **功能区域：**
 
-1. **搜索与过滤栏**
-   - 全文搜索（支持正则）
-   - 类型过滤下拉：All / UClass / UStruct / UEnum / UFunction / UPackage
-   - 包过滤下拉（带搜索）
+1. **搜索与过滤栏**（顶部）
+   - 搜索框（支持名称/路径搜索）
+   - 类型切换 Tab：All / Class / Struct / Enum / Function / Package / Actor
+   - 包过滤器（输入包名过滤）
    - 对象标志过滤（RF_Public, RF_Standalone 等）
 
 2. **左侧面板 — 对象列表**
-   - 双模式切换：树形视图（按包层级）/ 平铺列表
-   - 树形模式：Package → Outer 层级展开
-   - 列表模式：虚拟滚动，支持 5 万+ 对象
-   - 每项显示：名称、类名、地址（紧凑格式）
+   - 虚拟滚动列表，支持 5 万+ 对象
+   - 每行显示：索引、名称、类名、地址（紧凑格式）
    - 总数 + 当前过滤匹配数
+   - 双击或回车打开详情
 
-3. **右侧面板 — 对象详情**
-   - 基本信息：名称、完整路径、地址、类名、Outer 链、Index、Flags、内存大小
-   - Tab 切换：
-     - **Properties Tab**：属性表格（名称、类型、值），值可内联编辑
-     - **Raw Memory Tab**：十六进制内存视图
-     - **Functions Tab**：该对象类的所有函数（可直接调用）
+3. **右侧面板 — 详情**（多 Tab 切换）
+   - **Info Tab**：名称、完整路径、地址、类名、Outer 链、Index、Flags、内存大小
+   - **Properties Tab**：属性表格
+     - 列：名称、类型、值
+     - 值可点击编辑（调用 Property Write API）
+     - 类型感知渲染：FVector 显示 (X,Y,Z)、颜色显示色块、对象指针显示名称
+     - Watch 按钮：添加到监视列表
+     - 展开嵌套：结构体/数组/Map 可内联展开
+     - CDO 对比：高亮与默认值不同的属性
+   - **Fields Tab**（仅类/结构体）：字段表格
+     - 列：偏移、名称、类型、大小、Flags
+     - 按偏移排序
+     - "仅本类" / "含继承字段" 切换
+     - 点击类型跳转到该类型定义
+   - **Functions Tab**（仅类）：函数列表
+     - 列：名称、Flags、参数数量
+     - 可点击跳转到 Functions 页面
+   - **Instances Tab**（仅类）：该类的所有实例列表
+     - 列：名称、地址
+     - 可点击跳转到详情
+   - **World Tab**（仅 Actor/ActorComponent）：世界信息
+     - 位置：Location (X,Y,Z)
+     - 旋转：Rotation (P,Y,R)
+     - 缩放：Scale (X,Y,Z)
+     - 组件树层级
 
-4. **属性表格特性**
-   - 类型感知渲染：FVector 显示 (X,Y,Z)、颜色属性显示色块、对象指针显示名称+可点击跳转
-   - 内联编辑：点击值即可修改
-   - Watch 按钮：将属性加入监视列表
-   - 展开嵌套：结构体/数组/Map 可内联展开
-   - CDO 对比：高亮与默认值不同的属性
-
-5. **右键菜单**
-   - 复制地址 / 复制路径 / 复制值
-   - 在 Class Inspector 中打开
-   - 查找同类实例
+4. **右键菜单**
+   - 复制地址
+   - 复制路径
+   - 在新标签页打开
    - 添加到收藏夹
 
-6. **工具栏**
-   - 刷新 / 自动刷新（可配置间隔）
-   - 收藏夹/书签面板
-   - 对象对比：选择两个对象，并排对比属性值
-
 ---
 
-### Page 4: Class Inspector（类检查器）
+### Page 3: Functions（函数浏览器）
 
-类型系统深度浏览器，查看类/结构体/枚举的完整定义。
+**定位：** 函数查看、调用、Hook、蓝图反编译
+
+**覆盖 DLL API：** Call API、Hook API、Blueprint API、Watch API
 
 **功能区域：**
 
-1. **搜索与类型切换**
-   - 搜索框（按名称搜索）
-   - 类型切换：Classes / Structs / Enums / All
-
-2. **左侧面板 — 继承树**
-   - 完整继承树（可折叠）
-   - 根节点 UObject，逐级展开
-   - 当前选中类高亮
-   - 显示每个类的子类数量
-   - 支持搜索定位
-
-3. **右侧面板 — 类详情**
-   - 头部信息：类名、包名、大小、对齐、父类、子类列表、接口列表
-   - Tab 切换：
-     - **Fields Tab**：字段表格（Offset、名称、类型、大小、Flags），按偏移排序
-     - **Functions Tab**：函数列表（名称、签名、Flags），可展开查看参数详情
-     - **Inheritance Tab**：完整字段布局（含继承字段），按来源类着色区分
-     - **Layout Tab**：字节级内存布局可视化图（显示每个字段占用的字节范围和 padding）
-
-4. **字段表格特性**
-   - "仅本类" / "含继承字段" 切换
-   - 点击类型引用跳转到该类型定义
-   - 点击对象指针类型查看实时实例
-   - 搜索字段/函数
-
-5. **操作**
-   - 复制为 C++ 结构体声明
-   - 导出单个类定义（任意格式）
-   - 两个类并排对比（Diff 视图）
-
----
-
-### Page 5: Function Browser（函数浏览器与调用器）
-
-函数检查、调用和 Hook 的专用页面。
-
-**功能区域：**
-
-1. **搜索与过滤**
-   - 按名称搜索（支持 `ClassName::FuncName` 格式）
-   - 标志过滤：Native / BlueprintCallable / BlueprintEvent / Net / Static / Exec
+1. **搜索与过滤栏**（顶部）
+   - 搜索框（支持 `ClassName::FuncName` 格式）
+   - 标志过滤：Native / BlueprintCallable / BlueprintEvent / Static / Exec
+   - 类过滤器
 
 2. **左侧面板 — 函数列表**
    - 显示：`ClassName::FunctionName`
-   - 标志图标（N=Native, B=Blueprint, S=Static 等）
-   - 总数 + 过滤匹配数
+   - 标志图标（N=Native, B=Blueprint, S=Static）
+   - 总数显示
+   - 可滚动，支持大量函数
 
-3. **右侧面板 — 函数详情**
-   - 基本信息：完整名称、Flags、参数数量、返回类型、ParamSize、函数地址、字节码大小
-   - 参数列表：名称、类型、方向（In/Out/Return）、Flags
-
-4. **函数调用区**
-   - 目标对象选择器（搜索名称/路径/地址，或从 Object Browser 选取）
-   - 参数编辑器：根据函数签名自动生成表单，类型感知输入控件
-   - 执行按钮 + 结果显示区
-   - 调用历史（参数 + 返回值记录）
-
-5. **Hook 控制区**
-   - Hook 开关（启用/禁用）
-   - 日志模式：记录调用参数和返回值
-   - 调用计数显示
-   - Hook 日志查看器（实时滚动）
-
-6. **蓝图函数附加功能**
-   - "反编译"按钮（跳转到 Blueprint Decompiler 页面或内联显示）
-
----
-
-### Page 6: World Explorer（世界探索器）
-
-实时游戏世界检查，类似 UnityExplorer 的 Scene Explorer。
-
-**功能区域：**
-
-1. **世界信息栏**
-   - 当前 UWorld 名称
-   - 已加载关卡数量
-   - Actor 总数
-
-2. **左侧面板 — Actor 树**
-   - 按关卡分组：PersistentLevel / SubLevel_xxx
-   - 每个关卡下按类别分组（Lighting / Geometry / Characters / Volumes 等）
-   - 每项显示：Actor 名称、类名
-   - Actor 搜索（按名称、类名、Tag）
-   - 类过滤器（仅显示指定类型）
-
-3. **右侧面板 — Actor 详情**
-   - 基本信息：类名、完整路径、地址
-   - Transform 编辑器：Location (X,Y,Z) / Rotation (P,Y,R) / Scale (X,Y,Z)，可直接编辑
-   - 组件树：层级展开，每个组件可点击查看属性
-   - Tab 切换：Properties / Functions（复用 Object Browser 的属性表格）
-
-4. **快捷访问面板**
-   - GameMode / GameState / PlayerController / 本地 Pawn 一键跳转
-   - 当前关卡信息
-
-5. **操作**
-   - 从任意 Actor 跳转到 Object Browser 或 Class Inspector
-   - 流关卡状态显示（Loaded / Unloaded / Loading）
+3. **右侧面板 — 函数详情**（多 Tab 切换）
+   - **Info Tab**：完整名称、Flags、参数数量、返回类型、ParamSize、函数地址、字节码大小
+   - **Parameters Tab**：参数列表
+     - 列：名称、类型、方向（In/Out/Return）、Flags
+   - **Call Tab**：函数调用器
+     - 目标对象选择器（搜索名称/路径/地址，或从 Objects 页面选取）
+     - 参数输入表单（根据函数签名自动生成，类型感知输入控件）
+     - 执行按钮
+     - 返回值显示区
+     - 调用历史（参数 + 返回值记录）
+   - **Hook Tab**：Hook 控制
+     - Hook 开关（启用/禁用）
+     - 日志模式开关
+     - 命中次数统计
+     - Hook 日志查看器
+       - 实时滚动（SSE 推送）
+       - 每条记录：时间戳、调用者对象、参数值、返回值
+       - 过滤/暂停按钮
+   - **Decompile Tab**（仅蓝图函数）：蓝图反编译
+     - 字节码视图：偏移、操作码、操作数、注释
+     - 伪代码视图：C++ 风格，控制流结构（if/else, for, while, switch）
+     - 语法高亮
+     - 复制按钮
 
 ---
 
-### Page 7: Console（控制台）
+### Page 4: Memory（内存工具）
 
-交互式命令执行，类似 UE4SS 的 Lua 控制台 / UnityExplorer 的 C# 控制台。
+**定位：** 内存查看/编辑 + 命令执行 + 属性监视
+
+**覆盖 DLL API：** Memory API、Watch API
 
 **功能区域：**
 
-1. **输出区域**
-   - 滚动日志，显示命令和结果
-   - 语法高亮（地址、类型名、值）
-   - 可折叠长输出
-   - 右键复制
+1. **地址导航栏**（顶部）
+   - 地址输入框（支持十六进制和符号名）
+   - 刷新按钮
+   - 前进/后退按钮
+   - 书签下拉菜单
 
-2. **输入区域**
+2. **中间 — 十六进制视图**
+   - 经典布局：地址 | 十六进制字节 | ASCII
+   - 每行 16 字节
+   - 可配置每行字节数
+   - 点击字节可编辑（调用 Memory Write API）
+   - 高亮修改过的字节
+
+3. **右侧 — 类型化解读面板**
+   - 当前光标位置的多类型解读
+   - 类型：int8/16/32/64, uint8/16/32/64, float, double, pointer
+   - FString / FName / FText 智能识别
+   - 结构体叠加：选择结构体类型，按字段着色显示
+
+4. **指针链工具**（独立面板）
+   - 基址输入框
+   - 偏移链输入（逗号分隔）
+   - 逐级显示：每步的地址和值
+   - 最终地址的类型化读取
+   - 跳转按钮
+
+5. **底部 — Console 面板**
    - 命令输入框（支持多行）
+   - 输出日志区（滚动）
    - 自动补全（对象名、类名、函数名、属性名）
    - 命令历史（上下箭头）
+   - **内置命令：**
+     - `get <path_or_address>` — 获取对象信息
+     - `set <object>.<property> <value>` — 写入属性值
+     - `call <object> <function> <args...>` — 调用函数
+     - `watch <object> <property>` — 添加监视
+     - `unwatch <id>` — 移除监视
+     - `instances <class>` — 列出类的实例
+     - `mem.read <address> <size>` — 读内存
+     - `mem.write <address> <bytes>` — 写内存
 
-3. **内置命令集**
-   - `find(pattern)` — 搜索对象
-   - `get(path_or_address)` — 获取对象信息
-   - `prop(object, property_name)` — 读取属性值
-   - `set(object, property_name, value)` — 写入属性值
-   - `call(object, function_name, ...args)` — 调用函数
-   - `watch(object, property_name)` — 添加监视
-   - `instances(class_name)` — 列出类的所有实例
-   - `hierarchy(class_name)` — 显示继承链
-   - `dump(class_name, format)` — 导出单个类
-   - `mem.read(address, size)` — 读内存
-   - `mem.write(address, bytes)` — 写内存
-
-4. **脚本支持**
-   - 保存/加载命令脚本
-   - 批量执行
-   - 常用脚本收藏
+6. **右侧边栏 — Watch 监视面板**
+   - 监视列表表格
+     - 列：ID、对象、属性、当前值、变化时间
+   - 值变化高亮（绿色）
+   - 删除按钮
+   - 跳转到对象按钮
 
 ---
 
-### Page 8: Memory Viewer（内存查看器）
+### Page 5: SDK Dump（SDK 生成中心）
 
-低级内存检查和编辑工具。
+**定位：** 生成 SDK/映射文件
+
+**覆盖 DLL API：** Dump API
 
 **功能区域：**
 
-1. **地址导航栏**
-   - 地址输入框（支持十六进制和符号名）
-   - 前进/后退导航
-   - 书签管理
+1. **格式选择器**（顶部 Tab）
+   - C++ SDK
+   - USMAP
+   - Dumpspace JSON
+   - IDA Script
 
-2. **十六进制视图**
-   - 经典 Hex Editor 布局：地址 | 十六进制字节 | ASCII
-   - 可编辑（点击字节直接修改）
-   - 高亮修改过的字节
-   - 每行 16 字节，可配置
+2. **选项面板**（左侧）
+   - 包过滤器
+     - 包含模式：仅列出指定包
+     - 排除模式：排除指定包
+     - 输入框带自动补全
+   - 蓝图类开关：是否包含 BlueprintGeneratedClass
 
-3. **类型化解读面板**
-   - 当前光标位置的多类型解读：int8/16/32/64, uint8/16/32/64, float, double, pointer
-   - FString / FName / FText 智能识别
-   - 结构体叠加：选择一个结构体类型，按字段着色显示
+3. **C++ SDK 专属选项**（展开面板）
+   - Padding 风格：`uint8 UnknownData_OFFSET[N]` / `char pad[N]`
+   - static_assert 开关（偏移验证 + 大小验证）
+   - 命名空间名称
+   - 预定义结构体覆盖（FVector, FRotator, FTransform 等）
 
-4. **指针链工具**
-   - 输入基址 + 偏移链
-   - 逐级显示每一步的地址和值
-   - 最终地址的类型化读取
+4. **生成面板**（右侧）
+   - 大按钮：开始生成
+   - 进度条 + 百分比
+   - 当前处理的包名
+   - 预计剩余时间
 
-5. **模式扫描**
-   - AOB 扫描（支持通配符 `??`）
-   - 结果列表，可跳转到任意匹配地址
+5. **任务历史**（底部折叠面板）
+   - 列表：序号、格式、状态、类数量、开始时间、耗时
+   - 操作：重新生成、打开输出目录
 
----
-
-### Page 9: Hook Manager（Hook 管理器）
-
-集中管理所有函数 Hook 和监视。
-
-**功能区域：**
-
-1. **活跃 Hook 列表**
-   - 表格：函数名、状态（启用/禁用）、命中次数、最后命中时间
-   - 操作：启用/禁用、删除、查看日志
-
-2. **添加 Hook**
-   - 函数搜索器（自动补全）
-   - Hook 类型：仅日志 / 条件日志
-   - 条件编辑器（如：仅当某参数满足条件时记录）
-
-3. **Hook 日志查看器**
-   - 实时滚动日志（SSE 推送）
-   - 每条记录：时间戳、调用者对象、参数值、返回值
-   - 可过滤、可暂停
-   - 导出日志
-
-4. **属性监视列表（Watch）**
-   - 表格：对象名、属性名、当前值、上次变化时间
-   - 值变化高亮
-   - 值历史图表（数值类型可显示折线图）
-   - 操作：删除、跳转到对象
+6. **输出**
+   - 文件保存到本地目录
+     - C++ SDK → `CppSDK/`
+     - USMAP → `Mappings/`
+     - Dumpspace → `Dumpspace/`
+     - IDA Script → `IDAMappings/`
+   - 完成后弹出文件管理器
 
 ---
 
-### Page 10: Blueprint Decompiler（蓝图反编译器）
+### Page 6: Settings（设置）
 
-蓝图函数的字节码分析和伪代码生成。
-
-**功能区域：**
-
-1. **函数选择器**
-   - 搜索蓝图函数（仅显示有字节码的函数）
-   - 按蓝图类分组
-
-2. **字节码视图**
-   - 原始字节码反汇编列表
-   - 每条指令：偏移、操作码、操作数、注释
-   - 语法高亮
-
-3. **伪代码视图**
-   - C++ 风格伪代码输出
-   - 控制流结构（if/else, for, while, switch）
-   - 局部变量命名
-   - 函数调用解析（显示被调用函数的完整名称）
-   - 语法高亮 + 行号
-
-4. **操作**
-   - 复制伪代码
-   - 导出为文本文件
-   - 从 Function Browser 直接跳转过来
-
----
-
-### Page 11: Settings（设置）
-
-全局配置页面。
+**定位：** 全局配置
 
 **功能区域：**
 
 1. **连接设置**
-   - HTTP 端口配置（默认自动分配）
-   - Token 密钥配置
-   - 自动重连间隔
-   - 超时时间
+   - HTTP 端口（默认自动分配，27015-27020）
+   - Token 密钥（用于 X-UExplorer-Token 认证）
+   - 自动重连开关
 
 2. **DLL 设置**
-   - DLL 文件路径
-   - 劫持模式：目标 DLL 名称选择（xinput1_3.dll / version.dll / winhttp.dll 等）
-   - 注入模式：注入方法选择
+   - DLL 文件路径（浏览按钮）
+   - 注入方式：
+     - 劫持 DLL：目标 DLL 名称（xinput1_3.dll / version.dll / winhttp.dll）
+     - 远程注入：注入方法选择
+   - 自动注入开关
 
 3. **Dump 默认设置**
    - 默认输出目录
-   - 默认输出格式
-   - 默认包过滤规则
+   - 默认格式选择
 
 4. **显示设置**
-   - 主题（亮色/暗色）
-   - 地址显示格式（0x 前缀 / 无前缀）
-   - 数值显示格式（十六进制 / 十进制）
-   - 语言（中文/英文）
+   - 主题：亮色 / 暗色
+   - 地址格式：0x 前缀 / 无前缀
+   - 数值格式：十六进制 / 十进制
 
-5. **手动偏移覆盖**
-   - GObjects 地址手动输入
-   - GNames 地址手动输入
-   - ProcessEvent 偏移手动输入
-   - 用于自动扫描失败时的备用方案
+5. **手动偏移覆盖**（展开面板）
+   - GObjects 地址（手动输入，用于自动扫描失败时）
+   - GNames 地址
+   - ProcessEvent 偏移
+   - 测试连接按钮
+
+6. **关于**
+   - 版本号
+   - GitHub 链接
 
 ---
 
@@ -654,10 +538,7 @@ Base URL:    http://127.0.0.1:{PORT}/api/v1
 | POST | `/dump/usmap` | 生成 USMAP |
 | POST | `/dump/dumpspace` | 生成 Dumpspace JSON |
 | POST | `/dump/ida-script` | 生成 IDA/Ghidra 导入脚本 |
-| POST | `/dump/json` | 生成 Flat JSON |
 | GET | `/dump/jobs/:id` | 查询任务状态和进度 |
-| GET | `/dump/jobs/:id/download` | 下载完成的 dump（zip） |
-| POST | `/dump/cancel/:id` | 取消运行中的任务 |
 
 #### 内存操作
 
@@ -670,7 +551,6 @@ Base URL:    http://127.0.0.1:{PORT}/api/v1
 | GET | `/objects/:index/property/:name` | 读取单个属性值 |
 | POST | `/objects/:index/property/:name` | 写入单个属性值 |
 | POST | `/memory/pointer-chain` | 指针链跟踪 `{base, offsets[]}` |
-| POST | `/memory/scan` | AOB 模式扫描 `{pattern, protection}` |
 
 #### 属性监视
 
@@ -837,25 +717,25 @@ D:\Projects\UExplorer\
 
 ### Phase 4: 高级 Explorer
 
-**目标：** 实现运行时交互能力
+**目标：** 实现运行时交互能力（DLL 端）
 
-- [ ] 内存写入 + 属性值编辑
-- [ ] ProcessEvent 函数调用
-- [ ] Function Browser 页面（含调用器）
-- [ ] World Explorer 页面
-- [ ] Memory Viewer 页面
-- [ ] 属性监视（Watch）功能
+- [x] 内存写入 + 属性值编辑 — `POST /memory/write`, `POST /objects/:index/property/:name`
+- [x] ProcessEvent 函数调用 — `POST /call/function`
+- [x] 属性监视（Watch）功能 — `/watch/add`, `/watch/list`, SSE 实时推送
+- [ ] Function Browser 页面（含调用器）— 前端
+- [x] World Explorer API — `/world`, `/world/levels`, `/world/actors`, `/world/shortcuts`
+- [ ] Memory Viewer 页面 — 前端
 
 ### Phase 5: 进阶功能
 
-**目标：** Hook、蓝图反编译等高级特性
+**目标：** Hook、蓝图反编译等高级特性（DLL 端）
 
-- [ ] Hook Manager（UFunction Hook + SSE 实时推送）
-- [ ] Hook Manager 页面
-- [ ] Blueprint Decompiler
-- [ ] Blueprint Decompiler 页面
-- [ ] IDA/Ghidra 导入脚本生成
-- [ ] Dumpspace JSON / Flat JSON 生成
+- [x] Hook Manager（UFunction Hook + SSE 实时推送）— `/hooks/*`, SSE 推送
+- [ ] Hook Manager 页面 — 前端
+- [x] Blueprint Decompiler — `/blueprint/:func/bytecode`, `/blueprint/:func/decompile`
+- [ ] Blueprint Decompiler 页面 — 前端
+- [x] IDA/Ghidra 导入脚本生成 — `/dump/ida-script`
+- [x] Dumpspace JSON 生成 — `/dump/dumpspace`
 
 ---
 

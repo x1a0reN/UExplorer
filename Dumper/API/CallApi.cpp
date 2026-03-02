@@ -6,6 +6,7 @@
 #include "Unreal/UnrealTypes.h"
 #include "Unreal/Enums.h"
 #include "OffsetFinder/Offsets.h"
+#include "GameThreadQueue.h"
 
 #include <format>
 #include <vector>
@@ -85,10 +86,17 @@ void RegisterCallRoutes(HttpServer& server)
 				return { 404, "application/json", MakeError("Object is null") };
 			std::cerr << "[CallApi] Object found: " << obj.GetName() << std::endl;
 
-			UEClass cls = obj.GetClass();
+			UEClass cls;
+			// Check if this object is already a class - use it directly for static function lookup
+			if (obj.IsA(EClassCastFlags::Class)) {
+				cls = obj.Cast<UEClass>();
+				std::cerr << "[CallApi] Object is a class: " << cls.GetName() << std::endl;
+			} else {
+				cls = obj.GetClass();
+			}
 			if (!cls)
 				return { 500, "application/json", MakeError("Object has no class") };
-			std::cerr << "[CallApi] Class: " << cls.GetName() << std::endl;
+			std::cerr << "[CallApi] Using class: " << cls.GetName() << std::endl;
 
 			// Find the function
 			UEFunction func;
@@ -117,27 +125,59 @@ void RegisterCallRoutes(HttpServer& server)
 					FillParam(paramBuf.data(), prop, params[pName]);
 			}
 
-			// Call ProcessEvent directly via VTable (same as UEObject::ProcessEvent)
-			// This works from any thread — Main.cpp does the same during init.
-			void* objAddr = obj.GetAddress();
+			// Call the function
+			bool useGameThread = body.value("use_game_thread", false);
 			void* funcAddr = func.GetAddress();
-			void** vft = *reinterpret_cast<void***>(objAddr);
+
+			// Check if this is a static function
+			uint64 funcFlags = static_cast<uint64>(func.GetFunctionFlags());
+			bool isStatic = (funcFlags & static_cast<uint64>(EFunctionFlags::Static)) != 0;
+
+			void* objAddr;
+			void* procEvent = nullptr;
 			int32 peIdx = Off::InSDK::ProcessEvent::PEIndex;
-			std::cerr << "[CallApi] PEIndex=" << peIdx << " vft=" << std::hex << vft << std::dec << std::endl;
-			if (peIdx <= 0 || peIdx > 200) {
-				std::cerr << "[CallApi] Invalid PEIndex!" << std::endl;
-				return { 500, "application/json", MakeError("Invalid ProcessEvent index") };
+
+			if (isStatic) {
+				// For static functions, use the class's default object (CDO) and its VTable ProcessEvent
+				// SDK: GetDefaultObj()->ProcessEvent(Func, &Parms)
+				UEClass cls = obj.Cast<UEClass>();
+				UEObject cdo = cls.GetDefaultObject();
+				objAddr = cdo.GetAddress();
+				if (objAddr && peIdx > 0 && peIdx < 200) {
+					void** objVft = *reinterpret_cast<void***>(objAddr);
+					procEvent = objVft[peIdx];
+				}
+				std::cerr << "[CallApi] Static function, using CDO: " << std::hex << objAddr << " PE=" << procEvent << std::dec << std::endl;
+			} else {
+				// For non-static functions, use the object's own VTable ProcessEvent
+				// SDK: UObject::ProcessEvent(Func, &Parms) - uses 'this' to get VTable
+				objAddr = obj.GetAddress();
+				if (objAddr && peIdx > 0 && peIdx < 200) {
+					void** objVft = *reinterpret_cast<void***>(objAddr);
+					procEvent = objVft[peIdx];
+				}
+				std::cerr << "[CallApi] Non-static function, using object VTable: " << std::hex << objAddr << " PE=" << procEvent << std::dec << std::endl;
 			}
-			void* procEvent = vft[peIdx];
-			std::cerr << "[CallApi] ProcessEvent addr=" << std::hex << procEvent << std::dec << std::endl;
+
 			if (!procEvent) {
-				std::cerr << "[CallApi] ProcessEvent is null!" << std::endl;
 				return { 500, "application/json", MakeError("ProcessEvent not found") };
 			}
-			auto PE = reinterpret_cast<void(*)(void*, void*, void*)>(procEvent);
-			std::cerr << "[CallApi] Calling ProcessEvent..." << std::endl;
-			PE(objAddr, funcAddr, paramBuf.data());
-			std::cerr << "[CallApi] ProcessEvent returned" << std::endl;
+
+			// Call via game thread if requested and hooks are enabled
+			if (useGameThread && GameThread::g_Enabled) {
+				std::cerr << "[CallApi] Calling via GameThreadQueue..." << std::endl;
+				bool ok = GameThread::Submit(objAddr, funcAddr, paramBuf.data(), 10000);
+				std::cerr << "[CallApi] GameThreadQueue result: " << ok << std::endl;
+				if (!ok) {
+					return { 500, "application/json", MakeError("Game thread call timed out") };
+				}
+			} else {
+				// Direct call via ProcessEvent
+				auto PE = reinterpret_cast<void(*)(void*, void*, void*)>(procEvent);
+				std::cerr << "[CallApi] Calling ProcessEvent..." << std::endl;
+				PE(objAddr, funcAddr, paramBuf.data());
+				std::cerr << "[CallApi] ProcessEvent returned" << std::endl;
+			}
 
 			// Read return/out values
 			json result;

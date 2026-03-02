@@ -40,6 +40,14 @@ public:
 	std::thread ServerThread;
 	std::atomic<bool> Running{ false };
 
+	// SSE support
+	std::mutex SSEClientsMutex;
+	std::unordered_map<SOCKET, std::string> SSEClients; // socket -> clientId
+	std::atomic<int> SSEClientCounter{ 0 };
+	SSEConnectHandler OnSSEConnect;
+	SSEEventHandler OnSSEEvent;
+	SSEDisconnectHandler OnSSEDisconnect;
+
 	Impl(uint16_t port, const std::string& token)
 		: Port(port), Token(token) {}
 
@@ -258,6 +266,67 @@ public:
 				}
 			}
 
+			// SSE request detection
+			if (req.Path.rfind("/api/v1/events/", 0) == 0)
+			{
+				// Generate client ID
+				int clientIdNum = ++SSEClientCounter;
+				std::string clientId = "sse-" + std::to_string(clientIdNum);
+
+				// Register client
+				{
+					std::lock_guard<std::mutex> lk(SSEClientsMutex);
+					SSEClients[clientSock] = clientId;
+				}
+
+				// Notify connect handler
+				if (OnSSEConnect)
+					OnSSEConnect(clientId);
+
+				// Send SSE headers
+				std::ostringstream hdr;
+				hdr << "HTTP/1.1 200 OK\r\n";
+				hdr << "Content-Type: text/event-stream\r\n";
+				hdr << "Cache-Control: no-cache\r\n";
+				hdr << "Connection: keep-alive\r\n";
+				hdr << "Access-Control-Allow-Origin: *\r\n";
+				hdr << "\r\n";
+				send(clientSock, hdr.str().c_str(), (int)hdr.str().size(), 0);
+
+				// Send initial event
+				std::string init = "event: connected\ndata: {\"clientId\":\"" + clientId + "\"}\n\n";
+				send(clientSock, init.c_str(), (int)init.size(), 0);
+
+				// Keep connection alive with heartbeat
+				char rbuf[64];
+				fd_set readfds;
+				timeval tv;
+
+				while (Running.load())
+				{
+					FD_ZERO(&readfds);
+					FD_SET(clientSock, &readfds);
+					tv.tv_sec = 0;
+					tv.tv_usec = 500000; // 500ms
+					int sel = select(0, &readfds, nullptr, nullptr, &tv);
+					if (sel < 0) break;
+					if (sel == 0) continue; // timeout, send heartbeat
+
+					int n = recv(clientSock, rbuf, sizeof(rbuf) - 1, 0);
+					if (n <= 0) break; // client disconnected
+				}
+
+				// Cleanup
+				{
+					std::lock_guard<std::mutex> lk(SSEClientsMutex);
+					SSEClients.erase(clientSock);
+				}
+				if (OnSSEDisconnect)
+					OnSSEDisconnect(clientId);
+				closesocket(clientSock);
+				return;
+			}
+
 			// Dispatch
 			HttpResponse resp = MatchAndHandle(req);
 			std::string out = BuildResponse(resp);
@@ -411,5 +480,36 @@ void HttpServer::Patch(const std::string& path, RouteHandler handler)
 
 void HttpServer::Delete(const std::string& path, RouteHandler handler)
 { m_Impl->AddRoute("DELETE", path, std::move(handler)); }
+
+void HttpServer::SetSSEHandlers(SSEConnectHandler onConnect, SSEEventHandler onEvent, SSEDisconnectHandler onDisconnect)
+{
+	m_Impl->OnSSEConnect = std::move(onConnect);
+	m_Impl->OnSSEEvent = std::move(onEvent);
+	m_Impl->OnSSEDisconnect = std::move(onDisconnect);
+}
+
+void HttpServer::SendSSEEvent(const std::string& event, const std::string& data)
+{
+	std::lock_guard<std::mutex> lk(m_Impl->SSEClientsMutex);
+	for (const auto& [sock, clientId] : m_Impl->SSEClients)
+	{
+		std::string msg = "event: " + event + "\ndata: " + data + "\n\n";
+		send(sock, msg.c_str(), (int)msg.size(), 0);
+	}
+}
+
+void HttpServer::SendSSEEventTo(const std::string& clientId, const std::string& event, const std::string& data)
+{
+	std::lock_guard<std::mutex> lk(m_Impl->SSEClientsMutex);
+	for (const auto& [sock, id] : m_Impl->SSEClients)
+	{
+		if (id == clientId)
+		{
+			std::string msg = "event: " + event + "\ndata: " + data + "\n\n";
+			send(sock, msg.c_str(), (int)msg.size(), 0);
+			break;
+		}
+	}
+}
 
 } // namespace UExplorer

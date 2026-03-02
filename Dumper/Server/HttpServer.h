@@ -30,6 +30,9 @@ struct HttpResponse
 };
 
 using RouteHandler = std::function<HttpResponse(const HttpRequest&)>;
+using SSEConnectHandler = std::function<void(const std::string& clientId)>;
+using SSEEventHandler = std::function<void(const std::string& clientId, const std::string& event, const std::string& data)>;
+using SSEDisconnectHandler = std::function<void(const std::string& clientId)>;
 
 class HttpServer
 {
@@ -47,6 +50,11 @@ public:
 	void Post(const std::string& path, RouteHandler handler);
 	void Patch(const std::string& path, RouteHandler handler);
 	void Delete(const std::string& path, RouteHandler handler);
+
+	// SSE support
+	void SetSSEHandlers(SSEConnectHandler onConnect, SSEEventHandler onEvent, SSEDisconnectHandler onDisconnect);
+	void SendSSEEvent(const std::string& event, const std::string& data);
+	void SendSSEEventTo(const std::string& clientId, const std::string& event, const std::string& data);
 
 private:
 	class Impl;
