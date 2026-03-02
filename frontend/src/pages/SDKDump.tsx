@@ -1,136 +1,280 @@
-import { useState } from 'react';
-import { Download, Code2, Database, LayoutTemplate, Coffee, CheckCircle2, RotateCcw } from 'lucide-react';
+﻿import { useEffect, useMemo, useState, type ComponentType } from 'react';
+import { Download, Code2, Database, LayoutTemplate, Coffee, CheckCircle2, RotateCcw, PlayCircle, RefreshCw } from 'lucide-react';
+import api, { type DumpJob, type DumpType } from '../api';
+
+interface DumpFormat {
+  id: DumpType;
+  name: string;
+  icon: ComponentType<{ className?: string }>;
+  desc: string;
+}
+
+const formats: DumpFormat[] = [
+  { id: 'sdk', name: 'C++ Headers', icon: Code2, desc: 'Ready-to-use C++ pointers and structs' },
+  { id: 'usmap', name: 'USMAP', icon: Database, desc: '.usmap format for FModel/CUE4Parse' },
+  { id: 'dumpspace', name: 'Dumpspace JSON', icon: LayoutTemplate, desc: 'Web format for dumpspace.net' },
+  { id: 'ida-script', name: 'IDA Script', icon: Coffee, desc: 'Python script for Ghidra / IDA Pro' },
+];
 
 export default function SDKDump() {
-    const [activeFormat, setActiveFormat] = useState('cpp');
+  const [activeFormat, setActiveFormat] = useState<DumpType>('sdk');
+  const [includePackages, setIncludePackages] = useState('');
+  const [excludePackages, setExcludePackages] = useState('');
+  const [includeBlueprint, setIncludeBlueprint] = useState(true);
+  const [paddingStyle, setPaddingStyle] = useState('char pad_01[0xN]');
+  const [staticAssert, setStaticAssert] = useState(true);
 
-    const formats = [
-        { id: 'cpp', name: 'C++ Headers', icon: Code2, desc: 'Ready-to-use C++ pointers and structs' },
-        { id: 'usmap', name: 'USMAP', icon: Database, desc: '.usmap format for FModel/CUE4Parse' },
-        { id: 'json', name: 'Dumpspace JSON', icon: LayoutTemplate, desc: 'Web format for dumpspace.net' },
-        { id: 'ida', name: 'IDA Script', icon: Coffee, desc: 'Python script for Ghidra / IDA Pro' },
-    ];
+  const [jobs, setJobs] = useState<DumpJob[]>([]);
+  const [runningJobId, setRunningJobId] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-    return (
-        <div className="flex-1 overflow-auto bg-[#0A0A0C]">
-            <div className="max-w-4xl mx-auto p-12">
+  useEffect(() => {
+    void loadJobs();
+    const timer = setInterval(() => {
+      void loadJobs();
+    }, 1200);
+    return () => clearInterval(timer);
+  }, []);
 
-                <div className="text-center mb-12">
-                    <div className="w-20 h-20 mx-auto rounded-[24px] bg-white/5 border border-white/10 flex items-center justify-center mb-6 shadow-2xl">
-                        <Download className="w-10 h-10 text-primary stroke-[1.5]" />
-                    </div>
-                    <h1 className="text-[32px] font-semibold text-white tracking-tight mb-2">Export Center</h1>
-                    <p className="text-white/50 text-[15px] max-w-lg mx-auto">Generate game structures into standard formats for modding and reverse engineering tools.</p>
-                </div>
+  const sortedJobs = useMemo(
+    () => [...jobs].sort((a, b) => (b.start_time || 0) - (a.start_time || 0)),
+    [jobs]
+  );
 
-                {/* Formats Grid */}
-                <div className="grid grid-cols-2 gap-6 mb-12">
-                    {formats.map(f => (
-                        <button
-                            key={f.id}
-                            onClick={() => setActiveFormat(f.id)}
-                            className={`text-left p-6 rounded-[24px] transition-all duration-300 relative overflow-hidden group border ${activeFormat === f.id ? 'bg-primary/10 border-primary/30 shadow-[0_0_40px_rgba(10,132,255,0.1)]' : 'bg-white/5 border-white/5 hover:bg-white/10'}`}
-                        >
-                            <div className="flex gap-4 relative z-10">
-                                <div className={`w-12 h-12 rounded-[14px] flex items-center justify-center flex-none mt-1 ${activeFormat === f.id ? 'bg-primary text-white' : 'bg-black/40 text-white/50 group-hover:text-white'}`}>
-                                    <f.icon className="w-6 h-6 stroke-[1.5]" />
-                                </div>
-                                <div>
-                                    <h3 className={`text-[17px] font-semibold tracking-tight mb-1 ${activeFormat === f.id ? 'text-white' : 'text-white/80'}`}>{f.name}</h3>
-                                    <p className={`text-[13px] leading-relaxed ${activeFormat === f.id ? 'text-blue-300/80' : 'text-white/40'}`}>{f.desc}</p>
-                                </div>
-                            </div>
+  const runningJob = sortedJobs.find((j) => j.id === runningJobId) || sortedJobs.find((j) => j.status === 'running') || null;
 
-                            {activeFormat === f.id && (
-                                <div className="absolute right-6 top-1/2 -translate-y-1/2">
-                                    <CheckCircle2 className="w-6 h-6 text-primary" />
-                                </div>
-                            )}
-                        </button>
-                    ))}
-                </div>
+  const loadJobs = async () => {
+    const res = await api.getDumpJobs();
+    if (!res.success || !res.data) return;
+    setJobs(res.data);
+  };
 
-                {/* Configuration specific to format */}
-                {activeFormat === 'cpp' && (
-                    <div className="apple-glass-panel rounded-[24px] p-8 mb-8 space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                        <h3 className="text-[15px] font-semibold text-white/90">C++ Export Configuration</h3>
+  const buildOptions = () => ({
+    include_packages: includePackages,
+    exclude_packages: excludePackages,
+    include_blueprint: includeBlueprint,
+    padding_style: paddingStyle,
+    static_assert: staticAssert,
+  });
 
-                        <div className="grid grid-cols-2 gap-8">
-                            <div className="space-y-5">
-                                <div className="flex items-center justify-between">
-                                    <div>
-                                        <div className="text-[13px] font-medium text-white/90 mb-0.5">Static Asserts</div>
-                                        <div className="text-[11px] text-white/40">Verify offsets during compilation</div>
-                                    </div>
-                                    <label className="relative inline-flex items-center cursor-pointer">
-                                        <input type="checkbox" defaultChecked className="sr-only peer" />
-                                        <div className="w-11 h-6 bg-white/10 rounded-full peer peer-checked:bg-primary transition-colors after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
-                                    </label>
-                                </div>
+  const startGenerate = async (format: DumpType = activeFormat) => {
+    setBusy(true);
+    setError(null);
+    const res = await api.startDump(format, buildOptions());
+    setBusy(false);
 
-                                <div className="flex items-center justify-between">
-                                    <div>
-                                        <div className="text-[13px] font-medium text-white/90 mb-0.5">Padding Style</div>
-                                        <div className="text-[11px] text-white/40">Character array padding</div>
-                                    </div>
-                                    <select className="bg-white/5 border border-white/10 text-white text-[12px] rounded-lg px-3 py-1.5 outline-none">
-                                        <option>char pad_01[0xN]</option>
-                                        <option>uint8 pad_01[0xN]</option>
-                                    </select>
-                                </div>
-                            </div>
+    if (!res.success || !res.data) {
+      setError(res.error || 'Failed to create dump job');
+      return;
+    }
 
-                            <div className="space-y-4">
-                                <div>
-                                    <label className="text-[11px] font-bold text-white/40 uppercase tracking-widest block mb-2">Package Filter</label>
-                                    <input type="text" placeholder="Leave empty for all..." className="w-full bg-black/40 border border-white/10 text-white text-[13px] rounded-lg px-4 py-2 outline-none focus:border-primary/50" />
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                )}
+    setRunningJobId(res.data.job_id);
+    await loadJobs();
+  };
 
-                {/* Action Button */}
-                <button className="w-full h-14 rounded-2xl bg-primary hover:bg-primary-dark text-white font-semibold text-[16px] tracking-tight shadow-[0_4px_20px_rgba(10,132,255,0.3)] hover:shadow-[0_4px_24px_rgba(10,132,255,0.4)] transition-all active:scale-[0.98]">
-                    Generate {formats.find(f => f.id === activeFormat)?.name}
-                </button>
+  const openFolderText = (job: DumpJob) => {
+    return job.output_path || '(waiting output path)';
+  };
 
-                {/* History */}
-                <div className="mt-12 space-y-4">
-                    <h3 className="text-[13px] font-semibold text-white/50 uppercase tracking-widest ml-2">Recent Exports</h3>
-
-                    <div className="space-y-2">
-                        <div className="apple-glass-panel rounded-xl p-4 flex items-center justify-between group">
-                            <div className="flex items-center gap-4">
-                                <div className="w-8 h-8 rounded-full bg-green-500/10 flex items-center justify-center">
-                                    <CheckCircle2 className="w-4 h-4 text-green-500" />
-                                </div>
-                                <div>
-                                    <div className="text-[14px] font-medium text-white/90">USMAP Mappings</div>
-                                    <div className="text-[11px] text-white/40">Completed in 240ms • 142,012 objects parsed</div>
-                                </div>
-                            </div>
-                            <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                <button className="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-[12px] font-medium text-white">Open Folder</button>
-                                <button className="w-8 h-8 rounded-lg bg-white/5 hover:bg-white/10 flex items-center justify-center text-white"><RotateCcw className="w-3.5 h-3.5" /></button>
-                            </div>
-                        </div>
-
-                        <div className="apple-glass-panel rounded-xl p-4 flex items-center justify-between">
-                            <div className="flex items-center gap-4">
-                                <div className="w-8 h-8 rounded-full bg-green-500/10 flex items-center justify-center">
-                                    <CheckCircle2 className="w-4 h-4 text-green-500" />
-                                </div>
-                                <div>
-                                    <div className="text-[14px] font-medium text-white/90">C++ SDK Base</div>
-                                    <div className="text-[11px] text-white/40">Completed in 2.6s • /Engine, /CoreUObject</div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-            </div>
+  return (
+    <div className="flex-1 overflow-auto bg-[#0A0A0C]">
+      <div className="max-w-5xl mx-auto p-10">
+        <div className="text-center mb-10">
+          <div className="w-20 h-20 mx-auto rounded-[24px] bg-white/5 border border-white/10 flex items-center justify-center mb-6 shadow-2xl">
+            <Download className="w-10 h-10 text-primary stroke-[1.5]" />
+          </div>
+          <h1 className="text-[32px] font-semibold text-white tracking-tight mb-2">Export Center</h1>
+          <p className="text-white/50 text-[15px] max-w-lg mx-auto">Generate game structures into standard formats for reverse engineering workflows.</p>
         </div>
-    );
+
+        <div className="grid grid-cols-2 gap-6 mb-10">
+          {formats.map((f) => (
+            <button
+              key={f.id}
+              onClick={() => setActiveFormat(f.id)}
+              className={`text-left p-6 rounded-[24px] transition-all duration-300 relative overflow-hidden group border ${
+                activeFormat === f.id ? 'bg-primary/10 border-primary/30 shadow-[0_0_40px_rgba(10,132,255,0.1)]' : 'bg-white/5 border-white/5 hover:bg-white/10'
+              }`}
+            >
+              <div className="flex gap-4 relative z-10">
+                <div className={`w-12 h-12 rounded-[14px] flex items-center justify-center flex-none mt-1 ${activeFormat === f.id ? 'bg-primary text-white' : 'bg-black/40 text-white/50 group-hover:text-white'}`}>
+                  <f.icon className="w-6 h-6 stroke-[1.5]" />
+                </div>
+                <div>
+                  <h3 className={`text-[17px] font-semibold tracking-tight mb-1 ${activeFormat === f.id ? 'text-white' : 'text-white/80'}`}>{f.name}</h3>
+                  <p className={`text-[13px] leading-relaxed ${activeFormat === f.id ? 'text-blue-300/80' : 'text-white/40'}`}>{f.desc}</p>
+                </div>
+              </div>
+              {activeFormat === f.id && (
+                <div className="absolute right-6 top-1/2 -translate-y-1/2">
+                  <CheckCircle2 className="w-6 h-6 text-primary" />
+                </div>
+              )}
+            </button>
+          ))}
+        </div>
+
+        <div className="apple-glass-panel rounded-[24px] p-8 mb-8 space-y-6">
+          <h3 className="text-[15px] font-semibold text-white/90">Export Configuration</h3>
+
+          <div className="grid grid-cols-2 gap-8">
+            <div className="space-y-4">
+              <div>
+                <label className="text-[11px] font-bold text-white/40 uppercase tracking-widest block mb-2">Include Packages</label>
+                <input
+                  type="text"
+                  value={includePackages}
+                  onChange={(e) => setIncludePackages(e.target.value)}
+                  placeholder="Engine, CoreUObject"
+                  className="w-full bg-black/40 border border-white/10 text-white text-[13px] rounded-lg px-4 py-2 outline-none focus:border-primary/50"
+                />
+              </div>
+              <div>
+                <label className="text-[11px] font-bold text-white/40 uppercase tracking-widest block mb-2">Exclude Packages</label>
+                <input
+                  type="text"
+                  value={excludePackages}
+                  onChange={(e) => setExcludePackages(e.target.value)}
+                  placeholder="Temp, Dev"
+                  className="w-full bg-black/40 border border-white/10 text-white text-[13px] rounded-lg px-4 py-2 outline-none focus:border-primary/50"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-5">
+              <ToggleRow
+                title="Include Blueprint Classes"
+                subtitle="BlueprintGeneratedClass support"
+                checked={includeBlueprint}
+                onChange={setIncludeBlueprint}
+              />
+              <ToggleRow
+                title="Static Asserts"
+                subtitle="Generate offset/size assertions"
+                checked={staticAssert}
+                onChange={setStaticAssert}
+              />
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-[13px] font-medium text-white/90 mb-0.5">Padding Style</div>
+                  <div className="text-[11px] text-white/40">C++ unknown bytes style</div>
+                </div>
+                <select
+                  value={paddingStyle}
+                  onChange={(e) => setPaddingStyle(e.target.value)}
+                  className="bg-white/5 border border-white/10 text-white text-[12px] rounded-lg px-3 py-1.5 outline-none"
+                >
+                  <option>char pad_01[0xN]</option>
+                  <option>uint8 UnknownData_01[0xN]</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-[1fr_320px] gap-6 mb-10">
+          <button
+            disabled={busy}
+            onClick={() => void startGenerate(activeFormat)}
+            className="h-14 rounded-2xl bg-primary hover:bg-primary-dark text-white font-semibold text-[16px] tracking-tight shadow-[0_4px_20px_rgba(10,132,255,0.3)] transition-all active:scale-[0.98] disabled:opacity-60"
+          >
+            {busy ? 'Creating Task...' : `Generate ${formats.find((f) => f.id === activeFormat)?.name}`}
+          </button>
+
+          <div className="apple-glass-panel rounded-2xl px-4 py-3 flex items-center justify-between">
+            <div>
+              <div className="text-white/40 text-xs">Current Task</div>
+              <div className="text-white/90 text-sm font-mono truncate max-w-[190px]">{runningJob?.id || 'none'}</div>
+            </div>
+            <button
+              onClick={() => void loadJobs()}
+              className="w-8 h-8 rounded-lg bg-white/10 hover:bg-white/20 flex items-center justify-center"
+            >
+              <RefreshCw className="w-4 h-4 text-white/70" />
+            </button>
+          </div>
+        </div>
+
+        {runningJob && (
+          <div className="apple-glass-panel rounded-[18px] p-4 mb-8">
+            <div className="flex items-center justify-between mb-3">
+              <div className="text-sm text-white/90 font-medium">Running: {runningJob.format}</div>
+              <div className="text-xs font-mono text-white/60">{runningJob.status}</div>
+            </div>
+            <div className="h-2 rounded bg-white/10 overflow-hidden">
+              <div
+                className={`h-full ${runningJob.status === 'running' ? 'bg-blue-400 animate-pulse' : runningJob.status === 'completed' ? 'bg-green-400' : 'bg-red-400'}`}
+                style={{ width: runningJob.status === 'running' ? '60%' : '100%' }}
+              />
+            </div>
+            <div className="mt-2 text-xs text-white/50">Duration: {runningJob.duration_ms} ms</div>
+          </div>
+        )}
+
+        {error && <div className="text-red-300 text-sm mb-6">{error}</div>}
+
+        <div className="mt-10 space-y-4">
+          <h3 className="text-[13px] font-semibold text-white/50 uppercase tracking-widest ml-2">Task History</h3>
+          <div className="space-y-2">
+            {sortedJobs.map((job) => (
+              <div key={job.id} className="apple-glass-panel rounded-xl p-4 flex items-center justify-between group">
+                <div className="flex items-center gap-4 min-w-0">
+                  <div className={`w-8 h-8 rounded-full flex items-center justify-center ${job.status === 'completed' ? 'bg-green-500/10' : job.status === 'failed' ? 'bg-red-500/10' : 'bg-blue-500/10'}`}>
+                    {job.status === 'running' ? (
+                      <PlayCircle className="w-4 h-4 text-blue-400" />
+                    ) : (
+                      <CheckCircle2 className={`w-4 h-4 ${job.status === 'completed' ? 'text-green-500' : 'text-red-400'}`} />
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-[14px] font-medium text-white/90 truncate">{job.id}</div>
+                    <div className="text-[11px] text-white/40 truncate">
+                      {job.format} | {job.status} | {job.duration_ms} ms | {openFolderText(job)}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex gap-2 opacity-100">
+                  <button
+                    onClick={() => void startGenerate(job.format)}
+                    className="w-8 h-8 rounded-lg bg-white/5 hover:bg-white/10 flex items-center justify-center text-white"
+                    title="Rerun"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            ))}
+            {sortedJobs.length === 0 && <div className="text-white/40 text-sm px-2">No jobs yet</div>}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
+
+function ToggleRow({
+  title,
+  subtitle,
+  checked,
+  onChange,
+}: {
+  title: string;
+  subtitle: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <div className="flex items-center justify-between">
+      <div>
+        <div className="text-[13px] font-medium text-white/90 mb-0.5">{title}</div>
+        <div className="text-[11px] text-white/40">{subtitle}</div>
+      </div>
+      <label className="relative inline-flex items-center cursor-pointer">
+        <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} className="sr-only peer" />
+        <div className="w-11 h-6 bg-white/10 rounded-full peer peer-checked:bg-primary transition-colors after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full" />
+      </label>
+    </div>
+  );
+}
+

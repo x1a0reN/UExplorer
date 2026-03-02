@@ -17,13 +17,14 @@ export default function ProcessSelector({ isOpen, onClose, onInjectSuccess }: Pr
   const [processes, setProcesses] = useState<ProcessInfo[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedProcess, setSelectedProcess] = useState<ProcessInfo | null>(null);
-  const [dllPath, setDllPath] = useState('D:\\Projects\\UExplorer\\Dumper\\x64\\Release\\UExplorerCore.dll');
+  const [dllPath, setDllPath] = useState(api.getSettings().dllPath);
   const [injecting, setInjecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [injectResult, setInjectResult] = useState<{ success: boolean; message: string } | null>(null);
 
   useEffect(() => {
     if (isOpen) {
+      setDllPath(api.getSettings().dllPath);
       loadProcesses();
     }
   }, [isOpen]);
@@ -54,6 +55,7 @@ export default function ProcessSelector({ isOpen, onClose, onInjectSuccess }: Pr
       setInjectResult(result);
 
       if (result.success) {
+        api.updateSettings({ dllPath });
         onInjectSuccess(selectedProcess.pid);
         setTimeout(() => {
           onClose();

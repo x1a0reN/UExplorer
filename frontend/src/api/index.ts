@@ -1,29 +1,31 @@
-// API client for UExplorer Core DLL
-
 const DEFAULT_PORT = 27015;
 const DEFAULT_TOKEN = 'uexplorer-dev';
+const SETTINGS_KEY = 'uexplorer.settings';
 
 export interface ApiResponse<T> {
   success: boolean;
   data: T | null;
   error: string | null;
-  timestamp: number;
+  timestamp?: number;
+}
+
+export interface ApiClientSettings {
+  port: number;
+  token: string;
+  dllPath: string;
+  autoReconnect: boolean;
+  injectionMethod: 'CreateRemoteThread' | 'DLL Proxy (xinput1_3)';
+  defaultDumpFormat: DumpType;
+  outputDir: string;
 }
 
 export interface StatusData {
   game_name: string;
   game_version: string;
   gobjects_address: string;
-  gnames_address?: string;
   object_count: number;
   pid: number;
   architecture: string;
-}
-
-export interface WorldData {
-  name: string;
-  address: string;
-  actor_count: number;
 }
 
 export interface ObjectItem {
@@ -31,6 +33,19 @@ export interface ObjectItem {
   name: string;
   class: string;
   address: string;
+}
+
+export interface ObjectDetail extends ObjectItem {
+  full_name: string;
+  outer_chain: string[];
+}
+
+export interface ObjectProperty {
+  name: string;
+  type: string;
+  offset: number;
+  size: number;
+  value: unknown;
 }
 
 export interface ObjectsResponse {
@@ -47,20 +62,90 @@ export interface SearchResponse {
   limit: number;
 }
 
-export interface ClassItem {
-  name: string;
-  parent?: string;
-  package?: string;
-  size?: number;
-  properties?: number;
-  functions?: number;
+export interface ObjectCountData {
+  total: number;
+  classes: number;
+  structs: number;
+  enums: number;
+  functions: number;
+  packages: number;
 }
 
-export interface ClassesResponse {
-  items: ClassItem[];
+export interface ClassItem {
+  index: number;
+  name: string;
+  full_name: string;
+  size: number;
+  super: string;
+  address: string;
+}
+
+export interface ClassProperty {
+  name: string;
+  type: string;
+  offset: number;
+  size: number;
+  array_dim: number;
+  flags: string;
+}
+
+export interface ClassFunction {
+  name: string;
+  full_name: string;
+  flags: string;
+  param_size: number;
+  has_script: boolean;
+  address: string;
+  params: ClassProperty[];
+}
+
+export interface ClassDetail {
+  name: string;
+  full_name: string;
+  cpp_name: string;
+  size: number;
+  alignment: number;
+  index: number;
+  address: string;
+  super: string;
+  fields: ClassProperty[];
+  functions: ClassFunction[];
+}
+
+export interface PaginatedResponse<T> {
+  items: T[];
   total: number;
   offset: number;
   limit: number;
+}
+
+export interface StructItem {
+  index: number;
+  name: string;
+  size: number;
+  super: string;
+}
+
+export interface StructDetail {
+  name: string;
+  full_name: string;
+  size: number;
+  alignment: number;
+  super: string;
+  fields: ClassProperty[];
+}
+
+export interface EnumItem {
+  index: number;
+  name: string;
+  full_name: string;
+}
+
+export interface EnumDetail {
+  name: string;
+  full_name: string;
+  underlying_type: string;
+  values: Array<{ name: string; value: number }>;
 }
 
 export interface PackageItem {
@@ -69,56 +154,231 @@ export interface PackageItem {
   address: string;
 }
 
-export interface PackagesResponse {
-  items: PackageItem[];
-  total: number;
+export interface PackageContentsResponse {
+  package: string;
+  items: ObjectItem[];
+  count: number;
+}
+
+export interface ClassHierarchy {
+  name: string;
+  parents: string[];
+  children: string[];
+}
+
+export interface ClassInstancesResponse {
+  class: string;
+  items: Array<{ index: number; name: string; address: string }>;
+  matched: number;
   offset: number;
   limit: number;
 }
 
+export interface ClassCDOResponse {
+  class: string;
+  cdo_address: string;
+  properties: ObjectProperty[];
+}
+
+export interface WorldData {
+  name: string;
+  address: string;
+  actor_count: number;
+}
+
+export interface WorldActorItem extends ObjectItem {}
+
+export interface WorldActorResponse {
+  items: WorldActorItem[];
+  matched: number;
+  offset: number;
+  limit: number;
+}
+
+export interface WorldShortcuts {
+  game_mode: ObjectItem | null;
+  game_state: ObjectItem | null;
+  player_controller: ObjectItem | null;
+  pawn: ObjectItem | null;
+}
+
+export interface MemoryReadData {
+  address: string;
+  size: number;
+  hex: string;
+  interpret: Record<string, unknown>;
+}
+
+export interface MemoryTypedData {
+  address: string;
+  type: string;
+  value: unknown;
+}
+
+export interface PointerChainData {
+  final_address?: string;
+  steps: Array<Record<string, unknown>>;
+  value?: Record<string, unknown>;
+  error?: string;
+}
+
+export interface WatchItem {
+  id: number;
+  object_index: number;
+  property: string;
+  value: unknown;
+  changed: boolean;
+  last_change: number;
+  created: number;
+}
+
+export interface WatchListResponse {
+  watches: WatchItem[];
+  count: number;
+}
+
+export interface HookItem {
+  id: number;
+  function_path: string;
+  enabled: boolean;
+  hit_count: number;
+  last_hit_time: number;
+}
+
+export interface HookListResponse {
+  hooks: HookItem[];
+  monitored_count: number;
+  total_pe_calls: number;
+  vtable_hook_installed: boolean;
+  game_thread_enabled: boolean;
+}
+
+export interface HookLogEntry {
+  timestamp: number;
+  function_name: string;
+  caller_name: string;
+}
+
+export interface HookLogResponse {
+  entries: HookLogEntry[];
+}
+
+export interface BlueprintDecompileData {
+  function: string;
+  class: string;
+  flags: string;
+  script_size: number;
+  pseudocode: string;
+}
+
+export interface BlueprintBytecodeData {
+  function: string;
+  size: number;
+  hex: string;
+}
+
+export type DumpType = 'sdk' | 'usmap' | 'dumpspace' | 'ida-script';
+
 export interface DumpJob {
   id: string;
-  type: string;
-  status: 'pending' | 'running' | 'completed' | 'failed';
-  progress: number;
-  message?: string;
-  started_at?: number;
-  completed_at?: number;
+  format: DumpType;
+  status: 'running' | 'completed' | 'failed';
+  output_path?: string;
+  start_time: number;
+  end_time: number;
+  duration_ms: number;
+  error?: string;
 }
+
+const DEFAULT_SETTINGS: ApiClientSettings = {
+  port: DEFAULT_PORT,
+  token: DEFAULT_TOKEN,
+  dllPath: 'D:\\Projects\\UExplorer\\Dumper\\x64\\Release\\UExplorerCore.dll',
+  autoReconnect: true,
+  injectionMethod: 'CreateRemoteThread',
+  defaultDumpFormat: 'sdk',
+  outputDir: '',
+};
+
+function readSettings(): ApiClientSettings {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    if (!raw) return DEFAULT_SETTINGS;
+    const parsed = JSON.parse(raw) as Partial<ApiClientSettings>;
+    return { ...DEFAULT_SETTINGS, ...parsed };
+  } catch {
+    return DEFAULT_SETTINGS;
+  }
+}
+
+function toQuery(params: Record<string, string | number | undefined>): string {
+  const qs = new URLSearchParams();
+  Object.entries(params).forEach(([k, v]) => {
+    if (v === undefined || v === '') return;
+    qs.append(k, String(v));
+  });
+  return qs.toString();
+}
+
+type SSECallback = (event: string, payload: unknown) => void;
 
 class UExplorerApi {
   private baseUrl: string;
   private token: string;
+  private settings: ApiClientSettings;
 
-  constructor(port: number = DEFAULT_PORT, token: string = DEFAULT_TOKEN) {
-    this.baseUrl = `http://127.0.0.1:${port}/api/v1`;
-    this.token = token;
+  constructor() {
+    this.settings = readSettings();
+    this.baseUrl = `http://127.0.0.1:${this.settings.port}/api/v1`;
+    this.token = this.settings.token;
   }
 
-  setPort(port: number) {
-    this.baseUrl = `http://127.0.0.1:${port}/api/v1`;
+  getSettings() {
+    return this.settings;
   }
 
-  setToken(token: string) {
-    this.token = token;
+  updateSettings(next: Partial<ApiClientSettings>) {
+    this.settings = { ...this.settings, ...next };
+    this.baseUrl = `http://127.0.0.1:${this.settings.port}/api/v1`;
+    this.token = this.settings.token;
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(this.settings));
   }
 
   private async request<T>(endpoint: string, options: RequestInit = {}): Promise<ApiResponse<T>> {
     const url = `${this.baseUrl}${endpoint}`;
     const headers: HeadersInit = {
-      'Content-Type': 'application/json',
       'X-UExplorer-Token': this.token,
       ...options.headers,
     };
+
+    if (options.body && !(headers as Record<string, string>)['Content-Type']) {
+      (headers as Record<string, string>)['Content-Type'] = 'application/json';
+    }
 
     try {
       const response = await fetch(url, {
         ...options,
         headers,
       });
+      const text = await response.text();
+      if (!text) {
+        return {
+          success: response.ok,
+          data: null,
+          error: response.ok ? null : `HTTP ${response.status}`,
+        };
+      }
 
-      const data = await response.json();
-      return data as ApiResponse<T>;
+      const parsed = JSON.parse(text) as ApiResponse<T>;
+      if (!response.ok && parsed.success !== false) {
+        return {
+          success: false,
+          data: null,
+          error: parsed.error || `HTTP ${response.status}`,
+          timestamp: parsed.timestamp,
+        };
+      }
+      return parsed;
     } catch (error) {
       return {
         success: false,
@@ -129,154 +389,334 @@ class UExplorerApi {
     }
   }
 
-  // Status endpoints
+  // Status
   async getStatus(): Promise<ApiResponse<StatusData>> {
-    return this.request<StatusData>('/status');
+    return this.request('/status');
   }
 
   async healthCheck(): Promise<boolean> {
-    const response = await this.request<{ status: string }>('/status/health');
-    return response.success && response.data?.status === 'ok';
+    const response = await this.request<{ alive: boolean }>('/status/health');
+    return response.success && !!response.data?.alive;
   }
 
-  // World endpoints
-  async getWorld(): Promise<ApiResponse<WorldData>> {
-    return this.request<WorldData>('/world');
+  // Objects
+  async getObjectCounts(): Promise<ApiResponse<ObjectCountData>> {
+    return this.request('/objects/count');
   }
 
-  // Objects endpoints
-  async getObjects(offset: number = 0, limit: number = 50): Promise<ApiResponse<ObjectsResponse>> {
-    return this.request<ObjectsResponse>(`/objects?offset=${offset}&limit=${limit}`);
+  async getObjects(offset = 0, limit = 50, q = ''): Promise<ApiResponse<ObjectsResponse>> {
+    const qs = toQuery({ offset, limit, q });
+    return this.request(`/objects?${qs}`);
   }
 
   async searchObjects(
     query: string,
     options: { class?: string; package?: string; offset?: number; limit?: number } = {}
   ): Promise<ApiResponse<SearchResponse>> {
-    const params = new URLSearchParams({ q: query });
-    if (options.class) params.append('class', options.class);
-    if (options.package) params.append('package', options.package);
-    if (options.offset) params.append('offset', options.offset.toString());
-    if (options.limit) params.append('limit', options.limit.toString());
-    return this.request<SearchResponse>(`/objects/search?${params}`);
+    const qs = toQuery({
+      q: query,
+      class: options.class,
+      package: options.package,
+      offset: options.offset ?? 0,
+      limit: options.limit ?? 50,
+    });
+    return this.request(`/objects/search?${qs}`);
   }
 
-  async getObjectByIndex(index: number): Promise<ApiResponse<ObjectItem>> {
-    return this.request<ObjectItem>(`/objects/${index}`);
+  async getObjectByIndex(index: number): Promise<ApiResponse<ObjectDetail>> {
+    return this.request(`/objects/${index}`);
   }
 
-  async getObjectByAddress(address: string): Promise<ApiResponse<ObjectItem>> {
-    return this.request<ObjectItem>(`/objects/by-address/${address}`);
+  async getObjectByAddress(address: string): Promise<ApiResponse<ObjectDetail>> {
+    return this.request(`/objects/by-address/${encodeURIComponent(address)}`);
   }
 
-  async getObjectByPath(path: string): Promise<ApiResponse<ObjectItem>> {
-    return this.request<ObjectItem>(`/objects/by-path/${encodeURIComponent(path)}`);
+  async getObjectByPath(path: string): Promise<ApiResponse<ObjectDetail>> {
+    return this.request(`/objects/by-path/${encodeURIComponent(path)}`);
   }
 
-  // Classes endpoints
-  async getClasses(offset: number = 0, limit: number = 50): Promise<ApiResponse<ClassesResponse>> {
-    return this.request<ClassesResponse>(`/classes?offset=${offset}&limit=${limit}`);
+  async getObjectProperties(index: number): Promise<ApiResponse<ObjectProperty[]>> {
+    return this.request(`/objects/${index}/properties`);
   }
 
-  async getClassByName(name: string): Promise<ApiResponse<ClassItem>> {
-    return this.request<ClassItem>(`/classes/${encodeURIComponent(name)}`);
+  async setObjectProperty(index: number, property: string, value: unknown): Promise<ApiResponse<{ property: string; written: boolean; new_value: unknown }>> {
+    return this.request(`/objects/${index}/property/${encodeURIComponent(property)}`, {
+      method: 'POST',
+      body: JSON.stringify({ value }),
+    });
   }
 
-  // Packages endpoints
-  async getPackages(offset: number = 0, limit: number = 50): Promise<ApiResponse<PackagesResponse>> {
-    return this.request<PackagesResponse>(`/packages?offset=${offset}&limit=${limit}`);
+  async getPackages(offset = 0, limit = 50, q = ''): Promise<ApiResponse<PaginatedResponse<PackageItem>>> {
+    const qs = toQuery({ offset, limit, q });
+    return this.request(`/packages?${qs}`);
   }
 
-  async getPackageContents(packageName: string, offset: number = 0, limit: number = 50): Promise<ApiResponse<ObjectsResponse>> {
-    return this.request<ObjectsResponse>(
-      `/packages/${encodeURIComponent(packageName)}/contents?offset=${offset}&limit=${limit}`
-    );
+  async getPackageContents(packageName: string): Promise<ApiResponse<PackageContentsResponse>> {
+    return this.request(`/packages/${encodeURIComponent(packageName)}/contents`);
   }
 
-  // Dump endpoints
-  async startDump(type: 'sdk' | 'usmap' | 'dumpspace' | 'ida-script'): Promise<ApiResponse<{ job_id: string }>> {
-    return this.request<{ job_id: string }>(`/dump/${type}`, { method: 'POST' });
+  // Classes / Structs / Enums
+  async getClasses(offset = 0, limit = 50, q = ''): Promise<ApiResponse<PaginatedResponse<ClassItem>>> {
+    const qs = toQuery({ offset, limit, q });
+    return this.request(`/classes?${qs}`);
   }
 
-  async getDumpJobs(): Promise<ApiResponse<DumpJob[]>> {
-    return this.request<DumpJob[]>('/dump/jobs');
+  async getClassByName(name: string): Promise<ApiResponse<ClassDetail>> {
+    return this.request(`/classes/${encodeURIComponent(name)}`);
   }
 
-  async getDumpJob(id: string): Promise<ApiResponse<DumpJob>> {
-    return this.request<DumpJob>(`/dump/jobs/${id}`);
+  async getClassFields(name: string): Promise<ApiResponse<ClassProperty[]>> {
+    return this.request(`/classes/${encodeURIComponent(name)}/fields`);
   }
 
-  // Memory endpoints
-  async readMemory(address: string, size: number): Promise<ApiResponse<{ bytes: string }>> {
-    return this.request<{ bytes: string }>('/memory/read', {
+  async getClassFunctions(name: string): Promise<ApiResponse<ClassFunction[]>> {
+    return this.request(`/classes/${encodeURIComponent(name)}/functions`);
+  }
+
+  async getClassHierarchy(name: string): Promise<ApiResponse<ClassHierarchy>> {
+    return this.request(`/classes/${encodeURIComponent(name)}/hierarchy`);
+  }
+
+  async getClassInstances(name: string, offset = 0, limit = 50): Promise<ApiResponse<ClassInstancesResponse>> {
+    const qs = toQuery({ offset, limit });
+    return this.request(`/classes/${encodeURIComponent(name)}/instances?${qs}`);
+  }
+
+  async getClassCDO(name: string): Promise<ApiResponse<ClassCDOResponse>> {
+    return this.request(`/classes/${encodeURIComponent(name)}/cdo`);
+  }
+
+  async getStructs(offset = 0, limit = 50, q = ''): Promise<ApiResponse<PaginatedResponse<StructItem>>> {
+    const qs = toQuery({ offset, limit, q });
+    return this.request(`/structs?${qs}`);
+  }
+
+  async getStructByName(name: string): Promise<ApiResponse<StructDetail>> {
+    return this.request(`/structs/${encodeURIComponent(name)}`);
+  }
+
+  async getEnums(offset = 0, limit = 50, q = ''): Promise<ApiResponse<PaginatedResponse<EnumItem>>> {
+    const qs = toQuery({ offset, limit, q });
+    return this.request(`/enums?${qs}`);
+  }
+
+  async getEnumByName(name: string): Promise<ApiResponse<EnumDetail>> {
+    return this.request(`/enums/${encodeURIComponent(name)}`);
+  }
+
+  // World
+  async getWorld(): Promise<ApiResponse<WorldData>> {
+    return this.request('/world');
+  }
+
+  async getWorldActors(
+    offset = 0,
+    limit = 50,
+    q = '',
+    classFilter = ''
+  ): Promise<ApiResponse<WorldActorResponse>> {
+    const qs = toQuery({ offset, limit, q, class: classFilter });
+    return this.request(`/world/actors?${qs}`);
+  }
+
+  async getWorldShortcuts(): Promise<ApiResponse<WorldShortcuts>> {
+    return this.request('/world/shortcuts');
+  }
+
+  // Memory
+  async readMemory(address: string, size: number): Promise<ApiResponse<MemoryReadData>> {
+    return this.request('/memory/read', {
       method: 'POST',
       body: JSON.stringify({ address, size }),
     });
   }
 
-  async writeMemory(address: string, bytes: number[]): Promise<ApiResponse<{ written: number }>> {
-    return this.request<{ written: number }>('/memory/write', {
+  async readTypedMemory(address: string, type: string): Promise<ApiResponse<MemoryTypedData>> {
+    return this.request('/memory/read-typed', {
+      method: 'POST',
+      body: JSON.stringify({ address, type }),
+    });
+  }
+
+  async writeMemory(address: string, bytes: number[]): Promise<ApiResponse<{ address: string; bytes_written: number }>> {
+    return this.request('/memory/write', {
       method: 'POST',
       body: JSON.stringify({ address, bytes }),
     });
   }
 
-  // Call endpoints
+  async writeTypedMemory(address: string, type: string, value: unknown): Promise<ApiResponse<{ address: string; type: string; written: boolean }>> {
+    return this.request('/memory/write-typed', {
+      method: 'POST',
+      body: JSON.stringify({ address, type, value }),
+    });
+  }
+
+  async resolvePointerChain(base: string, offsets: number[]): Promise<ApiResponse<PointerChainData>> {
+    return this.request('/memory/pointer-chain', {
+      method: 'POST',
+      body: JSON.stringify({ base, offsets }),
+    });
+  }
+
+  // Function call / hook / blueprint
   async callFunction(
     objectIndex: number,
     functionName: string,
-    params: Record<string, unknown> = {}
-  ): Promise<ApiResponse<{ result: unknown }>> {
-    return this.request<{ result: unknown }>('/call/function', {
+    params: Record<string, unknown> = {},
+    useGameThread = true
+  ): Promise<ApiResponse<{ function: string; called: boolean; result: Record<string, unknown> }>> {
+    return this.request('/call/function', {
       method: 'POST',
-      body: JSON.stringify({ object_index: objectIndex, function_name: functionName, params }),
+      body: JSON.stringify({
+        object_index: objectIndex,
+        function_name: functionName,
+        params,
+        use_game_thread: useGameThread,
+      }),
     });
   }
 
-  // Watch endpoints
-  async addWatch(objectIndex: number, property: string): Promise<ApiResponse<{ id: number }>> {
-    return this.request<{ id: number }>('/watch/add', {
-      method: 'POST',
-      body: JSON.stringify({ object_index: objectIndex, property }),
-    });
-  }
-
-  async listWatches(): Promise<ApiResponse<{ watches: unknown[] }>> {
-    return this.request<{ watches: unknown[] }>('/watch/list');
-  }
-
-  async removeWatch(id: number): Promise<ApiResponse<{ removed: boolean }>> {
-    return this.request<{ removed: boolean }>(`/watch/${id}`, { method: 'DELETE' });
-  }
-
-  // Hook endpoints
-  async addHook(functionPath: string): Promise<ApiResponse<{ id: number }>> {
-    return this.request<{ id: number }>('/hooks/add', {
+  async addHook(functionPath: string): Promise<ApiResponse<{ id: number; function_path: string; enabled: boolean }>> {
+    return this.request('/hooks/add', {
       method: 'POST',
       body: JSON.stringify({ function_path: functionPath }),
     });
   }
 
-  async listHooks(): Promise<ApiResponse<{ hooks: unknown[] }>> {
-    return this.request<{ hooks: unknown[] }>('/hooks/list');
+  async listHooks(): Promise<ApiResponse<HookListResponse>> {
+    return this.request('/hooks/list');
+  }
+
+  async setHookEnabled(id: number, enabled: boolean): Promise<ApiResponse<{ id: number; enabled: boolean }>> {
+    return this.request(`/hooks/${id}?id=${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ enabled }),
+    });
   }
 
   async removeHook(id: number): Promise<ApiResponse<{ removed: boolean }>> {
-    return this.request<{ removed: boolean }>(`/hooks/${id}`, { method: 'DELETE' });
+    return this.request(`/hooks/${id}?id=${id}`, { method: 'DELETE' });
   }
 
-  async getHookLog(id: number): Promise<ApiResponse<{ entries: unknown[] }>> {
-    return this.request<{ entries: unknown[] }>(`/hooks/${id}/log`);
+  async getHookLog(id: number): Promise<ApiResponse<HookLogResponse>> {
+    return this.request(`/hooks/${id}/log?id=${id}`);
   }
 
-  // Process management (via Tauri commands)
+  async decompileBlueprint(index: number): Promise<ApiResponse<BlueprintDecompileData>> {
+    return this.request(`/blueprint/decompile?index=${index}`);
+  }
+
+  async getBlueprintBytecode(index: number): Promise<ApiResponse<BlueprintBytecodeData>> {
+    return this.request(`/blueprint/bytecode?index=${index}`);
+  }
+
+  // Watch
+  async addWatch(objectIndex: number, property: string): Promise<ApiResponse<{ id: number; object_index: number; property: string; current_value: unknown }>> {
+    return this.request('/watch/add', {
+      method: 'POST',
+      body: JSON.stringify({ object_index: objectIndex, property }),
+    });
+  }
+
+  async listWatches(): Promise<ApiResponse<WatchListResponse>> {
+    return this.request('/watch/list');
+  }
+
+  async removeWatch(id: number): Promise<ApiResponse<{ removed: number }>> {
+    return this.request(`/watch/${id}`, { method: 'DELETE' });
+  }
+
+  // Dump
+  async startDump(type: DumpType, options: Record<string, unknown> = {}): Promise<ApiResponse<{ job_id: string; message: string }>> {
+    return this.request(`/dump/${type}`, {
+      method: 'POST',
+      body: JSON.stringify(options),
+    });
+  }
+
+  async getDumpJobs(): Promise<ApiResponse<DumpJob[]>> {
+    return this.request('/dump/jobs');
+  }
+
+  async getDumpJob(id: string): Promise<ApiResponse<DumpJob>> {
+    return this.request(`/dump/jobs/${id}`);
+  }
+
+  // SSE by fetch stream, because native EventSource cannot attach auth header.
+  subscribeEventStream(path: '/events/stream' | '/events/hooks' | '/events/watches', onMessage: SSECallback, onError?: (error: unknown) => void) {
+    const controller = new AbortController();
+
+    const run = async () => {
+      try {
+        const res = await fetch(`${this.baseUrl}${path}`, {
+          method: 'GET',
+          headers: {
+            'X-UExplorer-Token': this.token,
+            Accept: 'text/event-stream',
+          },
+          signal: controller.signal,
+        });
+
+        if (!res.ok || !res.body) {
+          throw new Error(`SSE failed: HTTP ${res.status}`);
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let event = 'message';
+        let data = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          const lines = buffer.split('\n');
+          buffer = lines.pop() ?? '';
+
+          for (const rawLine of lines) {
+            const line = rawLine.trimEnd();
+            if (!line) {
+              if (data) {
+                let parsed: unknown = data;
+                try {
+                  parsed = JSON.parse(data);
+                } catch {
+                  // keep raw text
+                }
+                onMessage(event, parsed);
+              }
+              event = 'message';
+              data = '';
+              continue;
+            }
+            if (line.startsWith('event:')) {
+              event = line.slice(6).trim();
+            } else if (line.startsWith('data:')) {
+              data = data ? `${data}\n${line.slice(5).trim()}` : line.slice(5).trim();
+            }
+          }
+        }
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          onError?.(error);
+        }
+      }
+    };
+
+    run();
+    return () => controller.abort();
+  }
+
+  // Process management (Tauri invoke)
   async scanUEProcesses(): Promise<{ pid: number; name: string; path: string }[]> {
     const { invoke } = await import('@tauri-apps/api/core');
     try {
-      const processes = await invoke<{ pid: number; name: string; path: string }[]>('scan_ue_processes');
-      return processes;
+      return await invoke<{ pid: number; name: string; path: string }[]>('scan_ue_processes');
     } catch (error) {
-      console.error('Failed to scan processes:', error);
+      console.error('Failed to scan UE processes:', error);
       return [];
     }
   }
@@ -284,11 +724,7 @@ class UExplorerApi {
   async injectDLL(pid: number, dllPath: string): Promise<{ success: boolean; message: string }> {
     const { invoke } = await import('@tauri-apps/api/core');
     try {
-      const result = await invoke<{ success: boolean; message: string }>('inject_dll', {
-        pid,
-        dllPath,
-      });
-      return result;
+      return await invoke<{ success: boolean; message: string }>('inject_dll', { pid, dllPath });
     } catch (error) {
       console.error('Failed to inject DLL:', error);
       return { success: false, message: String(error) };

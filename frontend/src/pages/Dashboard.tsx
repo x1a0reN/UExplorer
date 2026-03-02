@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import api, { type StatusData } from '../api';
+import api, { type ObjectCountData, type StatusData } from '../api';
 import ProcessSelector from '../components/ProcessSelector';
 import {
   Activity,
@@ -8,6 +8,7 @@ import {
   Box,
   TerminalSquare,
   Layers,
+  MemoryStick,
   Wifi,
   WifiOff,
   ChevronRight,
@@ -24,10 +25,12 @@ interface DashboardProps {
 
 export default function Dashboard({ onNavigate }: DashboardProps) {
   const [status, setStatus] = useState<StatusData | null>(null);
+  const [counts, setCounts] = useState<ObjectCountData | null>(null);
   const [actorCount, setActorCount] = useState<number>(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showProcessSelector, setShowProcessSelector] = useState(false);
+  const [port, setPort] = useState<number>(api.getSettings().port);
 
   useEffect(() => {
     loadStatus();
@@ -36,20 +39,33 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
   }, []);
 
   const loadStatus = async () => {
-    const response = await api.getStatus();
-    if (response.success && response.data) {
-      setStatus(response.data);
+    const [statusResponse, countsResponse, worldResponse] = await Promise.all([
+      api.getStatus(),
+      api.getObjectCounts(),
+      api.getWorld(),
+    ]);
+
+    if (statusResponse.success && statusResponse.data) {
+      setStatus(statusResponse.data);
       setError(null);
     } else {
-      setError(response.error || 'Failed to connect');
+      setStatus(null);
+      setError(statusResponse.error || 'Failed to connect');
     }
 
-    // Also fetch actor count
-    const worldResponse = await api.getWorld();
+    if (countsResponse.success && countsResponse.data) {
+      setCounts(countsResponse.data);
+    } else {
+      setCounts(null);
+    }
+
     if (worldResponse.success && worldResponse.data) {
       setActorCount(worldResponse.data.actor_count);
+    } else {
+      setActorCount(0);
     }
 
+    setPort(api.getSettings().port);
     setLoading(false);
   };
 
@@ -64,7 +80,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
     );
   }
 
-  const isConnected = !error && status;
+  const isConnected = !error && !!status;
 
   return (
     <div className="flex-1 overflow-y-auto overflow-x-hidden relative scroll-smooth">
@@ -115,11 +131,11 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
                 </div>
                 <div>
                   <h3 className="text-white/90 font-semibold text-[16px] tracking-tight">{isConnected ? 'Engine Connected' : 'Disconnected'}</h3>
-                  <p className="text-white/40 text-[13px] font-medium mt-0.5">{isConnected ? 'Dumping service is active and listening.' : error || 'Waiting for game process...'}</p>
+              <p className="text-white/40 text-[13px] font-medium mt-0.5">{isConnected ? 'Dumping service is active and listening.' : error || 'Waiting for game process...'}</p>
                 </div>
               </div>
               <div className="px-3 py-1 rounded-[8px] bg-white/5 border border-white/10 text-[11px] font-mono font-medium text-white/60 shadow-sm">
-                PORT 27015
+                PORT {port}
               </div>
             </div>
 
@@ -167,7 +183,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
           <BentoCategoryBox
             icon={Box}
             label="Classes"
-            value={status ? Math.floor(status.object_count * 0.3) : 0}
+            value={counts?.classes ?? 0}
             color="text-indigo-400"
             bg="bg-indigo-400/10 border-indigo-400/20"
             onClick={() => onNavigate('objects')}
@@ -175,7 +191,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
           <BentoCategoryBox
             icon={Database}
             label="Structs"
-            value={status ? Math.floor(status.object_count * 0.15) : 0}
+            value={counts?.structs ?? 0}
             color="text-orange-400"
             bg="bg-orange-400/10 border-orange-400/20"
             onClick={() => onNavigate('objects')}
@@ -183,7 +199,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
           <BentoCategoryBox
             icon={Layers}
             label="Enums"
-            value={status ? Math.floor(status.object_count * 0.02) : 0}
+            value={counts?.enums ?? 0}
             color="text-yellow-400"
             bg="bg-yellow-400/10 border-yellow-400/20"
             onClick={() => onNavigate('objects')}
@@ -191,7 +207,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
           <BentoCategoryBox
             icon={TerminalSquare}
             label="Functions"
-            value={status ? Math.floor(status.object_count * 0.2) : 0}
+            value={counts?.functions ?? 0}
             color="text-green-400"
             bg="bg-green-400/10 border-green-400/20"
             onClick={() => onNavigate('functions')}
@@ -222,6 +238,13 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
                 shortcut="Ctrl+Shift+G"
                 onClick={() => onNavigate('sdkdump')}
               />
+              <ActionListItem
+                icon={MemoryStick}
+                title="Memory Tool"
+                desc="Inspect and edit memory, pointer chains, and watches"
+                shortcut="Ctrl+M"
+                onClick={() => onNavigate('memory')}
+              />
             </div>
           </div>
 
@@ -236,7 +259,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
 
             <div className="space-y-4 flex-1 flex flex-col justify-end">
               <OffsetRow label="GObjects" value={status?.gobjects_address || '0x0000000'} />
-              <OffsetRow label="GNames" value={status?.gnames_address || '0x0000000'} />
+              <OffsetRow label="PID" value={status ? String(status.pid) : '-'} />
               <OffsetRow label="UWorld" value="Not Resolving" dimmed />
             </div>
           </div>

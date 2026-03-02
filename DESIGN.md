@@ -1,4 +1,4 @@
-# UExplorer — 功能设计与页面架构方案
+﻿# UExplorer — 功能设计与页面架构方案
 
 ## Context
 
@@ -701,20 +701,20 @@ D:\Projects\UExplorer\
 - [x] Dump 任务管理 API（/dump/jobs, /dump/jobs/:id 状态查询）
 - [x] Dashboard 页面（Tauri + React）
 - [x] Tauri 应用构建成功（exe: 8.1MB）
-- [ ] SDK Dump Center 页面 — 前端
+- [x] SDK Dump Center 页面 — 前端（已实现，见 `frontend/src/pages/SDKDump.tsx`）
 - [ ] DLL 注入/劫持机制（Tauri 端）
 
 ### Phase 3: Explorer 基础（当前阶段）
 
 **目标：** 实现实时对象浏览和类型检查
 
-- [ ] Object Browser 页面（对象列表 + 属性查看）— 前端
-- [ ] Class Inspector 页面（继承树 + 字段/函数详情）— 前端
+- [x] Object Browser 页面（对象列表 + 属性查看）— 前端（已实现，见 `frontend/src/pages/Objects.tsx`）
+- [ ] Class Inspector 页面（继承树 + 字段/函数详情）— 前端（部分实现：字段/函数/实例已在 Objects 页；继承树与独立页面未完成）
 - [x] 内存读取 API — `POST /memory/read`, `/memory/read-typed`, `/memory/pointer-chain`
 - [x] 属性值读取（按名称自动解析偏移）— `GET /objects/:index/properties`，支持 Bool/Int/Float/Double/FName/FString/Object/Array 等
 - [x] 单对象详情 API — `GET /objects/:index`，含 outer chain
 - [x] Blueprint 反编译偏移修复 — Script offset fallback 机制
-- [ ] 基础 Console 页面 — 前端
+- [x] 基础 Console 页面 — 前端（已实现，集成在 `frontend/src/pages/Memory.tsx` 底部）
 
 ### Phase 4: 高级 Explorer
 
@@ -723,20 +723,30 @@ D:\Projects\UExplorer\
 - [x] 内存写入 + 属性值编辑 — `POST /memory/write`, `POST /objects/:index/property/:name`
 - [x] ProcessEvent 函数调用 — `POST /call/function`
 - [x] 属性监视（Watch）功能 — `/watch/add`, `/watch/list`, SSE 实时推送
-- [ ] Function Browser 页面（含调用器）— 前端
+- [x] Function Browser 页面（含调用器）— 前端（已实现，见 `frontend/src/pages/Functions.tsx`）
 - [x] World Explorer API — `/world`, `/world/levels`, `/world/actors`, `/world/shortcuts`
-- [ ] Memory Viewer 页面 — 前端
+- [x] Memory Viewer 页面 — 前端（已实现，见 `frontend/src/pages/Memory.tsx`）
 
 ### Phase 5: 进阶功能
 
 **目标：** Hook、蓝图反编译等高级特性（DLL 端）
 
 - [x] Hook Manager（UFunction Hook + SSE 实时推送）— `/hooks/*`, SSE 推送
-- [ ] Hook Manager 页面 — 前端
+- [ ] Hook Manager 页面 — 前端（部分实现：功能已集成在 Functions 页 Hook Tab，独立页面未拆分）
 - [x] Blueprint Decompiler — `/blueprint/:func/bytecode`, `/blueprint/:func/decompile`
-- [ ] Blueprint Decompiler 页面 — 前端
+- [ ] Blueprint Decompiler 页面 — 前端（部分实现：功能已集成在 Functions 页 Decompile Tab，独立页面未拆分）
 - [x] IDA/Ghidra 导入脚本生成 — `/dump/ida-script`
 - [x] Dumpspace JSON 生成 — `/dump/dumpspace`
+
+### 页面实现状态总览（重点 8 项）
+1. SDK Dump Center 页面：已实现（独立页）。
+2. Object Browser 页面：已实现（独立页）。
+3. Class Inspector 页面：部分实现（能力在 Objects 页面，未独立拆页，继承树未完成）。
+4. 基础 Console 页面：已实现（Memory 页面底部 Console）。
+5. Function Browser 页面（含调用器）：已实现（独立页）。
+6. Memory Viewer 页面：已实现（独立页）。
+7. Hook Manager 页面：部分实现（Functions 页 Hook Tab，未独立拆页）。
+8. Blueprint Decompiler 页面：部分实现（Functions 页 Decompile Tab，未独立拆页）。
 
 ---
 
