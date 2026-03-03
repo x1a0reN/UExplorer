@@ -1,5 +1,7 @@
 #include <algorithm>
 #include <climits>
+#include <mutex>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -27,6 +29,123 @@ namespace
 			return false;
 		}
 	}
+
+	struct ScriptOffsetDiagnostics
+	{
+		int32 SelectedOffset = OffsetNotFound;
+		int32 SelectedScore = INT32_MIN;
+		int32 ScoreGapTop2 = 0;
+		int32 BpEndHits = 0;
+		int32 WeightedBpEndHits = 0;
+		int32 GenericScriptHits = 0;
+
+		int32 VerifyProbed = 0;
+		int32 VerifyHeaderValid = 0;
+		int32 VerifyEndHits = 0;
+		int32 VerifyFirstOpcodeValid = 0;
+		int32 VerifySizeSane = 0;
+		int32 VerifyEndRate = 0;
+		int32 VerifyOpcodeRate = 0;
+
+		std::string Confidence = "unknown"; // unknown/high/medium/low
+		std::string AnomalyTags = "";
+		bool FromCache = false;
+		uint64 CacheKey = 0;
+	};
+
+	static std::mutex sScriptOffsetDiagnosticsMutex;
+	static ScriptOffsetDiagnostics sScriptOffsetDiagnostics;
+
+	static void SetScriptOffsetDiagnostics(const ScriptOffsetDiagnostics& in)
+	{
+		std::lock_guard<std::mutex> lock(sScriptOffsetDiagnosticsMutex);
+		sScriptOffsetDiagnostics = in;
+	}
+
+	static ScriptOffsetDiagnostics GetScriptOffsetDiagnosticsSnapshot()
+	{
+		std::lock_guard<std::mutex> lock(sScriptOffsetDiagnosticsMutex);
+		return sScriptOffsetDiagnostics;
+	}
+}
+
+extern "C" const char* UExplorer_GetScriptOffsetConfidence()
+{
+	thread_local std::string value;
+	value = GetScriptOffsetDiagnosticsSnapshot().Confidence;
+	return value.c_str();
+}
+
+extern "C" const char* UExplorer_GetScriptOffsetAnomalyTags()
+{
+	thread_local std::string value;
+	value = GetScriptOffsetDiagnosticsSnapshot().AnomalyTags;
+	return value.c_str();
+}
+
+extern "C" int32 UExplorer_GetScriptOffsetSelectedOffset()
+{
+	return GetScriptOffsetDiagnosticsSnapshot().SelectedOffset;
+}
+
+extern "C" int32 UExplorer_GetScriptOffsetSelectedScore()
+{
+	return GetScriptOffsetDiagnosticsSnapshot().SelectedScore;
+}
+
+extern "C" int32 UExplorer_GetScriptOffsetScoreGapTop2()
+{
+	return GetScriptOffsetDiagnosticsSnapshot().ScoreGapTop2;
+}
+
+extern "C" int32 UExplorer_GetScriptOffsetBpEndHits()
+{
+	return GetScriptOffsetDiagnosticsSnapshot().BpEndHits;
+}
+
+extern "C" int32 UExplorer_GetScriptOffsetWeightedBpEndHits()
+{
+	return GetScriptOffsetDiagnosticsSnapshot().WeightedBpEndHits;
+}
+
+extern "C" int32 UExplorer_GetScriptOffsetGenericScriptHits()
+{
+	return GetScriptOffsetDiagnosticsSnapshot().GenericScriptHits;
+}
+
+extern "C" int32 UExplorer_GetScriptOffsetVerifyProbed()
+{
+	return GetScriptOffsetDiagnosticsSnapshot().VerifyProbed;
+}
+
+extern "C" int32 UExplorer_GetScriptOffsetVerifyHeaderValid()
+{
+	return GetScriptOffsetDiagnosticsSnapshot().VerifyHeaderValid;
+}
+
+extern "C" int32 UExplorer_GetScriptOffsetVerifyEndHits()
+{
+	return GetScriptOffsetDiagnosticsSnapshot().VerifyEndHits;
+}
+
+extern "C" int32 UExplorer_GetScriptOffsetVerifyFirstOpcodeValid()
+{
+	return GetScriptOffsetDiagnosticsSnapshot().VerifyFirstOpcodeValid;
+}
+
+extern "C" int32 UExplorer_GetScriptOffsetVerifySizeSane()
+{
+	return GetScriptOffsetDiagnosticsSnapshot().VerifySizeSane;
+}
+
+extern "C" int32 UExplorer_GetScriptOffsetVerifyEndRate()
+{
+	return GetScriptOffsetDiagnosticsSnapshot().VerifyEndRate;
+}
+
+extern "C" int32 UExplorer_GetScriptOffsetVerifyOpcodeRate()
+{
+	return GetScriptOffsetDiagnosticsSnapshot().VerifyOpcodeRate;
 }
 
 /* UObject */
@@ -901,6 +1020,7 @@ int32_t OffsetFinder::FindFunctionScriptOffset()
 	};
 
 	static std::unordered_map<uint64, int32> sRuntimeCache;
+	static std::unordered_map<uint64, ScriptOffsetDiagnostics> sRuntimeDiagCache;
 	const uint64 runtimeCacheKey = BuildRuntimeCacheKey();
 	if (runtimeCacheKey != 0)
 	{
@@ -908,6 +1028,21 @@ int32_t OffsetFinder::FindFunctionScriptOffset()
 		if (it != sRuntimeCache.end())
 		{
 			std::cerr << "[UExplorer] Script offset cache hit: 0x" << std::hex << it->second << std::dec << std::endl;
+			ScriptOffsetDiagnostics diag;
+			auto diagIt = sRuntimeDiagCache.find(runtimeCacheKey);
+			if (diagIt != sRuntimeDiagCache.end())
+			{
+				diag = diagIt->second;
+			}
+			else
+			{
+				diag.SelectedOffset = it->second;
+				diag.Confidence = "medium";
+				diag.AnomalyTags = "cache_hit_without_diag";
+			}
+			diag.FromCache = true;
+			diag.CacheKey = runtimeCacheKey;
+			SetScriptOffsetDiagnostics(diag);
 			return it->second;
 		}
 	}
@@ -1078,6 +1213,12 @@ int32_t OffsetFinder::FindFunctionScriptOffset()
 	if (GeneralFuncs.empty())
 	{
 		std::cerr << "Dumper-7 WARNING: Could not gather function samples for Script offset discovery." << std::endl;
+		ScriptOffsetDiagnostics diag;
+		diag.SelectedOffset = OffsetNotFound;
+		diag.Confidence = "low";
+		diag.AnomalyTags = "no_function_samples";
+		diag.CacheKey = runtimeCacheKey;
+		SetScriptOffsetDiagnostics(diag);
 		return OffsetNotFound;
 	}
 
@@ -1654,11 +1795,6 @@ int32_t OffsetFinder::FindFunctionScriptOffset()
 			std::cerr << std::endl;
 		}
 
-		if (runtimeCacheKey != 0 && confidence != "low")
-		{
-			sRuntimeCache[runtimeCacheKey] = selectedOffset;
-		}
-
 		const CandidateScore* selectedCandidate = nullptr;
 		for (const CandidateScore& c : sorted)
 		{
@@ -1677,10 +1813,50 @@ int32_t OffsetFinder::FindFunctionScriptOffset()
 			<< " bpEndHits=" << selectedCandidate->BpEndTokenHits
 			<< " weightedBpEndHits=" << selectedCandidate->BpWeightedEndTokenHits
 			<< " genericScriptHits=" << selectedCandidate->GenericScriptHits << std::endl;
+
+		std::string anomalyCsv;
+		for (size_t i = 0; i < anomalyTags.size(); i++)
+		{
+			if (i > 0) anomalyCsv += ",";
+			anomalyCsv += anomalyTags[i];
+		}
+
+		ScriptOffsetDiagnostics diag;
+		diag.SelectedOffset = selectedOffset;
+		diag.SelectedScore = selectedCandidate->Score;
+		diag.ScoreGapTop2 = scoreGapTop2;
+		diag.BpEndHits = selectedCandidate->BpEndTokenHits;
+		diag.WeightedBpEndHits = selectedCandidate->BpWeightedEndTokenHits;
+		diag.GenericScriptHits = selectedCandidate->GenericScriptHits;
+		diag.VerifyProbed = bestVerification.Probed;
+		diag.VerifyHeaderValid = bestVerification.HeaderValid;
+		diag.VerifyEndHits = bestVerification.EndHits;
+		diag.VerifyFirstOpcodeValid = bestVerification.FirstOpcodeValid;
+		diag.VerifySizeSane = bestVerification.SizeSane;
+		diag.VerifyEndRate = verifyEndRate;
+		diag.VerifyOpcodeRate = verifyOpcodeRate;
+		diag.Confidence = confidence;
+		diag.AnomalyTags = anomalyCsv;
+		diag.CacheKey = runtimeCacheKey;
+		diag.FromCache = false;
+		SetScriptOffsetDiagnostics(diag);
+
+		if (runtimeCacheKey != 0 && confidence != "low")
+		{
+			sRuntimeCache[runtimeCacheKey] = selectedOffset;
+			sRuntimeDiagCache[runtimeCacheKey] = diag;
+		}
+
 		return selectedOffset;
 	}
 
 	std::cerr << "Dumper-7 WARNING: Could not find UFunction::Script offset." << std::endl;
+	ScriptOffsetDiagnostics diag;
+	diag.SelectedOffset = OffsetNotFound;
+	diag.Confidence = "low";
+	diag.AnomalyTags = "no_candidate_found";
+	diag.CacheKey = runtimeCacheKey;
+	SetScriptOffsetDiagnostics(diag);
 	return OffsetNotFound;
 }
 

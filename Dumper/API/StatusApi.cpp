@@ -11,8 +11,45 @@
 #include <filesystem>
 #include <mutex>
 
+extern "C" const char* UExplorer_GetScriptOffsetConfidence();
+extern "C" const char* UExplorer_GetScriptOffsetAnomalyTags();
+extern "C" int32 UExplorer_GetScriptOffsetSelectedOffset();
+extern "C" int32 UExplorer_GetScriptOffsetSelectedScore();
+extern "C" int32 UExplorer_GetScriptOffsetScoreGapTop2();
+extern "C" int32 UExplorer_GetScriptOffsetBpEndHits();
+extern "C" int32 UExplorer_GetScriptOffsetWeightedBpEndHits();
+extern "C" int32 UExplorer_GetScriptOffsetGenericScriptHits();
+extern "C" int32 UExplorer_GetScriptOffsetVerifyProbed();
+extern "C" int32 UExplorer_GetScriptOffsetVerifyHeaderValid();
+extern "C" int32 UExplorer_GetScriptOffsetVerifyEndHits();
+extern "C" int32 UExplorer_GetScriptOffsetVerifyFirstOpcodeValid();
+extern "C" int32 UExplorer_GetScriptOffsetVerifySizeSane();
+extern "C" int32 UExplorer_GetScriptOffsetVerifyEndRate();
+extern "C" int32 UExplorer_GetScriptOffsetVerifyOpcodeRate();
+
 namespace UExplorer::API
 {
+
+static json BuildScriptOffsetDiagnosticsJson()
+{
+	json diag;
+	diag["selected_offset"] = UExplorer_GetScriptOffsetSelectedOffset();
+	diag["selected_score"] = UExplorer_GetScriptOffsetSelectedScore();
+	diag["score_gap_top2"] = UExplorer_GetScriptOffsetScoreGapTop2();
+	diag["bp_end_hits"] = UExplorer_GetScriptOffsetBpEndHits();
+	diag["weighted_bp_end_hits"] = UExplorer_GetScriptOffsetWeightedBpEndHits();
+	diag["generic_script_hits"] = UExplorer_GetScriptOffsetGenericScriptHits();
+	diag["verify_probed"] = UExplorer_GetScriptOffsetVerifyProbed();
+	diag["verify_header_valid"] = UExplorer_GetScriptOffsetVerifyHeaderValid();
+	diag["verify_end_hits"] = UExplorer_GetScriptOffsetVerifyEndHits();
+	diag["verify_first_opcode_valid"] = UExplorer_GetScriptOffsetVerifyFirstOpcodeValid();
+	diag["verify_size_sane"] = UExplorer_GetScriptOffsetVerifySizeSane();
+	diag["verify_end_rate"] = UExplorer_GetScriptOffsetVerifyEndRate();
+	diag["verify_opcode_rate"] = UExplorer_GetScriptOffsetVerifyOpcodeRate();
+	diag["confidence"] = UExplorer_GetScriptOffsetConfidence();
+	diag["anomaly_tags"] = UExplorer_GetScriptOffsetAnomalyTags();
+	return diag;
+}
 
 static std::mutex g_ReconnectMutex;
 
@@ -75,6 +112,7 @@ void RegisterStatusRoutes(HttpServer& server)
 		data["offsets"] = std::move(offsets);
 		data["addresses"] = std::move(addresses);
 		data["internals"] = std::move(internals);
+		data["script_offset_diagnostics"] = BuildScriptOffsetDiagnosticsJson();
 
 		return { 200, "application/json", MakeResponse(data) };
 	});
@@ -119,6 +157,7 @@ void RegisterStatusRoutes(HttpServer& server)
 		data["gobjects_address"] = std::format("0x{:X}", reinterpret_cast<uintptr_t>(ObjectArray::DEBUGGetGObjects()));
 		data["pid"] = GetCurrentProcessId();
 		data["architecture"] = GetProcessArchitecture();
+		data["script_offset_diagnostics"] = BuildScriptOffsetDiagnosticsJson();
 		return { 200, "application/json", MakeResponse(data) };
 	});
 }

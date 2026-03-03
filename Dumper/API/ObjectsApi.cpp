@@ -8,72 +8,396 @@
 #include "Unreal/UnrealTypes.h"
 #include "Unreal/UnrealContainers.h"
 #include "Unreal/Enums.h"
+#include "Platform.h"
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
+#include <cstring>
 #include <format>
 #include <set>
 
 namespace UExplorer::API
 {
 
-// Helper: read a single property value from a live object as JSON
-static json ReadPropertyValue(uint8* objAddr, const UEProperty& prop)
+struct PropertyReadResult
 {
-	uint8* addr = objAddr + prop.GetOffset();
-	EClassCastFlags type = prop.GetCastFlags();
+	json value;
+	const char* state = "unknown"; // ok / empty / unknown
+};
 
-	try {
+static PropertyReadResult MakeUnknown(const std::string& typeName, const std::string& reason = "")
+{
+	json v;
+	v["kind"] = "unknown";
+	v["type"] = typeName;
+	if (!reason.empty())
+		v["reason"] = reason;
+	return { std::move(v), "unknown" };
+}
+
+static PropertyReadResult MakeEmpty(json value = nullptr)
+{
+	return { std::move(value), "empty" };
+}
+
+static PropertyReadResult MakeOk(json value)
+{
+	return { std::move(value), "ok" };
+}
+
+static json SerializeObjectRef(void* ptr)
+{
+	json out;
+	out["kind"] = "object_ref";
+	if (!ptr)
+	{
+		out["is_null"] = true;
+		out["address"] = nullptr;
+		out["name"] = nullptr;
+		out["class"] = nullptr;
+		out["index"] = nullptr;
+		return out;
+	}
+
+	out["is_null"] = false;
+	out["address"] = std::format("0x{:X}", reinterpret_cast<uintptr_t>(ptr));
+
+	UEObject ref(ptr);
+	if (!ref)
+	{
+		out["name"] = nullptr;
+		out["class"] = nullptr;
+		out["index"] = nullptr;
+		return out;
+	}
+
+	try { out["name"] = ref.GetName(); } catch (...) { out["name"] = nullptr; }
+	try
+	{
+		UEObject cls = ref.GetClass();
+		out["class"] = cls ? json(cls.GetName()) : json(nullptr);
+	}
+	catch (...) { out["class"] = nullptr; }
+	try { out["index"] = ref.GetIndex(); } catch (...) { out["index"] = nullptr; }
+	return out;
+}
+
+static bool TryReadArrayHeader(uint8* addr, uintptr_t& outData, int32& outNum, int32& outMax)
+{
+	if (!addr)
+		return false;
+
+	__try
+	{
+		outData = *reinterpret_cast<uintptr_t*>(addr);
+		outNum = *reinterpret_cast<int32*>(addr + sizeof(void*));
+		outMax = *reinterpret_cast<int32*>(addr + sizeof(void*) + sizeof(int32));
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		return false;
+	}
+
+	if (outNum < 0 || outMax < outNum || outMax > 0x400000)
+		return false;
+
+	if (outNum > 0)
+	{
+		if (outData == 0 || Platform::IsBadReadPtr(reinterpret_cast<void*>(outData)))
+			return false;
+	}
+
+	return true;
+}
+
+static PropertyReadResult ReadPropertyValueAt(uint8* addr, const UEProperty& prop, int depth = 0)
+{
+	if (!addr)
+		return MakeUnknown(prop.GetCppType(), "null_address");
+
+	const EClassCastFlags type = prop.GetCastFlags();
+
+	try
+	{
 		if (type & EClassCastFlags::BoolProperty)
 		{
 			UEBoolProperty bp = prop.Cast<UEBoolProperty>();
 			bool val = (*(addr + bp.GetByteOffset()) & bp.GetFieldMask()) != 0;
-			return val;
+			return MakeOk(val);
 		}
 		if (type & EClassCastFlags::ByteProperty)
-			return static_cast<int>(*reinterpret_cast<uint8*>(addr));
+			return MakeOk(static_cast<int32>(*reinterpret_cast<uint8*>(addr)));
+		if (type & EClassCastFlags::Int8Property)
+			return MakeOk(static_cast<int32>(*reinterpret_cast<int8*>(addr)));
+		if (type & EClassCastFlags::Int16Property)
+			return MakeOk(static_cast<int32>(*reinterpret_cast<int16*>(addr)));
+		if (type & EClassCastFlags::UInt16Property)
+			return MakeOk(static_cast<uint32>(*reinterpret_cast<uint16*>(addr)));
 		if (type & EClassCastFlags::IntProperty)
-			return *reinterpret_cast<int32*>(addr);
+			return MakeOk(*reinterpret_cast<int32*>(addr));
+		if (type & EClassCastFlags::UInt32Property)
+			return MakeOk(*reinterpret_cast<uint32*>(addr));
 		if (type & EClassCastFlags::Int64Property)
-			return *reinterpret_cast<int64*>(addr);
+			return MakeOk(*reinterpret_cast<int64*>(addr));
 		if (type & EClassCastFlags::UInt64Property)
-			return *reinterpret_cast<uint64*>(addr);
+			return MakeOk(*reinterpret_cast<uint64*>(addr));
 		if (type & EClassCastFlags::FloatProperty)
-			return *reinterpret_cast<float*>(addr);
+		{
+			const float v = *reinterpret_cast<float*>(addr);
+			if (!std::isfinite(v))
+				return MakeUnknown(prop.GetCppType(), "non_finite_float");
+			return MakeOk(v);
+		}
 		if (type & EClassCastFlags::DoubleProperty)
-			return *reinterpret_cast<double*>(addr);
+		{
+			const double v = *reinterpret_cast<double*>(addr);
+			if (!std::isfinite(v))
+				return MakeUnknown(prop.GetCppType(), "non_finite_double");
+			return MakeOk(v);
+		}
 		if (type & EClassCastFlags::NameProperty)
-			return reinterpret_cast<FName*>(addr)->ToString();
+		{
+			FName* fn = reinterpret_cast<FName*>(addr);
+			return MakeOk(fn->ToString());
+		}
 		if (type & EClassCastFlags::StrProperty)
 		{
 			UC::FString* fs = reinterpret_cast<UC::FString*>(addr);
-			return fs->IsValid() ? json(fs->ToString()) : json("");
+			if (!fs->IsValid())
+				return MakeEmpty("");
+			return MakeOk(fs->ToString());
 		}
 		if (type & EClassCastFlags::TextProperty)
-			return "(FText)";
-		if (type & EClassCastFlags::ObjectProperty)
+		{
+			json out;
+			out["kind"] = "text";
+			out["value"] = "(FText unresolved)";
+			return MakeOk(std::move(out));
+		}
+
+		if (type & EClassCastFlags::ClassProperty)
 		{
 			void* ptr = *reinterpret_cast<void**>(addr);
-			if (!ptr) return nullptr;
-			UEObject ref(ptr);
-			if (!ref) return std::format("0x{:X}", reinterpret_cast<uintptr_t>(ptr));
+			json out = SerializeObjectRef(ptr);
+			try
+			{
+				UEClassProperty cp = prop.Cast<UEClassProperty>();
+				UEClass meta = cp.GetMetaClass();
+				out["meta_class"] = meta ? json(meta.GetName()) : json(nullptr);
+			}
+			catch (...) {}
+			return ptr ? MakeOk(std::move(out)) : MakeEmpty(std::move(out));
+		}
+
+		if ((type & EClassCastFlags::ObjectProperty) || (type & EClassCastFlags::ObjectPropertyBase)
+			|| (type & EClassCastFlags::InterfaceProperty))
+		{
+			void* ptr = *reinterpret_cast<void**>(addr);
+			json out = SerializeObjectRef(ptr);
+			return ptr ? MakeOk(std::move(out)) : MakeEmpty(std::move(out));
+		}
+
+		if ((type & EClassCastFlags::WeakObjectProperty) || (type & EClassCastFlags::LazyObjectProperty))
+		{
+			json out;
+			out["kind"] = "weak_object_ref";
+			out["object_index"] = *reinterpret_cast<int32*>(addr);
+			out["serial_number"] = *reinterpret_cast<int32*>(addr + sizeof(int32));
+			if (out["object_index"].get<int32>() <= 0)
+				return MakeEmpty(std::move(out));
+			return MakeOk(std::move(out));
+		}
+
+		if ((type & EClassCastFlags::SoftObjectProperty) || (type & EClassCastFlags::SoftClassProperty))
+		{
+			json out;
+			out["kind"] = "soft_object_ref";
+			out["note"] = "soft reference parsing is partial";
+			out["object_index_hint"] = *reinterpret_cast<int32*>(addr);
+			out["serial_hint"] = *reinterpret_cast<int32*>(addr + sizeof(int32));
+			return MakeOk(std::move(out));
+		}
+
+		if (type & EClassCastFlags::EnumProperty)
+		{
+			UEEnumProperty ep = prop.Cast<UEEnumProperty>();
+			UEProperty under = ep.GetUnderlayingProperty();
+			PropertyReadResult raw = under ? ReadPropertyValueAt(addr, under, depth + 1)
+				: MakeUnknown(prop.GetCppType(), "enum_underlying_missing");
 
 			json out;
-			out["name"] = ref.GetName();
-			out["class"] = ref.GetClass() ? ref.GetClass().GetName() : "Unknown";
-			out["address"] = std::format("0x{:X}", reinterpret_cast<uintptr_t>(ptr));
-			out["index"] = ref.GetIndex();
-			return out;
+			out["kind"] = "enum";
+			out["underlying_type"] = under ? under.GetCppType() : "Unknown";
+			out["raw"] = raw.value;
+			try
+			{
+				UEEnum en = ep.GetEnum();
+				if (en)
+				{
+					out["enum_name"] = en.GetName();
+					if (raw.value.is_number_integer() || raw.value.is_number_unsigned())
+					{
+						const int64 rawVal = raw.value.get<int64>();
+						for (const auto& [n, v] : en.GetNameValuePairs())
+						{
+							if (v == rawVal)
+							{
+								out["value_name"] = n.ToString();
+								break;
+							}
+						}
+					}
+				}
+			}
+			catch (...) {}
+			return MakeOk(std::move(out));
 		}
+
 		if (type & EClassCastFlags::ArrayProperty)
 		{
-			int32 num = *reinterpret_cast<int32*>(addr + sizeof(void*));
-			return std::format("TArray[{}]", num);
+			UEArrayProperty ap = prop.Cast<UEArrayProperty>();
+			UEProperty inner = ap.GetInnerProperty();
+
+			uintptr_t data = 0;
+			int32 num = 0;
+			int32 max = 0;
+			if (!TryReadArrayHeader(addr, data, num, max))
+				return MakeUnknown(prop.GetCppType(), "invalid_array_header");
+
+			json out;
+			out["kind"] = "array";
+			out["num"] = num;
+			out["max"] = max;
+			out["data_ptr"] = data ? json(std::format("0x{:X}", data)) : json(nullptr);
+			out["inner_type"] = inner ? inner.GetCppType() : "Unknown";
+
+			if (num == 0)
+			{
+				out["preview"] = json::array();
+				return MakeEmpty(std::move(out));
+			}
+
+			if (!inner)
+				return MakeUnknown(prop.GetCppType(), "array_inner_missing");
+
+			const int32 elemSize = inner.GetSize();
+			if (elemSize <= 0 || elemSize > 0x4000)
+				return MakeUnknown(prop.GetCppType(), "invalid_array_element_size");
+
+			const int32 previewCount = (std::min)(num, 8);
+			json preview = json::array();
+			int32 unknownCount = 0;
+			for (int32 i = 0; i < previewCount; i++)
+			{
+				uint8* elemAddr = reinterpret_cast<uint8*>(data + static_cast<uintptr_t>(i) * static_cast<uintptr_t>(elemSize));
+				PropertyReadResult elem = ReadPropertyValueAt(elemAddr, inner, depth + 1);
+				preview.push_back(elem.value);
+				if (std::strcmp(elem.state, "unknown") == 0)
+					unknownCount++;
+			}
+			out["preview"] = std::move(preview);
+			if (num > previewCount)
+				out["truncated"] = true;
+
+			if (unknownCount == previewCount)
+				return MakeUnknown(prop.GetCppType(), "array_preview_unresolved");
+			return MakeOk(std::move(out));
+		}
+
+		if (type & EClassCastFlags::StructProperty)
+		{
+			UEStructProperty sp = prop.Cast<UEStructProperty>();
+			UEStruct st = sp.GetUnderlayingStruct();
+
+			json out;
+			out["kind"] = "struct";
+			out["struct_type"] = st ? json(st.GetName()) : json("Unknown");
+			out["size"] = prop.GetSize();
+
+			if (!st)
+				return MakeUnknown(prop.GetCppType(), "struct_type_missing");
+
+			if (depth >= 2)
+				return MakeOk(std::move(out));
+
+			json fields = json::array();
+			int32 unknownCount = 0;
+			int32 totalCount = 0;
+			for (const auto& member : st.GetProperties())
+			{
+				if (totalCount >= 16)
+				{
+					out["truncated"] = true;
+					break;
+				}
+
+				totalCount++;
+				json field;
+				field["name"] = member.GetName();
+				field["type"] = member.GetCppType();
+				field["offset"] = member.GetOffset();
+				field["size"] = member.GetSize();
+
+				PropertyReadResult fv = ReadPropertyValueAt(addr + member.GetOffset(), member, depth + 1);
+				field["value"] = std::move(fv.value);
+				field["value_state"] = fv.state;
+				if (std::strcmp(fv.state, "unknown") == 0)
+					unknownCount++;
+				fields.push_back(std::move(field));
+			}
+
+			out["fields"] = std::move(fields);
+			if (totalCount == 0)
+				return MakeEmpty(std::move(out));
+			if (unknownCount == totalCount)
+				return MakeUnknown(prop.GetCppType(), "struct_fields_unresolved");
+			return MakeOk(std::move(out));
+		}
+
+		if (type & EClassCastFlags::MapProperty)
+		{
+			UEMapProperty mp = prop.Cast<UEMapProperty>();
+			json out;
+			out["kind"] = "map";
+			out["key_type"] = mp.GetKeyProperty() ? mp.GetKeyProperty().GetCppType() : "Unknown";
+			out["value_type"] = mp.GetValueProperty() ? mp.GetValueProperty().GetCppType() : "Unknown";
+			out["note"] = "map serialization preview not implemented";
+			return MakeOk(std::move(out));
+		}
+
+		if (type & EClassCastFlags::SetProperty)
+		{
+			UESetProperty sp = prop.Cast<UESetProperty>();
+			json out;
+			out["kind"] = "set";
+			out["element_type"] = sp.GetElementProperty() ? sp.GetElementProperty().GetCppType() : "Unknown";
+			out["note"] = "set serialization preview not implemented";
+			return MakeOk(std::move(out));
+		}
+
+		if ((type & EClassCastFlags::DelegateProperty)
+			|| (type & EClassCastFlags::MulticastDelegateProperty)
+			|| (type & EClassCastFlags::MulticastInlineDelegateProperty))
+		{
+			json out;
+			out["kind"] = "delegate";
+			out["note"] = "delegate value preview not implemented";
+			return MakeOk(std::move(out));
 		}
 	}
-	catch (...) {}
+	catch (...)
+	{
+		return MakeUnknown(prop.GetCppType(), "exception");
+	}
 
-	return std::format("({})", prop.GetCppType());
+	return MakeUnknown(prop.GetCppType(), "unsupported_property_type");
+}
+
+// Helper: read a single property value from a live object as JSON
+static PropertyReadResult ReadPropertyValue(uint8* objAddr, const UEProperty& prop)
+{
+	return ReadPropertyValueAt(objAddr + prop.GetOffset(), prop, 0);
 }
 
 // Helper: write a property value from JSON
@@ -442,7 +766,9 @@ void RegisterObjectsRoutes(HttpServer& server)
 					p["type"] = prop.GetCppType();
 					p["offset"] = prop.GetOffset();
 					p["size"] = prop.GetSize();
-					p["value"] = ReadPropertyValue(objAddr, prop);
+					PropertyReadResult result = ReadPropertyValue(objAddr, prop);
+					p["value"] = std::move(result.value);
+					p["value_state"] = result.state;
 					props.push_back(std::move(p));
 				}
 				catch (...) {}
@@ -485,7 +811,9 @@ void RegisterObjectsRoutes(HttpServer& server)
 			data["type"] = prop.GetCppType();
 			data["offset"] = prop.GetOffset();
 			data["size"] = prop.GetSize();
-			data["value"] = ReadPropertyValue(objAddr, prop);
+			PropertyReadResult result = ReadPropertyValue(objAddr, prop);
+			data["value"] = std::move(result.value);
+			data["value_state"] = result.state;
 			return { 200, "application/json", MakeResponse(data) };
 		}
 		catch (...) {
@@ -527,7 +855,9 @@ void RegisterObjectsRoutes(HttpServer& server)
 			json data;
 			data["property"] = propName;
 			data["written"] = true;
-			data["new_value"] = ReadPropertyValue(objAddr, prop);
+			PropertyReadResult result = ReadPropertyValue(objAddr, prop);
+			data["new_value"] = std::move(result.value);
+			data["new_value_state"] = result.state;
 			return { 200, "application/json", MakeResponse(data) };
 		}
 		catch (const json::exception& e) {
