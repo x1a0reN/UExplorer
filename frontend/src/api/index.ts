@@ -290,6 +290,13 @@ export interface DumpJob {
   error?: string;
 }
 
+export interface RuntimeEndpoint {
+  pid: number;
+  port: number;
+  token: string;
+  running: boolean;
+}
+
 const DEFAULT_SETTINGS: ApiClientSettings = {
   port: DEFAULT_PORT,
   token: DEFAULT_TOKEN,
@@ -326,11 +333,14 @@ class UExplorerApi {
   private baseUrl: string;
   private token: string;
   private settings: ApiClientSettings;
+  private endpointRecovering = false;
 
   constructor() {
     this.settings = readSettings();
     this.baseUrl = `http://127.0.0.1:${this.settings.port}/api/v1`;
     this.token = this.settings.token;
+    void this.persistConnectionSettings();
+    void this.tryAdoptRuntimeEndpoint();
   }
 
   getSettings() {
@@ -342,51 +352,115 @@ class UExplorerApi {
     this.baseUrl = `http://127.0.0.1:${this.settings.port}/api/v1`;
     this.token = this.settings.token;
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(this.settings));
+    void this.persistConnectionSettings();
+  }
+
+  async persistConnectionSettings(): Promise<boolean> {
+    const { invoke } = await import('@tauri-apps/api/core');
+    try {
+      return await invoke<boolean>('save_connection_settings', {
+        port: this.settings.port,
+        token: this.settings.token,
+      });
+    } catch (error) {
+      console.error('Failed to persist connection settings:', error);
+      return false;
+    }
+  }
+
+  private applyEndpoint(port: number, token: string) {
+    if (!Number.isFinite(port) || port <= 0 || port > 65535) return;
+    if (!token) return;
+
+    this.settings = { ...this.settings, port, token };
+    this.baseUrl = `http://127.0.0.1:${port}/api/v1`;
+    this.token = token;
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(this.settings));
+  }
+
+  async tryAdoptRuntimeEndpoint(expectedPid?: number): Promise<boolean> {
+    if (this.endpointRecovering) return false;
+    this.endpointRecovering = true;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const runtime = await invoke<RuntimeEndpoint | null>('load_runtime_endpoint');
+      if (!runtime || !runtime.running) return false;
+      if (expectedPid !== undefined && runtime.pid > 0 && runtime.pid !== expectedPid) return false;
+      this.applyEndpoint(runtime.port, runtime.token);
+      return true;
+    } catch (error) {
+      console.error('Failed to load runtime endpoint:', error);
+      return false;
+    } finally {
+      this.endpointRecovering = false;
+    }
+  }
+
+  private shouldAttemptEndpointRecovery(error: string | null) {
+    if (!error) return false;
+    const msg = error.toLowerCase();
+    return (
+      msg.includes('network error') ||
+      msg.includes('failed to fetch') ||
+      msg.includes('http 401') ||
+      msg.includes('unauthorized')
+    );
   }
 
   private async request<T>(endpoint: string, options: RequestInit = {}): Promise<ApiResponse<T>> {
-    const url = `${this.baseUrl}${endpoint}`;
-    const headers: HeadersInit = {
-      'X-UExplorer-Token': this.token,
-      ...options.headers,
-    };
+    const execute = async (): Promise<ApiResponse<T>> => {
+      const url = `${this.baseUrl}${endpoint}`;
+      const headers: HeadersInit = {
+        'X-UExplorer-Token': this.token,
+        ...options.headers,
+      };
 
-    if (options.body && !(headers as Record<string, string>)['Content-Type']) {
-      (headers as Record<string, string>)['Content-Type'] = 'application/json';
-    }
-
-    try {
-      const response = await fetch(url, {
-        ...options,
-        headers,
-      });
-      const text = await response.text();
-      if (!text) {
-        return {
-          success: response.ok,
-          data: null,
-          error: response.ok ? null : `HTTP ${response.status}`,
-        };
+      if (options.body && !(headers as Record<string, string>)['Content-Type']) {
+        (headers as Record<string, string>)['Content-Type'] = 'application/json';
       }
 
-      const parsed = JSON.parse(text) as ApiResponse<T>;
-      if (!response.ok && parsed.success !== false) {
+      try {
+        const response = await fetch(url, {
+          ...options,
+          headers,
+        });
+        const text = await response.text();
+        if (!text) {
+          return {
+            success: response.ok,
+            data: null,
+            error: response.ok ? null : `HTTP ${response.status}`,
+          };
+        }
+
+        const parsed = JSON.parse(text) as ApiResponse<T>;
+        if (!response.ok && parsed.success !== false) {
+          return {
+            success: false,
+            data: null,
+            error: parsed.error || `HTTP ${response.status}`,
+            timestamp: parsed.timestamp,
+          };
+        }
+        return parsed;
+      } catch (error) {
         return {
           success: false,
           data: null,
-          error: parsed.error || `HTTP ${response.status}`,
-          timestamp: parsed.timestamp,
+          error: error instanceof Error ? error.message : 'Network error',
+          timestamp: Date.now(),
         };
       }
-      return parsed;
-    } catch (error) {
-      return {
-        success: false,
-        data: null,
-        error: error instanceof Error ? error.message : 'Network error',
-        timestamp: Date.now(),
-      };
+    };
+
+    let result = await execute();
+    if (!result.success && this.shouldAttemptEndpointRecovery(result.error)) {
+      const recovered = await this.tryAdoptRuntimeEndpoint();
+      if (recovered) {
+        result = await execute();
+      }
     }
+    return result;
   }
 
   // Status
@@ -724,7 +798,17 @@ class UExplorerApi {
   async injectDLL(pid: number, dllPath: string): Promise<{ success: boolean; message: string }> {
     const { invoke } = await import('@tauri-apps/api/core');
     try {
-      return await invoke<{ success: boolean; message: string }>('inject_dll', { pid, dllPath });
+      await this.persistConnectionSettings();
+      const result = await invoke<{ success: boolean; message: string }>('inject_dll', { pid, dllPath });
+      if (result.success) {
+        // Wait for DLL runtime state publication and adopt actual endpoint.
+        for (let i = 0; i < 50; i++) {
+          const adopted = await this.tryAdoptRuntimeEndpoint(pid);
+          if (adopted) break;
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+      }
+      return result;
     } catch (error) {
       console.error('Failed to inject DLL:', error);
       return { success: false, message: String(error) };

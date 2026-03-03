@@ -4,6 +4,9 @@
 #include <thread>
 #include <atomic>
 #include <cstring>
+#include <filesystem>
+#include <algorithm>
+#include <cctype>
 
 #include "Generators/Generator.h"
 #include "Server/HttpServer.h"
@@ -15,6 +18,102 @@
 static std::atomic<bool> g_Running{ true };
 static std::unique_ptr<UExplorer::HttpServer> g_Server;
 static HMODULE g_Module = nullptr;
+
+namespace
+{
+	constexpr uint16_t kDefaultApiPort = 27015;
+	constexpr const char* kDefaultApiToken = "uexplorer-dev";
+
+	std::string Trim(std::string value)
+	{
+		auto notSpace = [](unsigned char ch) { return !std::isspace(ch); };
+		value.erase(value.begin(), std::find_if(value.begin(), value.end(), notSpace));
+		value.erase(std::find_if(value.rbegin(), value.rend(), notSpace).base(), value.end());
+		return value;
+	}
+
+	std::string GetLocalAppDataPath()
+	{
+		char buffer[MAX_PATH] = {};
+		const DWORD len = GetEnvironmentVariableA("LOCALAPPDATA", buffer, MAX_PATH);
+		if (len > 0 && len < MAX_PATH)
+			return std::string(buffer, len);
+		return {};
+	}
+
+	std::string GetUExplorerConfigDir()
+	{
+		namespace fs = std::filesystem;
+		std::string base = GetLocalAppDataPath();
+		if (base.empty())
+		{
+			char tempBuf[MAX_PATH] = {};
+			const DWORD len = GetTempPathA(MAX_PATH, tempBuf);
+			base.assign(tempBuf, len > 0 ? len : 0);
+		}
+
+		if (base.empty())
+			base = ".";
+
+		fs::path dir = fs::path(base) / "UExplorer";
+		std::error_code ec;
+		fs::create_directories(dir, ec);
+		return dir.string();
+	}
+
+	std::string GetConnectionConfigPath()
+	{
+		return (std::filesystem::path(GetUExplorerConfigDir()) / "connection.ini").string();
+	}
+
+	std::string GetRuntimeStatePath()
+	{
+		return (std::filesystem::path(GetUExplorerConfigDir()) / "runtime.ini").string();
+	}
+
+	void EnsureDefaultConnectionConfig(const std::string& path)
+	{
+		if (GetFileAttributesA(path.c_str()) != INVALID_FILE_ATTRIBUTES)
+			return;
+
+		WritePrivateProfileStringA("Connection", "PreferredPort", std::to_string(kDefaultApiPort).c_str(), path.c_str());
+		WritePrivateProfileStringA("Connection", "Token", kDefaultApiToken, path.c_str());
+		WritePrivateProfileStringA("Connection", "PortMode", "fixed", path.c_str());
+	}
+
+	void LoadConnectionConfig(uint16_t& outPort, std::string& outToken)
+	{
+		const std::string cfgPath = GetConnectionConfigPath();
+		EnsureDefaultConnectionConfig(cfgPath);
+
+		int32_t preferred = GetPrivateProfileIntA("Connection", "PreferredPort", kDefaultApiPort, cfgPath.c_str());
+		if (preferred < 0 || preferred > 65535)
+			preferred = kDefaultApiPort;
+
+		char modeBuf[32] = {};
+		GetPrivateProfileStringA("Connection", "PortMode", "fixed", modeBuf, static_cast<DWORD>(sizeof(modeBuf)), cfgPath.c_str());
+		std::string mode = Trim(modeBuf);
+		std::transform(mode.begin(), mode.end(), mode.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+
+		char tokenBuf[256] = {};
+		GetPrivateProfileStringA("Connection", "Token", kDefaultApiToken, tokenBuf, static_cast<DWORD>(sizeof(tokenBuf)), cfgPath.c_str());
+		std::string token = Trim(tokenBuf);
+		if (token.empty())
+			token = kDefaultApiToken;
+
+		outPort = (mode == "auto") ? 0 : static_cast<uint16_t>(preferred);
+		outToken = token;
+	}
+
+	void WriteRuntimeState(uint16_t port, const std::string& token, bool running)
+	{
+		const std::string runtimePath = GetRuntimeStatePath();
+		WritePrivateProfileStringA("Runtime", "Port", std::to_string(port).c_str(), runtimePath.c_str());
+		WritePrivateProfileStringA("Runtime", "Token", token.c_str(), runtimePath.c_str());
+		WritePrivateProfileStringA("Runtime", "Pid", std::to_string(GetCurrentProcessId()).c_str(), runtimePath.c_str());
+		WritePrivateProfileStringA("Runtime", "Running", running ? "1" : "0", runtimePath.c_str());
+	}
+}
 
 static std::string TryProbeEngineVersionFromImage()
 {
@@ -140,9 +239,15 @@ DWORD MainThread(HMODULE Module)
 	std::cerr << "[UExplorer] Game: " << Settings::Generator::GameName << "\n";
 	std::cerr << "[UExplorer] Version: " << Settings::Generator::GameVersion << "\n";
 
+	uint16_t configuredPort = kDefaultApiPort;
+	std::string configuredToken = kDefaultApiToken;
+	LoadConnectionConfig(configuredPort, configuredToken);
+	std::cerr << "[UExplorer] Connection config: preferred_port="
+		<< configuredPort << " token_len=" << configuredToken.size() << "\n";
+
 	// Start HTTP server
-	const uint16_t port = 27015; // TODO: read from config
-	const std::string token = "uexplorer-dev"; // TODO: generate random token
+	const uint16_t port = configuredPort;
+	const std::string token = configuredToken;
 
 	try
 	{
@@ -151,6 +256,16 @@ DWORD MainThread(HMODULE Module)
 		if (!g_Server->Start())
 		{
 			std::cerr << "[UExplorer] Failed to start HTTP server (all ports failed)\n";
+		}
+		else
+		{
+			const uint16_t actualPort = g_Server->GetPort();
+			if (configuredPort != 0 && actualPort != configuredPort)
+			{
+				std::cerr << "[UExplorer] Preferred port " << configuredPort
+					<< " unavailable, switched to " << actualPort << "\n";
+			}
+			WriteRuntimeState(actualPort, token, true);
 		}
 	}
 	catch (const std::exception& e)
@@ -176,6 +291,7 @@ DWORD MainThread(HMODULE Module)
 	UExplorer::API::ShutdownHooks();
 
 	if (g_Server) g_Server->Stop();
+	WriteRuntimeState(0, token, false);
 
 	fclose(stderr);
 	if (Dummy) fclose(Dummy);

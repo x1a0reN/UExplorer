@@ -78,13 +78,15 @@ export default function SettingsView() {
     setSaving(true);
     setMessage(null);
     api.updateSettings(settings);
+    const persisted = await api.persistConnectionSettings();
     localStorage.setItem(DISPLAY_KEY, JSON.stringify(display));
     setSaving(false);
-    setMessage('Settings saved');
+    setMessage(persisted ? 'Settings saved' : 'Settings saved (native sync failed)');
   };
 
   const testConnection = async () => {
     api.updateSettings(settings);
+    await api.persistConnectionSettings();
     const ok = await api.healthCheck();
     setMessage(ok ? 'Health check: alive' : 'Health check failed');
   };
@@ -139,11 +141,19 @@ export default function SettingsView() {
           {activeTab === 'Connection' && (
             <>
               <Card>
-                <SettingLine label="HTTP Port" desc="Port used to communicate with the injected DLL.">
+                <SettingLine label="HTTP Port" desc="Port used to communicate with the injected DLL (0 = auto-select free port).">
                   <input
                     type="number"
                     value={settings.port}
-                    onChange={(e) => setSettingsField('port', Number(e.target.value) || 27015)}
+                    onChange={(e) => {
+                      const next = Number(e.target.value);
+                      if (Number.isNaN(next)) {
+                        setSettingsField('port', 27015);
+                        return;
+                      }
+                      const clamped = Math.min(65535, Math.max(0, Math.trunc(next)));
+                      setSettingsField('port', clamped);
+                    }}
                     className="bg-black/40 border border-white/10 text-white font-mono text-[13px] rounded-lg px-3 py-1.5 w-24 text-center outline-none focus:border-primary/50"
                   />
                 </SettingLine>

@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
+use std::fs;
 use std::net::{SocketAddr, TcpStream};
+use std::path::PathBuf;
 use std::time::Duration;
 use tauri::command;
 use tauri::Manager;
@@ -39,6 +41,102 @@ pub struct ProcessInfo {
 pub struct InjectionResult {
     pub success: bool,
     pub message: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RuntimeEndpoint {
+    pub pid: u32,
+    pub port: u16,
+    pub token: String,
+    pub running: bool,
+}
+
+fn uexplorer_data_dir() -> Result<PathBuf, String> {
+    let base = std::env::var("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .or_else(|_| std::env::current_dir().map(|p| p.join("temp")))
+        .map_err(|e| format!("Cannot resolve data dir: {e}"))?;
+    let dir = base.join("UExplorer");
+    fs::create_dir_all(&dir).map_err(|e| format!("Create data dir failed: {e}"))?;
+    Ok(dir)
+}
+
+fn connection_ini_path() -> Result<PathBuf, String> {
+    Ok(uexplorer_data_dir()?.join("connection.ini"))
+}
+
+fn runtime_ini_path() -> Result<PathBuf, String> {
+    Ok(uexplorer_data_dir()?.join("runtime.ini"))
+}
+
+fn read_ini_value(content: &str, section: &str, key: &str) -> Option<String> {
+    let mut current_section = String::new();
+    for raw_line in content.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with(';') || line.starts_with('#') {
+            continue;
+        }
+
+        if line.starts_with('[') && line.ends_with(']') && line.len() >= 3 {
+            current_section = line[1..line.len() - 1].trim().to_string();
+            continue;
+        }
+
+        if !current_section.eq_ignore_ascii_case(section) {
+            continue;
+        }
+
+        if let Some(idx) = line.find('=') {
+            let k = line[..idx].trim();
+            if k.eq_ignore_ascii_case(key) {
+                return Some(line[idx + 1..].trim().to_string());
+            }
+        }
+    }
+    None
+}
+
+#[command]
+fn save_connection_settings(port: u16, token: String) -> Result<bool, String> {
+    let path = connection_ini_path()?;
+    let port_mode = if port == 0 { "auto" } else { "fixed" };
+    let content = format!(
+        "[Connection]\nPreferredPort={}\nToken={}\nPortMode={}\n",
+        port, token, port_mode
+    );
+    fs::write(&path, content).map_err(|e| format!("Write connection settings failed: {e}"))?;
+    Ok(true)
+}
+
+#[command]
+fn load_runtime_endpoint() -> Result<Option<RuntimeEndpoint>, String> {
+    let path = runtime_ini_path()?;
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let content = fs::read_to_string(&path).map_err(|e| format!("Read runtime state failed: {e}"))?;
+    let pid = read_ini_value(&content, "Runtime", "Pid")
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(0);
+    let port = read_ini_value(&content, "Runtime", "Port")
+        .and_then(|v| v.parse::<u16>().ok())
+        .unwrap_or(0);
+    let token = read_ini_value(&content, "Runtime", "Token").unwrap_or_default();
+    let running = read_ini_value(&content, "Runtime", "Running")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
+    if port == 0 || token.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(RuntimeEndpoint {
+        pid,
+        port,
+        token,
+        running,
+    }))
 }
 
 // Scan all running processes via Windows API and filter likely Unreal/game processes.
@@ -325,7 +423,12 @@ fn is_dev_server_running() -> bool {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![scan_ue_processes, inject_dll,])
+        .invoke_handler(tauri::generate_handler![
+            scan_ue_processes,
+            inject_dll,
+            save_connection_settings,
+            load_runtime_endpoint,
+        ])
         .setup(|app| {
             if cfg!(debug_assertions) {
                 // Debug app.exe depends on devUrl; if local Vite is not running,
