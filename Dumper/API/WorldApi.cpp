@@ -9,8 +9,10 @@
 #include "OffsetFinder/Offsets.h"
 #include "Settings.h"
 
+#include <cmath>
 #include <format>
 #include <set>
+#include <vector>
 
 namespace UExplorer::API
 {
@@ -142,13 +144,19 @@ static bool ParseVec3(const json& input, double& x, double& y, double& z)
 			x = input[0].get<double>();
 			y = input[1].get<double>();
 			z = input[2].get<double>();
+			if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z))
+				return false;
 			return true;
 		}
 		if (input.is_object())
 		{
-			x = input.value("x", 0.0);
-			y = input.value("y", 0.0);
-			z = input.value("z", 0.0);
+			if (!input.contains("x") || !input.contains("y") || !input.contains("z"))
+				return false;
+			x = input.at("x").get<double>();
+			y = input.at("y").get<double>();
+			z = input.at("z").get<double>();
+			if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z))
+				return false;
 			return true;
 		}
 	}
@@ -540,18 +548,73 @@ void RegisterWorldRoutes(HttpServer& server)
 		if (!root)
 			return { 500, "application/json", MakeError("RootComponent not found") };
 
-		const bool hasLocation = body.contains("location");
-		const bool hasRotation = body.contains("rotation");
-		const bool hasScale = body.contains("scale");
-		if (!hasLocation && !hasRotation && !hasScale)
+		struct PendingWrite
+		{
+			const char* requestField;
+			const char* propertyName;
+			json newValue;
+			json originalValue;
+		};
+
+		std::vector<PendingWrite> writes;
+		auto enqueueWrite = [&](const char* requestField, const char* propertyName) -> HttpResponse* {
+			if (!body.contains(requestField))
+				return nullptr;
+
+			double x = 0.0, y = 0.0, z = 0.0;
+			if (!ParseVec3(body[requestField], x, y, z))
+			{
+				static HttpResponse badInput;
+				badInput = { 400, "application/json", MakeError(std::string("Invalid vector format for ") + requestField) };
+				return &badInput;
+			}
+
+			json original;
+			if (!ReadVec3Property(root, propertyName, original))
+			{
+				static HttpResponse readFail;
+				readFail = { 500, "application/json", MakeError(std::string("Failed to capture original ") + propertyName) };
+				return &readFail;
+			}
+
+			json normalized;
+			normalized["x"] = x;
+			normalized["y"] = y;
+			normalized["z"] = z;
+			writes.push_back(PendingWrite{ requestField, propertyName, std::move(normalized), std::move(original) });
+			return nullptr;
+		};
+
+		if (HttpResponse* err = enqueueWrite("location", "RelativeLocation")) return *err;
+		if (HttpResponse* err = enqueueWrite("rotation", "RelativeRotation")) return *err;
+		if (HttpResponse* err = enqueueWrite("scale", "RelativeScale3D")) return *err;
+
+		if (writes.empty())
 			return { 400, "application/json", MakeError("Missing location/rotation/scale") };
 
-		if (hasLocation && !WriteVec3Property(root, "RelativeLocation", body["location"]))
-			return { 400, "application/json", MakeError("Failed to write RelativeLocation") };
-		if (hasRotation && !WriteVec3Property(root, "RelativeRotation", body["rotation"]))
-			return { 400, "application/json", MakeError("Failed to write RelativeRotation") };
-		if (hasScale && !WriteVec3Property(root, "RelativeScale3D", body["scale"]))
-			return { 400, "application/json", MakeError("Failed to write RelativeScale3D") };
+		int32 applied = 0;
+		for (int32 i = 0; i < static_cast<int32>(writes.size()); i++)
+		{
+			const auto& write = writes[i];
+			if (!WriteVec3Property(root, write.propertyName, write.newValue))
+			{
+				bool rollbackOk = true;
+				for (int32 j = i - 1; j >= 0; j--)
+				{
+					if (!WriteVec3Property(root, writes[j].propertyName, writes[j].originalValue))
+						rollbackOk = false;
+				}
+
+				json err;
+				err["success"] = false;
+				err["error"] = std::string("Failed to write ") + write.propertyName;
+				err["rolled_back"] = true;
+				err["rollback_ok"] = rollbackOk;
+				err["applied_count"] = applied;
+				return { 400, "application/json", err.dump() };
+			}
+			applied++;
+		}
 
 		json transform;
 		json location;
@@ -564,6 +627,7 @@ void RegisterWorldRoutes(HttpServer& server)
 		json data;
 		data["actor_index"] = idx;
 		data["updated"] = true;
+		data["rolled_back"] = false;
 		data["transform"] = std::move(transform);
 		return { 200, "application/json", MakeResponse(data) };
 	});

@@ -195,6 +195,37 @@ export interface WorldActorResponse {
   limit: number;
 }
 
+export interface Vec3Data {
+  x: number;
+  y: number;
+  z: number;
+}
+
+export interface ActorTransformData {
+  location?: Vec3Data;
+  rotation?: Vec3Data;
+  scale?: Vec3Data;
+}
+
+export interface WorldActorDetail {
+  index: number;
+  name: string;
+  full_name: string;
+  class: string;
+  address: string;
+  root_component: ObjectItem | null;
+  transform: ActorTransformData;
+  components: ObjectItem[];
+  component_count: number;
+}
+
+export interface WorldActorTransformUpdateResponse {
+  actor_index: number;
+  updated: boolean;
+  rolled_back?: boolean;
+  transform: ActorTransformData;
+}
+
 export interface WorldShortcuts {
   game_mode: ObjectItem | null;
   game_state: ObjectItem | null;
@@ -261,6 +292,30 @@ export interface HookLogEntry {
 
 export interface HookLogResponse {
   entries: HookLogEntry[];
+}
+
+export interface FunctionCallResultData {
+  function: string;
+  called: boolean;
+  object_index?: number;
+  class?: string;
+  is_static: boolean;
+  result: Record<string, unknown>;
+}
+
+export interface BatchFunctionCallItem {
+  object_index: number;
+  called: boolean;
+  result?: Record<string, unknown>;
+  error?: string;
+}
+
+export interface BatchFunctionCallResultData {
+  function: string;
+  requested: number;
+  success: number;
+  failed: number;
+  items: BatchFunctionCallItem[];
 }
 
 export interface BlueprintDecompileData {
@@ -604,6 +659,24 @@ class UExplorerApi {
     return this.request('/world/shortcuts');
   }
 
+  async getWorldActorDetail(index: number): Promise<ApiResponse<WorldActorDetail>> {
+    return this.request(`/world/actors/${index}`);
+  }
+
+  async updateWorldActorTransform(
+    index: number,
+    transform: {
+      location?: Vec3Data | [number, number, number];
+      rotation?: Vec3Data | [number, number, number];
+      scale?: Vec3Data | [number, number, number];
+    }
+  ): Promise<ApiResponse<WorldActorTransformUpdateResponse>> {
+    return this.request(`/world/actors/${index}/transform`, {
+      method: 'POST',
+      body: JSON.stringify(transform),
+    });
+  }
+
   // Memory
   async readMemory(address: string, size: number): Promise<ApiResponse<MemoryReadData>> {
     return this.request('/memory/read', {
@@ -646,11 +719,53 @@ class UExplorerApi {
     functionName: string,
     params: Record<string, unknown> = {},
     useGameThread = true
-  ): Promise<ApiResponse<{ function: string; called: boolean; result: Record<string, unknown> }>> {
+  ): Promise<ApiResponse<FunctionCallResultData>> {
     return this.request('/call/function', {
       method: 'POST',
       body: JSON.stringify({
         object_index: objectIndex,
+        function_name: functionName,
+        params,
+        use_game_thread: useGameThread,
+      }),
+    });
+  }
+
+  async callStaticFunction(
+    functionName: string,
+    options: {
+      className?: string;
+      classIndex?: number;
+      objectIndex?: number;
+      params?: Record<string, unknown>;
+      useGameThread?: boolean;
+    }
+  ): Promise<ApiResponse<FunctionCallResultData>> {
+    const body: Record<string, unknown> = {
+      function_name: functionName,
+      params: options.params ?? {},
+      use_game_thread: options.useGameThread ?? true,
+    };
+    if (options.className) body.class_name = options.className;
+    if (options.classIndex !== undefined) body.class_index = options.classIndex;
+    if (options.objectIndex !== undefined) body.object_index = options.objectIndex;
+
+    return this.request('/call/static', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  }
+
+  async callFunctionBatch(
+    objectIndices: number[],
+    functionName: string,
+    params: Record<string, unknown> = {},
+    useGameThread = true
+  ): Promise<ApiResponse<BatchFunctionCallResultData>> {
+    return this.request('/call/batch', {
+      method: 'POST',
+      body: JSON.stringify({
+        object_indices: objectIndices,
         function_name: functionName,
         params,
         use_game_thread: useGameThread,

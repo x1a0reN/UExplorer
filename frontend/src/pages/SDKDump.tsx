@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState, type ComponentType } from 'react';
+﻿import { useCallback, useEffect, useMemo, useState, type ComponentType } from 'react';
 import { Download, Code2, Database, LayoutTemplate, Coffee, CheckCircle2, RotateCcw, PlayCircle, RefreshCw } from 'lucide-react';
 import api, { type DumpJob, type DumpType } from '../api';
 
@@ -26,8 +26,30 @@ export default function SDKDump() {
 
   const [jobs, setJobs] = useState<DumpJob[]>([]);
   const [runningJobId, setRunningJobId] = useState<string | null>(null);
+  const [selectedJobId, setSelectedJobId] = useState('');
+  const [selectedJobDetail, setSelectedJobDetail] = useState<DumpJob | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const loadJobs = useCallback(async () => {
+    const res = await api.getDumpJobs();
+    if (!res.success || !res.data) return;
+    setJobs(res.data);
+  }, []);
+
+  const loadJobDetail = useCallback(async (id: string) => {
+    const target = id.trim();
+    if (!target) return;
+    setDetailLoading(true);
+    const res = await api.getDumpJob(target);
+    setDetailLoading(false);
+    if (!res.success || !res.data) {
+      setError(res.error || 'Failed to load job detail');
+      return;
+    }
+    setSelectedJobDetail(res.data);
+  }, []);
 
   useEffect(() => {
     void loadJobs();
@@ -35,7 +57,7 @@ export default function SDKDump() {
       void loadJobs();
     }, 1200);
     return () => clearInterval(timer);
-  }, []);
+  }, [loadJobs]);
 
   const sortedJobs = useMemo(
     () => [...jobs].sort((a, b) => (b.start_time || 0) - (a.start_time || 0)),
@@ -43,12 +65,6 @@ export default function SDKDump() {
   );
 
   const runningJob = sortedJobs.find((j) => j.id === runningJobId) || sortedJobs.find((j) => j.status === 'running') || null;
-
-  const loadJobs = async () => {
-    const res = await api.getDumpJobs();
-    if (!res.success || !res.data) return;
-    setJobs(res.data);
-  };
 
   const buildOptions = () => ({
     include_packages: includePackages,
@@ -70,6 +86,8 @@ export default function SDKDump() {
     }
 
     setRunningJobId(res.data.job_id);
+    setSelectedJobId(res.data.job_id);
+    void loadJobDetail(res.data.job_id);
     await loadJobs();
   };
 
@@ -212,6 +230,40 @@ export default function SDKDump() {
           </div>
         )}
 
+        <div className="apple-glass-panel rounded-[18px] p-4 mb-8">
+          <div className="flex items-center gap-3 mb-3">
+            <input
+              type="text"
+              value={selectedJobId}
+              onChange={(e) => setSelectedJobId(e.target.value)}
+              placeholder="输入 Job ID（例如 job-3）"
+              className="flex-1 bg-black/40 border border-white/10 text-white text-[13px] rounded-lg px-3 py-2 outline-none focus:border-primary/50"
+            />
+            <button
+              onClick={() => void loadJobDetail(selectedJobId)}
+              className="px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-white text-sm"
+            >
+              查看详情
+            </button>
+            <button
+              onClick={() => {
+                if (selectedJobDetail?.id) void loadJobDetail(selectedJobDetail.id);
+              }}
+              className="w-8 h-8 rounded-lg bg-white/10 hover:bg-white/20 flex items-center justify-center"
+              title="刷新详情"
+            >
+              <RefreshCw className={`w-4 h-4 text-white/70 ${detailLoading ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
+          <pre className="bg-black/40 border border-white/10 rounded-lg p-3 text-xs text-white/80 font-mono whitespace-pre-wrap min-h-[96px]">
+            {selectedJobDetail
+              ? JSON.stringify(selectedJobDetail, null, 2)
+              : detailLoading
+                ? 'Loading...'
+                : '未选择任务'}
+          </pre>
+        </div>
+
         {error && <div className="text-red-300 text-sm mb-6">{error}</div>}
 
         <div className="mt-10 space-y-4">
@@ -241,6 +293,16 @@ export default function SDKDump() {
                     title="Rerun"
                   >
                     <RotateCcw className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={() => {
+                      setSelectedJobId(job.id);
+                      void loadJobDetail(job.id);
+                    }}
+                    className="px-2 h-8 rounded-lg bg-white/5 hover:bg-white/10 text-white text-[11px]"
+                    title="查看详情"
+                  >
+                    详情
                   </button>
                 </div>
               </div>
@@ -277,4 +339,5 @@ function ToggleRow({
     </div>
   );
 }
+
 

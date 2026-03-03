@@ -15,15 +15,20 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import api, {
+  type ActorTransformData,
   type ClassFunction,
   type ClassProperty,
   type ObjectDetail,
   type ObjectProperty,
   type ObjectItem,
+  type Vec3Data,
+  type WorldActorDetail,
 } from '../api';
 
 type ObjectTypeTab = 'All' | 'Class' | 'Struct' | 'Enum' | 'Function' | 'Package' | 'Actor';
 type DetailTab = 'Info' | 'Properties' | 'Fields' | 'Functions' | 'Instances' | 'World';
+type VecInput = { x: string; y: string; z: string };
+type TransformInputState = { location: VecInput; rotation: VecInput; scale: VecInput };
 
 interface BrowserItem {
   index: number;
@@ -60,6 +65,31 @@ function toEditable(value: unknown): string {
   }
 }
 
+function toVecInput(vec?: { x: number; y: number; z: number }): VecInput {
+  if (!vec) return { x: '', y: '', z: '' };
+  return {
+    x: String(vec.x),
+    y: String(vec.y),
+    z: String(vec.z),
+  };
+}
+
+function toTransformInputState(transform?: ActorTransformData): TransformInputState {
+  return {
+    location: toVecInput(transform?.location),
+    rotation: toVecInput(transform?.rotation),
+    scale: toVecInput(transform?.scale),
+  };
+}
+
+function parseVecInput(input: VecInput): Vec3Data | null {
+  const x = Number(input.x);
+  const y = Number(input.y);
+  const z = Number(input.z);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return null;
+  return { x, y, z };
+}
+
 export default function Objects() {
   const [activeTab, setActiveTab] = useState<DetailTab>('Info');
   const [typeTab, setTypeTab] = useState<ObjectTypeTab>('All');
@@ -82,6 +112,10 @@ export default function Objects() {
   const [detailError, setDetailError] = useState<string | null>(null);
   const [propertyEditMap, setPropertyEditMap] = useState<Record<string, string>>({});
   const [cdoDiff, setCdoDiff] = useState<Set<string>>(new Set());
+  const [actorDetail, setActorDetail] = useState<WorldActorDetail | null>(null);
+  const [transformInput, setTransformInput] = useState<TransformInputState>(toTransformInputState());
+  const [worldSaving, setWorldSaving] = useState(false);
+  const [worldMessage, setWorldMessage] = useState<string | null>(null);
 
   const tabs = useMemo(
     () => [
@@ -116,6 +150,9 @@ export default function Objects() {
     setInstances([]);
     setMatched(0);
     setTotal(0);
+    setActorDetail(null);
+    setTransformInput(toTransformInputState());
+    setWorldMessage(null);
 
     try {
       const q = search.trim();
@@ -224,6 +261,9 @@ export default function Objects() {
     setInstances([]);
     setWorldText('暂无世界数据');
     setCdoDiff(new Set());
+    setActorDetail(null);
+    setTransformInput(toTransformInputState());
+    setWorldMessage(null);
 
     try {
       let currentDetail: ObjectDetail | null = null;
@@ -295,7 +335,11 @@ export default function Objects() {
           setWorldText('未能加载包内容');
         }
       } else if (item.type === 'Actor') {
-        const worldRes = await api.getWorldShortcuts();
+        const [worldRes, actorRes] = await Promise.all([
+          api.getWorldShortcuts(),
+          api.getWorldActorDetail(item.index),
+        ]);
+
         if (worldRes.success && worldRes.data) {
           const shortcuts = [
             worldRes.data.game_mode?.name,
@@ -308,6 +352,14 @@ export default function Objects() {
           setWorldText(shortcuts ? `World shortcuts: ${shortcuts}` : 'No world shortcuts found');
         } else {
           setWorldText('未能加载 world shortcuts');
+        }
+
+        if (actorRes.success && actorRes.data) {
+          setActorDetail(actorRes.data);
+          setTransformInput(toTransformInputState(actorRes.data.transform));
+        } else {
+          setActorDetail(null);
+          setWorldMessage(actorRes.error || '未能加载 Actor Transform');
         }
       }
     } catch (error) {
@@ -335,6 +387,53 @@ export default function Objects() {
     if (!res.success) {
       setDetailError(res.error || 'Failed to add watch');
     }
+  };
+
+  const updateTransformField = (field: keyof TransformInputState, axis: keyof VecInput, value: string) => {
+    setTransformInput((prev) => ({
+      ...prev,
+      [field]: {
+        ...prev[field],
+        [axis]: value,
+      },
+    }));
+  };
+
+  const applyActorTransform = async () => {
+    if (!selected || selected.type !== 'Actor') return;
+    const location = parseVecInput(transformInput.location);
+    const rotation = parseVecInput(transformInput.rotation);
+    const scale = parseVecInput(transformInput.scale);
+
+    if (!location || !rotation || !scale) {
+      setWorldMessage('输入非法：位置/旋转/缩放必须全部是有效数字');
+      return;
+    }
+
+    setWorldSaving(true);
+    setWorldMessage(null);
+    const res = await api.updateWorldActorTransform(selected.index, {
+      location,
+      rotation,
+      scale,
+    });
+    setWorldSaving(false);
+
+    if (!res.success || !res.data) {
+      setWorldMessage(`写入失败：${res.error || 'unknown error'}，已回滚到服务器状态`);
+      await loadDetail(selected);
+      return;
+    }
+
+    setActorDetail((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        transform: res.data?.transform || prev.transform,
+      };
+    });
+    setTransformInput(toTransformInputState(res.data.transform));
+    setWorldMessage(res.data.rolled_back ? '服务器提示已回滚' : 'Transform 更新成功');
   };
 
   return (
@@ -590,7 +689,79 @@ export default function Objects() {
 
               {activeTab === 'World' && (
                 <Panel title="World">
-                  <div className="text-white/70 text-sm whitespace-pre-wrap">{worldText}</div>
+                  <div className="space-y-4">
+                    <div className="text-white/70 text-sm whitespace-pre-wrap">{worldText}</div>
+
+                    {selected.type !== 'Actor' && (
+                      <div className="text-white/40 text-sm">当前对象不是 Actor，无法编辑 Transform。</div>
+                    )}
+
+                    {selected.type === 'Actor' && (
+                      <>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                          {([
+                            { key: 'location' as const, label: 'Location' },
+                            { key: 'rotation' as const, label: 'Rotation' },
+                            { key: 'scale' as const, label: 'Scale' },
+                          ]).map((section) => (
+                            <div key={section.key} className="rounded-lg border border-white/10 bg-black/20 p-3 space-y-2">
+                              <div className="text-xs uppercase tracking-wider text-white/50">{section.label}</div>
+                              {(['x', 'y', 'z'] as const).map((axis) => (
+                                <div key={axis} className="flex items-center gap-2">
+                                  <div className="w-5 text-xs text-white/40 uppercase">{axis}</div>
+                                  <input
+                                    type="text"
+                                    value={transformInput[section.key][axis]}
+                                    onChange={(e) => updateTransformField(section.key, axis, e.target.value)}
+                                    className="flex-1 bg-black/40 border border-white/10 text-white font-mono text-[12px] rounded-md px-2 py-1 outline-none focus:border-primary/50"
+                                  />
+                                </div>
+                              ))}
+                            </div>
+                          ))}
+                        </div>
+
+                        <div className="flex items-center gap-3">
+                          <button
+                            onClick={() => void applyActorTransform()}
+                            disabled={worldSaving}
+                            className="px-3 py-2 rounded-lg bg-primary hover:bg-primary-dark text-white text-sm disabled:opacity-50"
+                          >
+                            {worldSaving ? '写入中...' : '应用 Transform'}
+                          </button>
+                          <button
+                            onClick={() => {
+                              if (actorDetail) {
+                                setTransformInput(toTransformInputState(actorDetail.transform));
+                                setWorldMessage('已恢复为最近一次服务端状态');
+                              }
+                            }}
+                            className="px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-white text-sm"
+                          >
+                            回滚输入
+                          </button>
+                        </div>
+
+                        {worldMessage && <div className="text-xs text-white/70">{worldMessage}</div>}
+
+                        <div className="rounded-lg border border-white/10 bg-black/20 p-3">
+                          <div className="text-xs uppercase tracking-wider text-white/50 mb-2">
+                            Components ({actorDetail?.component_count ?? 0})
+                          </div>
+                          <div className="max-h-40 overflow-auto space-y-1">
+                            {(actorDetail?.components || []).map((comp) => (
+                              <div key={`${comp.index}-${comp.address}`} className="text-xs text-white/80 font-mono">
+                                {comp.class} :: {comp.name}
+                              </div>
+                            ))}
+                            {(actorDetail?.components || []).length === 0 && (
+                              <div className="text-xs text-white/40">No components</div>
+                            )}
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </div>
                 </Panel>
               )}
             </div>

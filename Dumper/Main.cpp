@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 
 #include "Generators/Generator.h"
 #include "Server/HttpServer.h"
@@ -23,6 +24,7 @@ namespace
 {
 	constexpr uint16_t kDefaultApiPort = 27015;
 	constexpr const char* kDefaultApiToken = "uexplorer-dev";
+	constexpr const char* kAuthMode = "token_header";
 
 	std::string Trim(std::string value)
 	{
@@ -71,14 +73,44 @@ namespace
 		return (std::filesystem::path(GetUExplorerConfigDir()) / "runtime.ini").string();
 	}
 
+	std::string GenerateRandomToken(size_t length = 40)
+	{
+		static constexpr char kAlphabet[] =
+			"0123456789"
+			"ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+			"abcdefghijklmnopqrstuvwxyz";
+		static constexpr size_t kAlphabetLen = sizeof(kAlphabet) - 1;
+
+		std::string token;
+		token.reserve(length);
+		for (size_t i = 0; i < length; i++)
+		{
+			unsigned int r = 0;
+			if (rand_s(&r) != 0)
+				r = static_cast<unsigned int>(GetTickCount64() + i * 131);
+			token.push_back(kAlphabet[r % kAlphabetLen]);
+		}
+		return token;
+	}
+
 	void EnsureDefaultConnectionConfig(const std::string& path)
 	{
-		if (GetFileAttributesA(path.c_str()) != INVALID_FILE_ATTRIBUTES)
-			return;
+		const bool exists = (GetFileAttributesA(path.c_str()) != INVALID_FILE_ATTRIBUTES);
+		if (!exists)
+		{
+			WritePrivateProfileStringA("Connection", "PreferredPort", std::to_string(kDefaultApiPort).c_str(), path.c_str());
+			WritePrivateProfileStringA("Connection", "PortMode", "fixed", path.c_str());
+		}
 
-		WritePrivateProfileStringA("Connection", "PreferredPort", std::to_string(kDefaultApiPort).c_str(), path.c_str());
-		WritePrivateProfileStringA("Connection", "Token", kDefaultApiToken, path.c_str());
-		WritePrivateProfileStringA("Connection", "PortMode", "fixed", path.c_str());
+		char tokenBuf[256] = {};
+		GetPrivateProfileStringA("Connection", "Token", "", tokenBuf, static_cast<DWORD>(sizeof(tokenBuf)), path.c_str());
+		std::string token = Trim(tokenBuf);
+		if (token.empty() || token == kDefaultApiToken)
+		{
+			token = GenerateRandomToken();
+			WritePrivateProfileStringA("Connection", "Token", token.c_str(), path.c_str());
+			std::cerr << "[UExplorer] Connection token generated and persisted (len=" << token.size() << ")\n";
+		}
 	}
 
 	void LoadConnectionConfig(uint16_t& outPort, std::string& outToken)
@@ -110,6 +142,7 @@ namespace
 		const std::string runtimePath = GetRuntimeStatePath();
 		WritePrivateProfileStringA("Runtime", "Port", std::to_string(port).c_str(), runtimePath.c_str());
 		WritePrivateProfileStringA("Runtime", "Token", token.c_str(), runtimePath.c_str());
+		WritePrivateProfileStringA("Runtime", "AuthMode", kAuthMode, runtimePath.c_str());
 		WritePrivateProfileStringA("Runtime", "Pid", std::to_string(GetCurrentProcessId()).c_str(), runtimePath.c_str());
 		WritePrivateProfileStringA("Runtime", "Running", running ? "1" : "0", runtimePath.c_str());
 	}
@@ -243,7 +276,8 @@ DWORD MainThread(HMODULE Module)
 	std::string configuredToken = kDefaultApiToken;
 	LoadConnectionConfig(configuredPort, configuredToken);
 	std::cerr << "[UExplorer] Connection config: preferred_port="
-		<< configuredPort << " token_len=" << configuredToken.size() << "\n";
+		<< configuredPort << " token_len=" << configuredToken.size()
+		<< " auth_mode=" << kAuthMode << "\n";
 
 	// Start HTTP server
 	const uint16_t port = configuredPort;

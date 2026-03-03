@@ -4,6 +4,13 @@ import api, { type ClassFunction, type HookItem, type HookLogEntry, type ObjectD
 
 type FunctionTab = 'Info' | 'Parameters' | 'Call' | 'Hook' | 'Decompile';
 type FlagTab = 'All' | 'Native' | 'Blueprint';
+type FunctionsViewMode = 'function' | 'hookManager';
+type CallMode = 'instance' | 'static' | 'batch';
+
+interface FunctionsProps {
+  viewMode?: FunctionsViewMode;
+  onViewModeChange?: (mode: FunctionsViewMode) => void;
+}
 
 interface FunctionItem {
   index: number;
@@ -26,6 +33,21 @@ function parseInputValue(raw: string): unknown {
   }
 }
 
+function parseObjectIndices(raw: string): number[] {
+  const seen = new Set<number>();
+  raw
+    .split(/[,\s]+/)
+    .map((v) => v.trim())
+    .filter(Boolean)
+    .forEach((v) => {
+      const parsed = Number(v);
+      if (!Number.isNaN(parsed) && parsed >= 0) {
+        seen.add(parsed);
+      }
+    });
+  return [...seen];
+}
+
 function extractFunctionParts(detail: ObjectDetail | null): { className: string; functionName: string; functionPath: string } {
   if (!detail?.full_name) return { className: '', functionName: detail?.name || '', functionPath: '' };
   const full = detail.full_name;
@@ -37,7 +59,7 @@ function extractFunctionParts(detail: ObjectDetail | null): { className: string;
   return { className, functionName, functionPath };
 }
 
-export default function Functions() {
+export default function Functions({ viewMode = 'function', onViewModeChange }: FunctionsProps) {
   const [activeTab, setActiveTab] = useState<FunctionTab>('Call');
   const [flagTab, setFlagTab] = useState<FlagTab>('All');
   const [search, setSearch] = useState('');
@@ -54,12 +76,20 @@ export default function Functions() {
 
   const [targetIndex, setTargetIndex] = useState('');
   const [paramInputs, setParamInputs] = useState<Record<string, string>>({});
+  const [callMode, setCallMode] = useState<CallMode>('instance');
+  const [staticClassName, setStaticClassName] = useState('');
+  const [batchObjectIndices, setBatchObjectIndices] = useState('');
   const [callResult, setCallResult] = useState<string>('');
   const [calling, setCalling] = useState(false);
 
   const [hooks, setHooks] = useState<HookItem[]>([]);
   const [hookLog, setHookLog] = useState<HookLogEntry[]>([]);
   const [hookBusy, setHookBusy] = useState(false);
+  const [hookFilterKeyword, setHookFilterKeyword] = useState('');
+  const [hookFilterClass, setHookFilterClass] = useState('');
+  const [hookPage, setHookPage] = useState(1);
+  const [managerSelectedHookId, setManagerSelectedHookId] = useState<number | null>(null);
+  const [hookLogPage, setHookLogPage] = useState(1);
   const hookPollTimerRef = useRef<number | null>(null);
   const hookPollInFlightRef = useRef(false);
   const hookReconnectTimerRef = useRef<number | null>(null);
@@ -82,6 +112,36 @@ export default function Functions() {
 
   const currentParts = extractFunctionParts(detail);
   const currentHook = hooks.find((h) => h.function_path === currentParts.functionPath);
+  const activeHookId = viewMode === 'hookManager' ? (managerSelectedHookId ?? 0) : (currentHook?.id ?? 0);
+  const hookPageSize = 50;
+  const hookLogPageSize = 100;
+
+  const filteredHooks = useMemo(() => {
+    const keyword = hookFilterKeyword.trim().toLowerCase();
+    const classKw = hookFilterClass.trim().toLowerCase();
+    return hooks.filter((h) => {
+      const path = h.function_path.toLowerCase();
+      if (keyword && !path.includes(keyword)) return false;
+      if (classKw) {
+        const className = path.includes('.') ? path.split('.')[0] : path;
+        if (!className.includes(classKw)) return false;
+      }
+      return true;
+    });
+  }, [hookFilterClass, hookFilterKeyword, hooks]);
+
+  const pagedHooks = useMemo(() => {
+    const start = (hookPage - 1) * hookPageSize;
+    return filteredHooks.slice(start, start + hookPageSize);
+  }, [filteredHooks, hookPage]);
+
+  const pagedHookLogs = useMemo(() => {
+    const start = (hookLogPage - 1) * hookLogPageSize;
+    return hookLog.slice(start, start + hookLogPageSize);
+  }, [hookLog, hookLogPage]);
+
+  const hookTotalPages = Math.max(1, Math.ceil(filteredHooks.length / hookPageSize));
+  const hookLogTotalPages = Math.max(1, Math.ceil(hookLog.length / hookLogPageSize));
 
   useEffect(() => {
     void loadFunctions();
@@ -92,6 +152,32 @@ export default function Functions() {
     void loadFunctionDetail(selected.index);
   }, [selected]);
 
+  useEffect(() => {
+    setHookPage(1);
+  }, [hookFilterKeyword, hookFilterClass]);
+
+  useEffect(() => {
+    setHookLogPage(1);
+  }, [activeHookId]);
+
+  useEffect(() => {
+    if (hookPage > hookTotalPages) {
+      setHookPage(hookTotalPages);
+    }
+  }, [hookPage, hookTotalPages]);
+
+  useEffect(() => {
+    if (hookLogPage > hookLogTotalPages) {
+      setHookLogPage(hookLogTotalPages);
+    }
+  }, [hookLogPage, hookLogTotalPages]);
+
+  useEffect(() => {
+    if (viewMode !== 'hookManager') return;
+    if (managerSelectedHookId && hooks.some((h) => h.id === managerSelectedHookId)) return;
+    setManagerSelectedHookId(hooks.length > 0 ? hooks[0].id : null);
+  }, [hooks, managerSelectedHookId, viewMode]);
+
   const refreshHooks = useCallback(async () => {
     const res = await api.listHooks();
     if (res.success && res.data) {
@@ -100,12 +186,19 @@ export default function Functions() {
   }, []);
 
   const refreshHookLog = useCallback(async () => {
-    const id = currentHook?.id ?? 0;
-    const res = await api.getHookLog(id);
+    const res = await api.getHookLog(activeHookId);
     if (res.success && res.data) {
-      setHookLog(res.data.entries.slice(-200).reverse());
+      setHookLog(res.data.entries.slice(-1000).reverse());
     }
-  }, [currentHook?.id]);
+  }, [activeHookId]);
+
+  useEffect(() => {
+    if (activeHookId > 0) {
+      void refreshHookLog();
+    } else {
+      setHookLog([]);
+    }
+  }, [activeHookId, refreshHookLog]);
 
   const stopHookPolling = useCallback(() => {
     if (hookPollTimerRef.current !== null) {
@@ -146,7 +239,7 @@ export default function Functions() {
   }, []);
 
   useEffect(() => {
-    if (activeTab !== 'Hook') {
+    if (activeTab !== 'Hook' && viewMode !== 'hookManager') {
       clearHookReconnectTimer();
       hookReconnectDelayRef.current = 800;
       stopHookPolling();
@@ -200,7 +293,7 @@ export default function Functions() {
       hookReconnectDelayRef.current = 800;
       stopHookPolling();
     };
-  }, [activeTab, clearHookReconnectTimer, refreshHookLog, refreshHooks, startHookPolling, stopHookPolling]);
+  }, [activeTab, clearHookReconnectTimer, refreshHookLog, refreshHooks, startHookPolling, stopHookPolling, viewMode]);
 
   const loadFunctions = async () => {
     setListLoading(true);
@@ -255,6 +348,7 @@ export default function Functions() {
 
       const parts = extractFunctionParts(detailRes.data);
       if (!parts.className) return;
+      setStaticClassName(parts.className);
 
       const classFuncRes = await api.getClassFunctions(parts.className);
       if (!classFuncRes.success || !classFuncRes.data) {
@@ -264,6 +358,7 @@ export default function Functions() {
       setFunctionMeta(found);
 
       if (found) {
+        setCallMode(found.flags.toLowerCase().includes('static') ? 'static' : 'instance');
         const inputMap: Record<string, string> = {};
         found.params
           .filter((p) => !p.flags.includes('OutParm') && !p.flags.includes('ReturnParm'))
@@ -291,31 +386,90 @@ export default function Functions() {
 
   const executeCall = async () => {
     if (!detail) return;
-    if (!targetIndex.trim()) {
-      setCallResult('Target object index is required');
-      return;
-    }
 
-    const objectIndex = Number(targetIndex);
-    if (Number.isNaN(objectIndex)) {
-      setCallResult('Target object index is invalid');
-      return;
-    }
+    const parseParamValue = async (raw: string): Promise<unknown> => {
+      const trimmed = raw.trim();
+      const enumMatch = trimmed.match(/^([A-Za-z0-9_]+)::([A-Za-z0-9_]+)$/);
+      if (!enumMatch) return parseInputValue(raw);
+
+      const [, enumName, enumValueName] = enumMatch;
+      const enumRes = await api.getEnumByName(enumName);
+      if (!enumRes.success || !enumRes.data) {
+        return parseInputValue(raw);
+      }
+
+      const found = enumRes.data.values.find((v) => v.name === enumValueName || v.name.endsWith(`::${enumValueName}`));
+      return found ? found.value : parseInputValue(raw);
+    };
 
     const params: Record<string, unknown> = {};
-    Object.entries(paramInputs).forEach(([name, value]) => {
-      params[name] = parseInputValue(value);
-    });
+    for (const [name, raw] of Object.entries(paramInputs)) {
+      params[name] = await parseParamValue(raw);
+    }
 
     setCalling(true);
-    const res = await api.callFunction(objectIndex, detail.name, params, true);
-    setCalling(false);
+    try {
+      if (callMode === 'static') {
+        if (!staticClassName.trim()) {
+          setCallResult('Static call requires class name');
+          return;
+        }
 
-    if (!res.success || !res.data) {
-      setCallResult(res.error || 'Call failed');
-      return;
+        const classCheck = await api.getClassByName(staticClassName.trim());
+        if (!classCheck.success || !classCheck.data) {
+          setCallResult(classCheck.error || 'Class not found');
+          return;
+        }
+
+        const res = await api.callStaticFunction(detail.name, {
+          className: staticClassName.trim(),
+          params,
+          useGameThread: true,
+        });
+        if (!res.success || !res.data) {
+          setCallResult(res.error || 'Static call failed');
+          return;
+        }
+        setCallResult(JSON.stringify(res.data, null, 2));
+        return;
+      }
+
+      if (callMode === 'batch') {
+        const indices = parseObjectIndices(batchObjectIndices);
+        if (indices.length === 0) {
+          setCallResult('Batch call requires object indices, e.g. 100,101,102');
+          return;
+        }
+
+        const res = await api.callFunctionBatch(indices, detail.name, params, true);
+        if (!res.success || !res.data) {
+          setCallResult(res.error || 'Batch call failed');
+          return;
+        }
+        setCallResult(JSON.stringify(res.data, null, 2));
+        return;
+      }
+
+      if (!targetIndex.trim()) {
+        setCallResult('Target object index is required');
+        return;
+      }
+
+      const objectIndex = Number(targetIndex);
+      if (Number.isNaN(objectIndex)) {
+        setCallResult('Target object index is invalid');
+        return;
+      }
+
+      const res = await api.callFunction(objectIndex, detail.name, params, true);
+      if (!res.success || !res.data) {
+        setCallResult(res.error || 'Call failed');
+        return;
+      }
+      setCallResult(JSON.stringify(res.data.result, null, 2));
+    } finally {
+      setCalling(false);
     }
-    setCallResult(JSON.stringify(res.data.result, null, 2));
   };
 
   const addHook = async () => {
@@ -352,6 +506,22 @@ export default function Functions() {
       return;
     }
     await refreshHooks();
+  };
+
+  const bulkSetHooksEnabled = async (enabled: boolean) => {
+    const targets = filteredHooks;
+    if (targets.length === 0) return;
+    setHookBusy(true);
+    try {
+      for (const hook of targets) {
+        if (hook.enabled === enabled) continue;
+        await api.setHookEnabled(hook.id, enabled);
+      }
+      await refreshHooks();
+      await refreshHookLog();
+    } finally {
+      setHookBusy(false);
+    }
   };
 
   const loadDecompile = async () => {
@@ -451,29 +621,197 @@ export default function Functions() {
 
       <div className="flex-1 flex flex-col min-w-0 bg-[#0A0A0C] relative">
         <div className="h-14 border-b border-white/5 bg-white/[0.02] backdrop-blur-3xl flex items-center px-6 gap-6 z-20">
-          <nav className="flex items-center gap-4">
-            {functionTabs.map((tab) => (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={`relative h-14 flex items-center gap-2 text-[13px] font-semibold tracking-tight transition-colors ${
-                  activeTab === tab.id ? 'text-white' : 'text-white/40 hover:text-white/70'
-                }`}
-              >
-                <tab.icon className="w-4 h-4" />
-                {tab.id}
-                {activeTab === tab.id && (
-                  <div className="absolute bottom-0 left-0 right-0 h-[3px] bg-primary rounded-t-full shadow-[0_-2px_8px_rgba(10,132,255,0.5)]" />
-                )}
-              </button>
-            ))}
-          </nav>
+          <div className="flex items-center gap-2 bg-white/5 border border-white/10 rounded-lg p-1">
+            <button
+              onClick={() => onViewModeChange?.('function')}
+              className={`px-3 py-1.5 rounded-md text-xs font-semibold ${viewMode === 'function' ? 'bg-white/10 text-white' : 'text-white/50 hover:text-white'}`}
+            >
+              函数工作台
+            </button>
+            <button
+              onClick={() => onViewModeChange?.('hookManager')}
+              className={`px-3 py-1.5 rounded-md text-xs font-semibold ${viewMode === 'hookManager' ? 'bg-white/10 text-white' : 'text-white/50 hover:text-white'}`}
+            >
+              Hook 管理
+            </button>
+          </div>
+          {viewMode === 'function' && (
+            <nav className="flex items-center gap-4">
+              {functionTabs.map((tab) => (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`relative h-14 flex items-center gap-2 text-[13px] font-semibold tracking-tight transition-colors ${
+                    activeTab === tab.id ? 'text-white' : 'text-white/40 hover:text-white/70'
+                  }`}
+                >
+                  <tab.icon className="w-4 h-4" />
+                  {tab.id}
+                  {activeTab === tab.id && (
+                    <div className="absolute bottom-0 left-0 right-0 h-[3px] bg-primary rounded-t-full shadow-[0_-2px_8px_rgba(10,132,255,0.5)]" />
+                  )}
+                </button>
+              ))}
+            </nav>
+          )}
         </div>
 
         <div className="flex-1 overflow-auto p-8 relative">
-          {!selected && <div className="text-white/40 text-sm">Select a function on the left panel.</div>}
-          {selected && (
-            <div className="max-w-5xl space-y-6">
+          {viewMode === 'hookManager' ? (
+            <div className="max-w-6xl space-y-6">
+              <div className="apple-glass-panel rounded-[24px] p-6">
+                <div className="grid grid-cols-4 gap-4 text-sm">
+                  <div>
+                    <div className="text-white/40 text-xs">Total Hooks</div>
+                    <div className="text-white text-xl font-mono">{hooks.length}</div>
+                  </div>
+                  <div>
+                    <div className="text-white/40 text-xs">Enabled</div>
+                    <div className="text-green-300 text-xl font-mono">{hooks.filter((h) => h.enabled).length}</div>
+                  </div>
+                  <div>
+                    <div className="text-white/40 text-xs">Filtered</div>
+                    <div className="text-blue-300 text-xl font-mono">{filteredHooks.length}</div>
+                  </div>
+                  <div>
+                    <div className="text-white/40 text-xs">Selected Hook</div>
+                    <div className="text-white text-sm font-mono truncate">
+                      {hooks.find((h) => h.id === managerSelectedHookId)?.function_path || '-'}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="apple-glass-panel rounded-[24px] p-6 space-y-4">
+                <div className="grid grid-cols-[1fr_1fr_auto_auto_auto] gap-3">
+                  <input
+                    type="text"
+                    value={hookFilterKeyword}
+                    onChange={(e) => setHookFilterKeyword(e.target.value)}
+                    placeholder="按函数名过滤（关键词）"
+                    className="bg-black/40 border border-white/10 text-white text-[13px] rounded-lg px-3 py-2 outline-none focus:border-primary/50"
+                  />
+                  <input
+                    type="text"
+                    value={hookFilterClass}
+                    onChange={(e) => setHookFilterClass(e.target.value)}
+                    placeholder="按类名过滤（Class）"
+                    className="bg-black/40 border border-white/10 text-white text-[13px] rounded-lg px-3 py-2 outline-none focus:border-primary/50"
+                  />
+                  <button
+                    onClick={() => void bulkSetHooksEnabled(true)}
+                    disabled={hookBusy || filteredHooks.length === 0}
+                    className="px-3 py-2 rounded-lg bg-green-500/20 hover:bg-green-500/30 text-green-200 text-sm disabled:opacity-50"
+                  >
+                    批量启用
+                  </button>
+                  <button
+                    onClick={() => void bulkSetHooksEnabled(false)}
+                    disabled={hookBusy || filteredHooks.length === 0}
+                    className="px-3 py-2 rounded-lg bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-200 text-sm disabled:opacity-50"
+                  >
+                    批量停用
+                  </button>
+                  <button
+                    onClick={() => {
+                      void refreshHooks();
+                      void refreshHookLog();
+                    }}
+                    className="px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-white text-sm"
+                  >
+                    刷新
+                  </button>
+                </div>
+
+                <div className="border border-white/5 rounded-xl overflow-hidden">
+                  <div className="grid grid-cols-[90px_1fr_120px_140px] bg-white/5 text-white/50 text-xs uppercase tracking-wider px-3 py-2">
+                    <div>ID</div>
+                    <div>Function Path</div>
+                    <div>Status</div>
+                    <div>Hit Count</div>
+                  </div>
+                  <div className="max-h-[380px] overflow-auto">
+                    {pagedHooks.map((hook) => (
+                      <button
+                        key={hook.id}
+                        onClick={() => setManagerSelectedHookId(hook.id)}
+                        className={`w-full grid grid-cols-[90px_1fr_120px_140px] px-3 py-2 text-left text-sm border-b border-white/5 ${
+                          managerSelectedHookId === hook.id ? 'bg-primary/20 text-white' : 'text-white/80 hover:bg-white/5'
+                        }`}
+                      >
+                        <div className="font-mono">{hook.id}</div>
+                        <div className="font-mono truncate">{hook.function_path}</div>
+                        <div>{hook.enabled ? 'Enabled' : 'Disabled'}</div>
+                        <div className="font-mono">{hook.hit_count}</div>
+                      </button>
+                    ))}
+                    {pagedHooks.length === 0 && <div className="p-4 text-white/40 text-sm">没有匹配的 Hook</div>}
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between text-xs text-white/60">
+                  <div>第 {hookPage} / {hookTotalPages} 页（每页 {hookPageSize} 条）</div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setHookPage((p) => Math.max(1, p - 1))}
+                      disabled={hookPage <= 1}
+                      className="px-2 py-1 rounded bg-white/10 disabled:opacity-40"
+                    >
+                      上一页
+                    </button>
+                    <button
+                      onClick={() => setHookPage((p) => Math.min(hookTotalPages, p + 1))}
+                      disabled={hookPage >= hookTotalPages}
+                      className="px-2 py-1 rounded bg-white/10 disabled:opacity-40"
+                    >
+                      下一页
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="apple-glass-panel rounded-[24px] p-6 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-white font-semibold">Hook Log</h3>
+                  <div className="text-xs text-white/50 font-mono">
+                    Active Hook ID: {managerSelectedHookId ?? '-'}
+                  </div>
+                </div>
+                <div className="max-h-[320px] overflow-auto border border-white/5 rounded-xl p-3 bg-black/30 space-y-2">
+                  {pagedHookLogs.map((entry, idx) => (
+                    <div key={`${entry.timestamp}-${idx}`} className="text-xs font-mono text-white/80 border-b border-white/5 pb-2">
+                      <div>{new Date(entry.timestamp).toLocaleTimeString()}</div>
+                      <div className="text-white/50">{entry.function_name}</div>
+                    </div>
+                  ))}
+                  {pagedHookLogs.length === 0 && <div className="text-white/40 text-xs">No hook logs</div>}
+                </div>
+                <div className="flex items-center justify-between text-xs text-white/60">
+                  <div>第 {hookLogPage} / {hookLogTotalPages} 页（每页 {hookLogPageSize} 条）</div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setHookLogPage((p) => Math.max(1, p - 1))}
+                      disabled={hookLogPage <= 1}
+                      className="px-2 py-1 rounded bg-white/10 disabled:opacity-40"
+                    >
+                      上一页
+                    </button>
+                    <button
+                      onClick={() => setHookLogPage((p) => Math.min(hookLogTotalPages, p + 1))}
+                      disabled={hookLogPage >= hookLogTotalPages}
+                      className="px-2 py-1 rounded bg-white/10 disabled:opacity-40"
+                    >
+                      下一页
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <>
+              {!selected && <div className="text-white/40 text-sm">Select a function on the left panel.</div>}
+              {selected && (
+                <div className="max-w-5xl space-y-6">
               <div className="apple-glass-panel rounded-[24px] p-6 relative overflow-hidden">
                 <div className="flex gap-5 relative z-10 items-center">
                   <div className="w-16 h-16 rounded-[14px] bg-gradient-to-br from-green-500/20 to-teal-500/10 border border-white/10 flex items-center justify-center shadow-lg flex-none">
@@ -543,15 +881,66 @@ export default function Functions() {
                       <h3 className="text-[14px] font-semibold text-white/90 mb-4 tracking-tight">Invoke Parameters</h3>
                       <div className="space-y-4">
                         <div className="space-y-1.5">
-                          <label className="text-[11px] font-bold text-white/40 uppercase tracking-widest">Target Object Index</label>
-                          <input
-                            type="text"
-                            value={targetIndex}
-                            onChange={(e) => setTargetIndex(e.target.value)}
-                            placeholder="Object index"
-                            className="w-full bg-black/40 border border-white/10 text-white font-mono text-[13px] rounded-lg px-3 py-2 outline-none focus:border-primary/50 transition-colors"
-                          />
+                          <label className="text-[11px] font-bold text-white/40 uppercase tracking-widest">Call Mode</label>
+                          <div className="flex gap-2">
+                            {([
+                              { id: 'instance' as CallMode, label: 'Instance' },
+                              { id: 'static' as CallMode, label: 'Static' },
+                              { id: 'batch' as CallMode, label: 'Batch' },
+                            ]).map((mode) => (
+                              <button
+                                key={mode.id}
+                                onClick={() => setCallMode(mode.id)}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${
+                                  callMode === mode.id
+                                    ? 'bg-primary text-white'
+                                    : 'bg-white/10 text-white/70 hover:text-white'
+                                }`}
+                              >
+                                {mode.label}
+                              </button>
+                            ))}
+                          </div>
                         </div>
+
+                        {callMode === 'instance' && (
+                          <div className="space-y-1.5">
+                            <label className="text-[11px] font-bold text-white/40 uppercase tracking-widest">Target Object Index</label>
+                            <input
+                              type="text"
+                              value={targetIndex}
+                              onChange={(e) => setTargetIndex(e.target.value)}
+                              placeholder="Object index"
+                              className="w-full bg-black/40 border border-white/10 text-white font-mono text-[13px] rounded-lg px-3 py-2 outline-none focus:border-primary/50 transition-colors"
+                            />
+                          </div>
+                        )}
+
+                        {callMode === 'static' && (
+                          <div className="space-y-1.5">
+                            <label className="text-[11px] font-bold text-white/40 uppercase tracking-widest">Target Class Name</label>
+                            <input
+                              type="text"
+                              value={staticClassName}
+                              onChange={(e) => setStaticClassName(e.target.value)}
+                              placeholder="例如 BP_ItemGridWDT_C"
+                              className="w-full bg-black/40 border border-white/10 text-white font-mono text-[13px] rounded-lg px-3 py-2 outline-none focus:border-primary/50 transition-colors"
+                            />
+                          </div>
+                        )}
+
+                        {callMode === 'batch' && (
+                          <div className="space-y-1.5">
+                            <label className="text-[11px] font-bold text-white/40 uppercase tracking-widest">Object Indices</label>
+                            <input
+                              type="text"
+                              value={batchObjectIndices}
+                              onChange={(e) => setBatchObjectIndices(e.target.value)}
+                              placeholder="100,101,102"
+                              className="w-full bg-black/40 border border-white/10 text-white font-mono text-[13px] rounded-lg px-3 py-2 outline-none focus:border-primary/50 transition-colors"
+                            />
+                          </div>
+                        )}
 
                         {functionMeta?.params
                           .filter((p) => !p.flags.includes('OutParm') && !p.flags.includes('ReturnParm'))
@@ -575,13 +964,23 @@ export default function Functions() {
                             </div>
                           ))}
 
+                        <div className="text-[11px] text-white/40">
+                          参数支持 JSON/数字/布尔值；枚举可使用 <span className="font-mono text-white/60">EnumName::ValueName</span>
+                        </div>
+
                         <button
                           onClick={() => void executeCall()}
                           disabled={calling}
                           className="w-full py-2.5 rounded-lg bg-primary hover:bg-primary-dark text-white font-semibold text-[13px] tracking-tight shadow-md active:scale-[0.98] transition-all flex items-center justify-center gap-2 mt-4 disabled:opacity-50"
                         >
                           <Play className="w-4 h-4 fill-current" />
-                          {calling ? 'Calling...' : 'Execute ProcessEvent'}
+                          {calling
+                            ? 'Calling...'
+                            : callMode === 'instance'
+                              ? 'Execute ProcessEvent'
+                              : callMode === 'static'
+                                ? 'Execute Static Call'
+                                : 'Execute Batch Call'}
                         </button>
                       </div>
                     </div>
@@ -680,7 +1079,9 @@ export default function Functions() {
                   </div>
                 </div>
               )}
-            </div>
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>

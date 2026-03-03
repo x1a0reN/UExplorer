@@ -400,6 +400,50 @@ static PropertyReadResult ReadPropertyValue(uint8* objAddr, const UEProperty& pr
 	return ReadPropertyValueAt(objAddr + prop.GetOffset(), prop, 0);
 }
 
+json ReadPropertyValueUnified(uint8* objAddr, const UEProperty& prop, std::string& outState)
+{
+	PropertyReadResult result = ReadPropertyValue(objAddr, prop);
+	outState = result.state ? result.state : "unknown";
+	return std::move(result.value);
+}
+
+json SerializePropertyUnified(const UEProperty& prop)
+{
+	json j;
+	j["name"] = prop.GetName();
+	j["type"] = prop.GetCppType();
+	j["offset"] = prop.GetOffset();
+	j["size"] = prop.GetSize();
+	j["array_dim"] = prop.GetArrayDim();
+	j["flags"] = prop.StringifyFlags();
+	return j;
+}
+
+json SerializeFunctionUnified(const UEFunction& func)
+{
+	json j;
+	j["name"] = func.GetName();
+	j["full_name"] = func.GetFullName();
+	j["flags"] = func.StringifyFlags();
+	j["param_size"] = func.GetStructSize();
+	j["has_script"] = func.HasScript();
+	j["address"] = std::format("0x{:X}", reinterpret_cast<uintptr_t>(func.GetExecFunction()));
+
+	json params = json::array();
+	for (const auto& prop : func.GetProperties())
+	{
+		json p;
+		p["name"] = prop.GetName();
+		p["type"] = prop.GetCppType();
+		p["offset"] = prop.GetOffset();
+		p["size"] = prop.GetSize();
+		p["flags"] = prop.StringifyFlags();
+		params.push_back(std::move(p));
+	}
+	j["params"] = std::move(params);
+	return j;
+}
+
 // Helper: write a property value from JSON
 static bool WritePropertyValue(uint8* objAddr, const UEProperty& prop, const json& value)
 {

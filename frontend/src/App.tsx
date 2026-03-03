@@ -7,7 +7,8 @@ import {
   Settings,
   Search,
   Command,
-  LayoutGrid
+  LayoutGrid,
+  Power,
 } from 'lucide-react';
 import type { Page } from './types';
 import Dashboard from './pages/Dashboard';
@@ -19,27 +20,34 @@ import SettingsView from './pages/Settings';
 
 function App() {
   const [currentPage, setCurrentPage] = useState<Page>('dashboard');
+  const [functionsViewMode, setFunctionsViewMode] = useState<'function' | 'hookManager'>('function');
 
   const sidebarNavItems = [
-    { id: 'dashboard' as Page, label: 'Dashboard', icon: LayoutGrid },
-    { id: 'objects' as Page, label: 'Object Browser', icon: Box },
-    { id: 'functions' as Page, label: 'Functions', icon: TerminalSquare },
-    { id: 'memory' as Page, label: 'Memory', icon: MemoryStick },
+    { key: 'dashboard', id: 'dashboard' as Page, label: 'Dashboard', icon: LayoutGrid },
+    { key: 'objects', id: 'objects' as Page, label: 'Object Browser', icon: Box },
+    { key: 'functions', id: 'functions' as Page, label: 'Functions', icon: TerminalSquare, mode: 'function' as const },
+    { key: 'hooks', id: 'functions' as Page, label: 'Hook Manager', icon: Power, mode: 'hookManager' as const },
+    { key: 'memory', id: 'memory' as Page, label: 'Memory', icon: MemoryStick },
   ];
 
   const exportItems = [
-    { id: 'sdkdump' as Page, label: 'Export Center', icon: Download },
-    { id: 'settings' as Page, label: 'Settings', icon: Settings },
+    { key: 'sdkdump', id: 'sdkdump' as Page, label: 'Export Center', icon: Download },
+    { key: 'settings', id: 'settings' as Page, label: 'Settings', icon: Settings },
   ];
 
   const renderPage = () => {
     switch (currentPage) {
       case 'dashboard':
-        return <Dashboard onNavigate={(page) => setCurrentPage(page)} />;
+        return <Dashboard onNavigate={(page) => {
+          if (page === 'functions') {
+            setFunctionsViewMode('function');
+          }
+          setCurrentPage(page);
+        }} />;
       case 'objects':
         return <Objects />;
       case 'functions':
-        return <Functions />;
+        return <Functions viewMode={functionsViewMode} onViewModeChange={setFunctionsViewMode} />;
       case 'memory':
         return <Memory />;
       case 'sdkdump':
@@ -47,7 +55,12 @@ function App() {
       case 'settings':
         return <SettingsView />;
       default:
-        return <Dashboard onNavigate={(page) => setCurrentPage(page)} />;
+        return <Dashboard onNavigate={(page) => {
+          if (page === 'functions') {
+            setFunctionsViewMode('function');
+          }
+          setCurrentPage(page);
+        }} />;
     }
   };
 
@@ -74,14 +87,24 @@ function App() {
           <div className="space-y-1">
             {sidebarNavItems.map((item) => (
               <button
-                key={item.id}
-                onClick={() => setCurrentPage(item.id)}
-                className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl transition-all duration-200 cursor-pointer ${currentPage === item.id
+                key={item.key}
+                onClick={() => {
+                  setCurrentPage(item.id);
+                  if (item.id === 'functions' && item.mode) {
+                    setFunctionsViewMode(item.mode);
+                  }
+                }}
+                className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl transition-all duration-200 cursor-pointer ${
+                  currentPage === item.id && (item.id !== 'functions' || functionsViewMode === item.mode)
                     ? 'bg-primary text-white shadow-md shadow-primary/20'
                     : 'text-white/60 hover:bg-white/10 hover:text-white'
                   }`}
               >
-                <item.icon className={`w-[18px] h-[18px] stroke-[2] ${currentPage === item.id ? 'text-white' : 'text-white/50'}`} />
+                <item.icon className={`w-[18px] h-[18px] stroke-[2] ${
+                  currentPage === item.id && (item.id !== 'functions' || functionsViewMode === item.mode)
+                    ? 'text-white'
+                    : 'text-white/50'
+                }`} />
                 <span className="text-[13px] font-medium tracking-tight">{item.label}</span>
               </button>
             ))}
@@ -93,7 +116,7 @@ function App() {
             </div>
             {exportItems.map((item) => (
               <button
-                key={item.id}
+                key={item.key}
                 onClick={() => setCurrentPage(item.id)}
                 className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl transition-all duration-200 cursor-pointer ${currentPage === item.id
                     ? 'bg-primary text-white shadow-md shadow-primary/20'
@@ -128,7 +151,9 @@ function App() {
           <div className="flex items-center gap-4 text-white/60">
             {/* View Title */}
             <span className="text-[14px] font-semibold tracking-tight text-white/90">
-              {sidebarNavItems.concat(exportItems).find(i => i.id === currentPage)?.label || 'Dashboard'}
+              {currentPage === 'functions'
+                ? (functionsViewMode === 'hookManager' ? 'Hook Manager' : 'Functions')
+                : ([...sidebarNavItems, ...exportItems].find(i => i.id === currentPage)?.label || 'Dashboard')}
             </span>
           </div>
 
