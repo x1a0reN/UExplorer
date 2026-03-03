@@ -9,12 +9,21 @@
 #include <Windows.h>
 #include <WinSock2.h>
 #include <WS2tcpip.h>
+#include <Wincrypt.h>
 #pragma comment(lib, "Ws2_32.lib")
+#pragma comment(lib, "Crypt32.lib")
+#pragma comment(lib, "Advapi32.lib")
 
+#include <algorithm>
+#include <array>
+#include <cctype>
+#include <chrono>
+#include <cstdio>
 #include <iostream>
 #include <regex>
 #include <sstream>
-#include <algorithm>
+#include <thread>
+#include <vector>
 
 namespace UExplorer
 {
@@ -31,6 +40,19 @@ struct RouteEntry
 class HttpServer::Impl
 {
 public:
+	struct SSEClientInfo
+	{
+		std::string ClientId;
+		std::string Path;
+	};
+
+	struct WSClientInfo
+	{
+		std::string ClientId;
+		std::string Path;
+	};
+
+public:
 	uint16_t Port;
 	std::string Token;
 	std::vector<RouteEntry> Routes;
@@ -42,11 +64,16 @@ public:
 
 	// SSE support
 	std::mutex SSEClientsMutex;
-	std::unordered_map<SOCKET, std::string> SSEClients; // socket -> clientId
+	std::unordered_map<SOCKET, SSEClientInfo> SSEClients; // socket -> info
 	std::atomic<int> SSEClientCounter{ 0 };
 	SSEConnectHandler OnSSEConnect;
 	SSEEventHandler OnSSEEvent;
 	SSEDisconnectHandler OnSSEDisconnect;
+
+	// WebSocket support
+	std::mutex WSClientsMutex;
+	std::unordered_map<SOCKET, WSClientInfo> WSClients;
+	std::atomic<int> WSClientCounter{ 0 };
 
 	Impl(uint16_t port, const std::string& token)
 		: Port(port), Token(token) {}
@@ -64,10 +91,48 @@ public:
 		return headerValue == Token;
 	}
 
+	static std::string ToLower(std::string s)
+	{
+		std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) {
+			return static_cast<char>(std::tolower(c));
+		});
+		return s;
+	}
+
+	static std::string EscapeJson(const std::string& s)
+	{
+		std::string out;
+		out.reserve(s.size() + 16);
+		for (char ch : s)
+		{
+			switch (ch)
+			{
+			case '"': out += "\\\""; break;
+			case '\\': out += "\\\\"; break;
+			case '\b': out += "\\b"; break;
+			case '\f': out += "\\f"; break;
+			case '\n': out += "\\n"; break;
+			case '\r': out += "\\r"; break;
+			case '\t': out += "\\t"; break;
+			default:
+				if (static_cast<unsigned char>(ch) < 0x20)
+				{
+					char tmp[7] = { 0 };
+					sprintf_s(tmp, "\\u%04X", static_cast<unsigned char>(ch));
+					out += tmp;
+				}
+				else
+				{
+					out.push_back(ch);
+				}
+				break;
+			}
+		}
+		return out;
+	}
+
 	HttpResponse MatchAndHandle(const HttpRequest& req)
 	{
-		// Find matching handler under lock, then execute OUTSIDE the lock
-		// so a blocking handler doesn't starve all other requests
 		RouteHandler handler;
 		{
 			std::lock_guard<std::mutex> lock(RoutesMutex);
@@ -98,15 +163,14 @@ public:
 		}
 	}
 
-	// Read all data from socket until Content-Length is satisfied or connection closes
 	std::string RecvAll(SOCKET sock, int contentLength)
 	{
 		std::string result;
 		result.reserve(contentLength);
 		char buf[4096];
-		while ((int)result.size() < contentLength)
+		while (static_cast<int>(result.size()) < contentLength)
 		{
-			int toRead = std::min((int)sizeof(buf), contentLength - (int)result.size());
+			int toRead = std::min(static_cast<int>(sizeof(buf)), contentLength - static_cast<int>(result.size()));
 			int n = recv(sock, buf, toRead, 0);
 			if (n <= 0) break;
 			result.append(buf, n);
@@ -114,14 +178,12 @@ public:
 		return result;
 	}
 
-	// Parse raw HTTP request header block
 	HttpRequest ParseRequest(const std::string& raw, SOCKET sock)
 	{
 		HttpRequest req;
 		std::istringstream stream(raw);
 		std::string line;
 
-		// Request line: "GET /path?query HTTP/1.1"
 		if (std::getline(stream, line))
 		{
 			if (!line.empty() && line.back() == '\r') line.pop_back();
@@ -144,7 +206,6 @@ public:
 			}
 		}
 
-		// Headers
 		int contentLength = 0;
 		while (std::getline(stream, line))
 		{
@@ -155,34 +216,30 @@ public:
 			{
 				std::string key = line.substr(0, colon);
 				std::string val = line.substr(colon + 1);
-				// trim leading space
 				if (!val.empty() && val[0] == ' ') val = val.substr(1);
 				req.Headers[key] = val;
-				// case-insensitive Content-Length check
-				std::string keyLower = key;
-				std::transform(keyLower.begin(), keyLower.end(), keyLower.begin(), ::tolower);
+
+				std::string keyLower = ToLower(key);
 				if (keyLower == "content-length")
 					contentLength = std::stoi(val);
 			}
 		}
 
-		// Body
 		if (contentLength > 0)
 		{
-			// Some body bytes may already be in the raw buffer after headers
 			auto headerEnd = raw.find("\r\n\r\n");
 			std::string partial;
 			if (headerEnd != std::string::npos)
 				partial = raw.substr(headerEnd + 4);
 
-			if ((int)partial.size() >= contentLength)
+			if (static_cast<int>(partial.size()) >= contentLength)
 			{
 				req.Body = partial.substr(0, contentLength);
 			}
 			else
 			{
 				req.Body = partial;
-				int remaining = contentLength - (int)partial.size();
+				int remaining = contentLength - static_cast<int>(partial.size());
 				req.Body += RecvAll(sock, remaining);
 			}
 		}
@@ -197,6 +254,7 @@ public:
 		switch (resp.StatusCode)
 		{
 		case 200: oss << "OK"; break;
+		case 101: oss << "Switching Protocols"; break;
 		case 204: oss << "No Content"; break;
 		case 400: oss << "Bad Request"; break;
 		case 401: oss << "Unauthorized"; break;
@@ -216,17 +274,337 @@ public:
 		return oss.str();
 	}
 
+	std::string GetHeaderValue(const HttpRequest& req, const std::string& key) const
+	{
+		const std::string needle = ToLower(key);
+		for (const auto& [k, v] : req.Headers)
+		{
+			if (ToLower(k) == needle)
+				return v;
+		}
+		return "";
+	}
+
+	static std::string GetQueryValue(const std::string& query, const std::string& key)
+	{
+		size_t start = 0;
+		while (start < query.size())
+		{
+			size_t amp = query.find('&', start);
+			std::string pair = (amp == std::string::npos)
+				? query.substr(start)
+				: query.substr(start, amp - start);
+
+			size_t eq = pair.find('=');
+			if (eq != std::string::npos)
+			{
+				std::string k = pair.substr(0, eq);
+				if (k == key)
+					return pair.substr(eq + 1);
+			}
+
+			if (amp == std::string::npos) break;
+			start = amp + 1;
+		}
+		return "";
+	}
+
+	bool IsWebSocketUpgrade(const HttpRequest& req) const
+	{
+		std::string upgrade = ToLower(GetHeaderValue(req, "Upgrade"));
+		std::string connection = ToLower(GetHeaderValue(req, "Connection"));
+		return req.Method == "GET"
+			&& upgrade == "websocket"
+			&& connection.find("upgrade") != std::string::npos;
+	}
+
+	static bool SendAll(SOCKET sock, const char* data, int len)
+	{
+		int sent = 0;
+		while (sent < len)
+		{
+			int n = send(sock, data + sent, len - sent, 0);
+			if (n <= 0) return false;
+			sent += n;
+		}
+		return true;
+	}
+
+	static bool RecvExact(SOCKET sock, uint8_t* out, size_t len)
+	{
+		size_t got = 0;
+		while (got < len)
+		{
+			int n = recv(sock, reinterpret_cast<char*>(out + got), static_cast<int>(len - got), 0);
+			if (n <= 0) return false;
+			got += static_cast<size_t>(n);
+		}
+		return true;
+	}
+
+	static std::string ComputeWebSocketAccept(const std::string& clientKey)
+	{
+		const std::string source = clientKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+
+		HCRYPTPROV prov = 0;
+		HCRYPTHASH hash = 0;
+		std::array<BYTE, 20> digest{};
+		DWORD digestLen = static_cast<DWORD>(digest.size());
+		std::string out;
+
+		if (!CryptAcquireContextA(&prov, nullptr, nullptr, PROV_RSA_AES, CRYPT_VERIFYCONTEXT))
+			return out;
+		if (!CryptCreateHash(prov, CALG_SHA1, 0, 0, &hash))
+		{
+			CryptReleaseContext(prov, 0);
+			return out;
+		}
+		if (!CryptHashData(hash, reinterpret_cast<const BYTE*>(source.data()), static_cast<DWORD>(source.size()), 0))
+		{
+			CryptDestroyHash(hash);
+			CryptReleaseContext(prov, 0);
+			return out;
+		}
+		if (!CryptGetHashParam(hash, HP_HASHVAL, digest.data(), &digestLen, 0))
+		{
+			CryptDestroyHash(hash);
+			CryptReleaseContext(prov, 0);
+			return out;
+		}
+
+		DWORD b64Len = 0;
+		if (CryptBinaryToStringA(digest.data(), digestLen,
+			CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, nullptr, &b64Len))
+		{
+			out.resize(b64Len);
+			if (CryptBinaryToStringA(digest.data(), digestLen,
+				CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, out.data(), &b64Len))
+			{
+				if (!out.empty() && out.back() == '\0') out.pop_back();
+			}
+			else
+			{
+				out.clear();
+			}
+		}
+
+		CryptDestroyHash(hash);
+		CryptReleaseContext(prov, 0);
+		return out;
+	}
+
+	bool SendWebSocketFrame(SOCKET sock, uint8_t opcode, const std::string& payload)
+	{
+		std::vector<uint8_t> frame;
+		frame.reserve(payload.size() + 16);
+		frame.push_back(static_cast<uint8_t>(0x80 | (opcode & 0x0F))); // FIN + opcode
+
+		const uint64_t len = payload.size();
+		if (len <= 125)
+		{
+			frame.push_back(static_cast<uint8_t>(len));
+		}
+		else if (len <= 0xFFFF)
+		{
+			frame.push_back(126);
+			frame.push_back(static_cast<uint8_t>((len >> 8) & 0xFF));
+			frame.push_back(static_cast<uint8_t>(len & 0xFF));
+		}
+		else
+		{
+			frame.push_back(127);
+			for (int i = 7; i >= 0; --i)
+			{
+				frame.push_back(static_cast<uint8_t>((len >> (8 * i)) & 0xFF));
+			}
+		}
+
+		frame.insert(frame.end(), payload.begin(), payload.end());
+		return SendAll(sock, reinterpret_cast<const char*>(frame.data()), static_cast<int>(frame.size()));
+	}
+
+	bool ReadWebSocketFrame(SOCKET sock, uint8_t& opcode, std::string& payload)
+	{
+		uint8_t h[2] = { 0 };
+		if (!RecvExact(sock, h, 2))
+			return false;
+
+		opcode = static_cast<uint8_t>(h[0] & 0x0F);
+		const bool masked = (h[1] & 0x80) != 0;
+		uint64_t len = static_cast<uint64_t>(h[1] & 0x7F);
+
+		if (len == 126)
+		{
+			uint8_t ext[2] = { 0 };
+			if (!RecvExact(sock, ext, 2)) return false;
+			len = (static_cast<uint64_t>(ext[0]) << 8) | ext[1];
+		}
+		else if (len == 127)
+		{
+			uint8_t ext[8] = { 0 };
+			if (!RecvExact(sock, ext, 8)) return false;
+			len = 0;
+			for (int i = 0; i < 8; i++)
+				len = (len << 8) | ext[i];
+		}
+
+		if (len > 4 * 1024 * 1024)
+			return false;
+
+		uint8_t mask[4] = { 0 };
+		if (masked)
+		{
+			if (!RecvExact(sock, mask, 4)) return false;
+		}
+
+		payload.assign(static_cast<size_t>(len), '\0');
+		if (len > 0)
+		{
+			if (!RecvExact(sock, reinterpret_cast<uint8_t*>(payload.data()), static_cast<size_t>(len)))
+				return false;
+		}
+
+		if (masked)
+		{
+			for (size_t i = 0; i < payload.size(); i++)
+				payload[i] = static_cast<char>(static_cast<uint8_t>(payload[i]) ^ mask[i % 4]);
+		}
+
+		return true;
+	}
+
+	void BroadcastWebSocketEvent(const std::string& event, const std::string& data)
+	{
+		std::lock_guard<std::mutex> lk(WSClientsMutex);
+		const std::string payload = "{\"event\":\"" + EscapeJson(event)
+			+ "\",\"data\":\"" + EscapeJson(data) + "\"}";
+
+		for (const auto& [sock, info] : WSClients)
+		{
+			if (info.Path != "/api/v1/ws/events") continue;
+			SendWebSocketFrame(sock, 0x1, payload);
+		}
+	}
+
+	void HandleWebSocketClient(SOCKET clientSock, const HttpRequest& req)
+	{
+		const std::string path = req.Path;
+		if (path != "/api/v1/ws/console" && path != "/api/v1/ws/events")
+		{
+			HttpResponse resp{ 404, "application/json", R"({"success":false,"error":"WebSocket path not found"})" };
+			std::string out = BuildResponse(resp);
+			send(clientSock, out.c_str(), static_cast<int>(out.size()), 0);
+			closesocket(clientSock);
+			return;
+		}
+
+		const std::string key = GetHeaderValue(req, "Sec-WebSocket-Key");
+		if (key.empty())
+		{
+			HttpResponse resp{ 400, "application/json", R"({"success":false,"error":"Missing Sec-WebSocket-Key"})" };
+			std::string out = BuildResponse(resp);
+			send(clientSock, out.c_str(), static_cast<int>(out.size()), 0);
+			closesocket(clientSock);
+			return;
+		}
+
+		const std::string accept = ComputeWebSocketAccept(key);
+		if (accept.empty())
+		{
+			HttpResponse resp{ 500, "application/json", R"({"success":false,"error":"WebSocket handshake failed"})" };
+			std::string out = BuildResponse(resp);
+			send(clientSock, out.c_str(), static_cast<int>(out.size()), 0);
+			closesocket(clientSock);
+			return;
+		}
+
+		std::ostringstream hs;
+		hs << "HTTP/1.1 101 Switching Protocols\r\n";
+		hs << "Upgrade: websocket\r\n";
+		hs << "Connection: Upgrade\r\n";
+		hs << "Sec-WebSocket-Accept: " << accept << "\r\n";
+		hs << "Access-Control-Allow-Origin: *\r\n";
+		hs << "\r\n";
+
+		const std::string hsResp = hs.str();
+		if (!SendAll(clientSock, hsResp.c_str(), static_cast<int>(hsResp.size())))
+		{
+			closesocket(clientSock);
+			return;
+		}
+
+		const int wsIdNum = ++WSClientCounter;
+		const std::string clientId = "ws-" + std::to_string(wsIdNum);
+		{
+			std::lock_guard<std::mutex> lk(WSClientsMutex);
+			WSClients[clientSock] = WSClientInfo{ clientId, path };
+		}
+
+		std::string connected = "{\"type\":\"connected\",\"clientId\":\"" + EscapeJson(clientId)
+			+ "\",\"path\":\"" + EscapeJson(path) + "\"}";
+		SendWebSocketFrame(clientSock, 0x1, connected);
+
+		while (Running.load())
+		{
+			fd_set readfds;
+			timeval tv;
+			FD_ZERO(&readfds);
+			FD_SET(clientSock, &readfds);
+			tv.tv_sec = 0;
+			tv.tv_usec = 500000;
+			int sel = select(0, &readfds, nullptr, nullptr, &tv);
+			if (sel < 0) break;
+			if (sel == 0) continue;
+
+			uint8_t opcode = 0;
+			std::string payload;
+			if (!ReadWebSocketFrame(clientSock, opcode, payload))
+				break;
+
+			if (opcode == 0x8)
+			{
+				SendWebSocketFrame(clientSock, 0x8, "");
+				break;
+			}
+			if (opcode == 0x9)
+			{
+				SendWebSocketFrame(clientSock, 0xA, payload);
+				continue;
+			}
+			if (opcode != 0x1)
+				continue;
+
+			if (path == "/api/v1/ws/console")
+			{
+				std::string response = "{\"type\":\"console\",\"ok\":true,\"input\":\""
+					+ EscapeJson(payload)
+					+ "\",\"output\":\"Console bridge connected\"}";
+				SendWebSocketFrame(clientSock, 0x1, response);
+			}
+			else if (path == "/api/v1/ws/events")
+			{
+				if (payload == "ping")
+					SendWebSocketFrame(clientSock, 0x1, "{\"type\":\"pong\"}");
+			}
+		}
+
+		{
+			std::lock_guard<std::mutex> lk(WSClientsMutex);
+			WSClients.erase(clientSock);
+		}
+		closesocket(clientSock);
+	}
+
 	void HandleClient(SOCKET clientSock)
 	{
 		try {
-			// Read request (up to 64KB header)
 			char buf[65536];
 			int total = 0;
 			std::string raw;
 
-			while (total < (int)sizeof(buf) - 1)
+			while (total < static_cast<int>(sizeof(buf)) - 1)
 			{
-				int n = recv(clientSock, buf + total, (int)sizeof(buf) - 1 - total, 0);
+				int n = recv(clientSock, buf + total, static_cast<int>(sizeof(buf)) - 1 - total, 0);
 				if (n <= 0) break;
 				total += n;
 				buf[total] = '\0';
@@ -242,48 +620,59 @@ public:
 
 			HttpRequest req = ParseRequest(raw, clientSock);
 
-			// OPTIONS preflight
 			if (req.Method == "OPTIONS")
 			{
 				HttpResponse resp{ 204, "text/plain", "" };
 				std::string out = BuildResponse(resp);
-				send(clientSock, out.c_str(), (int)out.size(), 0);
+				send(clientSock, out.c_str(), static_cast<int>(out.size()), 0);
 				closesocket(clientSock);
 				return;
 			}
 
-			// Token auth (skip for health)
 			if (req.Path != "/api/v1/status/health")
 			{
+				bool authorized = false;
 				auto it = req.Headers.find("X-UExplorer-Token");
-				if (it == req.Headers.end() || !ValidateToken(it->second))
+				if (it != req.Headers.end() && ValidateToken(it->second))
+					authorized = true;
+
+				// Browser WebSocket clients usually cannot set custom headers; allow token query fallback.
+				if (!authorized && req.Path.rfind("/api/v1/ws/", 0) == 0)
+				{
+					std::string tokenInQuery = GetQueryValue(req.Query, "token");
+					if (!tokenInQuery.empty() && ValidateToken(tokenInQuery))
+						authorized = true;
+				}
+
+				if (!authorized)
 				{
 					HttpResponse resp{ 401, "application/json", R"({"success":false,"error":"Unauthorized"})" };
 					std::string out = BuildResponse(resp);
-					send(clientSock, out.c_str(), (int)out.size(), 0);
+					send(clientSock, out.c_str(), static_cast<int>(out.size()), 0);
 					closesocket(clientSock);
 					return;
 				}
 			}
 
-			// SSE request detection
+			if (IsWebSocketUpgrade(req))
+			{
+				HandleWebSocketClient(clientSock, req);
+				return;
+			}
+
 			if (req.Path.rfind("/api/v1/events/", 0) == 0)
 			{
-				// Generate client ID
 				int clientIdNum = ++SSEClientCounter;
 				std::string clientId = "sse-" + std::to_string(clientIdNum);
 
-				// Register client
 				{
 					std::lock_guard<std::mutex> lk(SSEClientsMutex);
-					SSEClients[clientSock] = clientId;
+					SSEClients[clientSock] = SSEClientInfo{ clientId, req.Path };
 				}
 
-				// Notify connect handler
 				if (OnSSEConnect)
 					OnSSEConnect(clientId);
 
-				// Send SSE headers
 				std::ostringstream hdr;
 				hdr << "HTTP/1.1 200 OK\r\n";
 				hdr << "Content-Type: text/event-stream\r\n";
@@ -291,13 +680,11 @@ public:
 				hdr << "Connection: keep-alive\r\n";
 				hdr << "Access-Control-Allow-Origin: *\r\n";
 				hdr << "\r\n";
-				send(clientSock, hdr.str().c_str(), (int)hdr.str().size(), 0);
+				send(clientSock, hdr.str().c_str(), static_cast<int>(hdr.str().size()), 0);
 
-				// Send initial event
 				std::string init = "event: connected\ndata: {\"clientId\":\"" + clientId + "\"}\n\n";
-				send(clientSock, init.c_str(), (int)init.size(), 0);
+				send(clientSock, init.c_str(), static_cast<int>(init.size()), 0);
 
-				// Keep connection alive with heartbeat
 				char rbuf[64];
 				fd_set readfds;
 				timeval tv;
@@ -307,16 +694,15 @@ public:
 					FD_ZERO(&readfds);
 					FD_SET(clientSock, &readfds);
 					tv.tv_sec = 0;
-					tv.tv_usec = 500000; // 500ms
+					tv.tv_usec = 500000;
 					int sel = select(0, &readfds, nullptr, nullptr, &tv);
 					if (sel < 0) break;
-					if (sel == 0) continue; // timeout, send heartbeat
+					if (sel == 0) continue;
 
 					int n = recv(clientSock, rbuf, sizeof(rbuf) - 1, 0);
-					if (n <= 0) break; // client disconnected
+					if (n <= 0) break;
 				}
 
-				// Cleanup
 				{
 					std::lock_guard<std::mutex> lk(SSEClientsMutex);
 					SSEClients.erase(clientSock);
@@ -327,14 +713,12 @@ public:
 				return;
 			}
 
-			// Dispatch
 			HttpResponse resp = MatchAndHandle(req);
 			std::string out = BuildResponse(resp);
-			send(clientSock, out.c_str(), (int)out.size(), 0);
+			send(clientSock, out.c_str(), static_cast<int>(out.size()), 0);
 			closesocket(clientSock);
 		}
 		catch (...) {
-			// Safety net: never let an exception escape and crash the game
 			try { closesocket(clientSock); } catch (...) {}
 		}
 	}
@@ -357,10 +741,9 @@ public:
 		}
 
 		int opt = 1;
-		setsockopt(ListenSocket, SOL_SOCKET, SO_REUSEADDR, (const char*)&opt, sizeof(opt));
+		setsockopt(ListenSocket, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&opt), sizeof(opt));
 
-		// Try requested port, then fallback to a few alternatives
-		uint16_t ports[] = { Port, 27015, 27016, 27017, 27018, 0 }; // 0 = OS picks
+		uint16_t ports[] = { Port, 27015, 27016, 27017, 27018, 0 };
 		bool bound = false;
 
 		for (uint16_t p : ports)
@@ -370,15 +753,14 @@ public:
 			addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 			addr.sin_port = htons(p);
 
-			if (bind(ListenSocket, (sockaddr*)&addr, sizeof(addr)) != SOCKET_ERROR)
+			if (bind(ListenSocket, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != SOCKET_ERROR)
 			{
-				// If OS picked (port 0), read back the actual port
 				if (p == 0)
 				{
-					sockaddr_in bound_addr{};
-					int len = sizeof(bound_addr);
-					getsockname(ListenSocket, (sockaddr*)&bound_addr, &len);
-					Port = ntohs(bound_addr.sin_port);
+					sockaddr_in boundAddr{};
+					int len = sizeof(boundAddr);
+					getsockname(ListenSocket, reinterpret_cast<sockaddr*>(&boundAddr), &len);
+					Port = ntohs(boundAddr.sin_port);
 				}
 				else
 				{
@@ -490,23 +872,33 @@ void HttpServer::SetSSEHandlers(SSEConnectHandler onConnect, SSEEventHandler onE
 
 void HttpServer::SendSSEEvent(const std::string& event, const std::string& data)
 {
-	std::lock_guard<std::mutex> lk(m_Impl->SSEClientsMutex);
-	for (const auto& [sock, clientId] : m_Impl->SSEClients)
 	{
-		std::string msg = "event: " + event + "\ndata: " + data + "\n\n";
-		send(sock, msg.c_str(), (int)msg.size(), 0);
+		std::lock_guard<std::mutex> lk(m_Impl->SSEClientsMutex);
+		for (const auto& [sock, info] : m_Impl->SSEClients)
+		{
+			const bool isAllStream = (info.Path == "/api/v1/events/stream");
+			const bool isWatchStream = (info.Path == "/api/v1/events/watches" && event == "watch");
+			const bool isHookStream = (info.Path == "/api/v1/events/hooks" && event == "hook");
+			if (!isAllStream && !isWatchStream && !isHookStream)
+				continue;
+
+			std::string msg = "event: " + event + "\ndata: " + data + "\n\n";
+			send(sock, msg.c_str(), static_cast<int>(msg.size()), 0);
+		}
 	}
+
+	m_Impl->BroadcastWebSocketEvent(event, data);
 }
 
 void HttpServer::SendSSEEventTo(const std::string& clientId, const std::string& event, const std::string& data)
 {
 	std::lock_guard<std::mutex> lk(m_Impl->SSEClientsMutex);
-	for (const auto& [sock, id] : m_Impl->SSEClients)
+	for (const auto& [sock, info] : m_Impl->SSEClients)
 	{
-		if (id == clientId)
+		if (info.ClientId == clientId)
 		{
 			std::string msg = "event: " + event + "\ndata: " + data + "\n\n";
-			send(sock, msg.c_str(), (int)msg.size(), 0);
+			send(sock, msg.c_str(), static_cast<int>(msg.size()), 0);
 			break;
 		}
 	}

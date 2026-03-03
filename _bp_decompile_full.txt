@@ -1,0 +1,40 @@
+===== BP_ItemGridWDT_C::EVT_InitOnce =====
+FULL_NAME: Function BP_ItemGridWDT.BP_ItemGridWDT_C.EVT_InitOnce
+SCRIPT_SIZE: 18
+PSEUDOCODE:
+  0000: ExecuteUbergraph_BP_ItemGridWDT(102)
+  000F: return
+
+
+===== BP_ItemGridWDT_C::BP_OnEntryInitialized_Event_0(UObject* Item, UUserWidget* Widget) =====
+FULL_NAME: Function BP_ItemGridWDT.BP_ItemGridWDT_C.BP_OnEntryInitialized_Event_0
+SCRIPT_SIZE: 54
+PSEUDOCODE:
+  0000: 0x288192F8800 = 0x288192F8780 = ExecuteUbergraph_BP_ItemGridWDT(27)
+  0033: return
+
+
+===== BP_ItemGridWDT_C::ExecuteUbergraph_BP_ItemGridWDT =====
+FULL_NAME: Function BP_ItemGridWDT.BP_ItemGridWDT_C.ExecuteUbergraph_BP_ItemGridWDT
+ERROR: 无法连接到远程服务器
+
+===== BPEntry_Item_WDT_C::ExecuteUbergraph_BPEntry_Item_WDT =====
+FULL_NAME: Function BPEntry_Item_WDT.BPEntry_Item_WDT_C.ExecuteUbergraph_BPEntry_Item_WDT
+ERROR: 无法连接到远程服务器
+
+===== BPEntry_Item_WDT_C::BndEvt__...Clicked__DelegateSignature =====
+FULL_NAME: Function BPEntry_Item_WDT.BPEntry_Item_WDT_C.BndEvt__BPEntry_Item_WDT_BTN_JHItem_K2Node_ComponentBoundEvent_0_JHNeoUIGamepadConfirmButtonClicked__DelegateSignature
+ERROR: 无法连接到远程服务器
+
+===== BPEntry_Item_WDT_C::BndEvt__...DoubleClicked__DelegateSignature =====
+FULL_NAME: Function BPEntry_Item_WDT.BPEntry_Item_WDT_C.BndEvt__BPEntry_Item_WDT_BTN_JHItem_K2Node_ComponentBoundEvent_1_JHNeoUIGamepadConfirmButtonDoubleClicked__DelegateSignature
+ERROR: 无法连接到远程服务器
+
+===== BPEntry_Item_WDT_C::Get Item Display Tool Tip Widget 0 =====
+FULL_NAME: Function BPEntry_Item_WDT.BPEntry_Item_WDT_C.Get Item Display Tool Tip Widget 0
+ERROR: 无法连接到远程服务器
+
+===== BPEntry_Item_WDT_C::EVT_GamepadShowTips =====
+FULL_NAME: Function BPEntry_Item_WDT.BPEntry_Item_WDT_C.EVT_GamepadShowTips
+ERROR: 无法连接到远程服务器
+

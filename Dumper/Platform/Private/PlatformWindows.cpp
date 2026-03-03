@@ -540,25 +540,34 @@ bool PlatformWindows::IsBadReadPtr(const uintptr_t Address)
 }
 bool PlatformWindows::IsBadReadPtr(const void* Address)
 {
+	if (!Address)
+		return true;
+
 	if constexpr (!Is32Bit())
 	{
 		if (!Architecture_x86_64::IsValid64BitVirtualAddress(Address))
 			return true;
 	}
 
-	// Use try-catch approach to check if memory is readable
-	// This avoids VirtualQuery compatibility issues with VS2026
-	try
+	// Use SEH probing instead of C++ exceptions. C++ catch(...) does not catch
+	// access violations under /EHsc, which caused startup crashes on nullptr.
+	__try
 	{
-		volatile const uint8_t* TestPtr = static_cast<volatile const uint8_t*>(Address);
-		volatile uint8_t TestVal = *TestPtr;
-		(void)TestVal;
-		return false;
+		const volatile uint8_t* first = static_cast<const volatile uint8_t*>(Address);
+		volatile uint8_t firstVal = *first;
+		(void)firstVal;
+
+		const uintptr_t tailAddr = reinterpret_cast<uintptr_t>(Address) + sizeof(void*) - 1;
+		const volatile uint8_t* tail = reinterpret_cast<const volatile uint8_t*>(tailAddr);
+		volatile uint8_t tailVal = *tail;
+		(void)tailVal;
 	}
-	catch (...)
+	__except (EXCEPTION_EXECUTE_HANDLER)
 	{
 		return true;
 	}
+
+	return false;
 }
 
 const void* PlatformWindows::GetAddressOfImportedFunction(const char* SearchModuleName, const char* ModuleToImportFrom, const char* SearchFunctionName)

@@ -1,9 +1,46 @@
 #include "Blueprint/BlueprintDecompiler.h"
 #include "Unreal/ObjectArray.h"
+#include "Unreal/NameArray.h"
+#include "OffsetFinder/Offsets.h"
 #include "Platform.h"
+#include "Settings.h"
 
 #include <format>
 #include <cstring>
+
+static bool TryResolveNameByCompIdxSafe(int32_t compIdx, std::string& outName);
+static bool IsUE426Bytecode();
+static EExprToken NormalizeToken(uint8_t rawToken);
+
+static bool IsUE426Bytecode()
+{
+	return Settings::Generator::GameVersion.find("4.26") != std::string::npos;
+}
+
+static EExprToken NormalizeToken(uint8_t rawToken)
+{
+	// This decompiler enum table follows newer layouts for part of the opcode range.
+	// UE4.26 uses older values around 0x29..0x36, so normalize here to avoid stream desync.
+	if (!IsUE426Bytecode())
+		return static_cast<EExprToken>(rawToken);
+
+	switch (rawToken)
+	{
+	case 0x29: return EExprToken::EX_TextConst;
+	case 0x2C: return EExprToken::EX_IntConstByte;
+	case 0x2D: return EExprToken::EX_NoInterface;
+	case 0x2E: return EExprToken::EX_DynamicCast;
+	case 0x2F: return EExprToken::EX_StructConst;
+	case 0x30: return EExprToken::EX_EndStructConst;
+	case 0x31: return EExprToken::EX_SetArray;
+	case 0x32: return EExprToken::EX_EndArray;
+	case 0x33: return EExprToken::EX_PropertyConst;
+	case 0x34: return EExprToken::EX_UnicodeStringConst;
+	case 0x35: return EExprToken::EX_Int64Const;
+	case 0x36: return EExprToken::EX_UInt64Const;
+	default: return static_cast<EExprToken>(rawToken);
+	}
+}
 
 // ============================================================
 // BytecodeReader implementation
@@ -135,15 +172,88 @@ uint64_t BlueprintDecompiler::BytecodeReader::ReadPointer()
 	return ReadUInt64();
 }
 
+std::string BlueprintDecompiler::BytecodeReader::ReadName()
+{
+	if (Position + 4 > Script.size())
+		return "None";
+
+	const int32 compIdx = ReadInt32();
+	int32 raw1 = 0;
+	int32 raw2 = 0;
+	bool hasRaw1 = false;
+	bool hasRaw2 = false;
+
+	if (Position + 4 <= Script.size())
+	{
+		std::memcpy(&raw1, &Script[Position], 4);
+		hasRaw1 = true;
+	}
+	if (Position + 8 <= Script.size())
+	{
+		std::memcpy(&raw2, &Script[Position + 4], 4);
+		hasRaw2 = true;
+	}
+
+	int32 scriptFNameSize = (Off::InSDK::Name::FNameSize > 0) ? Off::InSDK::Name::FNameSize : 0x8;
+	if (scriptFNameSize < 0x8)
+		scriptFNameSize = 0x8;
+	if (scriptFNameSize > 0x10)
+		scriptFNameSize = 0x10;
+
+	// UE4.26 ScriptSerialization uses FScriptName (12 bytes) for XFERNAME().
+	if (IsUE426Bytecode())
+		scriptFNameSize = 0xC;
+
+	// Fallback heuristic for non-4.26 builds where runtime flags might still disagree.
+	const bool looksLikeCasePreservingScriptName =
+		hasRaw2 && compIdx > 0xFFFF && raw1 == compIdx && raw2 >= 0 && raw2 < 1000000;
+
+	if (!IsUE426Bytecode() && (Settings::Internal::bUseCasePreservingName || looksLikeCasePreservingScriptName))
+		scriptFNameSize = 0xC;
+
+	if (scriptFNameSize >= 0x8 && hasRaw1)
+	{
+		raw1 = ReadInt32();
+	}
+	if (scriptFNameSize >= 0xC && hasRaw2)
+	{
+		raw2 = ReadInt32();
+	}
+	if (scriptFNameSize >= 0x10 && Position + 4 <= Script.size())
+	{
+		// Keep stream aligned for 16-byte script names; current games here don't need this value.
+		ReadInt32();
+	}
+
+	std::string name;
+	TryResolveNameByCompIdxSafe(compIdx, name);
+	if (name.empty())
+		name = std::format("Name_{}", compIdx);
+
+	int32 number = 0;
+	if (!Settings::Internal::bUseOutlineNumberName)
+	{
+		if (scriptFNameSize >= 0xC && (Settings::Internal::bUseCasePreservingName || looksLikeCasePreservingScriptName || Off::FName::Number == 0x8))
+			number = raw2;
+		else
+			number = raw1;
+	}
+
+	if (number > 0 && number < 1000000)
+		name += "_" + std::to_string(number - 1);
+
+	return name;
+}
+
 EExprToken BlueprintDecompiler::BytecodeReader::PeekToken() const
 {
 	if (Position >= Script.size()) return EExprToken::EX_EndOfScript;
-	return static_cast<EExprToken>(Script[Position]);
+	return NormalizeToken(Script[Position]);
 }
 
 EExprToken BlueprintDecompiler::BytecodeReader::ReadToken()
 {
-	return static_cast<EExprToken>(ReadByte());
+	return NormalizeToken(ReadByte());
 }
 
 void BlueprintDecompiler::BytecodeReader::Skip(size_t Count)
@@ -178,6 +288,46 @@ static bool ProbeReadable(const void* Addr, size_t Size)
 }
 #pragma optimize("", on)
 
+#pragma optimize("", off)
+static bool TryReadInt32Safe(const void* Addr, int32_t& OutValue)
+{
+	__try
+	{
+		OutValue = *reinterpret_cast<const int32_t*>(Addr);
+		return true;
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		return false;
+	}
+}
+#pragma optimize("", on)
+
+#pragma optimize("", off)
+static bool TryResolveNameByCompIdxSafe(int32_t compIdx, std::string& outName)
+{
+	if (compIdx < 0 || compIdx > 0x3FFFFFFF)
+		return false;
+
+	// Non-namepool can be strictly range-checked by NameArray element count.
+	if (!Settings::Internal::bUseNamePool)
+	{
+		const int32 num = NameArray::GetNumElements();
+		if (num <= 0 || compIdx >= num)
+			return false;
+	}
+
+	const std::string entryName = NameArray::GetNameEntry(compIdx).GetString();
+	if (!entryName.empty())
+	{
+		outName = entryName;
+		return true;
+	}
+
+	return false;
+}
+#pragma optimize("", on)
+
 std::string BlueprintDecompiler::ResolveObjectName(uint64_t Ptr)
 {
 	// Reject null and obviously invalid pointers
@@ -192,18 +342,25 @@ std::string BlueprintDecompiler::ResolveObjectName(uint64_t Ptr)
 	void* Addr = reinterpret_cast<void*>(Ptr);
 
 	// Check if pointer is in a readable memory region
-	if (Platform::IsBadReadPtr(Addr))
+	if (Platform::IsBadReadPtr(Addr) || !ProbeReadable(Addr, sizeof(void*) + sizeof(int32_t)))
 		return std::format("0x{:X}", Ptr);
 
-	// Additional validation: check if it looks like a valid UObject
-	// A valid UObject should have a VTable pointer at offset 0
-	uint64_t vtablePtr = *reinterpret_cast<uint64_t*>(Addr);
-	if (vtablePtr < 0x10000 || vtablePtr > 0x7FFFFFFFFFFF)
+	// Strong validation: only treat it as UObject when its UObject::Index points back
+	// to the same address in GObjects. This avoids crashing on random script constants.
+	int32_t objIndex = -1;
+	if (!TryReadInt32Safe(reinterpret_cast<const uint8_t*>(Addr) + Off::UObject::Index, objIndex))
+		return std::format("0x{:X}", Ptr);
+
+	const int32_t objCount = ObjectArray::Num();
+	if (objIndex < 0 || objIndex >= objCount)
 		return std::format("0x{:X}", Ptr);
 
 	try
 	{
-		UEObject Obj(Addr);
+		UEObject Obj = ObjectArray::GetByIndex(objIndex);
+		if (!Obj || reinterpret_cast<uint64_t>(Obj.GetAddress()) != Ptr)
+			return std::format("0x{:X}", Ptr);
+
 		std::string Name = Obj.GetName();
 		if (!Name.empty())
 			return Name;
@@ -262,6 +419,13 @@ std::string BlueprintDecompiler::ParseExpression(BytecodeReader& Reader, int Dep
 		return std::format("{:.4f}f", Reader.ReadFloat());
 
 	case EExprToken::EX_DoubleConst:
+		if (IsUE426Bytecode())
+		{
+			// UE4.26 uses opcode 0x38 as EX_PrimitiveCast.
+			uint8_t CastToken = Reader.ReadByte();
+			std::string Expr = ParseExpression(Reader, Depth + 1);
+			return std::format("PrimitiveCast(0x{:02X}, {})", CastToken, Expr);
+		}
 		return std::format("{:.6f}", Reader.ReadDouble());
 
 	case EExprToken::EX_StringConst:
@@ -310,8 +474,7 @@ std::string BlueprintDecompiler::ParseExpression(BytecodeReader& Reader, int Dep
 
 	case EExprToken::EX_NameConst:
 	{
-		// FScriptName: stored as FName (two int32s in bytecode)
-		std::string Name = Reader.ReadString();
+		const std::string Name = Reader.ReadName();
 		return std::format("FName(\"{}\")", Name);
 	}
 
@@ -352,7 +515,7 @@ std::string BlueprintDecompiler::ParseExpression(BytecodeReader& Reader, int Dep
 	case EExprToken::EX_VirtualFunction:
 	case EExprToken::EX_LocalVirtualFunction:
 	{
-		std::string FuncName = Reader.ReadString();
+		std::string FuncName = Reader.ReadName();
 		std::string Args = ParseCallArgs(Reader, Depth);
 		return std::format("{}({})", FuncName, Args);
 	}
@@ -375,13 +538,19 @@ std::string BlueprintDecompiler::ParseExpression(BytecodeReader& Reader, int Dep
 
 	// --- Assignment ---
 	case EExprToken::EX_Let:
+	{
+		uint64_t PropPtr = Reader.ReadPointer();
+		std::string VarExpr = ParseExpression(Reader, Depth + 1);
+		std::string ValueExpr = ParseExpression(Reader, Depth + 1);
+		return std::format("{} = {}", VarExpr, ValueExpr);
+	}
+
 	case EExprToken::EX_LetBool:
 	case EExprToken::EX_LetObj:
 	case EExprToken::EX_LetWeakObjPtr:
 	case EExprToken::EX_LetDelegate:
 	case EExprToken::EX_LetMulticastDelegate:
 	{
-		uint64_t PropPtr = Reader.ReadPointer();
 		std::string VarExpr = ParseExpression(Reader, Depth + 1);
 		std::string ValueExpr = ParseExpression(Reader, Depth + 1);
 		return std::format("{} = {}", VarExpr, ValueExpr);
@@ -390,9 +559,8 @@ std::string BlueprintDecompiler::ParseExpression(BytecodeReader& Reader, int Dep
 	case EExprToken::EX_LetValueOnPersistentFrame:
 	{
 		uint64_t PropPtr = Reader.ReadPointer();
-		std::string VarExpr = ParseExpression(Reader, Depth + 1);
 		std::string ValueExpr = ParseExpression(Reader, Depth + 1);
-		return std::format("{} = {}", VarExpr, ValueExpr);
+		return std::format("PersistentFrame[{}] = {}", ResolveObjectName(PropPtr), ValueExpr);
 	}
 
 	// --- Control flow ---
@@ -443,7 +611,7 @@ std::string BlueprintDecompiler::ParseExpression(BytecodeReader& Reader, int Dep
 	case EExprToken::EX_Context_FailSilent:
 	{
 		std::string ObjExpr = ParseExpression(Reader, Depth + 1);
-		Reader.Skip(4 + 1); // SkipOffset (4) + PropertyType (1)
+		Reader.Skip(4); // SkipOffset (CodeSkipSizeType in UE4.26/UE5 defaults to 4)
 		uint64_t PropPtr = Reader.ReadPointer();
 		std::string MemberExpr = ParseExpression(Reader, Depth + 1);
 		return std::format("{}.{}", ObjExpr, MemberExpr);
@@ -452,7 +620,7 @@ std::string BlueprintDecompiler::ParseExpression(BytecodeReader& Reader, int Dep
 	case EExprToken::EX_ClassContext:
 	{
 		std::string ObjExpr = ParseExpression(Reader, Depth + 1);
-		Reader.Skip(4 + 1);
+		Reader.Skip(4);
 		uint64_t PropPtr = Reader.ReadPointer();
 		std::string MemberExpr = ParseExpression(Reader, Depth + 1);
 		return std::format("{}::{}", ObjExpr, MemberExpr);
@@ -524,11 +692,17 @@ std::string BlueprintDecompiler::ParseExpression(BytecodeReader& Reader, int Dep
 
 	// --- Delegate ---
 	case EExprToken::EX_InstanceDelegate:
+	{
+		std::string FuncName = Reader.ReadName();
+		return std::format("Delegate({})", FuncName);
+	}
+
 	case EExprToken::EX_BindDelegate:
 	{
-		std::string FuncName = Reader.ReadString();
+		std::string FuncName = Reader.ReadName();
+		std::string Delegate = ParseExpression(Reader, Depth + 1);
 		std::string Obj = ParseExpression(Reader, Depth + 1);
-		return std::format("Delegate({}, {})", FuncName, Obj);
+		return std::format("BindDelegate({}, {}, {})", Delegate, FuncName, Obj);
 	}
 
 	case EExprToken::EX_AddMulticastDelegate:
@@ -588,6 +762,9 @@ std::string BlueprintDecompiler::ParseExpression(BytecodeReader& Reader, int Dep
 	case EExprToken::EX_InstrumentationEvent:
 	{
 		uint8_t EventType = Reader.ReadByte();
+		// ScriptSerialization: InlineEvent carries an inlined FScriptName payload.
+		if (EventType == 4)
+			Reader.Skip(12);
 		return std::format("/* instrumentation event {} */", EventType);
 	}
 
@@ -634,6 +811,7 @@ std::string BlueprintDecompiler::ParseExpression(BytecodeReader& Reader, int Dep
 	case EExprToken::EX_SetSet:
 	{
 		std::string SetExpr = ParseExpression(Reader, Depth + 1);
+		int32_t NumElements = Reader.ReadInt32();
 		std::string Elements;
 		bool bFirst = true;
 		while (Reader.HasMore() && Reader.PeekToken() != EExprToken::EX_EndSet)
@@ -643,7 +821,7 @@ std::string BlueprintDecompiler::ParseExpression(BytecodeReader& Reader, int Dep
 			Elements += ParseExpression(Reader, Depth + 1);
 		}
 		if (Reader.HasMore()) Reader.ReadToken();
-		return std::format("{} = TSet{{ {} }}", SetExpr, Elements);
+		return std::format("{} = TSet/*{}*/{{ {} }}", SetExpr, NumElements, Elements);
 	}
 
 	case EExprToken::EX_SetConst:
@@ -666,6 +844,7 @@ std::string BlueprintDecompiler::ParseExpression(BytecodeReader& Reader, int Dep
 	case EExprToken::EX_SetMap:
 	{
 		std::string MapExpr = ParseExpression(Reader, Depth + 1);
+		int32_t NumElements = Reader.ReadInt32();
 		std::string Elements;
 		bool bFirst = true;
 		while (Reader.HasMore() && Reader.PeekToken() != EExprToken::EX_EndMap)
@@ -677,7 +856,7 @@ std::string BlueprintDecompiler::ParseExpression(BytecodeReader& Reader, int Dep
 			Elements += std::format("{}: {}", Key, Val);
 		}
 		if (Reader.HasMore()) Reader.ReadToken();
-		return std::format("{} = TMap{{ {} }}", MapExpr, Elements);
+		return std::format("{} = TMap/*{}*/{{ {} }}", MapExpr, NumElements, Elements);
 	}
 
 	case EExprToken::EX_MapConst:
@@ -747,8 +926,9 @@ std::string BlueprintDecompiler::ParseExpression(BytecodeReader& Reader, int Dep
 		case 4: // StringTableEntry
 		{
 			uint64_t TablePtr = Reader.ReadPointer();
+			std::string TableId = ParseExpression(Reader, Depth + 1);
 			std::string Key = ParseExpression(Reader, Depth + 1);
-			return std::format("FText::FromStringTable({}, {})", ResolveObjectName(TablePtr), Key);
+			return std::format("FText::FromStringTable({}, {}, {})", ResolveObjectName(TablePtr), TableId, Key);
 		}
 		case 255: // None
 			return "FText()";

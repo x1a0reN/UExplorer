@@ -1,4 +1,4 @@
-﻿# UExplorer — 功能设计与页面架构方案
+# UExplorer — 功能设计与页面架构方案
 
 ## Context
 
@@ -623,17 +623,23 @@ D:\Projects\UExplorer\
     │
     ├── Server\                        # HTTP 服务器层
     │   ├── HttpServer.h               # PIMPL 接口 (HttpRequest/HttpResponse/RouteHandler)
-    │   └── HttpServer.cpp             # WinSock2 实现 (路由匹配/Token认证/CORS)
+    │   └── HttpServer.cpp             # WinSock2 实现 (路由匹配/Token认证/CORS/SSE/WebSocket)
     │
     ├── API\                           # REST API 路由层
     │   ├── ApiCommon.h                # JSON 响应信封 (MakeResponse/MakeError/ParseQuery/GetPathSegment)
     │   ├── Router.h / Router.cpp      # 路由注册中心 (RegisterAllRoutes)
-    │   ├── StatusApi.h / .cpp         # GET /status, /status/health
-    │   ├── ObjectsApi.h / .cpp        # GET /objects, /objects/count, /objects/:index, /objects/:index/properties
+    │   ├── StatusApi.h / .cpp         # GET /status,/status/health,/status/engine + POST /status/reconnect
+    │   ├── ObjectsApi.h / .cpp        # GET /objects/*, /objects/:index/outer-chain, /objects/:index/property/:name, /packages/*
     │   ├── ClassesApi.h / .cpp        # GET /classes, /classes/:name, fields, functions, hierarchy, /structs
     │   ├── EnumsApi.h / .cpp          # GET /enums, /enums/:name
     │   ├── DumpApi.h / .cpp           # POST /dump/sdk,usmap,dumpspace,ida-script + GET /dump/jobs
-    │   └── MemoryApi.h / .cpp         # POST /memory/read, /memory/read-typed, /memory/pointer-chain
+    │   ├── MemoryApi.h / .cpp         # POST /memory/read, /memory/write, /memory/read-typed, /memory/write-typed, /memory/pointer-chain
+    │   ├── CallApi.h / .cpp           # POST /call/function, /call/static, /call/batch
+    │   ├── WorldApi.h / .cpp          # GET /world, /world/levels, /world/actors/* + POST /world/actors/:index/transform
+    │   ├── WatchApi.h / .cpp          # /watch/add, /watch/list, /watch/:id/history, DELETE /watch/:id
+    │   ├── HookApi.h / .cpp           # /hooks/add, /hooks/list, /hooks/:id/log, PATCH/DELETE
+    │   ├── BlueprintApi.h / .cpp      # /blueprint/:funcpath/{bytecode,decompile} + ?index 兼容
+    │   └── EventsApi.h / .cpp         # SSE 路由注册 + 事件广播
     │
     ├── Engine\                        # [Dumper7] UE 引擎抽象层
     │   ├── Public\Unreal\             #   ObjectArray, NameArray, UnrealObjects, UnrealTypes, Enums
@@ -721,10 +727,10 @@ D:\Projects\UExplorer\
 **目标：** 实现运行时交互能力（DLL 端）
 
 - [x] 内存写入 + 属性值编辑 — `POST /memory/write`, `POST /objects/:index/property/:name`
-- [x] ProcessEvent 函数调用 — `POST /call/function`
-- [x] 属性监视（Watch）功能 — `/watch/add`, `/watch/list`, SSE 实时推送
+- [x] ProcessEvent 函数调用（含静态/批量）— `POST /call/function`, `/call/static`, `/call/batch`
+- [x] 属性监视（Watch）功能（含历史）— `/watch/add`, `/watch/list`, `/watch/:id/history`, SSE 实时推送
 - [x] Function Browser 页面（含调用器）— 前端（已实现，见 `frontend/src/pages/Functions.tsx`）
-- [x] World Explorer API — `/world`, `/world/levels`, `/world/actors`, `/world/shortcuts`
+- [x] World Explorer API — `/world`, `/world/levels`, `/world/actors`, `/world/actors/:index`, `/world/actors/:index/components`, `/world/actors/:index/transform`, `/world/shortcuts`
 - [x] Memory Viewer 页面 — 前端（已实现，见 `frontend/src/pages/Memory.tsx`）
 
 ### Phase 5: 进阶功能
@@ -732,8 +738,9 @@ D:\Projects\UExplorer\
 **目标：** Hook、蓝图反编译等高级特性（DLL 端）
 
 - [x] Hook Manager（UFunction Hook + SSE 实时推送）— `/hooks/*`, SSE 推送
+- [x] WebSocket 实时通道（基础可用）— `WS /ws/console`, `WS /ws/events`
 - [ ] Hook Manager 页面 — 前端（部分实现：功能已集成在 Functions 页 Hook Tab，独立页面未拆分）
-- [x] Blueprint Decompiler — `/blueprint/:func/bytecode`, `/blueprint/:func/decompile`
+- [x] Blueprint Decompiler — `/blueprint/:funcpath/bytecode`, `/blueprint/:funcpath/decompile`（并兼容 `?index=`）
 - [ ] Blueprint Decompiler 页面 — 前端（部分实现：功能已集成在 Functions 页 Decompile Tab，独立页面未拆分）
 - [x] IDA/Ghidra 导入脚本生成 — `/dump/ida-script`
 - [x] Dumpspace JSON 生成 — `/dump/dumpspace`

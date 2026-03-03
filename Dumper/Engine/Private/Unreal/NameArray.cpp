@@ -1,5 +1,7 @@
 
 #include <format>
+#include <cstring>
+#include <cwchar>
 
 #include "Unreal/ObjectArray.h"
 #include "Unreal/NameArray.h"
@@ -9,6 +11,42 @@
 
 uint8* NameArray::GNames = nullptr;
 
+namespace
+{
+#pragma optimize("", off)
+	static bool TryReadInt32AtOffsetSafe(const uint8* base, int32 offset, int32& outValue)
+	{
+		if (!base || offset < 0)
+			return false;
+
+		__try
+		{
+			outValue = *reinterpret_cast<const int32*>(base + offset);
+			return true;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return false;
+		}
+	}
+
+	static void* TryGetNameEntryPtrSafe(void* namesArray, void* (*byIndex)(void*, int32, int32), int32 idx, int32 blockBits)
+	{
+		if (!namesArray || !byIndex || idx < 0)
+			return nullptr;
+
+		__try
+		{
+			return byIndex(namesArray, idx, blockBits);
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return nullptr;
+		}
+	}
+#pragma optimize("", on)
+}
+
 FNameEntry::FNameEntry(void* Ptr)
 	: Address((uint8*)Ptr)
 {
@@ -16,7 +54,7 @@ FNameEntry::FNameEntry(void* Ptr)
 
 std::wstring FNameEntry::GetWString()
 {
-	if (!Address)
+	if (!Address || !GetStr || Platform::IsBadReadPtr(Address))
 		return L"";
 
 	return GetStr(Address);
@@ -80,8 +118,13 @@ void FNameEntry::Init(const uint8_t* FirstChunkPtr, int64 NameEntryStringOffset)
 
 		GetStr = [](uint8* NameEntry) -> std::wstring
 		{
+			if (!NameEntry || Platform::IsBadReadPtr(NameEntry))
+				return L"";
+
 			const uint16 HeaderWithoutNumber = *reinterpret_cast<uint16*>(NameEntry + Off::FNameEntry::NamePool::HeaderOffset);
 			const int32 NameLen = HeaderWithoutNumber >> FNameEntry::FNameEntryLengthShiftCount;
+			if (NameLen < 0 || NameLen > 1024)
+				return L"";
 
 			if (NameLen == 0)
 			{
@@ -89,6 +132,8 @@ void FNameEntry::Init(const uint8_t* FirstChunkPtr, int64 NameEntryStringOffset)
 
 				const int32 NextEntryIndex = *reinterpret_cast<int32*>(NameEntry + EntryIdOffset);
 				const int32 Number = *reinterpret_cast<int32*>(NameEntry + EntryIdOffset + sizeof(int32));
+				if (NextEntryIndex < 0 || NextEntryIndex > 0x3FFFFFFF)
+					return L"";
 
 				if (Number > 0)
 					return NameArray::GetNameEntry(NextEntryIndex).GetWString() + L'_' + std::to_wstring(Number - 1);
@@ -97,9 +142,17 @@ void FNameEntry::Init(const uint8_t* FirstChunkPtr, int64 NameEntryStringOffset)
 			}
 
 			if (HeaderWithoutNumber & NameWideMask)
-				return std::wstring(reinterpret_cast<const wchar_t*>(NameEntry + Off::FNameEntry::NamePool::StringOffset), NameLen);
+			{
+				const wchar_t* wideStr = reinterpret_cast<const wchar_t*>(NameEntry + Off::FNameEntry::NamePool::StringOffset);
+				if (Platform::IsBadReadPtr(wideStr))
+					return L"";
+				return std::wstring(wideStr, NameLen);
+			}
 
-			return UtfN::StringToWString(std::string(reinterpret_cast<const char*>(NameEntry + Off::FNameEntry::NamePool::StringOffset), NameLen));
+			const char* narrowStr = reinterpret_cast<const char*>(NameEntry + Off::FNameEntry::NamePool::StringOffset);
+			if (Platform::IsBadReadPtr(narrowStr))
+				return L"";
+			return UtfN::StringToWString(std::string(narrowStr, NameLen));
 		};
 	}
 	else
@@ -107,6 +160,12 @@ void FNameEntry::Init(const uint8_t* FirstChunkPtr, int64 NameEntryStringOffset)
 		const uint8_t* FNameEntryNone =     static_cast<uint8_t*>(NameArray::GetNameEntry(0x0).GetAddress());
 		const uint8_t* FNameEntryIdxThree = static_cast<uint8_t*>(NameArray::GetNameEntry(0x3).GetAddress());
 		const uint8_t* FNameEntryIdxEight = static_cast<uint8_t*>(NameArray::GetNameEntry(0x8).GetAddress());
+
+		if (!FNameEntryNone || !FNameEntryIdxThree || !FNameEntryIdxEight)
+		{
+			GetStr = [](uint8*) -> std::wstring { return L""; };
+			return;
+		}
 
 		for (int i = 0; i < 0x20; i++)
 		{
@@ -130,13 +189,24 @@ void FNameEntry::Init(const uint8_t* FirstChunkPtr, int64 NameEntryStringOffset)
 
 		GetStr = [](uint8* NameEntry) -> std::wstring
 		{
+			if (!NameEntry || Platform::IsBadReadPtr(NameEntry))
+				return L"";
+
 			const int32 NameIdx = *reinterpret_cast<int32*>(NameEntry + Off::FNameEntry::NameArray::IndexOffset);
 			const void* NameString = reinterpret_cast<void*>(NameEntry + Off::FNameEntry::NameArray::StringOffset);
+			if (!NameString || Platform::IsBadReadPtr(NameString))
+				return L"";
 
 			if (NameIdx & NameWideMask)
-				return std::wstring(reinterpret_cast<const wchar_t*>(NameString));
+			{
+				const wchar_t* wide = reinterpret_cast<const wchar_t*>(NameString);
+				const size_t len = wcsnlen(wide, 1024);
+				return std::wstring(wide, len);
+			}
 
-			return UtfN::StringToWString<std::string>(reinterpret_cast<const char*>(NameString));
+			const char* narrow = reinterpret_cast<const char*>(NameString);
+			const size_t len = strnlen(narrow, 1024);
+			return UtfN::StringToWString<std::string>(std::string(narrow, len));
 		};
 	}
 }
@@ -675,26 +745,62 @@ void NameArray::PostInit()
 
 int32 NameArray::GetNumChunks()
 {
-	return *reinterpret_cast<int32*>(GNames + Off::NameArray::MaxChunkIndex);
+	int32 value = 0;
+	if (!TryReadInt32AtOffsetSafe(GNames, Off::NameArray::MaxChunkIndex, value))
+		return 0;
+	return value;
 }
 
 int32 NameArray::GetNumElements()
 {
-	return !Settings::Internal::bUseNamePool ? *reinterpret_cast<int32*>(GNames + Off::NameArray::NumElements) : 0;
+	if (Settings::Internal::bUseNamePool)
+		return 0;
+
+	int32 value = 0;
+	if (!TryReadInt32AtOffsetSafe(GNames, Off::NameArray::NumElements, value))
+		return 0;
+	return value;
 }
 
 int32 NameArray::GetByteCursor()
 {
-	return Settings::Internal::bUseNamePool ? *reinterpret_cast<int32*>(GNames + Off::NameArray::ByteCursor) : 0;
+	if (!Settings::Internal::bUseNamePool)
+		return 0;
+
+	int32 value = 0;
+	if (!TryReadInt32AtOffsetSafe(GNames, Off::NameArray::ByteCursor, value))
+		return 0;
+	return value;
 }
 
 FNameEntry NameArray::GetNameEntry(const void* Name)
 {
-	return ByIndex(GNames, FName(Name).GetCompIdx(), FNameBlockOffsetBits);
+	if (!Name || Platform::IsBadReadPtr(Name))
+		return FNameEntry(nullptr);
+
+	int32 idx = -1;
+	if (!TryReadInt32AtOffsetSafe(static_cast<const uint8*>(Name), Off::FName::CompIdx, idx))
+		return FNameEntry(nullptr);
+
+	return GetNameEntry(idx);
 }
 
 FNameEntry NameArray::GetNameEntry(int32 Idx)
 {
-	return ByIndex(GNames, Idx, FNameBlockOffsetBits);
+	if (Idx < 0 || !GNames || !ByIndex)
+		return FNameEntry(nullptr);
+
+	if (!Settings::Internal::bUseNamePool)
+	{
+		const int32 total = GetNumElements();
+		if (total <= 0 || Idx >= total)
+			return FNameEntry(nullptr);
+	}
+
+	void* entryPtr = TryGetNameEntryPtrSafe(GNames, ByIndex, Idx, FNameBlockOffsetBits);
+	if (!entryPtr || Platform::IsBadReadPtr(entryPtr))
+		return FNameEntry(nullptr);
+
+	return FNameEntry(entryPtr);
 }
 

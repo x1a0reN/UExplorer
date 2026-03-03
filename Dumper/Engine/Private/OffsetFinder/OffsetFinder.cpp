@@ -1,9 +1,33 @@
+#include <algorithm>
+#include <climits>
+#include <unordered_map>
 #include <vector>
 
 #include "OffsetFinder/OffsetFinder.h"
 #include "Unreal/ObjectArray.h"
 
 #include "Platform.h"
+#include "Settings.h"
+
+namespace
+{
+	// Keep this trivial: SEH helper must avoid C++ objects with destructors.
+	static bool TryReadU8Safe(uintptr_t address, uint8& outValue)
+	{
+		if (address == 0)
+			return false;
+
+		__try
+		{
+			outValue = *reinterpret_cast<const uint8*>(address);
+			return true;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return false;
+		}
+	}
+}
 
 /* UObject */
 int32_t OffsetFinder::FindUObjectFlagsOffset()
@@ -834,130 +858,826 @@ int32_t OffsetFinder::FindFunctionNativeFuncOffset()
 
 int32_t OffsetFinder::FindFunctionScriptOffset()
 {
-	// Script is a TArray<uint8> after ExecFunction in UFunction.
-	// Strategy: find a known Blueprint function where Script.Num > 0,
-	// and a known Native function where Script.Num == 0.
+	constexpr uint8 ScriptEndToken = 0x53; // EExprToken::EX_EndOfScript
 
-	// Find a Blueprint-only function (ReceiveBeginPlay is common in all UE games)
-	UEObject BPFunc = ObjectArray::FindObjectFast("ReceiveBeginPlay", EClassCastFlags::Function);
-
-	if (!BPFunc)
-		BPFunc = ObjectArray::FindObjectFast("ReceiveTick", EClassCastFlags::Function);
-
-	if (!BPFunc)
-		BPFunc = ObjectArray::FindObjectFast("ReceiveEndPlay", EClassCastFlags::Function);
-
-	if (!BPFunc)
-		BPFunc = ObjectArray::FindObjectFast("ReceiveAnyDamage", EClassCastFlags::Function);
-
-	if (!BPFunc)
+	auto BuildRuntimeCacheKey = []() -> uint64
 	{
-		// Last resort: scan for ANY non-native function with FUNC_BlueprintEvent flag
-		for (UEObject Obj : ObjectArray())
+		uint64 key = 1469598103934665603ull; // FNV1a 64 offset basis
+		auto HashBytes = [&key](const uint8* ptr, size_t size)
 		{
-			if (!Obj.IsA(EClassCastFlags::Function)) continue;
-			try {
-				UEFunction Func = Obj.Cast<UEFunction>();
-				if (!Func.HasFlags(EFunctionFlags::Native) && Func.HasFlags(EFunctionFlags::BlueprintEvent))
-				{
-					BPFunc = Obj;
-					std::cerr << "[UExplorer] Script offset: using fallback BP function: " << Obj.GetName() << std::endl;
-					break;
-				}
-			} catch (...) {}
+			for (size_t i = 0; i < size; i++)
+			{
+				key ^= ptr[i];
+				key *= 1099511628211ull;
+			}
+		};
+
+		auto HashU64 = [&HashBytes](uint64 value)
+		{
+			HashBytes(reinterpret_cast<const uint8*>(&value), sizeof(value));
+		};
+
+		HMODULE exeModule = GetModuleHandleW(nullptr);
+		if (!exeModule)
+			return 0;
+
+		const uint8* base = reinterpret_cast<const uint8*>(exeModule);
+		const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+		if (!dos || dos->e_magic != IMAGE_DOS_SIGNATURE)
+			return 0;
+
+		const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
+		if (!nt || nt->Signature != IMAGE_NT_SIGNATURE)
+			return 0;
+
+		HashU64(reinterpret_cast<uint64>(exeModule));
+		HashU64(static_cast<uint64>(nt->FileHeader.TimeDateStamp));
+		HashU64(static_cast<uint64>(nt->OptionalHeader.CheckSum));
+		HashU64(static_cast<uint64>(nt->OptionalHeader.SizeOfImage));
+		HashU64(static_cast<uint64>(nt->OptionalHeader.SizeOfCode));
+		HashBytes(reinterpret_cast<const uint8*>(Settings::Generator::GameVersion.data()), Settings::Generator::GameVersion.size());
+
+		return key;
+	};
+
+	static std::unordered_map<uint64, int32> sRuntimeCache;
+	const uint64 runtimeCacheKey = BuildRuntimeCacheKey();
+	if (runtimeCacheKey != 0)
+	{
+		auto it = sRuntimeCache.find(runtimeCacheKey);
+		if (it != sRuntimeCache.end())
+		{
+			std::cerr << "[UExplorer] Script offset cache hit: 0x" << std::hex << it->second << std::dec << std::endl;
+			return it->second;
 		}
 	}
 
-	if (!BPFunc)
+	auto AddUniqueAddress = [](std::vector<uintptr_t>& list, const UEObject& obj)
 	{
-		std::cerr << "Dumper-7 WARNING: Could not find Blueprint function for Script offset discovery." << std::endl;
+		if (!obj)
+			return;
+
+		const uintptr_t addr = reinterpret_cast<uintptr_t>(obj.GetAddress());
+		if (addr == 0)
+			return;
+
+		if (std::find(list.begin(), list.end(), addr) == list.end())
+			list.push_back(addr);
+	};
+
+	struct BlueprintSample
+	{
+		uintptr_t Address = 0;
+		int32 Weight = 1;
+		uint8 Tier = 0xFF; // lower tier means higher confidence
+	};
+
+	std::vector<BlueprintSample> BlueprintSamples;
+	std::vector<uintptr_t> VerificationPool;
+	std::vector<uintptr_t> NativeFuncs;
+	std::vector<uintptr_t> GeneralFuncs;
+
+	auto AddOrUpdateBlueprintSample = [&BlueprintSamples](uintptr_t address, int32 weight, uint8 tier)
+	{
+		if (address == 0)
+			return;
+
+		for (BlueprintSample& sample : BlueprintSamples)
+		{
+			if (sample.Address != address)
+				continue;
+
+			if (weight > sample.Weight)
+				sample.Weight = weight;
+			if (tier < sample.Tier)
+				sample.Tier = tier;
+			return;
+		}
+
+		BlueprintSamples.push_back(BlueprintSample{ address, weight, tier });
+	};
+
+	auto ClassifyBlueprintSample = [](UEFunction func, const std::string& name, int32& outWeight, uint8& outTier) -> bool
+	{
+		if (func.HasFlags(EFunctionFlags::Native))
+			return false;
+
+		if (name.rfind("ExecuteUbergraph_", 0) == 0)
+		{
+			outWeight = 6;
+			outTier = 0;
+			return true;
+		}
+
+		if (name.rfind("BndEvt__", 0) == 0)
+		{
+			outWeight = 5;
+			outTier = 1;
+			return true;
+		}
+
+		if (func.HasFlags(EFunctionFlags::UbergraphFunction))
+		{
+			outWeight = 5;
+			outTier = 1;
+			return true;
+		}
+
+		if (func.HasFlags(EFunctionFlags::BlueprintEvent))
+		{
+			outWeight = 3;
+			outTier = 2;
+			return true;
+		}
+
+		if (name.rfind("Receive", 0) == 0)
+		{
+			outWeight = 2;
+			outTier = 3;
+			return true;
+		}
+
+		return false;
+	};
+
+	for (const char* name : { "ReceiveBeginPlay", "ReceiveTick", "ReceiveEndPlay", "ReceiveAnyDamage" })
+	{
+		UEObject obj = ObjectArray::FindObjectFast(name, EClassCastFlags::Function);
+		UEFunction func = obj.Cast<UEFunction>();
+		if (func)
+		{
+			int32 weight = 0;
+			uint8 tier = 0xFF;
+			if (ClassifyBlueprintSample(func, func.GetName(), weight, tier))
+			{
+				AddOrUpdateBlueprintSample(reinterpret_cast<uintptr_t>(obj.GetAddress()), weight, tier);
+			}
+		}
+	}
+
+	for (const char* name : { "WasInputKeyJustPressed", "ToggleSpeaking", "SwitchLevel", "FOV", "BeginPlay", "Tick" })
+		AddUniqueAddress(NativeFuncs, ObjectArray::FindObjectFast(name, EClassCastFlags::Function));
+
+	int32 highConfidenceCount = 0;
+
+	for (UEObject obj : ObjectArray())
+	{
+		if (!obj || !obj.IsA(EClassCastFlags::Function))
+			continue;
+
+		AddUniqueAddress(GeneralFuncs, obj);
+
+		UEFunction func = obj.Cast<UEFunction>();
+		if (!func)
+			continue;
+
+		const bool isNative = func.HasFlags(EFunctionFlags::Native);
+		if (!isNative)
+		{
+			const std::string funcName = func.GetName();
+			int32 weight = 0;
+			uint8 tier = 0xFF;
+			if (ClassifyBlueprintSample(func, funcName, weight, tier))
+			{
+				AddOrUpdateBlueprintSample(reinterpret_cast<uintptr_t>(obj.GetAddress()), weight, tier);
+				if (tier <= 1)
+					highConfidenceCount++;
+			}
+		}
+		else if (NativeFuncs.size() < 24)
+		{
+			AddUniqueAddress(NativeFuncs, obj);
+		}
+
+		if (highConfidenceCount >= 48 && NativeFuncs.size() >= 24 && GeneralFuncs.size() >= 320 && BlueprintSamples.size() >= 80)
+			break;
+	}
+
+	if (!BlueprintSamples.empty())
+	{
+		std::sort(BlueprintSamples.begin(), BlueprintSamples.end(), [](const BlueprintSample& a, const BlueprintSample& b)
+		{
+			if (a.Tier != b.Tier) return a.Tier < b.Tier;
+			if (a.Weight != b.Weight) return a.Weight > b.Weight;
+			return a.Address < b.Address;
+		});
+
+		const size_t maxScoringSamples = 56;
+		const size_t maxVerificationSamples = 192;
+		VerificationPool.clear();
+		VerificationPool.reserve((std::min)(maxVerificationSamples, BlueprintSamples.size()));
+		for (size_t i = 0; i < BlueprintSamples.size() && i < maxVerificationSamples; i++)
+		{
+			VerificationPool.push_back(BlueprintSamples[i].Address);
+		}
+
+		if (BlueprintSamples.size() > maxScoringSamples)
+			BlueprintSamples.resize(maxScoringSamples);
+	}
+
+	if (GeneralFuncs.empty())
+	{
+		std::cerr << "Dumper-7 WARNING: Could not gather function samples for Script offset discovery." << std::endl;
 		return OffsetNotFound;
 	}
 
-	std::cerr << "[UExplorer] Script offset: BP function = " << BPFunc.GetName()
-		<< " at 0x" << std::hex << reinterpret_cast<uintptr_t>(BPFunc.GetAddress()) << std::dec << std::endl;
-
-	// Find Native functions for cross-validation (Script.Num should be 0 for native funcs)
-	UEObject NativeFunc = ObjectArray::FindObjectFast("WasInputKeyJustPressed", EClassCastFlags::Function);
-	if (!NativeFunc) NativeFunc = ObjectArray::FindObjectFast("BeginPlay", EClassCastFlags::Function);
-	if (!NativeFunc) NativeFunc = ObjectArray::FindObjectFast("Tick", EClassCastFlags::Function);
-
-	const uintptr_t BPAddr = reinterpret_cast<uintptr_t>(BPFunc.GetAddress());
-	const uintptr_t NativeAddr = NativeFunc ? reinterpret_cast<uintptr_t>(NativeFunc.GetAddress()) : 0;
-
-	std::cerr << "[UExplorer] Script offset: NativeFunc = "
-		<< (NativeFunc ? NativeFunc.GetName() : "NOT FOUND")
-		<< (NativeAddr ? " at 0x" : "") << std::hex << NativeAddr << std::dec << std::endl;
-
-	// Scan after ExecFunction for TArray<uint8> pattern
-	const int32 StartOffset = Off::UFunction::ExecFunction + static_cast<int32>(sizeof(void*));
-
-	std::cerr << "[UExplorer] Script offset: ExecFunction=0x" << std::hex << Off::UFunction::ExecFunction
-		<< ", scanning from 0x" << StartOffset << " to 0x" << (StartOffset + 0x80) << std::dec << std::endl;
-
-	int32 BestCandidate = OffsetNotFound; // Track best candidate that passes basic checks
-
-	for (int32 i = StartOffset; i < StartOffset + 0x80; i += sizeof(void*))
+	if (BlueprintSamples.empty())
 	{
-		// Read potential TArray fields: { Data* (8), Num (4), Max (4) }
-		const uintptr_t PossibleData = *reinterpret_cast<uintptr_t*>(BPAddr + i);
-		const int32 PossibleNum = *reinterpret_cast<int32*>(BPAddr + i + sizeof(void*));
-		const int32 PossibleMax = *reinterpret_cast<int32*>(BPAddr + i + sizeof(void*) + sizeof(int32));
+		std::cerr << "Dumper-7 WARNING: Could not gather Blueprint functions; using generic fallback scan." << std::endl;
+	}
 
-		std::cerr << "[UExplorer]   offset 0x" << std::hex << i << std::dec
-			<< ": Data=0x" << std::hex << PossibleData << std::dec
-			<< " Num=" << PossibleNum << " Max=" << PossibleMax;
-
-		// Blueprint function should have non-empty script
-		if (PossibleNum <= 0 || PossibleNum > 0x19000)
+	if (VerificationPool.empty())
+	{
+		for (const BlueprintSample& sample : BlueprintSamples)
 		{
-			std::cerr << " -> SKIP (Num out of range)" << std::endl;
-			continue;
+			if (sample.Address != 0)
+				VerificationPool.push_back(sample.Address);
+		}
+	}
+
+	auto TryReadArrayHeader = [](const uintptr_t funcAddr, const int32 offset, uintptr_t& outData, int32& outNum, int32& outMax) -> bool
+	{
+		if (funcAddr == 0 || offset <= 0)
+			return false;
+
+		const uintptr_t base = funcAddr + static_cast<uintptr_t>(offset);
+		const uintptr_t numPtr = base + sizeof(void*);
+		const uintptr_t maxPtr = numPtr + sizeof(int32);
+
+		if (Platform::IsBadReadPtr(reinterpret_cast<void*>(base))
+			|| Platform::IsBadReadPtr(reinterpret_cast<void*>(numPtr))
+			|| Platform::IsBadReadPtr(reinterpret_cast<void*>(maxPtr)))
+		{
+			return false;
 		}
 
-		if (PossibleMax < PossibleNum)
+		const uintptr_t data = *reinterpret_cast<const uintptr_t*>(base);
+		const int32 num = *reinterpret_cast<const int32*>(numPtr);
+		const int32 max = *reinterpret_cast<const int32*>(maxPtr);
+
+		if (data == 0 || num <= 0 || num > 0x200000 || max < num || max > 0x400000)
+			return false;
+
+		if (Platform::IsBadReadPtr(reinterpret_cast<void*>(data)))
+			return false;
+
+		outData = data;
+		outNum = num;
+		outMax = max;
+		return true;
+	};
+
+	auto TryReadScriptArray = [ScriptEndToken, &TryReadArrayHeader](const uintptr_t funcAddr, const int32 offset, uintptr_t& outData, int32& outNum, int32& outMax, uint8& outFirst) -> bool
+	{
+		if (!TryReadArrayHeader(funcAddr, offset, outData, outNum, outMax))
+			return false;
+
+		const uintptr_t tail = outData + static_cast<uintptr_t>(outNum - 1);
+		if (tail < outData)
+			return false;
+
+		uint8 first = 0;
+		uint8 last = 0;
+		if (!TryReadU8Safe(outData, first) || !TryReadU8Safe(tail, last))
+			return false;
+
+		if (last != ScriptEndToken)
+			return false;
+
+		outFirst = first;
+		return true;
+	};
+
+	auto TryReadNumOnly = [](const uintptr_t funcAddr, const int32 offset, int32& outNum) -> bool
+	{
+		if (funcAddr == 0 || offset <= 0)
+			return false;
+
+		const uintptr_t numPtr = funcAddr + static_cast<uintptr_t>(offset) + sizeof(void*);
+		if (Platform::IsBadReadPtr(reinterpret_cast<void*>(numPtr)))
+			return false;
+
+		outNum = *reinterpret_cast<const int32*>(numPtr);
+		return true;
+	};
+
+	const int32 StartOffset = 0x30;
+	int32 EndOffset = Off::UFunction::ExecFunction + 0x40;
+	if (EndOffset < 0x180) EndOffset = 0x180;
+	if (EndOffset > 0x280) EndOffset = 0x280;
+
+	struct CandidateScore
+	{
+		int32 Offset = OffsetNotFound;
+		int32 Score = INT32_MIN;
+
+		int32 BpTotal = 0;
+		int32 BpWeightedTotal = 0;
+		int32 BpHeaderValid = 0;
+		int32 BpHeaderInvalid = 0;
+		int32 BpEndTokenHits = 0;
+		int32 BpWeightedEndTokenHits = 0;
+		int32 BpTailMismatch = 0;
+		int32 BpFirstOpcodeInRange = 0;
+		int32 BpSmallScript = 0;
+		int32 BpStableReread = 0;
+
+		int32 NativeReadable = 0;
+		int32 NativeZeroNum = 0;
+		int32 NativeNonZeroNum = 0;
+		int32 NativeLooksLikeScript = 0;
+
+		int32 GenericProbed = 0;
+		int32 GenericScriptHits = 0;
+		int32 GenericZeroHits = 0;
+		int32 GenericNoisyHits = 0;
+
+		std::string Reason;
+
+		bool HasBpEvidence() const
 		{
-			std::cerr << " -> SKIP (Max < Num)" << std::endl;
-			continue;
+			return BpEndTokenHits >= 4 || BpWeightedEndTokenHits >= 16;
 		}
+	};
 
-		if (PossibleData == 0)
+	auto AddReason = [](std::string& reason, int32 delta, const std::string& why, int32 count)
+	{
+		if (!reason.empty())
+			reason += "; ";
+
+		reason += std::format("{}{}({}x {})",
+			(delta >= 0 ? "+" : ""),
+			delta,
+			count,
+			why);
+	};
+
+	std::cerr << "[UExplorer] Script offset discovery: BP samples=" << BlueprintSamples.size()
+		<< " (high-confidence-collected=" << highConfidenceCount << ")"
+		<< " Native samples=" << NativeFuncs.size() << std::endl;
+	std::cerr << "[UExplorer] Script offset scan range: 0x" << std::hex << StartOffset
+		<< " - 0x" << EndOffset << std::dec << std::endl;
+
+	int32 bestOffset = OffsetNotFound;
+	int32 bestScore = INT32_MIN;
+	int32 bestBpEndTokenHits = 0;
+	int32 bestBpWeightedEndTokenHits = 0;
+	int32 bestGenericScriptHits = 0;
+	bool bestHasBpEvidence = false;
+	std::vector<CandidateScore> candidates;
+	candidates.reserve((EndOffset - StartOffset) / static_cast<int32>(sizeof(void*)));
+
+	for (int32 offset = StartOffset; offset < EndOffset; offset += sizeof(void*))
+	{
+		CandidateScore c;
+		c.Offset = offset;
+		c.Score = 0;
+		c.BpTotal = static_cast<int32>(BlueprintSamples.size());
+
+		for (const BlueprintSample& sample : BlueprintSamples)
 		{
-			std::cerr << " -> SKIP (Data is null)" << std::endl;
-			continue;
-		}
+			const uintptr_t bpAddr = sample.Address;
+			const int32 sampleWeight = sample.Weight;
+			c.BpWeightedTotal += sampleWeight;
 
-		if (Platform::IsBadReadPtr(reinterpret_cast<void*>(PossibleData)))
-		{
-			std::cerr << " -> SKIP (IsBadReadPtr)" << std::endl;
-			continue;
-		}
-
-		// This offset passes all basic TArray checks — remember it
-		if (BestCandidate == OffsetNotFound)
-			BestCandidate = i;
-
-		// Cross-validate: native function should have empty script (Num == 0)
-		if (NativeAddr != 0)
-		{
-			const int32 NativeNum = *reinterpret_cast<int32*>(NativeAddr + i + sizeof(void*));
-			if (NativeNum != 0)
+			uintptr_t data = 0;
+			int32 num = 0;
+			int32 max = 0;
+			if (!TryReadArrayHeader(bpAddr, offset, data, num, max))
 			{
-				std::cerr << " -> SKIP (NativeNum=" << NativeNum << " != 0)" << std::endl;
+				c.BpHeaderInvalid++;
 				continue;
+			}
+
+			c.BpHeaderValid++;
+
+			const uintptr_t tail = data + static_cast<uintptr_t>(num - 1);
+			if (tail < data)
+			{
+				c.BpTailMismatch++;
+				continue;
+			}
+
+			uint8 first = 0;
+			uint8 last = 0;
+			if (!TryReadU8Safe(data, first) || !TryReadU8Safe(tail, last))
+			{
+				c.BpTailMismatch++;
+				continue;
+			}
+
+			if (last == ScriptEndToken)
+			{
+				c.BpEndTokenHits++;
+				c.BpWeightedEndTokenHits += sampleWeight;
+			}
+			else
+				c.BpTailMismatch++;
+
+			if (first <= 0x6D)
+				c.BpFirstOpcodeInRange++;
+
+			if (num <= 0x8000)
+				c.BpSmallScript++;
+
+			uintptr_t data2 = 0;
+			int32 num2 = 0;
+			int32 max2 = 0;
+			if (TryReadArrayHeader(bpAddr, offset, data2, num2, max2))
+			{
+				const uintptr_t tail2 = data2 + static_cast<uintptr_t>(num2 - 1);
+				if (tail2 >= data2)
+				{
+					uint8 first2 = 0;
+					uint8 last2 = 0;
+					if (TryReadU8Safe(data2, first2) && TryReadU8Safe(tail2, last2)
+						&& data2 == data && num2 == num && max2 == max
+						&& first2 == first && last2 == last)
+					{
+						c.BpStableReread++;
+					}
+				}
 			}
 		}
 
-		std::cerr << " -> MATCH!" << std::endl;
-		return i;
+		{
+			const int32 deltaEnd = c.BpWeightedEndTokenHits * 6;
+			c.Score += deltaEnd;
+			AddReason(c.Reason, deltaEnd, "BP weighted end-token hits", c.BpWeightedEndTokenHits);
+
+			const int32 deltaFirst = c.BpFirstOpcodeInRange * 3;
+			c.Score += deltaFirst;
+			AddReason(c.Reason, deltaFirst, "BP first-opcode in range", c.BpFirstOpcodeInRange);
+
+			const int32 deltaSmall = c.BpSmallScript * 2;
+			c.Score += deltaSmall;
+			AddReason(c.Reason, deltaSmall, "BP script-size sanity", c.BpSmallScript);
+
+			const int32 deltaStable = c.BpStableReread * 3;
+			c.Score += deltaStable;
+			AddReason(c.Reason, deltaStable, "BP stable re-read", c.BpStableReread);
+
+			const int32 deltaTailMismatch = -(c.BpTailMismatch * 14);
+			c.Score += deltaTailMismatch;
+			AddReason(c.Reason, deltaTailMismatch, "BP tail mismatch", c.BpTailMismatch);
+
+			const int32 deltaHeaderInvalid = -(c.BpHeaderInvalid * 6);
+			c.Score += deltaHeaderInvalid;
+			AddReason(c.Reason, deltaHeaderInvalid, "BP invalid array header", c.BpHeaderInvalid);
+
+			if (!BlueprintSamples.empty() && c.BpEndTokenHits == 0)
+			{
+				c.Score -= 500;
+				AddReason(c.Reason, -500, "no Blueprint script endings (hard confidence gate)", 1);
+			}
+
+			if (!BlueprintSamples.empty() && c.BpHeaderValid == 0)
+			{
+				c.Score -= 180;
+				AddReason(c.Reason, -180, "no readable Blueprint headers", 1);
+			}
+
+			const int32 bpCheckedSafe = std::max<int32>(1, c.BpTotal);
+			const int32 bpValidRate = (c.BpHeaderValid * 100) / bpCheckedSafe;
+			if (bpValidRate < 25)
+			{
+				c.Score -= 80;
+				AddReason(c.Reason, -80, "Blueprint header valid-rate too low%", bpValidRate);
+			}
+		}
+
+		{
+			const size_t totalFuncs = GeneralFuncs.size();
+			const size_t targetProbes = 1024;
+			const size_t stride = std::max<size_t>(1, totalFuncs / targetProbes);
+
+			for (size_t idx = 0; idx < totalFuncs; idx += stride)
+			{
+				const uintptr_t funcAddr = GeneralFuncs[idx];
+				int32 numOnly = 0;
+				if (!TryReadNumOnly(funcAddr, offset, numOnly))
+					continue;
+
+				c.GenericProbed++;
+				if (numOnly == 0)
+				{
+					c.GenericZeroHits++;
+					continue;
+				}
+
+				uintptr_t data = 0;
+				int32 num = 0;
+				int32 max = 0;
+				if (!TryReadArrayHeader(funcAddr, offset, data, num, max))
+				{
+					c.GenericNoisyHits++;
+					continue;
+				}
+
+				const uintptr_t tail = data + static_cast<uintptr_t>(num - 1);
+				uint8 last = 0;
+				if (tail < data || !TryReadU8Safe(tail, last))
+				{
+					c.GenericNoisyHits++;
+					continue;
+				}
+
+				if (last == ScriptEndToken)
+					c.GenericScriptHits++;
+				else
+					c.GenericNoisyHits++;
+			}
+		}
+
+		{
+			const int32 genericProbeSafe = std::max<int32>(1, c.GenericProbed);
+			const int32 genericZeroPct = (c.GenericZeroHits * 100) / genericProbeSafe;
+			const int32 genericNoisyPct = (c.GenericNoisyHits * 100) / genericProbeSafe;
+			const int32 genericScriptPct = (c.GenericScriptHits * 100) / genericProbeSafe;
+
+			const int32 deltaGenericScript = (std::min)(160, c.GenericScriptHits * 6 + genericScriptPct * 2);
+			c.Score += deltaGenericScript;
+			AddReason(c.Reason, deltaGenericScript, "generic script-likeness", c.GenericScriptHits);
+
+			const int32 deltaGenericZero = (std::min)(10, genericZeroPct / 10);
+			c.Score += deltaGenericZero;
+			AddReason(c.Reason, deltaGenericZero, "generic native-zero ratio%", genericZeroPct);
+
+			const int32 deltaGenericNoisy = -(std::min)(80, genericNoisyPct);
+			c.Score += deltaGenericNoisy;
+			AddReason(c.Reason, deltaGenericNoisy, "generic noisy ratio%", genericNoisyPct);
+
+			if (c.GenericScriptHits == 0)
+			{
+				c.Score -= 20;
+				AddReason(c.Reason, -20, "no generic script hits", 1);
+			}
+		}
+
+		for (const uintptr_t nativeAddr : NativeFuncs)
+		{
+			int32 nativeNum = 0;
+			if (!TryReadNumOnly(nativeAddr, offset, nativeNum))
+				continue;
+
+			c.NativeReadable++;
+			if (nativeNum == 0)
+			{
+				c.NativeZeroNum++;
+			}
+			else if (nativeNum > 0 && nativeNum < 0x200000)
+			{
+				c.NativeNonZeroNum++;
+
+				uintptr_t data = 0;
+				int32 num = 0;
+				int32 max = 0;
+				if (TryReadArrayHeader(nativeAddr, offset, data, num, max))
+				{
+					const uintptr_t tail = data + static_cast<uintptr_t>(num - 1);
+					uint8 last = 0;
+					if (tail >= data && TryReadU8Safe(tail, last) && last == ScriptEndToken)
+						c.NativeLooksLikeScript++;
+				}
+			}
+		}
+
+		{
+			const int32 deltaNativeZero = c.NativeZeroNum * 3;
+			c.Score += deltaNativeZero;
+			AddReason(c.Reason, deltaNativeZero, "native Num==0", c.NativeZeroNum);
+
+			const int32 deltaNativeNonZero = -(c.NativeNonZeroNum * 5);
+			c.Score += deltaNativeNonZero;
+			AddReason(c.Reason, deltaNativeNonZero, "native Num unexpectedly non-zero", c.NativeNonZeroNum);
+
+			const int32 deltaNativeLooksScript = -(c.NativeLooksLikeScript * 10);
+			c.Score += deltaNativeLooksScript;
+			AddReason(c.Reason, deltaNativeLooksScript, "native functions looked like script arrays", c.NativeLooksLikeScript);
+
+			if (c.NativeReadable > 0 && c.NativeZeroNum == 0)
+			{
+				c.Score -= 35;
+				AddReason(c.Reason, -35, "none of readable native samples had Num==0", 1);
+			}
+		}
+
+		std::cerr << "[UExplorer]   candidate 0x" << std::hex << offset << std::dec
+			<< " score=" << c.Score
+			<< " | BP(end=" << c.BpEndTokenHits
+			<< ", wEnd=" << c.BpWeightedEndTokenHits
+			<< ", valid=" << c.BpHeaderValid
+			<< ", invalid=" << c.BpHeaderInvalid
+			<< ", tailMismatch=" << c.BpTailMismatch
+			<< ", stable=" << c.BpStableReread
+			<< ") Native(zero=" << c.NativeZeroNum << "/" << c.NativeReadable
+			<< ", nonZero=" << c.NativeNonZeroNum
+			<< ", scriptLike=" << c.NativeLooksLikeScript
+			<< ") Generic(script=" << c.GenericScriptHits
+			<< ", zero=" << c.GenericZeroHits
+			<< ", noisy=" << c.GenericNoisyHits
+			<< ", probed=" << c.GenericProbed
+			<< ") | reason: " << c.Reason << std::endl;
+
+		const bool cHasBpEvidence = c.HasBpEvidence();
+		const bool better = (cHasBpEvidence && !bestHasBpEvidence)
+			|| (cHasBpEvidence == bestHasBpEvidence && c.Score > bestScore)
+			|| (cHasBpEvidence == bestHasBpEvidence && c.Score == bestScore && c.BpWeightedEndTokenHits > bestBpWeightedEndTokenHits)
+			|| (cHasBpEvidence == bestHasBpEvidence && c.Score == bestScore && c.BpWeightedEndTokenHits == bestBpWeightedEndTokenHits && c.BpEndTokenHits > bestBpEndTokenHits)
+			|| (cHasBpEvidence == bestHasBpEvidence && c.Score == bestScore && c.BpWeightedEndTokenHits == bestBpWeightedEndTokenHits && c.BpEndTokenHits == bestBpEndTokenHits && c.GenericScriptHits > bestGenericScriptHits)
+			|| (cHasBpEvidence == bestHasBpEvidence && c.Score == bestScore && c.BpWeightedEndTokenHits == bestBpWeightedEndTokenHits && c.BpEndTokenHits == bestBpEndTokenHits && c.GenericScriptHits == bestGenericScriptHits
+				&& (bestOffset == OffsetNotFound || offset < bestOffset));
+
+		if (better)
+		{
+			bestScore = c.Score;
+			bestOffset = offset;
+			bestBpEndTokenHits = c.BpEndTokenHits;
+			bestBpWeightedEndTokenHits = c.BpWeightedEndTokenHits;
+			bestGenericScriptHits = c.GenericScriptHits;
+			bestHasBpEvidence = cHasBpEvidence;
+		}
+
+		candidates.emplace_back(std::move(c));
 	}
 
-	// Fallback: if cross-validation rejected all candidates but we found a valid TArray, use it
-	if (BestCandidate != OffsetNotFound)
+	if (bestOffset != OffsetNotFound)
 	{
-		std::cerr << "[UExplorer] Script offset: cross-validation failed, using best candidate 0x"
-			<< std::hex << BestCandidate << std::dec << std::endl;
-		return BestCandidate;
+		std::vector<CandidateScore> sorted = candidates;
+		std::sort(sorted.begin(), sorted.end(), [](const CandidateScore& a, const CandidateScore& b)
+		{
+			if (a.Score != b.Score) return a.Score > b.Score;
+			if (a.BpEndTokenHits != b.BpEndTokenHits) return a.BpEndTokenHits > b.BpEndTokenHits;
+			if (a.GenericScriptHits != b.GenericScriptHits) return a.GenericScriptHits > b.GenericScriptHits;
+			return a.Offset < b.Offset;
+		});
+
+		std::cerr << "[UExplorer] Script offset ranking (top 8):" << std::endl;
+		for (size_t i = 0; i < std::min<size_t>(8, sorted.size()); i++)
+		{
+			const CandidateScore& c = sorted[i];
+			std::cerr << "  #" << (i + 1)
+				<< " off=0x" << std::hex << c.Offset << std::dec
+				<< " score=" << c.Score
+				<< " bpEnd=" << c.BpEndTokenHits
+				<< " wBpEnd=" << c.BpWeightedEndTokenHits
+				<< " nativeZero=" << c.NativeZeroNum << "/" << c.NativeReadable
+				<< " genericScript=" << c.GenericScriptHits
+				<< " reason={" << c.Reason << "}" << std::endl;
+		}
+
+		struct VerificationResult
+		{
+			int32 Probed = 0;
+			int32 HeaderValid = 0;
+			int32 HeaderInvalid = 0;
+			int32 EndHits = 0;
+			int32 FirstOpcodeValid = 0;
+			int32 SizeSane = 0;
+		};
+
+		auto RunVerification = [&](int32 offsetToVerify, size_t maxSamples) -> VerificationResult
+		{
+			VerificationResult vr;
+			if (offsetToVerify == OffsetNotFound)
+				return vr;
+
+			const size_t limit = (std::min)(maxSamples, VerificationPool.size());
+			for (size_t i = 0; i < limit; i++)
+			{
+				const uintptr_t addr = VerificationPool[i];
+				uintptr_t data = 0;
+				int32 num = 0;
+				int32 max = 0;
+
+				vr.Probed++;
+				if (!TryReadArrayHeader(addr, offsetToVerify, data, num, max))
+				{
+					vr.HeaderInvalid++;
+					continue;
+				}
+
+				vr.HeaderValid++;
+
+				const uintptr_t tail = data + static_cast<uintptr_t>(num - 1);
+				if (tail < data)
+					continue;
+
+				uint8 first = 0;
+				uint8 last = 0;
+				if (!TryReadU8Safe(data, first) || !TryReadU8Safe(tail, last))
+					continue;
+
+				if (last == ScriptEndToken)
+				{
+					vr.EndHits++;
+					if (first <= 0x6D) vr.FirstOpcodeValid++;
+					if (num <= 0x8000) vr.SizeSane++;
+				}
+			}
+
+			return vr;
+		};
+
+		int32 selectedOffset = sorted.front().Offset;
+		const int32 scoreGapTop2 = sorted.size() >= 2 ? (sorted[0].Score - sorted[1].Score) : INT32_MAX;
+
+		VerificationResult bestVerification = RunVerification(sorted[0].Offset, 120);
+		VerificationResult secondVerification{};
+		bool bHasSecondVerification = false;
+
+		if (sorted.size() >= 2 && (scoreGapTop2 < 180 || bestVerification.EndHits < 8))
+		{
+			secondVerification = RunVerification(sorted[1].Offset, 120);
+			bHasSecondVerification = true;
+
+			const bool bSecondClearlyBetter = (secondVerification.EndHits >= (bestVerification.EndHits + 4))
+				&& (secondVerification.HeaderValid >= (bestVerification.HeaderValid - 2));
+
+			if (bSecondClearlyBetter)
+			{
+				selectedOffset = sorted[1].Offset;
+				bestVerification = secondVerification;
+			}
+		}
+
+		std::cerr << "[UExplorer] Script offset verify: selected=0x" << std::hex << selectedOffset << std::dec
+			<< " probed=" << bestVerification.Probed
+			<< " headerValid=" << bestVerification.HeaderValid
+			<< " endHits=" << bestVerification.EndHits
+			<< " firstOpcodeValid=" << bestVerification.FirstOpcodeValid
+			<< " sizeSane=" << bestVerification.SizeSane
+			<< " scoreGapTop2=" << scoreGapTop2
+			<< std::endl;
+
+		if (bHasSecondVerification)
+		{
+			std::cerr << "[UExplorer] Script offset verify(second): off=0x" << std::hex << sorted[1].Offset << std::dec
+				<< " probed=" << secondVerification.Probed
+				<< " headerValid=" << secondVerification.HeaderValid
+				<< " endHits=" << secondVerification.EndHits
+				<< " firstOpcodeValid=" << secondVerification.FirstOpcodeValid
+				<< " sizeSane=" << secondVerification.SizeSane
+				<< std::endl;
+		}
+
+		const int32 verifySafe = std::max<int32>(1, bestVerification.HeaderValid);
+		const int32 verifyEndRate = (bestVerification.EndHits * 100) / verifySafe;
+		const int32 verifyOpcodeRate = (bestVerification.FirstOpcodeValid * 100) / std::max<int32>(1, bestVerification.EndHits);
+
+		std::string confidence = "low";
+		if (verifyEndRate >= 55 && scoreGapTop2 >= 180)
+			confidence = "high";
+		else if (verifyEndRate >= 20)
+			confidence = "medium";
+
+		std::vector<std::string> anomalyTags;
+		if (!sorted.front().HasBpEvidence()) anomalyTags.emplace_back("no_bp_end_evidence");
+		if (scoreGapTop2 < 120) anomalyTags.emplace_back("narrow_margin");
+		if (bestVerification.HeaderValid == 0) anomalyTags.emplace_back("header_read_fail");
+		if (verifyEndRate < 10) anomalyTags.emplace_back("possible_custom_layout_or_encrypted_script");
+		if (confidence == "low") anomalyTags.emplace_back("low_confidence");
+
+		std::cerr << "[UExplorer] Script offset confidence: " << confidence
+			<< " verifyEndRate=" << verifyEndRate << "%"
+			<< " verifyOpcodeRate=" << verifyOpcodeRate << "%"
+			<< std::endl;
+
+		if (!anomalyTags.empty())
+		{
+			std::cerr << "[UExplorer] Script offset anomaly tags: ";
+			for (size_t i = 0; i < anomalyTags.size(); i++)
+			{
+				if (i > 0) std::cerr << ',';
+				std::cerr << anomalyTags[i];
+			}
+			std::cerr << std::endl;
+		}
+
+		if (runtimeCacheKey != 0 && confidence != "low")
+		{
+			sRuntimeCache[runtimeCacheKey] = selectedOffset;
+		}
+
+		const CandidateScore* selectedCandidate = nullptr;
+		for (const CandidateScore& c : sorted)
+		{
+			if (c.Offset == selectedOffset)
+			{
+				selectedCandidate = &c;
+				break;
+			}
+		}
+
+		if (!selectedCandidate)
+			selectedCandidate = &sorted.front();
+
+		std::cerr << "[UExplorer] Script offset selected: 0x" << std::hex << selectedOffset
+			<< std::dec << " score=" << selectedCandidate->Score
+			<< " bpEndHits=" << selectedCandidate->BpEndTokenHits
+			<< " weightedBpEndHits=" << selectedCandidate->BpWeightedEndTokenHits
+			<< " genericScriptHits=" << selectedCandidate->GenericScriptHits << std::endl;
+		return selectedOffset;
 	}
 
 	std::cerr << "Dumper-7 WARNING: Could not find UFunction::Script offset." << std::endl;

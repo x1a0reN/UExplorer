@@ -53,7 +53,7 @@ inline std::unordered_map<std::string, std::string> ParseQuery(const std::string
 	return params;
 }
 
-// Extract path segment by index: "/api/v1/classes/Foo" → GetPathSegment(path, 3) = "Foo"
+// Extract path segment by index: "/api/v1/classes/Foo" -> GetPathSegment(path, 3) = "Foo"
 inline std::string GetPathSegment(const std::string& path, int index)
 {
 	int cur = 0;

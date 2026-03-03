@@ -1,8 +1,41 @@
 #include <format>
+#include <cstring>
+#include <type_traits>
 
 #include "Unreal/UnrealObjects.h"
 #include "Unreal/ObjectArray.h"
 #include "OffsetFinder/Offsets.h"
+#include "Platform.h"
+
+namespace
+{
+	static bool SafeCopyMemory(void* dst, const void* src, size_t size)
+	{
+		if (!dst || !src || size == 0)
+			return false;
+
+		__try
+		{
+			std::memcpy(dst, src, size);
+			return true;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return false;
+		}
+	}
+
+	template <typename T>
+	static bool SafeReadValue(const void* src, T& out)
+	{
+		static_assert(std::is_trivially_copyable_v<T>, "SafeReadValue only supports POD types");
+
+		if (!src || Platform::IsBadReadPtr(src))
+			return false;
+
+		return SafeCopyMemory(&out, src, sizeof(T));
+	}
+}
 
 
 void* UEFFieldClass::GetAddress()
@@ -792,7 +825,14 @@ UEFunction UEClass::GetFunction(const std::string& ClassName, const std::string&
 
 EFunctionFlags UEFunction::GetFunctionFlags() const
 {
-	return *reinterpret_cast<EFunctionFlags*>(Object + Off::UFunction::FunctionFlags);
+	if (!Object || Off::UFunction::FunctionFlags <= 0)
+		return EFunctionFlags::None;
+
+	EFunctionFlags Flags = EFunctionFlags::None;
+	if (!SafeReadValue(reinterpret_cast<const void*>(Object + Off::UFunction::FunctionFlags), Flags))
+		return EFunctionFlags::None;
+
+	return Flags;
 }
 
 bool UEFunction::HasFlags(EFunctionFlags FuncFlags) const
@@ -802,15 +842,42 @@ bool UEFunction::HasFlags(EFunctionFlags FuncFlags) const
 
 void* UEFunction::GetExecFunction() const
 {
-	return *reinterpret_cast<void**>(Object + Off::UFunction::ExecFunction);
+	if (!Object || Off::UFunction::ExecFunction <= 0)
+		return nullptr;
+
+	void* ExecFunc = nullptr;
+	if (!SafeReadValue(reinterpret_cast<const void*>(Object + Off::UFunction::ExecFunction), ExecFunc))
+		return nullptr;
+
+	return ExecFunc;
 }
 
 int32 UEFunction::GetScriptSize() const
 {
-	if (Off::UFunction::Script <= 0)
+	if (!Object || Off::UFunction::Script <= 0)
 		return 0;
 
-	return *reinterpret_cast<int32*>(Object + Off::UFunction::Script + sizeof(void*));
+	const uintptr_t Base = reinterpret_cast<uintptr_t>(Object) + static_cast<uintptr_t>(Off::UFunction::Script);
+
+	const uint8_t* DataPtr = nullptr;
+	int32 Num = 0;
+	int32 Max = 0;
+
+	if (!SafeReadValue(reinterpret_cast<const void*>(Base), DataPtr))
+		return 0;
+	if (!SafeReadValue(reinterpret_cast<const void*>(Base + sizeof(void*)), Num))
+		return 0;
+	if (!SafeReadValue(reinterpret_cast<const void*>(Base + sizeof(void*) + sizeof(int32)), Max))
+		return 0;
+
+	if (!DataPtr || Num <= 0 || Num > 1024 * 1024)
+		return 0;
+	if (Max < Num || Max > 4 * 1024 * 1024)
+		return 0;
+	if (Platform::IsBadReadPtr(DataPtr))
+		return 0;
+
+	return Num;
 }
 
 bool UEFunction::HasScript() const
@@ -820,16 +887,34 @@ bool UEFunction::HasScript() const
 
 std::vector<uint8_t> UEFunction::GetScript() const
 {
-	if (Off::UFunction::Script <= 0)
+	if (!Object || Off::UFunction::Script <= 0)
 		return {};
 
-	const uint8_t* DataPtr = *reinterpret_cast<uint8_t* const*>(Object + Off::UFunction::Script);
-	const int32 Num = *reinterpret_cast<int32*>(Object + Off::UFunction::Script + sizeof(void*));
+	const uintptr_t Base = reinterpret_cast<uintptr_t>(Object) + static_cast<uintptr_t>(Off::UFunction::Script);
 
-	if (!DataPtr || Num <= 0)
+	const uint8_t* DataPtr = nullptr;
+	int32 Num = 0;
+	int32 Max = 0;
+
+	if (!SafeReadValue(reinterpret_cast<const void*>(Base), DataPtr))
+		return {};
+	if (!SafeReadValue(reinterpret_cast<const void*>(Base + sizeof(void*)), Num))
+		return {};
+	if (!SafeReadValue(reinterpret_cast<const void*>(Base + sizeof(void*) + sizeof(int32)), Max))
 		return {};
 
-	return std::vector<uint8_t>(DataPtr, DataPtr + Num);
+	if (!DataPtr || Num <= 0 || Num > 1024 * 1024)
+		return {};
+	if (Max < Num || Max > 4 * 1024 * 1024)
+		return {};
+	if (Platform::IsBadReadPtr(DataPtr))
+		return {};
+
+	std::vector<uint8_t> Out(static_cast<size_t>(Num));
+	if (!SafeCopyMemory(Out.data(), DataPtr, static_cast<size_t>(Num)))
+		return {};
+
+	return Out;
 }
 
 UEProperty UEFunction::GetReturnProperty() const

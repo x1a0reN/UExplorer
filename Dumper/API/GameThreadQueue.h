@@ -28,7 +28,7 @@ inline bool g_Enabled = false;
 inline void (*g_OrigProcessEvent)(void*, void*, void*) = nullptr;
 inline std::atomic<bool> g_Processing{false};  // reentrancy guard
 
-// Called from game thread (inside HookedProcessEvent) — non-blocking
+// Called from game thread (inside HookedProcessEvent) - non-blocking
 inline void ProcessQueue()
 {
 	if (!g_Enabled || !g_OrigProcessEvent) return;
@@ -56,7 +56,7 @@ inline void ProcessQueue()
 	}
 }
 
-// Called from HTTP thread — blocks until game thread executes (or timeout)
+// Called from HTTP thread - blocks until game thread executes (or timeout)
 inline bool Submit(void* obj, void* func, void* params, int timeoutMs = 5000)
 {
 	if (!g_Enabled || !g_OrigProcessEvent) return false;
