@@ -4,9 +4,11 @@
 #include "ApiCommon.h"
 
 #include "Unreal/ObjectArray.h"
+#include "Unreal/NameArray.h"
 #include "Unreal/UnrealObjects.h"
 #include "Unreal/UnrealContainers.h"
 #include "OffsetFinder/Offsets.h"
+#include "Platform.h"
 #include "Settings.h"
 
 #include <cmath>
@@ -50,14 +52,179 @@ static bool TryFindProperty(const UEClass& cls, const std::string& propName, UEP
 	return false;
 }
 
+static bool TryReadPtrField(const void* base, int32 offset, void*& outPtr)
+{
+	outPtr = nullptr;
+	if (!base || offset < 0)
+		return false;
+
+	const uint8* addr = reinterpret_cast<const uint8*>(base) + offset;
+	if (Platform::IsBadReadPtr(addr))
+		return false;
+
+	__try
+	{
+		outPtr = *reinterpret_cast<void* const*>(addr);
+		return true;
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		outPtr = nullptr;
+		return false;
+	}
+}
+
+static bool TryReadInt32Field(const void* base, int32 offset, int32& outValue)
+{
+	outValue = 0;
+	if (!base || offset < 0)
+		return false;
+
+	const uint8* addr = reinterpret_cast<const uint8*>(base) + offset;
+	if (Platform::IsBadReadPtr(addr))
+		return false;
+
+	__try
+	{
+		outValue = *reinterpret_cast<const int32*>(addr);
+		return true;
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		outValue = 0;
+		return false;
+	}
+}
+
+static bool IsReadableObjectAddress(const void* objAddr)
+{
+	return objAddr
+		&& !Platform::IsBadReadPtr(objAddr)
+		&& Platform::IsAddressInProcessRange(objAddr);
+}
+
+static bool TryReadObjectNameByAddress(const void* objAddr, std::string& outName)
+{
+	outName.clear();
+	if (!IsReadableObjectAddress(objAddr) || Off::UObject::Name < 0)
+		return false;
+
+	const uint8* fnameAddr = reinterpret_cast<const uint8*>(objAddr) + Off::UObject::Name;
+	if (Platform::IsBadReadPtr(fnameAddr))
+		return false;
+
+	int32 compIdx = -1;
+	if (!TryReadInt32Field(fnameAddr, Off::FName::CompIdx, compIdx))
+		return false;
+	if (compIdx < 0)
+		return false;
+
+	std::string name = NameArray::GetNameEntry(compIdx).GetString();
+	if (name.empty() && compIdx != 0)
+		return false;
+
+	int32 rawNum = 0;
+	if (TryReadInt32Field(fnameAddr, Off::FName::Number, rawNum))
+	{
+		const uint32 number = static_cast<uint32>(rawNum);
+		if (!Settings::Internal::bUseOutlineNumberName && number > 0)
+			name += "_" + std::to_string(number - 1);
+	}
+
+	outName = std::move(name);
+	return true;
+}
+
+static bool TryReadObjectClassAddress(const void* objAddr, void*& outClassAddr)
+{
+	outClassAddr = nullptr;
+	if (!IsReadableObjectAddress(objAddr) || Off::UObject::Class < 0)
+		return false;
+
+	if (!TryReadPtrField(objAddr, Off::UObject::Class, outClassAddr))
+		return false;
+
+	return IsReadableObjectAddress(outClassAddr);
+}
+
+static std::string GetSafeClassNameByAddress(const void* objAddr)
+{
+	void* classAddr = nullptr;
+	if (!TryReadObjectClassAddress(objAddr, classAddr))
+		return "Unknown";
+
+	std::string className;
+	if (!TryReadObjectNameByAddress(classAddr, className) || className.empty())
+		return "Unknown";
+	return className;
+}
+
+static std::string BuildSafeFullNameByAddress(const void* objAddr, const std::string& className, const std::string& objName)
+{
+	if (objName.empty())
+		return className.empty() ? std::string("Unknown") : className;
+
+	std::vector<std::string> pathParts;
+	pathParts.push_back(objName);
+
+	const void* cursor = objAddr;
+	for (int i = 0; i < 32; i++)
+	{
+		if (!cursor || Off::UObject::Outer < 0)
+			break;
+
+		void* outerAddr = nullptr;
+		if (!TryReadPtrField(cursor, Off::UObject::Outer, outerAddr))
+			break;
+		if (!outerAddr || outerAddr == cursor || !IsReadableObjectAddress(outerAddr))
+			break;
+
+		std::string outerName;
+		if (!TryReadObjectNameByAddress(outerAddr, outerName) || outerName.empty())
+			break;
+
+		pathParts.push_back(std::move(outerName));
+		cursor = outerAddr;
+	}
+
+	std::string path;
+	for (auto it = pathParts.rbegin(); it != pathParts.rend(); ++it)
+	{
+		if (!path.empty())
+			path += ".";
+		path += *it;
+	}
+
+	if (!className.empty() && className != "Unknown")
+		return className + " " + path;
+	return path;
+}
+
 static json MakeObjectBrief(UEObject obj)
 {
 	json out;
-	out["index"] = obj.GetIndex();
-	out["name"] = obj.GetName();
-	out["full_name"] = obj.GetFullName();
-	out["class"] = obj.GetClass() ? obj.GetClass().GetName() : "Unknown";
-	out["address"] = std::format("0x{:X}", reinterpret_cast<uintptr_t>(obj.GetAddress()));
+	const void* objAddr = obj ? obj.GetAddress() : nullptr;
+	const uintptr_t addr = reinterpret_cast<uintptr_t>(objAddr);
+	out["address"] = std::format("0x{:X}", addr);
+
+	int32 index = -1;
+	if (IsReadableObjectAddress(objAddr))
+	{
+		int32 tmp = 0;
+		if (TryReadInt32Field(objAddr, Off::UObject::Index, tmp))
+			index = tmp;
+	}
+	out["index"] = index;
+
+	std::string name;
+	if (!TryReadObjectNameByAddress(objAddr, name) || name.empty())
+		name = "<invalid>";
+	out["name"] = name;
+
+	const std::string className = GetSafeClassNameByAddress(objAddr);
+	out["class"] = className;
+	out["full_name"] = BuildSafeFullNameByAddress(objAddr, className, name == "<invalid>" ? std::string() : name);
+
 	return out;
 }
 
@@ -285,9 +452,10 @@ void RegisterWorldRoutes(HttpServer& server)
 
 			UEObject worldObj(world);
 			json data;
-			data["name"] = worldObj ? worldObj.GetName() : "Unknown";
-			data["address"] = std::format("0x{:X}", reinterpret_cast<uintptr_t>(world));
-			data["index"] = worldObj ? worldObj.GetIndex() : -1;
+			json worldBrief = MakeObjectBrief(worldObj);
+			data["name"] = worldBrief["name"];
+			data["address"] = worldBrief["address"];
+			data["index"] = worldBrief["index"];
 
 			int actorCount = 0;
 			int32 total = ObjectArray::Num();
@@ -370,10 +538,17 @@ void RegisterWorldRoutes(HttpServer& server)
 						UEObject lv(ptr);
 						if (!lv) continue;
 
-						std::string clsName = lv.GetClass() ? lv.GetClass().GetName() : "";
+						std::string clsName = GetSafeClassNameByAddress(lv.GetAddress());
 						if (clsName.find("LevelStreaming") != std::string::npos)
 						{
-							UEClass streamingCls = lv.GetClass();
+							void* streamingClassAddr = nullptr;
+							if (!TryReadObjectClassAddress(lv.GetAddress(), streamingClassAddr))
+							{
+								addLevel(lv, propName);
+								continue;
+							}
+
+							UEClass streamingCls(streamingClassAddr);
 							if (!streamingCls) continue;
 							UEProperty loadedLevelProp;
 							if (!TryFindProperty(streamingCls, "LoadedLevel", loadedLevelProp)) continue;
@@ -427,21 +602,15 @@ void RegisterWorldRoutes(HttpServer& server)
 				if (!obj) continue;
 				if (!obj.IsA(EClassCastFlags::Actor)) continue;
 
+				const void* objAddr = obj.GetAddress();
 				std::string name;
-				try { name = obj.GetName(); }
-				catch (...) { continue; }
+				if (!TryReadObjectNameByAddress(objAddr, name) || name.empty())
+					continue;
 
 				if (!filter.empty() && name.find(filter) == std::string::npos)
 					continue;
 
-				std::string className;
-				try {
-					UEObject cls = obj.GetClass();
-					className = cls ? cls.GetName() : "Unknown";
-				}
-				catch (...) {
-					className = "Unknown";
-				}
+				std::string className = GetSafeClassNameByAddress(objAddr);
 
 				if (!classFilter.empty() && className.find(classFilter) == std::string::npos)
 					continue;

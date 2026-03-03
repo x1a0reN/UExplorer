@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import api from '../api';
+import { t } from '../i18n';
 
 interface ProcessInfo {
   pid: number;
@@ -11,6 +12,67 @@ interface ProcessSelectorProps {
   isOpen: boolean;
   onClose: () => void;
   onInjectSuccess: (pid: number) => void;
+}
+
+function isUEProcessCandidate(proc: ProcessInfo): boolean {
+  const name = proc.name.toLowerCase();
+  const path = (proc.path || '').toLowerCase();
+
+  const denyByName = [
+    'steam',
+    'epic',
+    'launcher',
+    'updater',
+    'helper',
+    'service',
+    'renderer',
+    'crashreporter',
+    'uexplorer',
+    'app.exe',
+  ];
+  const denyByPath = [
+    '\\windows\\system32\\',
+    '\\windows\\syswow64\\',
+    '\\microsoft\\edge\\',
+    '\\google\\chrome\\',
+    '\\mozilla firefox\\',
+  ];
+  if (denyByName.some((k) => name.includes(k))) {
+    return false;
+  }
+  if (denyByPath.some((k) => path.includes(k))) {
+    return false;
+  }
+
+  if (
+    name.includes('ue4editor') ||
+    name.includes('ue5editor') ||
+    name.includes('unrealeditor') ||
+    name.includes('ue4') ||
+    name.includes('ue5') ||
+    name.includes('unreal') ||
+    name.includes('-win64-shipping') ||
+    name.includes('-win64-development') ||
+    name.includes('-win64-test')
+  ) {
+    return true;
+  }
+
+  let score = 0;
+  const pathHints = [
+    '\\engine\\binaries\\',
+    '\\binaries\\win64\\',
+    '\\windowsnoeditor\\',
+    '\\saved\\stagedbuilds\\',
+    '\\unrealengine\\',
+  ];
+  pathHints.forEach((hint) => {
+    if (path.includes(hint)) score += 1;
+  });
+  if (name.includes('-win64-')) score += 1;
+  if (name.endsWith('.exe')) score += 1;
+
+  return score >= 2;
 }
 
 export default function ProcessSelector({ isOpen, onClose, onInjectSuccess }: ProcessSelectorProps) {
@@ -34,9 +96,13 @@ export default function ProcessSelector({ isOpen, onClose, onInjectSuccess }: Pr
     setError(null);
     try {
       const procs = await api.scanUEProcesses();
-      setProcesses(procs);
+      const filtered = procs.filter(isUEProcessCandidate);
+      setProcesses(filtered);
+      if (selectedProcess && !filtered.some((p) => p.pid === selectedProcess.pid)) {
+        setSelectedProcess(null);
+      }
     } catch (err) {
-      setError('Failed to scan processes');
+      setError(t('Failed to scan processes'));
       console.error(err);
     } finally {
       setLoading(false);
@@ -62,7 +128,7 @@ export default function ProcessSelector({ isOpen, onClose, onInjectSuccess }: Pr
         }, 1500);
       }
     } catch (err) {
-      setError('Injection failed');
+      setError(t('Injection failed'));
       console.error(err);
     } finally {
       setInjecting(false);
@@ -78,7 +144,7 @@ export default function ProcessSelector({ isOpen, onClose, onInjectSuccess }: Pr
         <div className="flex items-center justify-between px-6 py-4 border-b border-white/5">
           <div className="flex items-center gap-3">
             <span className="material-symbols-outlined text-primary text-[24px]">extension</span>
-            <h2 className="text-white font-semibold text-lg">Inject DLL</h2>
+            <h2 className="text-white font-semibold text-lg">{t('Inject DLL')}</h2>
           </div>
           <button
             onClick={onClose}
@@ -93,7 +159,7 @@ export default function ProcessSelector({ isOpen, onClose, onInjectSuccess }: Pr
           {/* DLL Path */}
           <div className="mb-4">
             <label className="text-white/60 text-xs uppercase font-semibold tracking-wider mb-2 block">
-              DLL Path
+              {t('DLL Path')}
             </label>
             <input
               type="text"
@@ -107,7 +173,7 @@ export default function ProcessSelector({ isOpen, onClose, onInjectSuccess }: Pr
           <div className="mb-4">
             <div className="flex items-center justify-between mb-2">
               <label className="text-white/60 text-xs uppercase font-semibold tracking-wider">
-                Select Process
+                {t('Select Process')}
               </label>
               <button
                 onClick={loadProcesses}
@@ -115,7 +181,7 @@ export default function ProcessSelector({ isOpen, onClose, onInjectSuccess }: Pr
                 disabled={loading}
               >
                 <span className="material-symbols-outlined text-[14px]">refresh</span>
-                Refresh
+                {t('Refresh')}
               </button>
             </div>
 
@@ -125,7 +191,7 @@ export default function ProcessSelector({ isOpen, onClose, onInjectSuccess }: Pr
               </div>
             ) : processes.length === 0 ? (
               <div className="text-white/40 text-center py-8 text-sm">
-                No Unreal Engine processes found
+                {t('No Unreal Engine processes found')}
               </div>
             ) : (
               <div className="max-h-[200px] overflow-auto border border-white/5 rounded-lg">
@@ -179,7 +245,7 @@ export default function ProcessSelector({ isOpen, onClose, onInjectSuccess }: Pr
             onClick={onClose}
             className="px-4 py-2 rounded-lg text-white/60 hover:text-white hover:bg-white/5 transition-colors text-sm"
           >
-            Cancel
+            {t('Cancel')}
           </button>
           <button
             onClick={handleInject}
@@ -193,10 +259,10 @@ export default function ProcessSelector({ isOpen, onClose, onInjectSuccess }: Pr
             {injecting ? (
               <span className="flex items-center gap-2">
                 <div className="w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin"></div>
-                Injecting...
+                {t('Injecting...')}
               </span>
             ) : (
-              'Inject DLL'
+              t('Inject DLL')
             )}
           </button>
         </div>

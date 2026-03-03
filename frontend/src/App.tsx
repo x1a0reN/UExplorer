@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { t } from './i18n';
 import {
   Box,
   TerminalSquare,
@@ -23,16 +24,16 @@ function App() {
   const [functionsViewMode, setFunctionsViewMode] = useState<'function' | 'hookManager'>('function');
 
   const sidebarNavItems = [
-    { key: 'dashboard', id: 'dashboard' as Page, label: 'Dashboard', icon: LayoutGrid },
-    { key: 'objects', id: 'objects' as Page, label: 'Object Browser', icon: Box },
-    { key: 'functions', id: 'functions' as Page, label: 'Functions', icon: TerminalSquare, mode: 'function' as const },
-    { key: 'hooks', id: 'functions' as Page, label: 'Hook Manager', icon: Power, mode: 'hookManager' as const },
-    { key: 'memory', id: 'memory' as Page, label: 'Memory', icon: MemoryStick },
+    { key: 'dashboard', id: 'dashboard' as Page, label: t('Overview'), icon: LayoutGrid },
+    { key: 'objects', id: 'objects' as Page, label: t('Object Browser'), icon: Box },
+    { key: 'functions', id: 'functions' as Page, label: t('Functions'), icon: TerminalSquare, mode: 'function' as const },
+    { key: 'hooks', id: 'functions' as Page, label: t('Hook Manager'), icon: Power, mode: 'hookManager' as const },
+    { key: 'memory', id: 'memory' as Page, label: t('Memory Tool'), icon: MemoryStick },
   ];
 
   const exportItems = [
-    { key: 'sdkdump', id: 'sdkdump' as Page, label: 'Export Center', icon: Download },
-    { key: 'settings', id: 'settings' as Page, label: 'Settings', icon: Settings },
+    { key: 'sdkdump', id: 'sdkdump' as Page, label: t('Export Center'), icon: Download },
+    { key: 'settings', id: 'settings' as Page, label: t('Settings'), icon: Settings },
   ];
 
   const renderPage = () => {
@@ -152,8 +153,8 @@ function App() {
             {/* View Title */}
             <span className="text-[14px] font-semibold tracking-tight text-white/90">
               {currentPage === 'functions'
-                ? (functionsViewMode === 'hookManager' ? 'Hook Manager' : 'Functions')
-                : ([...sidebarNavItems, ...exportItems].find(i => i.id === currentPage)?.label || 'Dashboard')}
+                ? (functionsViewMode === 'hookManager' ? t('Hook Manager') : t('Functions'))
+                : ([...sidebarNavItems, ...exportItems].find(i => i.id === currentPage)?.label || t('Overview'))}
             </span>
           </div>
 
@@ -164,7 +165,7 @@ function App() {
             </div>
             <input
               className="bg-white/5 border border-white/10 focus:border-white/20 focus:bg-white/10 text-white text-[13px] rounded-lg pl-9 pr-12 py-1.5 w-[280px] outline-none transition-all placeholder:text-white/30 font-medium"
-              placeholder="Search..."
+              placeholder={t('Search...')}
               type="text"
             />
             <div className="absolute right-2 flex gap-1 items-center pointer-events-none">

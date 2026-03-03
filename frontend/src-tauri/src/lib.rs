@@ -168,12 +168,7 @@ fn scan_processes_internal() -> Result<Vec<ProcessInfo>, String> {
                 if pid > 0 {
                     let name = utf16_z_to_string(&entry.szExeFile);
                     let path = query_process_path(pid).unwrap_or_default();
-                    let name_lower = name.to_lowercase();
-
-                    let is_ue = name_lower.contains("ue4")
-                        || name_lower.contains("ue5")
-                        || name_lower.contains("unreal")
-                        || is_likely_game_process(&name, &path);
+                    let is_ue = is_likely_unreal_process(&name, &path);
 
                     if is_ue {
                         processes.push(ProcessInfo { pid, name, path });
@@ -226,10 +221,10 @@ fn query_process_path(pid: u32) -> Option<String> {
 }
 
 #[cfg(windows)]
-fn is_likely_game_process(name: &str, path: &str) -> bool {
+fn is_likely_unreal_process(name: &str, path: &str) -> bool {
     let lower = name.to_lowercase();
     let path_lower = path.to_lowercase();
-    let excludes = [
+    let name_excludes = [
         "steam",
         "epic",
         "launcher",
@@ -243,23 +238,76 @@ fn is_likely_game_process(name: &str, path: &str) -> bool {
         "vcredist",
         "directx",
         ".net",
+        "uexplorer",
+        "app.exe",
+        "explorer.exe",
+        "msedge",
+        "chrome",
+        "firefox",
+        "discord",
+    ];
+    let path_excludes = [
+        "\\windows\\system32\\",
+        "\\windows\\syswow64\\",
+        "\\microsoft\\edge\\",
+        "\\google\\chrome\\",
+        "\\mozilla firefox\\",
     ];
 
-    for ex in excludes {
-        if lower.contains(ex) || path_lower.contains(ex) {
+    for ex in name_excludes {
+        if lower.contains(ex) {
+            return false;
+        }
+    }
+    for ex in path_excludes {
+        if path_lower.contains(ex) {
             return false;
         }
     }
 
-    let game_indicators = ["games", "game", "binaries", "builds"];
+    // Explicit UE/editor signatures.
+    if lower.contains("ue4editor")
+        || lower.contains("ue5editor")
+        || lower.contains("unrealeditor")
+        || lower.contains("ue4")
+        || lower.contains("ue5")
+        || lower.contains("unreal")
+    {
+        return true;
+    }
+
+    // Packaged UE game naming hints.
+    if lower.contains("-win64-shipping")
+        || lower.contains("-win64-development")
+        || lower.contains("-win64-test")
+    {
+        return true;
+    }
+
+    // Score-based fallback, only if enough UE runtime hints are present.
+    let mut score = 0;
+    let game_indicators = [
+        "\\engine\\binaries\\",
+        "\\binaries\\win64\\",
+        "\\windowsnoeditor\\",
+        "\\saved\\stagedbuilds\\",
+        "\\unrealengine\\",
+    ];
 
     for indicator in game_indicators {
         if path_lower.contains(indicator) {
-            return true;
+            score += 1;
         }
     }
 
-    true
+    if lower.contains("-win64-") {
+        score += 1;
+    }
+    if lower.ends_with(".exe") {
+        score += 1;
+    }
+
+    score >= 2
 }
 
 // DLL Injection using CreateRemoteThread via Windows API
