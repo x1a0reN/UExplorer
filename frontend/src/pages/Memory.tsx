@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from 'react';
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Terminal, Binary, Bookmark, Search, ArrowRight, ArrowLeft, RefreshCw, Layers, Plus, Trash2 } from 'lucide-react';
 import api, { type WatchItem } from '../api';
 
@@ -74,6 +74,10 @@ export default function Memory() {
   ]);
 
   const [watches, setWatches] = useState<WatchItem[]>([]);
+  const watchPollTimerRef = useRef<number | null>(null);
+  const watchPollInFlightRef = useRef(false);
+  const watchReconnectTimerRef = useRef<number | null>(null);
+  const watchReconnectDelayRef = useRef(800);
 
   const rows = useMemo(() => {
     const result: Array<{ addr: string; chunk: string[]; ascii: string }> = [];
@@ -93,23 +97,97 @@ export default function Memory() {
     return result;
   }, [hexBytes, currentAddress]);
 
+  const refreshWatches = useCallback(async () => {
+    const res = await api.listWatches();
+    if (res.success && res.data) {
+      setWatches(res.data.watches);
+    }
+  }, []);
+
+  const stopWatchPolling = useCallback(() => {
+    if (watchPollTimerRef.current !== null) {
+      window.clearInterval(watchPollTimerRef.current);
+      watchPollTimerRef.current = null;
+    }
+  }, []);
+
+  const runWatchFallbackTick = useCallback(async () => {
+    if (watchPollInFlightRef.current) return;
+    watchPollInFlightRef.current = true;
+    try {
+      await refreshWatches();
+    } finally {
+      watchPollInFlightRef.current = false;
+    }
+  }, [refreshWatches]);
+
+  const startWatchPolling = useCallback(
+    (immediate = true) => {
+      if (watchPollTimerRef.current !== null) return;
+      if (immediate) {
+        void runWatchFallbackTick();
+      }
+      watchPollTimerRef.current = window.setInterval(() => {
+        void runWatchFallbackTick();
+      }, 300);
+    },
+    [runWatchFallbackTick]
+  );
+
+  const clearWatchReconnectTimer = useCallback(() => {
+    if (watchReconnectTimerRef.current !== null) {
+      window.clearTimeout(watchReconnectTimerRef.current);
+      watchReconnectTimerRef.current = null;
+    }
+  }, []);
+
   useEffect(() => {
     void loadMemory('0x0', false);
   }, []);
 
   useEffect(() => {
-    const timer = setInterval(() => {
-      void refreshWatches();
-    }, 1500);
-    return () => clearInterval(timer);
-  }, []);
+    let disposed = false;
+    let unsubscribe: (() => void) | null = null;
 
-  useEffect(() => {
-    const unsubscribe = api.subscribeEventStream('/events/watches', () => {
-      void refreshWatches();
-    });
-    return unsubscribe;
-  }, []);
+    const connect = () => {
+      if (disposed) return;
+      unsubscribe = api.subscribeEventStream('/events/watches', () => {
+        void refreshWatches();
+      }, {
+        onOpen: () => {
+          clearWatchReconnectTimer();
+          watchReconnectDelayRef.current = 800;
+          stopWatchPolling();
+          void refreshWatches();
+        },
+        onError: () => {
+          if (disposed) return;
+          startWatchPolling(true);
+        },
+        onClose: (reason) => {
+          if (disposed || reason === 'abort') return;
+          startWatchPolling(true);
+
+          if (watchReconnectTimerRef.current !== null) return;
+          const delay = watchReconnectDelayRef.current;
+          watchReconnectTimerRef.current = window.setTimeout(() => {
+            watchReconnectTimerRef.current = null;
+            connect();
+          }, delay);
+          watchReconnectDelayRef.current = Math.min(watchReconnectDelayRef.current * 2, 5000);
+        },
+      });
+    };
+
+    connect();
+    return () => {
+      disposed = true;
+      unsubscribe?.();
+      clearWatchReconnectTimer();
+      watchReconnectDelayRef.current = 800;
+      stopWatchPolling();
+    };
+  }, [clearWatchReconnectTimer, refreshWatches, startWatchPolling, stopWatchPolling]);
 
   useEffect(() => {
     if (!currentAddress) return;
@@ -118,13 +196,6 @@ export default function Memory() {
 
   const pushConsole = (line: string) => {
     setConsoleLogs((prev) => [...prev, line]);
-  };
-
-  const refreshWatches = async () => {
-    const res = await api.listWatches();
-    if (res.success && res.data) {
-      setWatches(res.data.watches);
-    }
   };
 
   const loadMemory = async (addr: string, pushHistory = true) => {
@@ -429,7 +500,12 @@ export default function Memory() {
                 <div className="text-xs text-blue-300 font-mono break-all">{String(w.value)}</div>
                 <div className="flex justify-end mt-1">
                   <button
-                    onClick={() => void api.removeWatch(w.id)}
+                    onClick={() => {
+                      void (async () => {
+                        await api.removeWatch(w.id);
+                        await refreshWatches();
+                      })();
+                    }}
                     className="w-6 h-6 rounded bg-red-500/20 hover:bg-red-500/30 flex items-center justify-center"
                   >
                     <Trash2 className="w-3 h-3 text-red-200" />
@@ -498,3 +574,4 @@ function InspectorRow({ label, value, isLink }: { label: string; value: string; 
     </div>
   );
 }
+

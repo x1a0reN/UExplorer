@@ -328,6 +328,13 @@ function toQuery(params: Record<string, string | number | undefined>): string {
 }
 
 type SSECallback = (event: string, payload: unknown) => void;
+type SSECloseReason = 'eof' | 'error' | 'abort';
+
+interface SSESubscribeOptions {
+  onOpen?: () => void;
+  onError?: (error: unknown) => void;
+  onClose?: (reason: SSECloseReason) => void;
+}
 
 class UExplorerApi {
   private baseUrl: string;
@@ -718,8 +725,23 @@ class UExplorerApi {
   }
 
   // SSE by fetch stream, because native EventSource cannot attach auth header.
-  subscribeEventStream(path: '/events/stream' | '/events/hooks' | '/events/watches', onMessage: SSECallback, onError?: (error: unknown) => void) {
+  subscribeEventStream(
+    path: '/events/stream' | '/events/hooks' | '/events/watches',
+    onMessage: SSECallback,
+    optionsOrOnError?: SSESubscribeOptions | ((error: unknown) => void)
+  ) {
+    const options: SSESubscribeOptions =
+      typeof optionsOrOnError === 'function'
+        ? { onError: optionsOrOnError }
+        : optionsOrOnError ?? {};
     const controller = new AbortController();
+    let closed = false;
+
+    const emitClose = (reason: SSECloseReason) => {
+      if (closed) return;
+      closed = true;
+      options.onClose?.(reason);
+    };
 
     const run = async () => {
       try {
@@ -736,6 +758,7 @@ class UExplorerApi {
           throw new Error(`SSE failed: HTTP ${res.status}`);
         }
 
+        options.onOpen?.();
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
@@ -752,6 +775,9 @@ class UExplorerApi {
 
           for (const rawLine of lines) {
             const line = rawLine.trimEnd();
+            if (line.startsWith(':')) {
+              continue;
+            }
             if (!line) {
               if (data) {
                 let parsed: unknown = data;
@@ -773,15 +799,25 @@ class UExplorerApi {
             }
           }
         }
+
+        if (!controller.signal.aborted) {
+          emitClose('eof');
+        }
       } catch (error) {
         if (!controller.signal.aborted) {
-          onError?.(error);
+          options.onError?.(error);
+          emitClose('error');
         }
       }
     };
 
     run();
-    return () => controller.abort();
+    return () => {
+      if (!controller.signal.aborted) {
+        controller.abort();
+      }
+      emitClose('abort');
+    };
   }
 
   // Process management (Tauri invoke)

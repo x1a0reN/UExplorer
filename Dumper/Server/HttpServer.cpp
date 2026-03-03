@@ -680,14 +680,36 @@ public:
 				hdr << "Connection: keep-alive\r\n";
 				hdr << "Access-Control-Allow-Origin: *\r\n";
 				hdr << "\r\n";
-				send(clientSock, hdr.str().c_str(), static_cast<int>(hdr.str().size()), 0);
+				const std::string hdrText = hdr.str();
+				if (!SendAll(clientSock, hdrText.c_str(), static_cast<int>(hdrText.size())))
+				{
+					{
+						std::lock_guard<std::mutex> lk(SSEClientsMutex);
+						SSEClients.erase(clientSock);
+					}
+					if (OnSSEDisconnect)
+						OnSSEDisconnect(clientId);
+					closesocket(clientSock);
+					return;
+				}
 
 				std::string init = "event: connected\ndata: {\"clientId\":\"" + clientId + "\"}\n\n";
-				send(clientSock, init.c_str(), static_cast<int>(init.size()), 0);
+				if (!SendAll(clientSock, init.c_str(), static_cast<int>(init.size())))
+				{
+					{
+						std::lock_guard<std::mutex> lk(SSEClientsMutex);
+						SSEClients.erase(clientSock);
+					}
+					if (OnSSEDisconnect)
+						OnSSEDisconnect(clientId);
+					closesocket(clientSock);
+					return;
+				}
 
 				char rbuf[64];
 				fd_set readfds;
 				timeval tv;
+				auto lastHeartbeat = std::chrono::steady_clock::now();
 
 				while (Running.load())
 				{
@@ -697,10 +719,21 @@ public:
 					tv.tv_usec = 500000;
 					int sel = select(0, &readfds, nullptr, nullptr, &tv);
 					if (sel < 0) break;
-					if (sel == 0) continue;
+					if (sel > 0)
+					{
+						int n = recv(clientSock, rbuf, sizeof(rbuf) - 1, 0);
+						if (n <= 0) break;
+					}
 
-					int n = recv(clientSock, rbuf, sizeof(rbuf) - 1, 0);
-					if (n <= 0) break;
+					auto now = std::chrono::steady_clock::now();
+					if (now - lastHeartbeat >= std::chrono::seconds(10))
+					{
+						static constexpr const char* kHeartbeat = ": ping\n\n";
+						static constexpr int kHeartbeatLen = 8;
+						if (!SendAll(clientSock, kHeartbeat, kHeartbeatLen))
+							break;
+						lastHeartbeat = now;
+					}
 				}
 
 				{
@@ -872,19 +905,37 @@ void HttpServer::SetSSEHandlers(SSEConnectHandler onConnect, SSEEventHandler onE
 
 void HttpServer::SendSSEEvent(const std::string& event, const std::string& data)
 {
+	std::vector<std::string> disconnectedClientIds;
 	{
 		std::lock_guard<std::mutex> lk(m_Impl->SSEClientsMutex);
-		for (const auto& [sock, info] : m_Impl->SSEClients)
+		for (auto it = m_Impl->SSEClients.begin(); it != m_Impl->SSEClients.end();)
 		{
+			const SOCKET sock = it->first;
+			const auto& info = it->second;
 			const bool isAllStream = (info.Path == "/api/v1/events/stream");
 			const bool isWatchStream = (info.Path == "/api/v1/events/watches" && event == "watch");
 			const bool isHookStream = (info.Path == "/api/v1/events/hooks" && event == "hook");
 			if (!isAllStream && !isWatchStream && !isHookStream)
+			{
+				++it;
 				continue;
+			}
 
 			std::string msg = "event: " + event + "\ndata: " + data + "\n\n";
-			send(sock, msg.c_str(), static_cast<int>(msg.size()), 0);
+			if (!m_Impl->SendAll(sock, msg.c_str(), static_cast<int>(msg.size())))
+			{
+				disconnectedClientIds.push_back(info.ClientId);
+				closesocket(sock);
+				it = m_Impl->SSEClients.erase(it);
+				continue;
+			}
+			++it;
 		}
+	}
+	for (const auto& clientId : disconnectedClientIds)
+	{
+		if (m_Impl->OnSSEDisconnect)
+			m_Impl->OnSSEDisconnect(clientId);
 	}
 
 	m_Impl->BroadcastWebSocketEvent(event, data);
@@ -892,16 +943,28 @@ void HttpServer::SendSSEEvent(const std::string& event, const std::string& data)
 
 void HttpServer::SendSSEEventTo(const std::string& clientId, const std::string& event, const std::string& data)
 {
-	std::lock_guard<std::mutex> lk(m_Impl->SSEClientsMutex);
-	for (const auto& [sock, info] : m_Impl->SSEClients)
+	bool disconnected = false;
 	{
-		if (info.ClientId == clientId)
+		std::lock_guard<std::mutex> lk(m_Impl->SSEClientsMutex);
+		for (auto it = m_Impl->SSEClients.begin(); it != m_Impl->SSEClients.end(); ++it)
 		{
-			std::string msg = "event: " + event + "\ndata: " + data + "\n\n";
-			send(sock, msg.c_str(), static_cast<int>(msg.size()), 0);
-			break;
+			const SOCKET sock = it->first;
+			const auto& info = it->second;
+			if (info.ClientId == clientId)
+			{
+				std::string msg = "event: " + event + "\ndata: " + data + "\n\n";
+				if (!m_Impl->SendAll(sock, msg.c_str(), static_cast<int>(msg.size())))
+				{
+					closesocket(sock);
+					m_Impl->SSEClients.erase(it);
+					disconnected = true;
+				}
+				break;
+			}
 		}
 	}
+	if (disconnected && m_Impl->OnSSEDisconnect)
+		m_Impl->OnSSEDisconnect(clientId);
 }
 
 } // namespace UExplorer

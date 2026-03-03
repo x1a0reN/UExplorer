@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from 'react';
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Search, Filter, TerminalSquare, Play, Info, List, History, Power, RefreshCw, Cpu } from 'lucide-react';
 import api, { type ClassFunction, type HookItem, type HookLogEntry, type ObjectDetail, type ObjectItem } from '../api';
 
@@ -60,6 +60,10 @@ export default function Functions() {
   const [hooks, setHooks] = useState<HookItem[]>([]);
   const [hookLog, setHookLog] = useState<HookLogEntry[]>([]);
   const [hookBusy, setHookBusy] = useState(false);
+  const hookPollTimerRef = useRef<number | null>(null);
+  const hookPollInFlightRef = useRef(false);
+  const hookReconnectTimerRef = useRef<number | null>(null);
+  const hookReconnectDelayRef = useRef(800);
 
   const [bytecode, setBytecode] = useState('');
   const [decompiled, setDecompiled] = useState('');
@@ -88,27 +92,115 @@ export default function Functions() {
     void loadFunctionDetail(selected.index);
   }, [selected]);
 
-  useEffect(() => {
-    const timer = setInterval(() => {
-      void refreshHooks();
-    }, 2000);
-    return () => clearInterval(timer);
+  const refreshHooks = useCallback(async () => {
+    const res = await api.listHooks();
+    if (res.success && res.data) {
+      setHooks(res.data.hooks);
+    }
+  }, []);
+
+  const refreshHookLog = useCallback(async () => {
+    const id = currentHook?.id ?? 0;
+    const res = await api.getHookLog(id);
+    if (res.success && res.data) {
+      setHookLog(res.data.entries.slice(-200).reverse());
+    }
+  }, [currentHook?.id]);
+
+  const stopHookPolling = useCallback(() => {
+    if (hookPollTimerRef.current !== null) {
+      window.clearInterval(hookPollTimerRef.current);
+      hookPollTimerRef.current = null;
+    }
+  }, []);
+
+  const runHookFallbackTick = useCallback(async () => {
+    if (hookPollInFlightRef.current) return;
+    hookPollInFlightRef.current = true;
+    try {
+      await refreshHooks();
+      await refreshHookLog();
+    } finally {
+      hookPollInFlightRef.current = false;
+    }
+  }, [refreshHookLog, refreshHooks]);
+
+  const startHookPolling = useCallback(
+    (immediate = true) => {
+      if (hookPollTimerRef.current !== null) return;
+      if (immediate) {
+        void runHookFallbackTick();
+      }
+      hookPollTimerRef.current = window.setInterval(() => {
+        void runHookFallbackTick();
+      }, 300);
+    },
+    [runHookFallbackTick]
+  );
+
+  const clearHookReconnectTimer = useCallback(() => {
+    if (hookReconnectTimerRef.current !== null) {
+      window.clearTimeout(hookReconnectTimerRef.current);
+      hookReconnectTimerRef.current = null;
+    }
   }, []);
 
   useEffect(() => {
-    if (activeTab !== 'Hook') return;
-    const unsubscribe = api.subscribeEventStream(
-      '/events/hooks',
-      () => {
-        void refreshHookLog();
-        void refreshHooks();
-      },
-      () => {
-        // ignore stream errors, polling is fallback
-      }
-    );
-    return unsubscribe;
-  }, [activeTab, currentHook?.id]);
+    if (activeTab !== 'Hook') {
+      clearHookReconnectTimer();
+      hookReconnectDelayRef.current = 800;
+      stopHookPolling();
+      return;
+    }
+
+    let disposed = false;
+    let unsubscribe: (() => void) | null = null;
+
+    const connect = () => {
+      if (disposed) return;
+      unsubscribe = api.subscribeEventStream(
+        '/events/hooks',
+        () => {
+          void refreshHookLog();
+          void refreshHooks();
+        },
+        {
+          onOpen: () => {
+            clearHookReconnectTimer();
+            hookReconnectDelayRef.current = 800;
+            stopHookPolling();
+            void refreshHookLog();
+            void refreshHooks();
+          },
+          onError: () => {
+            if (disposed) return;
+            startHookPolling(true);
+          },
+          onClose: (reason) => {
+            if (disposed || reason === 'abort') return;
+            startHookPolling(true);
+
+            if (hookReconnectTimerRef.current !== null) return;
+            const delay = hookReconnectDelayRef.current;
+            hookReconnectTimerRef.current = window.setTimeout(() => {
+              hookReconnectTimerRef.current = null;
+              connect();
+            }, delay);
+            hookReconnectDelayRef.current = Math.min(hookReconnectDelayRef.current * 2, 5000);
+          },
+        }
+      );
+    };
+
+    connect();
+    return () => {
+      disposed = true;
+      unsubscribe?.();
+      clearHookReconnectTimer();
+      hookReconnectDelayRef.current = 800;
+      stopHookPolling();
+    };
+  }, [activeTab, clearHookReconnectTimer, refreshHookLog, refreshHooks, startHookPolling, stopHookPolling]);
 
   const loadFunctions = async () => {
     setListLoading(true);
@@ -194,21 +286,6 @@ export default function Functions() {
       setDetailError(error instanceof Error ? error.message : String(error));
     } finally {
       setDetailLoading(false);
-    }
-  };
-
-  const refreshHooks = async () => {
-    const res = await api.listHooks();
-    if (res.success && res.data) {
-      setHooks(res.data.hooks);
-    }
-  };
-
-  const refreshHookLog = async () => {
-    const id = currentHook?.id ?? 0;
-    const res = await api.getHookLog(id);
-    if (res.success && res.data) {
-      setHookLog(res.data.entries.slice(-200).reverse());
     }
   };
 
@@ -619,3 +696,4 @@ function InfoLine({ k, v }: { k: string; v: string }) {
     </div>
   );
 }
+
