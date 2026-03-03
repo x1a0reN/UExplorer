@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import api, { type ObjectCountData, type StatusData } from '../api';
+import api, { type EngineStatusData, type ObjectCountData, type StatusData } from '../api';
 import ProcessSelector from '../components/ProcessSelector';
 import {
   Activity,
@@ -25,8 +25,11 @@ interface DashboardProps {
 
 export default function Dashboard({ onNavigate }: DashboardProps) {
   const [status, setStatus] = useState<StatusData | null>(null);
+  const [engineStatus, setEngineStatus] = useState<EngineStatusData | null>(null);
   const [counts, setCounts] = useState<ObjectCountData | null>(null);
   const [actorCount, setActorCount] = useState<number>(0);
+  const [eventWsConnected, setEventWsConnected] = useState(false);
+  const [eventWsCount, setEventWsCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showProcessSelector, setShowProcessSelector] = useState(false);
@@ -38,11 +41,24 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
     return () => clearInterval(interval);
   }, []);
 
+  useEffect(() => {
+    const conn = api.connectWebSocket('/ws/events', {
+      onOpen: () => setEventWsConnected(true),
+      onClose: () => setEventWsConnected(false),
+      onError: () => setEventWsConnected(false),
+      onMessage: () => {
+        setEventWsCount((v) => v + 1);
+      },
+    });
+    return () => conn.close();
+  }, []);
+
   const loadStatus = async () => {
-    const [statusResponse, countsResponse, worldResponse] = await Promise.all([
+    const [statusResponse, countsResponse, worldResponse, engineResponse] = await Promise.all([
       api.getStatus(),
       api.getObjectCounts(),
       api.getWorld(),
+      api.getEngineStatus(),
     ]);
 
     if (statusResponse.success && statusResponse.data) {
@@ -65,6 +81,12 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
       setActorCount(0);
     }
 
+    if (engineResponse.success && engineResponse.data) {
+      setEngineStatus(engineResponse.data);
+    } else {
+      setEngineStatus(null);
+    }
+
     setPort(api.getSettings().port);
     setLoading(false);
   };
@@ -81,6 +103,15 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
   }
 
   const isConnected = !error && !!status;
+
+  const reconnectEngine = async () => {
+    const res = await api.reconnectEngine();
+    if (!res.success) {
+      setError(res.error || 'Engine reconnect failed');
+      return;
+    }
+    await loadStatus();
+  };
 
   return (
     <div className="flex-1 overflow-y-auto overflow-x-hidden relative scroll-smooth">
@@ -106,6 +137,13 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
             >
               <RefreshCw className="w-4 h-4 text-white/70" />
               Refresh
+            </button>
+            <button
+              onClick={() => void reconnectEngine()}
+              className="px-4 py-2 rounded-[10px] bg-yellow-500/20 hover:bg-yellow-500/30 border border-yellow-500/30 text-[13px] font-medium text-yellow-100 transition-all flex items-center gap-2 cursor-pointer shadow-sm active:scale-95"
+            >
+              <Zap className="w-4 h-4" />
+              重连引擎
             </button>
             <button
               onClick={() => onNavigate('sdkdump')}
@@ -260,7 +298,10 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
             <div className="space-y-4 flex-1 flex flex-col justify-end">
               <OffsetRow label="GObjects" value={status?.gobjects_address || '0x0000000'} />
               <OffsetRow label="PID" value={status ? String(status.pid) : '-'} />
-              <OffsetRow label="UWorld" value="Not Resolving" dimmed />
+              <OffsetRow label="UWorld" value={engineStatus?.addresses?.gworld_ptr ? String(engineStatus.addresses.gworld_ptr) : 'Not Resolving'} dimmed={!engineStatus?.addresses?.gworld_ptr} />
+              <OffsetRow label="ScriptOff" value={engineStatus?.script_offset_diagnostics ? `0x${engineStatus.script_offset_diagnostics.selected_offset.toString(16)}` : '-'} />
+              <OffsetRow label="ScriptConf" value={engineStatus?.script_offset_diagnostics?.confidence || '-'} />
+              <OffsetRow label="WS Events" value={eventWsConnected ? `CONNECTED (${eventWsCount})` : 'DISCONNECTED'} dimmed={!eventWsConnected} />
             </div>
           </div>
 

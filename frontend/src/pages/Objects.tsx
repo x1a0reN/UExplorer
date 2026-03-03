@@ -19,10 +19,12 @@ import api, {
   type ClassFunction,
   type ClassProperty,
   type ObjectDetail,
+  type OuterChainItem,
   type ObjectProperty,
   type ObjectItem,
   type Vec3Data,
   type WorldActorDetail,
+  type WorldLevelItem,
 } from '../api';
 
 type ObjectTypeTab = 'All' | 'Class' | 'Struct' | 'Enum' | 'Function' | 'Package' | 'Actor';
@@ -111,8 +113,12 @@ export default function Objects() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [propertyEditMap, setPropertyEditMap] = useState<Record<string, string>>({});
+  const [propertyRefreshing, setPropertyRefreshing] = useState<Record<string, boolean>>({});
   const [cdoDiff, setCdoDiff] = useState<Set<string>>(new Set());
+  const [outerChain, setOuterChain] = useState<OuterChainItem[]>([]);
   const [actorDetail, setActorDetail] = useState<WorldActorDetail | null>(null);
+  const [actorComponents, setActorComponents] = useState<ObjectItem[]>([]);
+  const [worldLevels, setWorldLevels] = useState<WorldLevelItem[]>([]);
   const [transformInput, setTransformInput] = useState<TransformInputState>(toTransformInputState());
   const [worldSaving, setWorldSaving] = useState(false);
   const [worldMessage, setWorldMessage] = useState<string | null>(null);
@@ -150,7 +156,10 @@ export default function Objects() {
     setInstances([]);
     setMatched(0);
     setTotal(0);
+    setOuterChain([]);
     setActorDetail(null);
+    setActorComponents([]);
+    setWorldLevels([]);
     setTransformInput(toTransformInputState());
     setWorldMessage(null);
 
@@ -261,7 +270,11 @@ export default function Objects() {
     setInstances([]);
     setWorldText('暂无世界数据');
     setCdoDiff(new Set());
+    setOuterChain([]);
     setActorDetail(null);
+    setActorComponents([]);
+    setWorldLevels([]);
+    setPropertyRefreshing({});
     setTransformInput(toTransformInputState());
     setWorldMessage(null);
 
@@ -274,6 +287,21 @@ export default function Objects() {
         }
       }
       setDetail(currentDetail);
+
+      if (currentDetail) {
+        const outerRes = await api.getObjectOuterChain(item.index);
+        if (outerRes.success && outerRes.data) {
+          setOuterChain(outerRes.data.outer_chain);
+        } else {
+          const fallback = (currentDetail.outer_chain || []).map((name, idx) => ({
+            name,
+            full_name: name,
+            index: -(idx + 1),
+            address: '-',
+          }));
+          setOuterChain(fallback);
+        }
+      }
 
       let loadedProperties: ObjectProperty[] = [];
       const canLoadProperties = item.type !== 'Struct' && item.type !== 'Enum' && item.type !== 'Package';
@@ -335,9 +363,11 @@ export default function Objects() {
           setWorldText('未能加载包内容');
         }
       } else if (item.type === 'Actor') {
-        const [worldRes, actorRes] = await Promise.all([
+        const [worldRes, actorRes, actorComponentsRes, levelRes] = await Promise.all([
           api.getWorldShortcuts(),
           api.getWorldActorDetail(item.index),
+          api.getWorldActorComponents(item.index),
+          api.getWorldLevels(),
         ]);
 
         if (worldRes.success && worldRes.data) {
@@ -357,9 +387,28 @@ export default function Objects() {
         if (actorRes.success && actorRes.data) {
           setActorDetail(actorRes.data);
           setTransformInput(toTransformInputState(actorRes.data.transform));
+          if (actorComponentsRes.success && actorComponentsRes.data) {
+            setActorComponents(actorComponentsRes.data.components);
+          } else {
+            setActorComponents(actorRes.data.components || []);
+          }
         } else {
           setActorDetail(null);
+          setActorComponents([]);
           setWorldMessage(actorRes.error || '未能加载 Actor Transform');
+        }
+
+        if (levelRes.success && levelRes.data) {
+          setWorldLevels(levelRes.data.levels);
+        } else {
+          setWorldLevels([]);
+        }
+      } else {
+        const levelRes = await api.getWorldLevels();
+        if (levelRes.success && levelRes.data) {
+          setWorldLevels(levelRes.data.levels);
+        } else {
+          setWorldLevels([]);
         }
       }
     } catch (error) {
@@ -379,6 +428,26 @@ export default function Objects() {
     } else {
       setDetailError(res.error || 'Property write failed');
     }
+  };
+
+  const refreshSingleProperty = async (propertyName: string) => {
+    if (!selected) return;
+    setPropertyRefreshing((prev) => ({ ...prev, [propertyName]: true }));
+    const res = await api.getObjectPropertyValue(selected.index, propertyName);
+    setPropertyRefreshing((prev) => ({ ...prev, [propertyName]: false }));
+    if (!res.success || !res.data) {
+      setDetailError(res.error || `Failed to read property: ${propertyName}`);
+      return;
+    }
+    const propertyData = res.data;
+
+    setProperties((prev) =>
+      prev.map((prop) => (prop.name === propertyName ? { ...prop, value: propertyData.value } : prop))
+    );
+    setPropertyEditMap((prev) => ({
+      ...prev,
+      [propertyName]: toEditable(propertyData.value),
+    }));
   };
 
   const addWatch = async (propertyName: string) => {
@@ -579,7 +648,17 @@ export default function Objects() {
                   <InfoRow label="Full Name" value={detail?.full_name || '-'} />
                   <InfoRow label="Class" value={detail?.class || selected.className} />
                   <InfoRow label="Address" value={detail?.address || selected.address} />
-                  <InfoRow label="Outer Chain" value={detail?.outer_chain?.join(' -> ') || '-'} />
+                  <InfoRow label="Outer Chain Count" value={String(outerChain.length)} />
+                  <div className="mt-3 rounded-lg border border-white/10 bg-black/20 p-3 max-h-56 overflow-auto">
+                    {outerChain.length === 0 && <div className="text-white/40 text-xs">No outer chain data</div>}
+                    {outerChain.map((node, idx) => (
+                      <div key={`${node.index}-${idx}`} className="text-xs text-white/80 font-mono py-1 border-b border-white/5 last:border-b-0">
+                        <div className="text-white/50">[{idx}] {node.name}</div>
+                        <div className="text-white/40 break-all">{node.full_name}</div>
+                        <div className="text-white/30">#{node.index} / {node.address}</div>
+                      </div>
+                    ))}
+                  </div>
                 </Panel>
               )}
 
@@ -590,7 +669,7 @@ export default function Objects() {
                     {properties.map((prop) => (
                       <div
                         key={prop.name}
-                        className={`grid grid-cols-[160px_140px_1fr_auto_auto] gap-3 items-center p-3 rounded-lg border ${
+                        className={`grid grid-cols-[160px_140px_1fr_auto_auto_auto] gap-3 items-center p-3 rounded-lg border ${
                           cdoDiff.has(prop.name) ? 'border-yellow-500/30 bg-yellow-500/5' : 'border-white/5 bg-black/20'
                         }`}
                       >
@@ -614,6 +693,13 @@ export default function Objects() {
                         >
                           <Save className="w-3 h-3" />
                           Save
+                        </button>
+                        <button
+                          onClick={() => void refreshSingleProperty(prop.name)}
+                          className="px-2 py-1 rounded-md bg-white/10 hover:bg-white/20 text-white text-xs flex items-center gap-1"
+                        >
+                          <RefreshCw className={`w-3 h-3 ${propertyRefreshing[prop.name] ? 'animate-spin' : ''}`} />
+                          Read
                         </button>
                         <button
                           onClick={() => void addWatch(prop.name)}
@@ -692,6 +778,20 @@ export default function Objects() {
                   <div className="space-y-4">
                     <div className="text-white/70 text-sm whitespace-pre-wrap">{worldText}</div>
 
+                    <div className="rounded-lg border border-white/10 bg-black/20 p-3">
+                      <div className="text-xs uppercase tracking-wider text-white/50 mb-2">
+                        Loaded Levels ({worldLevels.length})
+                      </div>
+                      <div className="max-h-40 overflow-auto space-y-1">
+                        {worldLevels.map((lv) => (
+                          <div key={`${lv.index}-${lv.address}`} className="text-xs text-white/80 font-mono">
+                            {lv.name} [{lv.source || 'Unknown'}]
+                          </div>
+                        ))}
+                        {worldLevels.length === 0 && <div className="text-xs text-white/40">No levels</div>}
+                      </div>
+                    </div>
+
                     {selected.type !== 'Actor' && (
                       <div className="text-white/40 text-sm">当前对象不是 Actor，无法编辑 Transform。</div>
                     )}
@@ -746,15 +846,15 @@ export default function Objects() {
 
                         <div className="rounded-lg border border-white/10 bg-black/20 p-3">
                           <div className="text-xs uppercase tracking-wider text-white/50 mb-2">
-                            Components ({actorDetail?.component_count ?? 0})
+                            Components ({actorComponents.length})
                           </div>
                           <div className="max-h-40 overflow-auto space-y-1">
-                            {(actorDetail?.components || []).map((comp) => (
+                            {actorComponents.map((comp) => (
                               <div key={`${comp.index}-${comp.address}`} className="text-xs text-white/80 font-mono">
                                 {comp.class} :: {comp.name}
                               </div>
                             ))}
-                            {(actorDetail?.components || []).length === 0 && (
+                            {actorComponents.length === 0 && (
                               <div className="text-xs text-white/40">No components</div>
                             )}
                           </div>

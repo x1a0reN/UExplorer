@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <random>
 
 #include "Generators/Generator.h"
 #include "Server/HttpServer.h"
@@ -81,14 +82,15 @@ namespace
 			"abcdefghijklmnopqrstuvwxyz";
 		static constexpr size_t kAlphabetLen = sizeof(kAlphabet) - 1;
 
+		std::random_device rd;
+		std::mt19937_64 gen(rd());
+		std::uniform_int_distribution<size_t> dist(0, kAlphabetLen - 1);
+
 		std::string token;
 		token.reserve(length);
 		for (size_t i = 0; i < length; i++)
 		{
-			unsigned int r = 0;
-			if (rand_s(&r) != 0)
-				r = static_cast<unsigned int>(GetTickCount64() + i * 131);
-			token.push_back(kAlphabet[r % kAlphabetLen]);
+			token.push_back(kAlphabet[dist(gen)]);
 		}
 		return token;
 	}

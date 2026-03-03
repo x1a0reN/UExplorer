@@ -32,7 +32,7 @@ namespace
 
 	struct ScriptOffsetDiagnostics
 	{
-		int32 SelectedOffset = OffsetNotFound;
+		int32 SelectedOffset = OffsetFinder::OffsetNotFound;
 		int32 SelectedScore = INT32_MIN;
 		int32 ScoreGapTop2 = 0;
 		int32 BpEndHits = 0;

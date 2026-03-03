@@ -1,6 +1,6 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Terminal, Binary, Bookmark, Search, ArrowRight, ArrowLeft, RefreshCw, Layers, Plus, Trash2 } from 'lucide-react';
-import api, { type WatchItem } from '../api';
+import api, { type WatchHistoryEntry, type WatchItem } from '../api';
 
 const READ_SIZE = 256;
 
@@ -72,8 +72,13 @@ export default function Memory() {
     'UExplorer Console [Connected]',
     'Supported: get/set/call/watch/unwatch/instances/mem.read/mem.write',
   ]);
+  const [wsConsoleConnected, setWsConsoleConnected] = useState(false);
+  const consoleWsRef = useRef<ReturnType<typeof api.connectWebSocket> | null>(null);
 
   const [watches, setWatches] = useState<WatchItem[]>([]);
+  const [watchHistory, setWatchHistory] = useState<Record<number, WatchHistoryEntry[]>>({});
+  const [expandedWatchId, setExpandedWatchId] = useState<number | null>(null);
+  const [watchHistoryLoading, setWatchHistoryLoading] = useState<Record<number, boolean>>({});
   const watchPollTimerRef = useRef<number | null>(null);
   const watchPollInFlightRef = useRef(false);
   const watchReconnectTimerRef = useRef<number | null>(null);
@@ -146,6 +151,37 @@ export default function Memory() {
   }, []);
 
   useEffect(() => {
+    const conn = api.connectWebSocket('/ws/console', {
+      onOpen: () => {
+        setWsConsoleConnected(true);
+        pushConsole('[WS] console connected');
+      },
+      onClose: () => {
+        setWsConsoleConnected(false);
+        pushConsole('[WS] console disconnected');
+      },
+      onError: () => {
+        setWsConsoleConnected(false);
+      },
+      onMessage: (payload) => {
+        if (typeof payload === 'string') {
+          pushConsole(`[WS] ${payload}`);
+          return;
+        }
+        pushConsole(`[WS] ${JSON.stringify(payload)}`);
+      },
+    });
+
+    consoleWsRef.current = conn;
+    return () => {
+      if (consoleWsRef.current === conn) {
+        consoleWsRef.current = null;
+      }
+      conn.close();
+    };
+  }, []);
+
+  useEffect(() => {
     let disposed = false;
     let unsubscribe: (() => void) | null = null;
 
@@ -194,9 +230,9 @@ export default function Memory() {
     void loadTypedValues();
   }, [currentAddress, cursorOffset, hexBytes.length]);
 
-  const pushConsole = (line: string) => {
+  function pushConsole(line: string) {
     setConsoleLogs((prev) => [...prev, line]);
-  };
+  }
 
   const loadMemory = async (addr: string, pushHistory = true) => {
     setLoading(true);
@@ -283,6 +319,11 @@ export default function Memory() {
     setConsoleInput('');
     pushConsole(`> ${command}`);
 
+    if (wsConsoleConnected && consoleWsRef.current) {
+      consoleWsRef.current.send(command);
+      return;
+    }
+
     const parts = command.split(' ');
     const head = parts[0];
 
@@ -339,6 +380,31 @@ export default function Memory() {
     } catch (error) {
       pushConsole(`Error: ${error instanceof Error ? error.message : String(error)}`);
     }
+  };
+
+  const toggleWatchHistory = async (watchId: number) => {
+    if (expandedWatchId === watchId) {
+      setExpandedWatchId(null);
+      return;
+    }
+
+    setExpandedWatchId(watchId);
+    if (watchHistory[watchId]) return;
+
+    setWatchHistoryLoading((prev) => ({ ...prev, [watchId]: true }));
+    const res = await api.getWatchHistory(watchId, 100);
+    setWatchHistoryLoading((prev) => ({ ...prev, [watchId]: false }));
+
+    if (!res.success || !res.data) {
+      pushConsole(`[WatchHistory] ${res.error || 'load failed'}`);
+      return;
+    }
+    const historyData = res.data;
+
+    setWatchHistory((prev) => ({
+      ...prev,
+      [watchId]: historyData.history,
+    }));
   };
 
   return (
@@ -498,11 +564,25 @@ export default function Memory() {
                 <div className="text-xs text-white/90 font-mono">#{w.id} obj:{w.object_index}</div>
                 <div className="text-xs text-white/60">{w.property}</div>
                 <div className="text-xs text-blue-300 font-mono break-all">{String(w.value)}</div>
-                <div className="flex justify-end mt-1">
+                <div className="flex justify-end gap-1 mt-1">
+                  <button
+                    onClick={() => void toggleWatchHistory(w.id)}
+                    className="px-2 h-6 rounded bg-white/10 hover:bg-white/20 text-[10px] text-white"
+                  >
+                    History
+                  </button>
                   <button
                     onClick={() => {
                       void (async () => {
                         await api.removeWatch(w.id);
+                        setWatchHistory((prev) => {
+                          const next = { ...prev };
+                          delete next[w.id];
+                          return next;
+                        });
+                        if (expandedWatchId === w.id) {
+                          setExpandedWatchId(null);
+                        }
                         await refreshWatches();
                       })();
                     }}
@@ -511,6 +591,21 @@ export default function Memory() {
                     <Trash2 className="w-3 h-3 text-red-200" />
                   </button>
                 </div>
+                {expandedWatchId === w.id && (
+                  <div className="mt-2 rounded border border-white/10 bg-black/30 p-2 max-h-36 overflow-auto space-y-1">
+                    {watchHistoryLoading[w.id] && <div className="text-[10px] text-white/50">Loading...</div>}
+                    {!watchHistoryLoading[w.id] && (watchHistory[w.id] || []).length === 0 && (
+                      <div className="text-[10px] text-white/40">No history</div>
+                    )}
+                    {!watchHistoryLoading[w.id] &&
+                      (watchHistory[w.id] || []).map((entry, idx) => (
+                        <div key={`${entry.timestamp}-${idx}`} className="text-[10px] text-white/70 border-b border-white/5 pb-1 last:border-b-0">
+                          <div className="text-white/40">{new Date(entry.timestamp).toLocaleString()}</div>
+                          <div className="font-mono break-all">{JSON.stringify(entry.value)}</div>
+                        </div>
+                      ))}
+                  </div>
+                )}
               </div>
             ))}
             {watches.length === 0 && <div className="text-white/40 text-xs">No watches</div>}
@@ -535,6 +630,9 @@ export default function Memory() {
         <div className="h-8 border-b border-white/5 flex items-center px-4 bg-white/[0.02]">
           <span className="text-[10px] font-bold text-white/40 uppercase tracking-widest flex items-center gap-2">
             <Terminal className="w-3 h-3" /> UExplorer Console
+          </span>
+          <span className={`ml-auto text-[10px] font-mono ${wsConsoleConnected ? 'text-green-300' : 'text-yellow-300'}`}>
+            {wsConsoleConnected ? 'WS:CONNECTED' : 'WS:FALLBACK'}
           </span>
         </div>
         <div className="flex-1 overflow-auto p-4 font-mono text-[12px] space-y-1">

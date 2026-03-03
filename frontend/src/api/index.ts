@@ -26,6 +26,45 @@ export interface StatusData {
   object_count: number;
   pid: number;
   architecture: string;
+  script_offset_diagnostics?: ScriptOffsetDiagnosticsData;
+}
+
+export interface ScriptOffsetDiagnosticsData {
+  selected_offset: number;
+  selected_score: number;
+  score_gap_top2: number;
+  bp_end_hits: number;
+  weighted_bp_end_hits: number;
+  generic_script_hits: number;
+  verify_probed: number;
+  verify_header_valid: number;
+  verify_end_hits: number;
+  verify_first_opcode_valid: number;
+  verify_size_sane: number;
+  verify_end_rate: number;
+  verify_opcode_rate: number;
+  confidence: string;
+  anomaly_tags: string;
+}
+
+export interface EngineStatusData {
+  game_name: string;
+  game_version: string;
+  architecture: string;
+  pid: number;
+  object_count: number;
+  offsets: Record<string, number>;
+  addresses: Record<string, string | null>;
+  internals: Record<string, boolean>;
+  script_offset_diagnostics: ScriptOffsetDiagnosticsData;
+}
+
+export interface ReconnectStatusData {
+  reconnected: boolean;
+  object_count: number;
+  game_name: string;
+  game_version: string;
+  gobjects_address: string;
 }
 
 export interface ObjectItem {
@@ -46,6 +85,30 @@ export interface ObjectProperty {
   offset: number;
   size: number;
   value: unknown;
+  value_state?: string;
+}
+
+export interface OuterChainItem {
+  name: string;
+  full_name: string;
+  index: number;
+  address: string;
+}
+
+export interface ObjectOuterChainData {
+  index: number;
+  name: string;
+  outer_chain: OuterChainItem[];
+}
+
+export interface ObjectPropertyValueData {
+  object_index: number;
+  property: string;
+  type: string;
+  offset: number;
+  size: number;
+  value: unknown;
+  value_state: string;
 }
 
 export interface ObjectsResponse {
@@ -186,6 +249,17 @@ export interface WorldData {
   actor_count: number;
 }
 
+export interface WorldLevelItem extends ObjectItem {
+  source?: string;
+  actor_count?: number;
+}
+
+export interface WorldLevelsResponse {
+  world: ObjectItem;
+  levels: WorldLevelItem[];
+  count: number;
+}
+
 export interface WorldActorItem extends ObjectItem {}
 
 export interface WorldActorResponse {
@@ -217,6 +291,12 @@ export interface WorldActorDetail {
   transform: ActorTransformData;
   components: ObjectItem[];
   component_count: number;
+}
+
+export interface WorldActorComponentsResponse {
+  actor_index: number;
+  components: ObjectItem[];
+  count: number;
 }
 
 export interface WorldActorTransformUpdateResponse {
@@ -332,6 +412,19 @@ export interface BlueprintBytecodeData {
   hex: string;
 }
 
+export interface WatchHistoryEntry {
+  timestamp: number;
+  value: unknown;
+}
+
+export interface WatchHistoryData {
+  id: number;
+  object_index: number;
+  property: string;
+  history: WatchHistoryEntry[];
+  total: number;
+}
+
 export type DumpType = 'sdk' | 'usmap' | 'dumpspace' | 'ida-script';
 
 export interface DumpJob {
@@ -389,6 +482,18 @@ interface SSESubscribeOptions {
   onOpen?: () => void;
   onError?: (error: unknown) => void;
   onClose?: (reason: SSECloseReason) => void;
+}
+
+interface WebSocketOptions {
+  onOpen?: () => void;
+  onClose?: (event: CloseEvent) => void;
+  onError?: (event: Event) => void;
+  onMessage?: (payload: unknown, raw: MessageEvent) => void;
+}
+
+export interface WebSocketConnection {
+  send: (payload: unknown) => void;
+  close: () => void;
 }
 
 class UExplorerApi {
@@ -530,6 +635,16 @@ class UExplorerApi {
     return this.request('/status');
   }
 
+  async getEngineStatus(): Promise<ApiResponse<EngineStatusData>> {
+    return this.request('/status/engine');
+  }
+
+  async reconnectEngine(): Promise<ApiResponse<ReconnectStatusData>> {
+    return this.request('/status/reconnect', {
+      method: 'POST',
+    });
+  }
+
   async healthCheck(): Promise<boolean> {
     const response = await this.request<{ alive: boolean }>('/status/health');
     return response.success && !!response.data?.alive;
@@ -573,6 +688,14 @@ class UExplorerApi {
 
   async getObjectProperties(index: number): Promise<ApiResponse<ObjectProperty[]>> {
     return this.request(`/objects/${index}/properties`);
+  }
+
+  async getObjectOuterChain(index: number): Promise<ApiResponse<ObjectOuterChainData>> {
+    return this.request(`/objects/${index}/outer-chain`);
+  }
+
+  async getObjectPropertyValue(index: number, property: string): Promise<ApiResponse<ObjectPropertyValueData>> {
+    return this.request(`/objects/${index}/property/${encodeURIComponent(property)}`);
   }
 
   async setObjectProperty(index: number, property: string, value: unknown): Promise<ApiResponse<{ property: string; written: boolean; new_value: unknown }>> {
@@ -645,6 +768,10 @@ class UExplorerApi {
     return this.request('/world');
   }
 
+  async getWorldLevels(): Promise<ApiResponse<WorldLevelsResponse>> {
+    return this.request('/world/levels');
+  }
+
   async getWorldActors(
     offset = 0,
     limit = 50,
@@ -661,6 +788,10 @@ class UExplorerApi {
 
   async getWorldActorDetail(index: number): Promise<ApiResponse<WorldActorDetail>> {
     return this.request(`/world/actors/${index}`);
+  }
+
+  async getWorldActorComponents(index: number): Promise<ApiResponse<WorldActorComponentsResponse>> {
+    return this.request(`/world/actors/${index}/components`);
   }
 
   async updateWorldActorTransform(
@@ -807,6 +938,14 @@ class UExplorerApi {
     return this.request(`/blueprint/bytecode?index=${index}`);
   }
 
+  async decompileBlueprintByPath(functionPath: string): Promise<ApiResponse<BlueprintDecompileData>> {
+    return this.request(`/blueprint/${encodeURIComponent(functionPath)}/decompile`);
+  }
+
+  async getBlueprintBytecodeByPath(functionPath: string): Promise<ApiResponse<BlueprintBytecodeData>> {
+    return this.request(`/blueprint/${encodeURIComponent(functionPath)}/bytecode`);
+  }
+
   // Watch
   async addWatch(objectIndex: number, property: string): Promise<ApiResponse<{ id: number; object_index: number; property: string; current_value: unknown }>> {
     return this.request('/watch/add', {
@@ -821,6 +960,10 @@ class UExplorerApi {
 
   async removeWatch(id: number): Promise<ApiResponse<{ removed: number }>> {
     return this.request(`/watch/${id}`, { method: 'DELETE' });
+  }
+
+  async getWatchHistory(id: number, limit = 200): Promise<ApiResponse<WatchHistoryData>> {
+    return this.request(`/watch/${id}/history?limit=${limit}`);
   }
 
   // Dump
@@ -932,6 +1075,41 @@ class UExplorerApi {
         controller.abort();
       }
       emitClose('abort');
+    };
+  }
+
+  connectWebSocket(path: '/ws/console' | '/ws/events', options: WebSocketOptions = {}): WebSocketConnection {
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${proto}//127.0.0.1:${this.settings.port}/api/v1${path}?token=${encodeURIComponent(this.token)}`;
+    const ws = new WebSocket(wsUrl);
+
+    ws.onopen = () => options.onOpen?.();
+    ws.onclose = (event) => options.onClose?.(event);
+    ws.onerror = (event) => options.onError?.(event);
+    ws.onmessage = (event) => {
+      let parsed: unknown = event.data;
+      if (typeof event.data === 'string') {
+        try {
+          parsed = JSON.parse(event.data);
+        } catch {
+          parsed = event.data;
+        }
+      }
+      options.onMessage?.(parsed, event);
+    };
+
+    return {
+      send: (payload: unknown) => {
+        const body = typeof payload === 'string' ? payload : JSON.stringify(payload);
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(body);
+        }
+      },
+      close: () => {
+        if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+          ws.close();
+        }
+      },
     };
   }
 

@@ -97,6 +97,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
 
   const [bytecode, setBytecode] = useState('');
   const [decompiled, setDecompiled] = useState('');
+  const [blueprintPath, setBlueprintPath] = useState('');
   const [decompileLoading, setDecompileLoading] = useState(false);
 
   const functionTabs = useMemo(
@@ -349,6 +350,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
       const parts = extractFunctionParts(detailRes.data);
       if (!parts.className) return;
       setStaticClassName(parts.className);
+      setBlueprintPath(parts.functionPath);
 
       const classFuncRes = await api.getClassFunctions(parts.className);
       if (!classFuncRes.success || !classFuncRes.data) {
@@ -527,10 +529,28 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
   const loadDecompile = async () => {
     if (!selected) return;
     setDecompileLoading(true);
-    const [byteRes, decompileRes] = await Promise.all([
-      api.getBlueprintBytecode(selected.index),
-      api.decompileBlueprint(selected.index),
-    ]);
+    const path = blueprintPath.trim();
+    let byteRes;
+    let decompileRes;
+
+    if (path) {
+      [byteRes, decompileRes] = await Promise.all([
+        api.getBlueprintBytecodeByPath(path),
+        api.decompileBlueprintByPath(path),
+      ]);
+      if (!byteRes.success || !decompileRes.success) {
+        [byteRes, decompileRes] = await Promise.all([
+          api.getBlueprintBytecode(selected.index),
+          api.decompileBlueprint(selected.index),
+        ]);
+      }
+    } else {
+      [byteRes, decompileRes] = await Promise.all([
+        api.getBlueprintBytecode(selected.index),
+        api.decompileBlueprint(selected.index),
+      ]);
+    }
+
     if (byteRes.success && byteRes.data) {
       setBytecode(byteRes.data.hex);
     } else {
@@ -1050,6 +1070,16 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
 
               {activeTab === 'Decompile' && (
                 <div className="apple-glass-panel rounded-[24px] p-6 space-y-4">
+                  <div className="space-y-1">
+                    <div className="text-white/70 text-xs">Function Path（优先走 /blueprint/:funcpath/*）</div>
+                    <input
+                      type="text"
+                      value={blueprintPath}
+                      onChange={(e) => setBlueprintPath(e.target.value)}
+                      placeholder="例如 BP_ItemGridWDT_C.ExecuteUbergraph_BP_ItemGridWDT"
+                      className="w-full bg-black/40 border border-white/10 text-white text-[12px] font-mono rounded-lg px-3 py-2 outline-none focus:border-primary/50"
+                    />
+                  </div>
                   <button
                     onClick={() => void loadDecompile()}
                     disabled={decompileLoading}
