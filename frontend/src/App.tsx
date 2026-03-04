@@ -46,7 +46,7 @@ function App() {
           setCurrentPage(page);
         }} />;
       case 'objects':
-        return <Objects />;
+        return <Objects onNavigate={setCurrentPage} />;
       case 'functions':
         return <Functions viewMode={functionsViewMode} onViewModeChange={setFunctionsViewMode} />;
       case 'memory':

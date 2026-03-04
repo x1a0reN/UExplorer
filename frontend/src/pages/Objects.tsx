@@ -1,4 +1,5 @@
 ﻿import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { t } from '../i18n';
 import {
   Search,
   Filter,
@@ -13,6 +14,9 @@ import {
   Save,
   Plus,
   RefreshCw,
+  ExternalLink,
+  MapPin,
+  Code2,
 } from 'lucide-react';
 import api, {
   type ActorTransformData,
@@ -26,6 +30,7 @@ import api, {
   type WorldActorDetail,
   type WorldLevelItem,
 } from '../api';
+import type { Page } from '../types';
 
 type ObjectTypeTab = 'All' | 'Class' | 'Struct' | 'Enum' | 'Function' | 'Package' | 'Actor';
 type DetailTab = 'Info' | 'Properties' | 'Fields' | 'Functions' | 'Instances' | 'World';
@@ -40,7 +45,23 @@ interface BrowserItem {
   type: ObjectTypeTab;
 }
 
-const OBJECT_TABS: ObjectTypeTab[] = ['All', 'Class', 'Struct', 'Enum', 'Function', 'Package', 'Actor'];
+interface ObjectsProps {
+  onNavigate?: (page: Page) => void;
+}
+
+const OBJECT_TABS_KEYS: ObjectTypeTab[] = ['All', 'Class', 'Struct', 'Enum', 'Function', 'Package', 'Actor'];
+
+function isClassDefinitionObject(item: BrowserItem, detail: ObjectDetail | null): boolean {
+  if (item.type === 'Class') return true;
+  const className = detail?.class || item.className;
+  return className === 'Class' || className === 'BlueprintGeneratedClass';
+}
+
+function resolveClassLookupName(item: BrowserItem, detail: ObjectDetail | null): string {
+  if (item.type === 'Class') return item.name;
+  if (isClassDefinitionObject(item, detail)) return detail?.name || item.name;
+  return detail?.class || '';
+}
 
 function parseInputValue(raw: string): unknown {
   const trimmed = raw.trim();
@@ -92,7 +113,7 @@ function parseVecInput(input: VecInput): Vec3Data | null {
   return { x, y, z };
 }
 
-export default function Objects() {
+export default function Objects({ onNavigate }: ObjectsProps) {
   const [activeTab, setActiveTab] = useState<DetailTab>('Info');
   const [typeTab, setTypeTab] = useState<ObjectTypeTab>('All');
   const [search, setSearch] = useState('');
@@ -115,6 +136,9 @@ export default function Objects() {
   const [propertyEditMap, setPropertyEditMap] = useState<Record<string, string>>({});
   const [propertyRefreshing, setPropertyRefreshing] = useState<Record<string, boolean>>({});
   const [cdoDiff, setCdoDiff] = useState<Set<string>>(new Set());
+  const [propertyReadOnly, setPropertyReadOnly] = useState(false);
+  const [propertyHint, setPropertyHint] = useState<string | null>(null);
+  const [classSchemaError, setClassSchemaError] = useState<string | null>(null);
   const [outerChain, setOuterChain] = useState<OuterChainItem[]>([]);
   const [actorDetail, setActorDetail] = useState<WorldActorDetail | null>(null);
   const [actorComponents, setActorComponents] = useState<ObjectItem[]>([]);
@@ -125,12 +149,12 @@ export default function Objects() {
 
   const tabs = useMemo(
     () => [
-      { id: 'Info' as DetailTab, icon: Info },
-      { id: 'Properties' as DetailTab, icon: ListTree },
-      { id: 'Fields' as DetailTab, icon: Database },
-      { id: 'Functions' as DetailTab, icon: Hash },
-      { id: 'Instances' as DetailTab, icon: PackageSearch },
-      { id: 'World' as DetailTab, icon: Globe },
+      { id: 'Info' as DetailTab, icon: Info, label: t('Tab Info') },
+      { id: 'Properties' as DetailTab, icon: ListTree, label: t('Tab Properties') },
+      { id: 'Fields' as DetailTab, icon: Database, label: t('Tab Fields') },
+      { id: 'Functions' as DetailTab, icon: Hash, label: t('Tab Functions') },
+      { id: 'Instances' as DetailTab, icon: PackageSearch, label: t('Tab Instances') },
+      { id: 'World' as DetailTab, icon: Globe, label: t('Tab World') },
     ],
     []
   );
@@ -162,6 +186,9 @@ export default function Objects() {
     setWorldLevels([]);
     setTransformInput(toTransformInputState());
     setWorldMessage(null);
+    setPropertyReadOnly(false);
+    setPropertyHint(null);
+    setClassSchemaError(null);
 
     try {
       const q = search.trim();
@@ -206,7 +233,26 @@ export default function Objects() {
         setTotal(res.data.total);
       } else if (typeTab === 'Actor') {
         const res = await api.getWorldActors(0, 200, q);
-        if (!res.success || !res.data) throw new Error(res.error || 'Failed to load actors');
+        // Handle case where world is not available
+        if (!res.success) {
+          // Check if it's a connection issue or world not available
+          if (res.error?.includes('world') || res.error?.includes('World') || res.error?.includes('UWorld')) {
+            setListError(t('No world data') + ' - ' + (res.error || t('Engine may not be connected')));
+          } else {
+            throw new Error(res.error || 'Failed to load actors');
+          }
+          setItems([]);
+          setMatched(0);
+          setTotal(0);
+          return;
+        }
+        if (!res.data) {
+          setListError(t('No world data'));
+          setItems([]);
+          setMatched(0);
+          setTotal(0);
+          return;
+        }
         const mapped: BrowserItem[] = res.data.items.map((it) => ({
           index: it.index,
           name: it.name,
@@ -277,6 +323,9 @@ export default function Objects() {
     setPropertyRefreshing({});
     setTransformInput(toTransformInputState());
     setWorldMessage(null);
+    setPropertyReadOnly(false);
+    setPropertyHint(null);
+    setClassSchemaError(null);
 
     try {
       let currentDetail: ObjectDetail | null = null;
@@ -315,36 +364,67 @@ export default function Objects() {
             editMap[prop.name] = toEditable(prop.value);
           });
           setPropertyEditMap(editMap);
+          setPropertyReadOnly(false);
+          setPropertyHint(null);
         } else {
           setProperties([]);
+          setPropertyReadOnly(false);
+          setPropertyHint(propsRes.error || '对象属性读取失败');
         }
       } else {
         setProperties([]);
       }
 
-      if (item.type === 'Class' || (currentDetail?.class && item.type !== 'Struct' && item.type !== 'Enum')) {
-        const className = item.type === 'Class' ? item.name : currentDetail?.class || '';
-        if (className) {
-          const [fieldRes, funcRes, instanceRes, cdoRes] = await Promise.all([
-            api.getClassFields(className),
-            api.getClassFunctions(className),
-            api.getClassInstances(className, 0, 100),
-            api.getClassCDO(className),
-          ]);
-          if (fieldRes.success && fieldRes.data) setFields(fieldRes.data);
-          if (funcRes.success && funcRes.data) setFunctions(funcRes.data);
-          if (instanceRes.success && instanceRes.data) setInstances(instanceRes.data.items);
+      const className = resolveClassLookupName(item, currentDetail);
+      if (className && item.type !== 'Struct' && item.type !== 'Enum' && item.type !== 'Package') {
+        const [fieldRes, funcRes, instanceRes, cdoRes] = await Promise.all([
+          api.getClassFields(className),
+          api.getClassFunctions(className),
+          api.getClassInstances(className, 0, 100),
+          api.getClassCDO(className),
+        ]);
 
-          if (cdoRes.success && cdoRes.data && loadedProperties.length > 0) {
-            const cdoMap = new Map(cdoRes.data.properties.map((p) => [p.name, p.value]));
-            const diff = new Set<string>();
-            loadedProperties.forEach((p) => {
-              if (cdoMap.has(p.name) && cdoMap.get(p.name) !== p.value) {
-                diff.add(p.name);
-              }
-            });
-            setCdoDiff(diff);
-          }
+        const schemaErrors: string[] = [];
+        if (fieldRes.success && fieldRes.data) {
+          setFields(fieldRes.data);
+        } else {
+          schemaErrors.push(`Fields: ${fieldRes.error || 'load failed'}`);
+        }
+        if (funcRes.success && funcRes.data) {
+          setFunctions(funcRes.data);
+        } else {
+          schemaErrors.push(`Functions: ${funcRes.error || 'load failed'}`);
+        }
+        if (instanceRes.success && instanceRes.data) {
+          setInstances(instanceRes.data.items);
+        } else {
+          schemaErrors.push(`Instances: ${instanceRes.error || 'load failed'}`);
+        }
+        if (schemaErrors.length > 0) {
+          setClassSchemaError(schemaErrors.join(' | '));
+        }
+
+        if (cdoRes.success && cdoRes.data && loadedProperties.length > 0) {
+          const cdoMap = new Map(cdoRes.data.properties.map((p) => [p.name, p.value]));
+          const diff = new Set<string>();
+          loadedProperties.forEach((p) => {
+            if (cdoMap.has(p.name) && cdoMap.get(p.name) !== p.value) {
+              diff.add(p.name);
+            }
+          });
+          setCdoDiff(diff);
+        }
+
+        if (cdoRes.success && cdoRes.data && loadedProperties.length === 0 && isClassDefinitionObject(item, currentDetail)) {
+          loadedProperties = cdoRes.data.properties;
+          setProperties(loadedProperties);
+          const editMap: Record<string, string> = {};
+          loadedProperties.forEach((prop) => {
+            editMap[prop.name] = toEditable(prop.value);
+          });
+          setPropertyEditMap(editMap);
+          setPropertyReadOnly(true);
+          setPropertyHint('当前显示类 CDO 默认属性（只读）');
         }
       }
 
@@ -362,14 +442,8 @@ export default function Objects() {
         } else {
           setWorldText('未能加载包内容');
         }
-      } else if (item.type === 'Actor') {
-        const [worldRes, actorRes, actorComponentsRes, levelRes] = await Promise.all([
-          api.getWorldShortcuts(),
-          api.getWorldActorDetail(item.index),
-          api.getWorldActorComponents(item.index),
-          api.getWorldLevels(),
-        ]);
-
+      } else {
+        const worldRes = await api.getWorldShortcuts();
         if (worldRes.success && worldRes.data) {
           const shortcuts = [
             worldRes.data.game_mode?.name,
@@ -384,6 +458,10 @@ export default function Objects() {
           setWorldText('未能加载 world shortcuts');
         }
 
+        const [actorRes, actorComponentsRes] = await Promise.all([
+          api.getWorldActorDetail(item.index),
+          api.getWorldActorComponents(item.index),
+        ]);
         if (actorRes.success && actorRes.data) {
           setActorDetail(actorRes.data);
           setTransformInput(toTransformInputState(actorRes.data.transform));
@@ -392,23 +470,18 @@ export default function Objects() {
           } else {
             setActorComponents(actorRes.data.components || []);
           }
+
+          const levelRes = await api.getWorldLevels();
+          if (levelRes.success && levelRes.data) {
+            setWorldLevels(levelRes.data.levels);
+          } else {
+            setWorldLevels([]);
+          }
         } else {
           setActorDetail(null);
           setActorComponents([]);
-          setWorldMessage(actorRes.error || '未能加载 Actor Transform');
-        }
-
-        if (levelRes.success && levelRes.data) {
-          setWorldLevels(levelRes.data.levels);
-        } else {
           setWorldLevels([]);
-        }
-      } else {
-        const levelRes = await api.getWorldLevels();
-        if (levelRes.success && levelRes.data) {
-          setWorldLevels(levelRes.data.levels);
-        } else {
-          setWorldLevels([]);
+          setWorldMessage(null);
         }
       }
     } catch (error) {
@@ -419,7 +492,7 @@ export default function Objects() {
   };
 
   const saveProperty = async (propertyName: string) => {
-    if (!selected) return;
+    if (!selected || propertyReadOnly) return;
     const raw = propertyEditMap[propertyName] ?? '';
     const parsed = parseInputValue(raw);
     const res = await api.setObjectProperty(selected.index, propertyName, parsed);
@@ -431,7 +504,7 @@ export default function Objects() {
   };
 
   const refreshSingleProperty = async (propertyName: string) => {
-    if (!selected) return;
+    if (!selected || propertyReadOnly) return;
     setPropertyRefreshing((prev) => ({ ...prev, [propertyName]: true }));
     const res = await api.getObjectPropertyValue(selected.index, propertyName);
     setPropertyRefreshing((prev) => ({ ...prev, [propertyName]: false }));
@@ -451,7 +524,7 @@ export default function Objects() {
   };
 
   const addWatch = async (propertyName: string) => {
-    if (!selected) return;
+    if (!selected || propertyReadOnly) return;
     const res = await api.addWatch(selected.index, propertyName);
     if (!res.success) {
       setDetailError(res.error || 'Failed to add watch');
@@ -469,7 +542,7 @@ export default function Objects() {
   };
 
   const applyActorTransform = async () => {
-    if (!selected || selected.type !== 'Actor') return;
+    if (!selected || !actorDetail) return;
     const location = parseVecInput(transformInput.location);
     const rotation = parseVecInput(transformInput.rotation);
     const scale = parseVecInput(transformInput.scale);
@@ -515,7 +588,7 @@ export default function Objects() {
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search name/path..."
+              placeholder={t('Search name/path...')}
               className="w-full bg-white/5 border border-white/10 text-white text-[13px] rounded-lg pl-9 pr-3 py-2 outline-none focus:border-primary/50 focus:bg-white/10 transition-all font-medium placeholder:text-white/30"
             />
           </div>
@@ -525,12 +598,12 @@ export default function Objects() {
               type="text"
               value={packageFilter}
               onChange={(e) => setPackageFilter(e.target.value)}
-              placeholder="Package filter"
+              placeholder={t('Package filter')}
               className="w-full bg-white/5 border border-white/10 text-white text-[13px] rounded-lg pl-9 pr-3 py-2 outline-none focus:border-primary/50 focus:bg-white/10 transition-all font-medium placeholder:text-white/30"
             />
           </div>
           <div className="flex items-center gap-1 bg-white/5 p-1 rounded-[8px] border border-white/5 overflow-x-auto">
-            {OBJECT_TABS.map((tab) => (
+            {OBJECT_TABS_KEYS.map((tab) => (
               <button
                 key={tab}
                 onClick={() => setTypeTab(tab)}
@@ -538,13 +611,13 @@ export default function Objects() {
                   typeTab === tab ? 'bg-white/10 text-white shadow-sm' : 'text-white/50 hover:text-white'
                 }`}
               >
-                {tab}
+                {t('Tab ' + tab)}
               </button>
             ))}
             <button
               onClick={() => void loadList()}
               className="ml-auto w-7 h-7 flex items-center justify-center rounded-[8px] hover:bg-white/10 text-white/50 hover:text-white transition-colors"
-              title="Refresh"
+              title={t('Refresh')}
             >
               <RefreshCw className="w-3.5 h-3.5" />
             </button>
@@ -552,9 +625,9 @@ export default function Objects() {
         </div>
 
         <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
-          {listLoading && <div className="text-white/40 text-[12px] p-3">Loading...</div>}
+          {listLoading && <div className="text-white/40 text-[12px] p-3">{t('Loading...')}</div>}
           {listError && <div className="text-red-300 text-[12px] p-3">{listError}</div>}
-          {!listLoading && !listError && items.length === 0 && <div className="text-white/40 text-[12px] p-3">No data</div>}
+          {!listLoading && !listError && items.length === 0 && <div className="text-white/40 text-[12px] p-3">{t('No data')}</div>}
           {items.map((item) => {
             const active = selected?.index === item.index && selected?.type === item.type;
             return (
@@ -570,14 +643,42 @@ export default function Objects() {
                     <Layers className="w-4 h-4" />
                   ) : item.type === 'Struct' ? (
                     <Database className="w-4 h-4" />
+                  ) : item.type === 'Actor' ? (
+                    <MapPin className="w-4 h-4" />
                   ) : (
                     <Box className="w-4 h-4" />
                   )}
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className={`text-[13px] font-semibold truncate ${active ? 'text-white' : 'text-white/90'}`}>{item.name}</div>
-                  <div className={`text-[11px] font-mono truncate ${active ? 'text-white/70' : 'text-white/40'}`}>{item.className}</div>
-                  <div className={`text-[10px] font-mono truncate ${active ? 'text-white/60' : 'text-white/30'}`}>{item.address}</div>
+                  <div
+                    className={`text-[11px] font-mono truncate cursor-pointer hover:underline ${active ? 'text-blue-300' : 'text-blue-400'} flex items-center gap-1`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (onNavigate) {
+                        onNavigate('functions');
+                      }
+                    }}
+                    title={t('Click to view functions')}
+                  >
+                    <Code2 className="w-3 h-3" />
+                    {item.className}
+                  </div>
+                  {item.address !== '-' && (
+                    <div
+                      className={`text-[10px] font-mono truncate cursor-pointer hover:underline ${active ? 'text-green-300' : 'text-green-400'} flex items-center gap-1`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (onNavigate) {
+                          onNavigate('memory');
+                        }
+                      }}
+                      title={t('Click to open in Memory Tool')}
+                    >
+                      <ExternalLink className="w-3 h-3" />
+                      {item.address}
+                    </div>
+                  )}
                 </div>
               </div>
             );
@@ -585,8 +686,8 @@ export default function Objects() {
         </div>
 
         <div className="p-3 border-t border-white/5 bg-black/40 flex justify-between items-center text-[10px] font-medium text-white/40">
-          <span>Total {total.toLocaleString()}</span>
-          <span>Matched {matched.toLocaleString()}</span>
+          <span>{t('Total')} {total.toLocaleString()}</span>
+          <span>{t('Matched')} {matched.toLocaleString()}</span>
         </div>
       </div>
 
@@ -602,7 +703,7 @@ export default function Objects() {
                 }`}
               >
                 <tab.icon className="w-4 h-4" />
-                {tab.id}
+                {tab.label}
                 {activeTab === tab.id && (
                   <div className="absolute bottom-0 left-0 right-0 h-[3px] bg-primary rounded-t-full shadow-[0_-2px_8px_rgba(10,132,255,0.5)]" />
                 )}
@@ -612,7 +713,7 @@ export default function Objects() {
         </div>
 
         <div className="flex-1 overflow-auto p-8 relative">
-          {!selected && <div className="text-white/40 text-sm">Select an item on the left panel.</div>}
+          {!selected && <div className="text-white/40 text-sm">{t('Select an item on the left panel.')}</div>}
           {selected && (
             <div className="max-w-5xl space-y-6">
               <div className="apple-glass-panel rounded-[24px] p-6 relative overflow-hidden">
@@ -625,32 +726,52 @@ export default function Objects() {
                     <h1 className="text-[24px] font-semibold text-white tracking-tight leading-tight mb-1">{selected.name}</h1>
                     <p className="text-[13px] text-white/50 font-mono mb-4">{detail?.full_name || selected.className}</p>
                     <div className="flex flex-wrap gap-2">
-                      <span className="px-2.5 py-1 rounded-[6px] bg-white/5 border border-white/10 text-[11px] font-mono text-white/60">
-                        Class: {detail?.class || selected.className}
+                      <span
+                        className="px-2.5 py-1 rounded-[6px] bg-white/5 border border-white/10 text-[11px] font-mono text-blue-400 cursor-pointer hover:bg-blue-500/20 hover:border-blue-500/30 flex items-center gap-1"
+                        onClick={() => onNavigate?.('functions')}
+                        title={t('Click to view functions')}
+                      >
+                        <Code2 className="w-3 h-3" />
+                        {t('Obj Class')}: {detail?.class || selected.className}
                       </span>
                       <span className="px-2.5 py-1 rounded-[6px] bg-green-500/10 border border-green-500/20 text-[11px] font-mono text-green-400">
-                        Index: {selected.index}
+                        {t('Index')}: {selected.index}
                       </span>
-                      <span className="px-2.5 py-1 rounded-[6px] bg-purple-500/10 border border-purple-500/20 text-[11px] font-mono text-purple-400">
-                        Address: {selected.address}
+                      <span
+                        className="px-2.5 py-1 rounded-[6px] bg-purple-500/10 border border-purple-500/20 text-[11px] font-mono text-purple-400 cursor-pointer hover:bg-purple-500/20 hover:border-purple-500/30 flex items-center gap-1"
+                        onClick={() => onNavigate?.('memory')}
+                        title={t('Click to open in Memory Tool')}
+                      >
+                        <ExternalLink className="w-3 h-3" />
+                        {t('Address')}: {selected.address}
                       </span>
                     </div>
                   </div>
                 </div>
               </div>
 
-              {detailLoading && <div className="text-white/40 text-sm">Loading detail...</div>}
+              {detailLoading && <div className="text-white/40 text-sm">{t('Loading detail...')}</div>}
               {detailError && <div className="text-red-300 text-sm">{detailError}</div>}
 
               {activeTab === 'Info' && (
-                <Panel title="Detailed Information">
-                  <InfoRow label="Name" value={detail?.name || selected.name} />
-                  <InfoRow label="Full Name" value={detail?.full_name || '-'} />
-                  <InfoRow label="Class" value={detail?.class || selected.className} />
-                  <InfoRow label="Address" value={detail?.address || selected.address} />
-                  <InfoRow label="Outer Chain Count" value={String(outerChain.length)} />
+                <Panel title={t('Detailed Information')}>
+                  <InfoRow label={t('Obj Name')} value={detail?.name || selected.name} />
+                  <InfoRow label={t('Full Name')} value={detail?.full_name || '-'} />
+                  <InfoRow
+                    label={t('Obj Class')}
+                    value={detail?.class || selected.className}
+                    isLink
+                    onClick={() => onNavigate?.('functions')}
+                  />
+                  <InfoRow
+                    label={t('Address')}
+                    value={detail?.address || selected.address}
+                    isLink
+                    onClick={() => onNavigate?.('memory')}
+                  />
+                  <InfoRow label={t('Outer Chain Count')} value={String(outerChain.length)} />
                   <div className="mt-3 rounded-lg border border-white/10 bg-black/20 p-3 max-h-56 overflow-auto">
-                    {outerChain.length === 0 && <div className="text-white/40 text-xs">No outer chain data</div>}
+                    {outerChain.length === 0 && <div className="text-white/40 text-xs">{t('No outer chain data')}</div>}
                     {outerChain.map((node, idx) => (
                       <div key={`${node.index}-${idx}`} className="text-xs text-white/80 font-mono py-1 border-b border-white/5 last:border-b-0">
                         <div className="text-white/50">[{idx}] {node.name}</div>
@@ -663,9 +784,10 @@ export default function Objects() {
               )}
 
               {activeTab === 'Properties' && (
-                <Panel title="Properties">
+                <Panel title={t('Properties')}>
                   <div className="space-y-2">
-                    {properties.length === 0 && <div className="text-white/40 text-sm">No properties</div>}
+                    {propertyHint && <div className="text-yellow-300 text-xs">{propertyHint}</div>}
+                    {properties.length === 0 && <div className="text-white/40 text-sm">{t('No properties')}</div>}
                     {properties.map((prop) => (
                       <div
                         key={prop.name}
@@ -689,24 +811,27 @@ export default function Objects() {
                         />
                         <button
                           onClick={() => void saveProperty(prop.name)}
-                          className="px-2 py-1 rounded-md bg-primary/80 hover:bg-primary text-white text-xs flex items-center gap-1"
+                          disabled={propertyReadOnly}
+                          className="px-2 py-1 rounded-md bg-primary/80 hover:bg-primary text-white text-xs flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
                         >
                           <Save className="w-3 h-3" />
-                          Save
+                          {t('Save')}
                         </button>
                         <button
                           onClick={() => void refreshSingleProperty(prop.name)}
-                          className="px-2 py-1 rounded-md bg-white/10 hover:bg-white/20 text-white text-xs flex items-center gap-1"
+                          disabled={propertyReadOnly}
+                          className="px-2 py-1 rounded-md bg-white/10 hover:bg-white/20 text-white text-xs flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
                         >
                           <RefreshCw className={`w-3 h-3 ${propertyRefreshing[prop.name] ? 'animate-spin' : ''}`} />
-                          Read
+                          {t('Read')}
                         </button>
                         <button
                           onClick={() => void addWatch(prop.name)}
-                          className="px-2 py-1 rounded-md bg-white/10 hover:bg-white/20 text-white text-xs flex items-center gap-1"
+                          disabled={propertyReadOnly}
+                          className="px-2 py-1 rounded-md bg-white/10 hover:bg-white/20 text-white text-xs flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
                         >
                           <Plus className="w-3 h-3" />
-                          Watch
+                          {t('Watch')}
                         </button>
                       </div>
                     ))}
@@ -715,94 +840,123 @@ export default function Objects() {
               )}
 
               {activeTab === 'Fields' && (
-                <Panel title="Fields">
+                <Panel title={t('Fields')}>
+                  {classSchemaError && <div className="text-yellow-300 text-xs mb-2">{classSchemaError}</div>}
                   <table className="w-full text-left text-xs">
                     <thead>
                       <tr className="text-white/40 border-b border-white/10">
-                        <th className="py-2">Offset</th>
-                        <th>Name</th>
-                        <th>Type</th>
-                        <th>Size</th>
-                        <th>Flags</th>
+                        <th className="py-2">{t('Offset')}</th>
+                        <th>{t('Name')}</th>
+                        <th>{t('Type')}</th>
+                        <th>{t('Size')}</th>
+                        <th>{t('Flags')}</th>
                       </tr>
                     </thead>
                     <tbody>
                       {fields.map((field) => (
-                        <tr key={`${field.name}-${field.offset}`} className="border-b border-white/5">
+                        <tr key={`${field.name}-${field.offset}`} className="border-b border-white/5 hover:bg-white/5">
                           <td className="py-2 text-white/60 font-mono">{field.offset}</td>
                           <td className="text-white/90 font-mono">{field.name}</td>
-                          <td className="text-white/70">{field.type}</td>
+                          <td
+                            className="text-blue-400 cursor-pointer hover:underline"
+                            onClick={() => onNavigate?.('functions')}
+                            title={t('Click to view functions')}
+                          >
+                            {field.type}
+                          </td>
                           <td className="text-white/60">{field.size}</td>
-                          <td className="text-white/40">{field.flags}</td>
+                          <td className="text-white/40 font-mono">{field.flags}</td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
-                  {fields.length === 0 && <div className="text-white/40 text-sm">No fields</div>}
+                  {fields.length === 0 && <div className="text-white/40 text-sm">{t('No fields')}</div>}
                 </Panel>
               )}
 
               {activeTab === 'Functions' && (
-                <Panel title="Functions">
+                <Panel title={t('Functions')}>
+                  {classSchemaError && <div className="text-yellow-300 text-xs mb-2">{classSchemaError}</div>}
                   <div className="space-y-2">
                     {functions.map((fn) => (
-                      <div key={fn.full_name} className="p-3 rounded-lg border border-white/5 bg-black/20">
-                        <div className="text-white/90 font-mono text-sm">{fn.full_name}</div>
-                        <div className="text-white/50 text-xs mt-1">Flags: {fn.flags}</div>
-                        <div className="text-white/40 text-xs mt-1">Params: {fn.params.length}</div>
+                      <div
+                        key={fn.full_name}
+                        className="p-3 rounded-lg border border-white/5 bg-black/20 hover:bg-white/5 cursor-pointer"
+                        onClick={() => onNavigate?.('functions')}
+                        title={t('Click to view function details')}
+                      >
+                        <div className="text-white/90 font-mono text-sm flex items-center gap-2">
+                          <Hash className="w-4 h-4 text-blue-400" />
+                          {fn.full_name}
+                        </div>
+                        <div className="text-white/50 text-xs mt-1">{t('Flags')}: {fn.flags}</div>
+                        <div className="text-white/40 text-xs mt-1">{t('Params')}: {fn.params.length}</div>
                       </div>
                     ))}
-                    {functions.length === 0 && <div className="text-white/40 text-sm">No functions</div>}
+                    {functions.length === 0 && <div className="text-white/40 text-sm">{t('No functions')}</div>}
                   </div>
                 </Panel>
               )}
 
               {activeTab === 'Instances' && (
-                <Panel title="Instances">
+                <Panel title={t('Instances')}>
                   <div className="space-y-2">
                     {instances.map((inst) => (
-                      <div key={`${inst.index}-${inst.address}`} className="p-3 rounded-lg border border-white/5 bg-black/20">
+                      <div
+                        key={`${inst.index}-${inst.address}`}
+                        className="p-3 rounded-lg border border-white/5 bg-black/20 hover:bg-white/5 cursor-pointer"
+                        onClick={() => onNavigate?.('memory')}
+                        title={t('Click to open in Memory Tool')}
+                      >
                         <div className="text-white/90 font-mono text-sm">{inst.name}</div>
-                        <div className="text-white/40 text-xs mt-1">
+                        <div className="text-green-400 text-xs mt-1 flex items-center gap-1">
+                          <ExternalLink className="w-3 h-3" />
                           #{inst.index} / {inst.address}
                         </div>
                       </div>
                     ))}
-                    {instances.length === 0 && <div className="text-white/40 text-sm">No instances</div>}
+                    {instances.length === 0 && <div className="text-white/40 text-sm">{t('No instances')}</div>}
                   </div>
                 </Panel>
               )}
 
               {activeTab === 'World' && (
-                <Panel title="World">
+                <Panel title={t('World')}>
                   <div className="space-y-4">
                     <div className="text-white/70 text-sm whitespace-pre-wrap">{worldText}</div>
 
                     <div className="rounded-lg border border-white/10 bg-black/20 p-3">
                       <div className="text-xs uppercase tracking-wider text-white/50 mb-2">
-                        Loaded Levels ({worldLevels.length})
+                        {t('Loaded Levels')} ({worldLevels.length})
                       </div>
                       <div className="max-h-40 overflow-auto space-y-1">
                         {worldLevels.map((lv) => (
-                          <div key={`${lv.index}-${lv.address}`} className="text-xs text-white/80 font-mono">
-                            {lv.name} [{lv.source || 'Unknown'}]
+                          <div
+                            key={`${lv.index}-${lv.address}`}
+                            className="text-xs text-white/80 font-mono hover:text-blue-400 cursor-pointer flex items-center gap-2 py-1"
+                            onClick={() => onNavigate?.('objects')}
+                            title={t('Click to view level object')}
+                          >
+                            <Globe className="w-3 h-3 text-white/40" />
+                            {lv.name}
+                            <span className="text-white/30">[{lv.source || t('Unknown')}]</span>
                           </div>
                         ))}
-                        {worldLevels.length === 0 && <div className="text-xs text-white/40">No levels</div>}
+                        {worldLevels.length === 0 && <div className="text-xs text-white/40">{t('No levels')}</div>}
                       </div>
                     </div>
 
-                    {selected.type !== 'Actor' && (
-                      <div className="text-white/40 text-sm">当前对象不是 Actor，无法编辑 Transform。</div>
+                    {!actorDetail && (
+                      <div className="text-white/40 text-sm">{t('Not Actor Transform')}</div>
                     )}
 
-                    {selected.type === 'Actor' && (
+                    {actorDetail && (
                       <>
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                           {([
-                            { key: 'location' as const, label: 'Location' },
-                            { key: 'rotation' as const, label: 'Rotation' },
-                            { key: 'scale' as const, label: 'Scale' },
+                            { key: 'location' as const, label: t('Location') },
+                            { key: 'rotation' as const, label: t('Rotation') },
+                            { key: 'scale' as const, label: t('Scale') },
                           ]).map((section) => (
                             <div key={section.key} className="rounded-lg border border-white/10 bg-black/20 p-3 space-y-2">
                               <div className="text-xs uppercase tracking-wider text-white/50">{section.label}</div>
@@ -827,18 +981,18 @@ export default function Objects() {
                             disabled={worldSaving}
                             className="px-3 py-2 rounded-lg bg-primary hover:bg-primary-dark text-white text-sm disabled:opacity-50"
                           >
-                            {worldSaving ? '写入中...' : '应用 Transform'}
+                            {worldSaving ? t('写入中...') : t('应用 Transform')}
                           </button>
                           <button
                             onClick={() => {
                               if (actorDetail) {
                                 setTransformInput(toTransformInputState(actorDetail.transform));
-                                setWorldMessage('已恢复为最近一次服务端状态');
+                                setWorldMessage(t('已恢复为最近一次服务端状态'));
                               }
                             }}
                             className="px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-white text-sm"
                           >
-                            回滚输入
+                            {t('回滚输入')}
                           </button>
                         </div>
 
@@ -846,16 +1000,23 @@ export default function Objects() {
 
                         <div className="rounded-lg border border-white/10 bg-black/20 p-3">
                           <div className="text-xs uppercase tracking-wider text-white/50 mb-2">
-                            Components ({actorComponents.length})
+                            {t('Components')} ({actorComponents.length})
                           </div>
                           <div className="max-h-40 overflow-auto space-y-1">
                             {actorComponents.map((comp) => (
-                              <div key={`${comp.index}-${comp.address}`} className="text-xs text-white/80 font-mono">
-                                {comp.class} :: {comp.name}
+                              <div
+                                key={`${comp.index}-${comp.address}`}
+                                className="text-xs text-white/80 font-mono hover:text-blue-400 cursor-pointer py-1"
+                                onClick={() => onNavigate?.('objects')}
+                                title={t('Click to view component')}
+                              >
+                                <span className="text-blue-300">{comp.class}</span>
+                                <span className="text-white/40"> :: </span>
+                                <span>{comp.name}</span>
                               </div>
                             ))}
                             {actorComponents.length === 0 && (
-                              <div className="text-xs text-white/40">No components</div>
+                              <div className="text-xs text-white/40">{t('No components')}</div>
                             )}
                           </div>
                         </div>
@@ -883,11 +1044,17 @@ function Panel({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
-function InfoRow({ label, value }: { label: string; value: string }) {
+function InfoRow({ label, value, isLink, onClick }: { label: string; value: string; isLink?: boolean; onClick?: () => void }) {
   return (
     <div className="grid grid-cols-[180px_1fr] gap-3 py-2 border-b border-white/5 last:border-b-0">
       <div className="text-white/50 text-xs">{label}</div>
-      <div className="text-white/90 text-xs font-mono break-all">{value}</div>
+      <div
+        className={`text-xs font-mono break-all ${isLink ? 'cursor-pointer text-blue-400 hover:underline flex items-center gap-1' : 'text-white/90'}`}
+        onClick={isLink ? onClick : undefined}
+      >
+        {isLink && <ExternalLink className="w-3 h-3" />}
+        {value}
+      </div>
     </div>
   );
 }
