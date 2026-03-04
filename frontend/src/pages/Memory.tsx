@@ -1,5 +1,6 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Terminal, Binary, Bookmark, Search, ArrowRight, ArrowLeft, RefreshCw, Layers, Plus, Trash2 } from 'lucide-react';
+import { t } from '../i18n';
 import api, { type WatchHistoryEntry, type WatchItem } from '../api';
 
 const READ_SIZE = 256;
@@ -342,7 +343,7 @@ export default function Memory() {
       } else if (head === 'set' && parts.length >= 3) {
         const [objAndProp, ...valueParts] = parts.slice(1);
         const dot = objAndProp.lastIndexOf('.');
-        if (dot <= 0) throw new Error('Use: set <objectIndex>.<property> <value>');
+        if (dot <= 0) throw new Error(t('Use: set <objectIndex>.<property> <value>'));
         const objectIndex = Number(objAndProp.slice(0, dot));
         const property = objAndProp.slice(dot + 1);
         const value = parseInputValue(valueParts.join(' '));

@@ -17,6 +17,7 @@ UExplorer is a desktop tool for Unreal Engine SDK dumping and live game explorat
 3. **After every code modification, you must clearly inform the user: exactly what was modified, the motive behind the change, the specific problem it solved, and the root cause that necessitated the modification.**
 4. **After modifying the code, you must push the changes to GitHub and then compile using the following command: powershell -Command "& 'D:\Program Files\Visual Studio 2026\MSBuild\Current\Bin\MSBuild.exe' 'D:\Projects\UExplorer\Dumper\UExplorerCore.vcxproj' /p:Configuration=Release /p:Platform=x64 /m:1 /v:minimal 2>&1"**
 5. **After every code modification, you must review DESIGN.md and update the current project progress within it.**
+6. **我明确告诉你，我不要fallback，行就是行，不行就是不行，不要给我退而求其次的fallback**
 
 
 ## Build Commands

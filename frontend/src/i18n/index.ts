@@ -19,10 +19,10 @@ export function setLanguage(lang: Language): void {
 }
 
 // Translation function
-export function t(key: keyof typeof translations.zh): string {
+export function t(key: string): string {
   const lang = getLanguage();
   const dict = translations[lang];
-  return dict[key] || key;
+  return dict[key as keyof typeof dict] || key;
 }
 
 // Get translations for current language

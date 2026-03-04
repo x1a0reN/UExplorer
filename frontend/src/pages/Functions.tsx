@@ -1,5 +1,6 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Search, Filter, TerminalSquare, Play, Info, List, History, Power, RefreshCw, Cpu } from 'lucide-react';
+import { t } from '../i18n';
 import api, { type ClassFunction, type HookItem, type HookLogEntry, type ObjectDetail, type ObjectItem } from '../api';
 
 type FunctionTab = 'Info' | 'Parameters' | 'Call' | 'Hook' | 'Decompile';
@@ -306,7 +307,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
         offset: 0,
         limit: 300,
       });
-      if (!res.success || !res.data) throw new Error(res.error || 'Failed to load functions');
+      if (!res.success || !res.data) throw new Error(res.error || t('Failed to load functions'));
 
       let next = res.data.items.map((it: ObjectItem) => ({
         index: it.index,
@@ -343,7 +344,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
     try {
       const detailRes = await api.getObjectByIndex(index);
       if (!detailRes.success || !detailRes.data) {
-        throw new Error(detailRes.error || 'Failed to load function detail');
+        throw new Error(detailRes.error || t('Failed to load function detail'));
       }
       setDetail(detailRes.data);
 
@@ -354,7 +355,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
 
       const classFuncRes = await api.getClassFunctions(parts.className);
       if (!classFuncRes.success || !classFuncRes.data) {
-        throw new Error(classFuncRes.error || 'Failed to load class functions');
+        throw new Error(classFuncRes.error || t('Failed to load class functions'));
       }
       const found = classFuncRes.data.find((f) => f.name === parts.functionName) || null;
       setFunctionMeta(found);
@@ -708,14 +709,14 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
                     type="text"
                     value={hookFilterKeyword}
                     onChange={(e) => setHookFilterKeyword(e.target.value)}
-                    placeholder="按函数名过滤（关键词）"
+                    placeholder={t('Search function name...')}
                     className="bg-black/40 border border-white/10 text-white text-[13px] rounded-lg px-3 py-2 outline-none focus:border-primary/50"
                   />
                   <input
                     type="text"
                     value={hookFilterClass}
                     onChange={(e) => setHookFilterClass(e.target.value)}
-                    placeholder="按类名过滤（Class）"
+                    placeholder={t('Search class name...')}
                     className="bg-black/40 border border-white/10 text-white text-[13px] rounded-lg px-3 py-2 outline-none focus:border-primary/50"
                   />
                   <button

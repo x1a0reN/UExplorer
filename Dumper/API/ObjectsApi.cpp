@@ -6,6 +6,7 @@
 #include "Unreal/ObjectArray.h"
 #include "Unreal/UnrealObjects.h"
 #include "Unreal/UnrealTypes.h"
+#include "Unreal/NameArray.h"
 #include "Unreal/UnrealContainers.h"
 #include "Unreal/Enums.h"
 #include "Platform.h"
@@ -25,6 +26,10 @@ struct PropertyReadResult
 	json value;
 	const char* state = "unknown"; // ok / empty / unknown
 };
+
+template<typename T>
+static bool TryReadValueSafe(const uint8* addr, T& outValue);
+static bool TryReadFNameStringSafe(const uint8* addr, std::string& outValue, std::string& outReason);
 
 static PropertyReadResult MakeUnknown(const std::string& typeName, const std::string& reason = "")
 {
@@ -62,24 +67,56 @@ static json SerializeObjectRef(void* ptr)
 
 	out["is_null"] = false;
 	out["address"] = std::format("0x{:X}", reinterpret_cast<uintptr_t>(ptr));
+	out["name"] = nullptr;
+	out["class"] = nullptr;
+	out["index"] = nullptr;
 
-	UEObject ref(ptr);
-	if (!ref)
+	const uint8* obj = reinterpret_cast<const uint8*>(ptr);
+	if (!Platform::IsAddressInProcessRange(ptr) || Platform::IsBadReadPtr(ptr))
 	{
-		out["name"] = nullptr;
-		out["class"] = nullptr;
-		out["index"] = nullptr;
+		out["state"] = "invalid_pointer";
 		return out;
 	}
 
-	try { out["name"] = ref.GetName(); } catch (...) { out["name"] = nullptr; }
-	try
+	int32 index = -1;
+	if (TryReadValueSafe<int32>(obj + Off::UObject::Index, index))
+		out["index"] = index;
+
+	std::string objName;
+	std::string objNameReason;
+	if (TryReadFNameStringSafe(obj + Off::UObject::Name, objName, objNameReason))
 	{
-		UEObject cls = ref.GetClass();
-		out["class"] = cls ? json(cls.GetName()) : json(nullptr);
+		out["name"] = std::move(objName);
 	}
-	catch (...) { out["class"] = nullptr; }
-	try { out["index"] = ref.GetIndex(); } catch (...) { out["index"] = nullptr; }
+	else if (!objNameReason.empty())
+	{
+		out["name_reason"] = objNameReason;
+	}
+
+	void* clsPtr = nullptr;
+	if (!TryReadValueSafe<void*>(obj + Off::UObject::Class, clsPtr) || !clsPtr)
+	{
+		out["class_reason"] = "class_ptr_unreadable";
+		return out;
+	}
+
+	if (!Platform::IsAddressInProcessRange(clsPtr) || Platform::IsBadReadPtr(clsPtr))
+	{
+		out["class_reason"] = "class_ptr_invalid";
+		return out;
+	}
+
+	std::string clsName;
+	std::string clsNameReason;
+	if (TryReadFNameStringSafe(reinterpret_cast<const uint8*>(clsPtr) + Off::UObject::Name, clsName, clsNameReason))
+	{
+		out["class"] = std::move(clsName);
+	}
+	else if (!clsNameReason.empty())
+	{
+		out["class_reason"] = clsNameReason;
+	}
+
 	return out;
 }
 
@@ -111,10 +148,78 @@ static bool TryReadArrayHeader(uint8* addr, uintptr_t& outData, int32& outNum, i
 	return true;
 }
 
+template<typename T>
+static bool TryReadValueSafe(const uint8* addr, T& outValue)
+{
+	if (!addr)
+		return false;
+
+	__try
+	{
+		outValue = *reinterpret_cast<const T*>(addr);
+		return true;
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		return false;
+	}
+}
+
+static bool TryReadFNameStringSafe(const uint8* addr, std::string& outValue, std::string& outReason)
+{
+	if (!addr || Platform::IsBadReadPtr(addr))
+	{
+		outReason = "bad_address";
+		return false;
+	}
+
+	int32 compIdx = -1;
+	if (!TryReadValueSafe<int32>(addr + Off::FName::CompIdx, compIdx))
+	{
+		outReason = "compidx_unreadable";
+		return false;
+	}
+
+	if (compIdx < 0 || compIdx > 0x3FFFFFFF)
+	{
+		outReason = "compidx_out_of_range";
+		return false;
+	}
+
+	FNameEntry entry = NameArray::GetNameEntry(compIdx);
+	if (!entry.GetAddress())
+	{
+		outReason = "name_entry_missing";
+		return false;
+	}
+
+	std::string base = entry.GetString();
+	if (base.empty())
+	{
+		outReason = "name_entry_empty";
+		return false;
+	}
+
+	if (!Settings::Internal::bUseOutlineNumberName)
+	{
+		uint32 number = 0;
+		if (TryReadValueSafe<uint32>(addr + Off::FName::Number, number) && number > 0 && number < 0x1000000)
+		{
+			outValue = std::format("{}_{}", base, number - 1);
+			return true;
+		}
+	}
+
+	outValue = std::move(base);
+	return true;
+}
+
 static PropertyReadResult ReadPropertyValueAt(uint8* addr, const UEProperty& prop, int depth = 0)
 {
 	if (!addr)
 		return MakeUnknown(prop.GetCppType(), "null_address");
+	if (Platform::IsBadReadPtr(addr))
+		return MakeUnknown(prop.GetCppType(), "bad_address");
 
 	const EClassCastFlags type = prop.GetCastFlags();
 
@@ -158,8 +263,11 @@ static PropertyReadResult ReadPropertyValueAt(uint8* addr, const UEProperty& pro
 		}
 		if (type & EClassCastFlags::NameProperty)
 		{
-			FName* fn = reinterpret_cast<FName*>(addr);
-			return MakeOk(fn->ToString());
+			std::string value;
+			std::string reason;
+			if (TryReadFNameStringSafe(addr, value, reason))
+				return MakeOk(std::move(value));
+			return MakeUnknown(prop.GetCppType(), "invalid_fname_" + reason);
 		}
 		if (type & EClassCastFlags::StrProperty)
 		{
@@ -178,7 +286,9 @@ static PropertyReadResult ReadPropertyValueAt(uint8* addr, const UEProperty& pro
 
 		if (type & EClassCastFlags::ClassProperty)
 		{
-			void* ptr = *reinterpret_cast<void**>(addr);
+			void* ptr = nullptr;
+			if (!TryReadValueSafe<void*>(addr, ptr))
+				return MakeUnknown(prop.GetCppType(), "class_ptr_unreadable");
 			json out = SerializeObjectRef(ptr);
 			try
 			{
@@ -193,29 +303,41 @@ static PropertyReadResult ReadPropertyValueAt(uint8* addr, const UEProperty& pro
 		if ((type & EClassCastFlags::ObjectProperty) || (type & EClassCastFlags::ObjectPropertyBase)
 			|| (type & EClassCastFlags::InterfaceProperty))
 		{
-			void* ptr = *reinterpret_cast<void**>(addr);
+			void* ptr = nullptr;
+			if (!TryReadValueSafe<void*>(addr, ptr))
+				return MakeUnknown(prop.GetCppType(), "object_ptr_unreadable");
 			json out = SerializeObjectRef(ptr);
 			return ptr ? MakeOk(std::move(out)) : MakeEmpty(std::move(out));
 		}
 
 		if ((type & EClassCastFlags::WeakObjectProperty) || (type & EClassCastFlags::LazyObjectProperty))
 		{
+			int32 objectIndex = 0;
+			int32 serialNumber = 0;
+			if (!TryReadValueSafe<int32>(addr, objectIndex) || !TryReadValueSafe<int32>(addr + sizeof(int32), serialNumber))
+				return MakeUnknown(prop.GetCppType(), "weak_object_unreadable");
+
 			json out;
 			out["kind"] = "weak_object_ref";
-			out["object_index"] = *reinterpret_cast<int32*>(addr);
-			out["serial_number"] = *reinterpret_cast<int32*>(addr + sizeof(int32));
-			if (out["object_index"].get<int32>() <= 0)
+			out["object_index"] = objectIndex;
+			out["serial_number"] = serialNumber;
+			if (objectIndex <= 0)
 				return MakeEmpty(std::move(out));
 			return MakeOk(std::move(out));
 		}
 
 		if ((type & EClassCastFlags::SoftObjectProperty) || (type & EClassCastFlags::SoftClassProperty))
 		{
+			int32 objectIndexHint = 0;
+			int32 serialHint = 0;
+			if (!TryReadValueSafe<int32>(addr, objectIndexHint) || !TryReadValueSafe<int32>(addr + sizeof(int32), serialHint))
+				return MakeUnknown(prop.GetCppType(), "soft_object_unreadable");
+
 			json out;
 			out["kind"] = "soft_object_ref";
 			out["note"] = "soft reference parsing is partial";
-			out["object_index_hint"] = *reinterpret_cast<int32*>(addr);
-			out["serial_hint"] = *reinterpret_cast<int32*>(addr + sizeof(int32));
+			out["object_index_hint"] = objectIndexHint;
+			out["serial_hint"] = serialHint;
 			return MakeOk(std::move(out));
 		}
 

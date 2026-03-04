@@ -104,6 +104,8 @@ export const translations = {
     'Failed to add watch': '添加监视失败',
     'CDO Readonly Hint': '当前显示类 CDO 默认属性（只读）',
     'Property Read Failed': '对象属性读取失败',
+    'Transform update success': 'Transform 更新成功',
+    'Server rolled back': '服务器提示已回滚',
     'Save': '保存',
     'Read': '读取',
     'Watch': '监视',
@@ -137,6 +139,10 @@ export const translations = {
 
     // Functions Page
     'Search functions...': '搜索函数...',
+    'Search function name...': '按函数名过滤（关键词）',
+    'Failed to load functions': '加载函数失败',
+    'Failed to load function detail': '加载函数详情失败',
+    'Failed to load class functions': '加载类函数失败',
     'Parameters': '参数',
     'Return Type': '返回类型',
     'Hook': '挂钩',
@@ -146,6 +152,7 @@ export const translations = {
     'No function selected': '未选择函数',
 
     // Memory Page
+    'Use: set <objectIndex>.<property> <value>': '用法: set <对象索引>.<属性名> <值>',
     'Value': '值',
     'Pointer Chain': '指针链',
     'Add': '添加',
@@ -164,6 +171,10 @@ export const translations = {
     'Output Path': '输出路径',
     'Generate': '生成',
     'Generating...': '生成中...',
+    'Failed to load job detail': '加载任务详情失败',
+    'Failed to create dump job': '创建转储任务失败',
+    'Refresh details': '刷新详情',
+    'View details': '查看详情',
 
     // Settings
     'Settings': '设置',
@@ -289,6 +300,8 @@ export const translations = {
     'Failed to add watch': 'Failed to add watch',
     'CDO Readonly Hint': 'Showing class CDO default properties (read-only)',
     'Property Read Failed': 'Failed to read object properties',
+    'Transform update success': 'Transform updated successfully',
+    'Server rolled back': 'Server rolled back',
     'Read': 'Read',
     'Watch': 'Watch',
     'Offset': 'Offset',
@@ -321,6 +334,11 @@ export const translations = {
 
     // Functions Page
     'Search functions...': 'Search functions...',
+    'Search function name...': 'Search function name...',
+    'Search class name...': 'Search class name...',
+    'Failed to load functions': 'Failed to load functions',
+    'Failed to load function detail': 'Failed to load function detail',
+    'Failed to load class functions': 'Failed to load class functions',
     'Parameters': 'Parameters',
     'Return Type': 'Return Type',
     'Hook': 'Hook',
@@ -330,6 +348,7 @@ export const translations = {
     'No function selected': 'No function selected',
 
     // Memory Page
+    'Use: set <objectIndex>.<property> <value>': 'Use: set <objectIndex>.<property> <value>',
     'Value': 'Value',
     'Pointer Chain': 'Pointer Chain',
     'Add': 'Add',
@@ -348,6 +367,11 @@ export const translations = {
     'Output Path': 'Output Path',
     'Generate': 'Generate',
     'Generating...': 'Generating...',
+    'Failed to load job detail': 'Failed to load job detail',
+    'Failed to create dump job': 'Failed to create dump job',
+    'Refresh details': 'Refresh details',
+    'View details': 'View details',
+    'Details': 'Details',
 
     // Settings
     'Settings': 'Settings',

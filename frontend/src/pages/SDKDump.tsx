@@ -1,5 +1,6 @@
 ﻿import { useCallback, useEffect, useMemo, useState, type ComponentType } from 'react';
 import { Download, Code2, Database, LayoutTemplate, Coffee, CheckCircle2, RotateCcw, PlayCircle, RefreshCw } from 'lucide-react';
+import { t } from '../i18n';
 import api, { type DumpJob, type DumpType } from '../api';
 
 interface DumpFormat {
@@ -45,7 +46,7 @@ export default function SDKDump() {
     const res = await api.getDumpJob(target);
     setDetailLoading(false);
     if (!res.success || !res.data) {
-      setError(res.error || 'Failed to load job detail');
+      setError(res.error || t('Failed to load job detail'));
       return;
     }
     setSelectedJobDetail(res.data);
@@ -81,7 +82,7 @@ export default function SDKDump() {
     setBusy(false);
 
     if (!res.success || !res.data) {
-      setError(res.error || 'Failed to create dump job');
+      setError(res.error || t('Failed to create dump job'));
       return;
     }
 
@@ -243,14 +244,14 @@ export default function SDKDump() {
               onClick={() => void loadJobDetail(selectedJobId)}
               className="px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-white text-sm"
             >
-              查看详情
+              {t('View details')}
             </button>
             <button
               onClick={() => {
                 if (selectedJobDetail?.id) void loadJobDetail(selectedJobDetail.id);
               }}
               className="w-8 h-8 rounded-lg bg-white/10 hover:bg-white/20 flex items-center justify-center"
-              title="刷新详情"
+              title={t('Refresh details')}
             >
               <RefreshCw className={`w-4 h-4 text-white/70 ${detailLoading ? 'animate-spin' : ''}`} />
             </button>
@@ -300,9 +301,9 @@ export default function SDKDump() {
                       void loadJobDetail(job.id);
                     }}
                     className="px-2 h-8 rounded-lg bg-white/5 hover:bg-white/10 text-white text-[11px]"
-                    title="查看详情"
+                    title={t('View details')}
                   >
-                    详情
+                    {t('Details')}
                   </button>
                 </div>
               </div>

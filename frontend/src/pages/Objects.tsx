@@ -194,7 +194,7 @@ export default function Objects({ onNavigate }: ObjectsProps) {
       const q = search.trim();
       if (typeTab === 'Class') {
         const res = await api.getClasses(0, 200, q);
-        if (!res.success || !res.data) throw new Error(res.error || 'Failed to load classes');
+        if (!res.success || !res.data) throw new Error(res.error || t('Failed to load classes'));
         const mapped: BrowserItem[] = res.data.items.map((it) => ({
           index: it.index,
           name: it.name,
@@ -207,7 +207,7 @@ export default function Objects({ onNavigate }: ObjectsProps) {
         setTotal(res.data.total);
       } else if (typeTab === 'Struct') {
         const res = await api.getStructs(0, 200, q);
-        if (!res.success || !res.data) throw new Error(res.error || 'Failed to load structs');
+        if (!res.success || !res.data) throw new Error(res.error || t('Failed to load structs'));
         const mapped: BrowserItem[] = res.data.items.map((it) => ({
           index: it.index,
           name: it.name,
@@ -220,7 +220,7 @@ export default function Objects({ onNavigate }: ObjectsProps) {
         setTotal(res.data.total);
       } else if (typeTab === 'Enum') {
         const res = await api.getEnums(0, 200, q);
-        if (!res.success || !res.data) throw new Error(res.error || 'Failed to load enums');
+        if (!res.success || !res.data) throw new Error(res.error || t('Failed to load enums'));
         const mapped: BrowserItem[] = res.data.items.map((it) => ({
           index: it.index,
           name: it.name,
@@ -239,7 +239,7 @@ export default function Objects({ onNavigate }: ObjectsProps) {
           if (res.error?.includes('world') || res.error?.includes('World') || res.error?.includes('UWorld')) {
             setListError(t('No world data') + ' - ' + (res.error || t('Engine may not be connected')));
           } else {
-            throw new Error(res.error || 'Failed to load actors');
+            throw new Error(res.error || t('Failed to load actors'));
           }
           setItems([]);
           setMatched(0);
@@ -265,7 +265,7 @@ export default function Objects({ onNavigate }: ObjectsProps) {
         setTotal(res.data.matched);
       } else if (typeTab === 'Package') {
         const res = await api.getPackages(0, 200, q);
-        if (!res.success || !res.data) throw new Error(res.error || 'Failed to load packages');
+        if (!res.success || !res.data) throw new Error(res.error || t('Failed to load packages'));
         const mapped: BrowserItem[] = res.data.items.map((it) => ({
           index: it.index,
           name: it.name,
@@ -288,7 +288,7 @@ export default function Objects({ onNavigate }: ObjectsProps) {
             })
           : await api.getObjects(0, 200, q);
 
-        if (!res.success || !res.data) throw new Error(res.error || 'Failed to load objects');
+        if (!res.success || !res.data) throw new Error(res.error || t('Failed to load objects'));
         const list = res.data.items.map((it: ObjectItem) => ({
           index: it.index,
           name: it.name,
@@ -499,7 +499,7 @@ export default function Objects({ onNavigate }: ObjectsProps) {
     if (res.success) {
       await loadDetail(selected);
     } else {
-      setDetailError(res.error || 'Property write failed');
+      setDetailError(res.error || t('Property write failed'));
     }
   };
 
@@ -527,7 +527,7 @@ export default function Objects({ onNavigate }: ObjectsProps) {
     if (!selected || propertyReadOnly) return;
     const res = await api.addWatch(selected.index, propertyName);
     if (!res.success) {
-      setDetailError(res.error || 'Failed to add watch');
+      setDetailError(res.error || t('Failed to add watch'));
     }
   };
 
@@ -575,7 +575,7 @@ export default function Objects({ onNavigate }: ObjectsProps) {
       };
     });
     setTransformInput(toTransformInputState(res.data.transform));
-    setWorldMessage(res.data.rolled_back ? '服务器提示已回滚' : 'Transform 更新成功');
+    setWorldMessage(res.data.rolled_back ? t('Server rolled back') : t('Transform update success'));
   };
 
   return (
