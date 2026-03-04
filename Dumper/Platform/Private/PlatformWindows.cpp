@@ -5,13 +5,6 @@
 
 #include <windows.h>
 
-// Manually declare Windows API functions to avoid include issues
-#ifdef _WIN64
-using NtQueryVirtualMemory_t = LONG(*)(HANDLE ProcessHandle, PVOID BaseAddress, LONG VirtualMemoryInformationClass, PVOID VirtualMemoryInformation, ULONG VirtualMemoryInformationLength, PULONG ReturnLength);
-#else
-// For 32-bit, use VirtualQuery from kernel32
-#endif
-
 // Private implementation to ensure that there is no accidental usage of platform-specific functions
 namespace
 {
@@ -505,17 +498,35 @@ bool PlatformWindows::IsAddressInAnyModule(const uintptr_t Address)
 
 bool PlatformWindows::IsAddressInAnyModule(const void* Address)
 {
+	if (!Address)
+		return false;
+
 	const PEB* Peb = GetPEB();
+	if (!Peb || !Peb->Ldr)
+		return false;
+
 	const PEB_LDR_DATA* Ldr = Peb->Ldr;
+	const LIST_ENTRY* Head = &Ldr->InMemoryOrderModuleList;
+	const LIST_ENTRY* P = Head->Flink;
+	int SafetyCounter = 0;
 
-	int NumEntriesLeft = Ldr->Length;
-
-	for (const LIST_ENTRY* P = Ldr->InMemoryOrderModuleList.Flink; P && NumEntriesLeft-- > 0; P = P->Flink)
+	while (P && P != Head && SafetyCounter++ < 4096)
 	{
-		const LDR_DATA_TABLE_ENTRY* Entry = reinterpret_cast<const LDR_DATA_TABLE_ENTRY*>(P);
+		const auto* Entry = reinterpret_cast<const LDR_DATA_TABLE_ENTRY*>(
+			reinterpret_cast<const uint8_t*>(P) - offsetof(LDR_DATA_TABLE_ENTRY, InMemoryOrderLinks));
+		if (!Entry->DllBase || Entry->SizeOfImage == 0)
+		{
+			P = P->Flink;
+			continue;
+		}
 
-		if (Address > Entry->DllBase && Address < (static_cast<uint8_t*>(Entry->DllBase) + Entry->SizeOfImage))
+		const uintptr_t ModuleBegin = reinterpret_cast<uintptr_t>(Entry->DllBase);
+		const uintptr_t ModuleEnd = ModuleBegin + static_cast<uintptr_t>(Entry->SizeOfImage);
+		const uintptr_t Addr = reinterpret_cast<uintptr_t>(Address);
+		if (Addr >= ModuleBegin && Addr < ModuleEnd)
 			return true;
+
+		P = P->Flink;
 	}
 
 	return false;
@@ -523,12 +534,18 @@ bool PlatformWindows::IsAddressInAnyModule(const void* Address)
 
 bool PlatformWindows::IsAddressInProcessRange(const uintptr_t Address)
 {
-	const auto [ImageBase, ImageSize] = GetImageBaseAndSize();
+	if (Address == 0)
+		return false;
 
-	if (Address >= ImageBase && Address < (ImageBase + ImageSize))
-		return true;
+	if constexpr (!Is32Bit())
+	{
+		if (!Architecture_x86_64::IsValid64BitVirtualAddress(reinterpret_cast<const void*>(Address)))
+			return false;
+	}
 
-	return IsAddressInAnyModule(Address);
+	// Keep this as a pure "currently readable" probe.
+	// Do not mix in module-range heuristics here.
+	return !IsBadReadPtr(reinterpret_cast<const void*>(Address));
 }
 bool PlatformWindows::IsAddressInProcessRange(const void* Address)
 {

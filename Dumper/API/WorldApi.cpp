@@ -18,14 +18,192 @@
 
 namespace UExplorer::API
 {
+static bool TryReadPtrField(const void* base, int32 offset, void*& outPtr);
+static bool TryReadPointerAt(const void* addr, void*& outPtr);
+static bool TryReadObjectNameByAddress(const void* objAddr, std::string& outName);
 
-// Helper: get GWorld pointer
-static void* GetGWorld()
+struct GWorldResolveResult
 {
-	if (Off::InSDK::World::GWorld == 0) return nullptr;
-	uintptr_t base = reinterpret_cast<uintptr_t>(GetModuleHandle(nullptr));
-	void** worldPtr = reinterpret_cast<void**>(base + Off::InSDK::World::GWorld);
-	return *worldPtr;
+	void* World = nullptr;
+	std::string Source;
+	std::string Reason;
+	json Debug = json::object();
+};
+
+static bool TryReadInt32At(const void* addr, int32& outValue)
+{
+	outValue = 0;
+	if (!addr)
+		return false;
+
+	__try
+	{
+		outValue = *reinterpret_cast<const int32*>(addr);
+		return true;
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		outValue = 0;
+		return false;
+	}
+}
+
+static bool TryReadUObjectIndex(const void* objAddr, int32& outIndex)
+{
+	outIndex = -1;
+	if (!objAddr || Off::UObject::Index < 0)
+		return false;
+
+	const uint8* idxAddr = reinterpret_cast<const uint8*>(objAddr) + Off::UObject::Index;
+	if (!TryReadInt32At(idxAddr, outIndex))
+		return false;
+
+	const int32 total = ObjectArray::Num();
+	return outIndex >= 0 && outIndex < total;
+}
+
+static bool IsBackedByObjectArray(const void* objAddr, int32& outIndex)
+{
+	outIndex = -1;
+	if (!TryReadUObjectIndex(objAddr, outIndex))
+		return false;
+
+	UEObject indexedObj = ObjectArray::GetByIndex(outIndex);
+	if (!indexedObj)
+		return false;
+
+	return indexedObj.GetAddress() == objAddr;
+}
+
+static bool IsResolvedWorldCandidate(void* candidate, std::string& outReason, std::string& outClassName)
+{
+	outReason.clear();
+	outClassName.clear();
+
+	if (!candidate)
+	{
+		outReason = "null_candidate";
+		return false;
+	}
+
+	int32 idx = -1;
+	if (!IsBackedByObjectArray(candidate, idx))
+	{
+		outReason = "candidate_not_in_object_array";
+		return false;
+	}
+
+	UEObject obj = ObjectArray::GetByIndex(idx);
+	if (!obj || obj.GetAddress() != candidate)
+	{
+		outReason = "candidate_object_unstable";
+		return false;
+	}
+
+	UEObject cls;
+	try
+	{
+		cls = obj.GetClass();
+	}
+	catch (...)
+	{
+		outReason = "candidate_get_class_failed";
+		return false;
+	}
+
+	if (!cls)
+	{
+		outReason = "candidate_class_ptr_invalid";
+		return false;
+	}
+
+	try
+	{
+		outClassName = cls.GetName();
+	}
+	catch (...)
+	{
+		outReason = "candidate_class_name_invalid";
+		return false;
+	}
+
+	if (outClassName.empty() || outClassName == "None")
+	{
+		outReason = "candidate_class_name_invalid";
+		return false;
+	}
+
+	if (outClassName != "World")
+	{
+		outReason = "candidate_class_not_world:" + outClassName;
+		return false;
+	}
+
+	outReason = "ok";
+	return true;
+}
+
+// Resolve GWorld strictly: only accept candidates that are valid UObject instances of class World.
+static GWorldResolveResult ResolveGWorld()
+{
+	GWorldResolveResult result;
+	result.Debug["offset"] = Off::InSDK::World::GWorld;
+
+	if (Off::InSDK::World::GWorld == 0)
+	{
+		result.Reason = "gworld_offset_zero";
+		return result;
+	}
+
+	const uintptr_t base = reinterpret_cast<uintptr_t>(GetModuleHandle(nullptr));
+	void* slotAddr = reinterpret_cast<void*>(base + static_cast<uintptr_t>(Off::InSDK::World::GWorld));
+	result.Debug["slot_address"] = std::format("0x{:X}", reinterpret_cast<uintptr_t>(slotAddr));
+
+	void* candidateA = nullptr;
+	bool readSlotOk = TryReadPointerAt(slotAddr, candidateA);
+	result.Debug["read_slot_ok"] = readSlotOk;
+	result.Debug["candidate_a"] = candidateA ? json(std::format("0x{:X}", reinterpret_cast<uintptr_t>(candidateA))) : json(nullptr);
+
+	std::string reasonA;
+	std::string classA;
+	const bool validA = IsResolvedWorldCandidate(candidateA, reasonA, classA);
+	result.Debug["candidate_a_valid"] = validA;
+	result.Debug["candidate_a_reason"] = reasonA;
+	result.Debug["candidate_a_class"] = classA;
+
+	if (validA)
+	{
+		result.World = candidateA;
+		result.Source = "single_deref";
+		result.Reason = "ok";
+		return result;
+	}
+
+	void* candidateB = nullptr;
+	bool readNestedOk = false;
+	if (candidateA)
+		readNestedOk = TryReadPointerAt(candidateA, candidateB);
+
+	result.Debug["read_nested_ok"] = readNestedOk;
+	result.Debug["candidate_b"] = candidateB ? json(std::format("0x{:X}", reinterpret_cast<uintptr_t>(candidateB))) : json(nullptr);
+
+	std::string reasonB;
+	std::string classB;
+	const bool validB = IsResolvedWorldCandidate(candidateB, reasonB, classB);
+	result.Debug["candidate_b_valid"] = validB;
+	result.Debug["candidate_b_reason"] = reasonB;
+	result.Debug["candidate_b_class"] = classB;
+
+	if (validB)
+	{
+		result.World = candidateB;
+		result.Source = "double_deref";
+		result.Reason = "ok";
+		return result;
+	}
+
+	result.Reason = "no_valid_world_candidate";
+	return result;
 }
 
 static bool TryParseIndex(const std::string& raw, int32& out)
@@ -59,8 +237,6 @@ static bool TryReadPtrField(const void* base, int32 offset, void*& outPtr)
 		return false;
 
 	const uint8* addr = reinterpret_cast<const uint8*>(base) + offset;
-	if (Platform::IsBadReadPtr(addr))
-		return false;
 
 	__try
 	{
@@ -77,7 +253,7 @@ static bool TryReadPtrField(const void* base, int32 offset, void*& outPtr)
 static bool TryReadPointerAt(const void* addr, void*& outPtr)
 {
 	outPtr = nullptr;
-	if (!addr || Platform::IsBadReadPtr(addr))
+	if (!addr)
 		return false;
 
 	__try
@@ -99,8 +275,6 @@ static bool TryReadInt32Field(const void* base, int32 offset, int32& outValue)
 		return false;
 
 	const uint8* addr = reinterpret_cast<const uint8*>(base) + offset;
-	if (Platform::IsBadReadPtr(addr))
-		return false;
 
 	__try
 	{
@@ -129,7 +303,7 @@ static bool TryReadPointerArrayHeader(const void* arrayAddr, uintptr_t& outData,
 	outNum = 0;
 	outMax = 0;
 
-	if (!arrayAddr || Platform::IsBadReadPtr(arrayAddr))
+	if (!arrayAddr)
 		return false;
 
 	__try
@@ -153,7 +327,7 @@ static bool TryReadPointerArrayHeader(const void* arrayAddr, uintptr_t& outData,
 	if (outNum > 0)
 	{
 		void* dataPtr = reinterpret_cast<void*>(outData);
-		if (!dataPtr || Platform::IsBadReadPtr(dataPtr) || !Platform::IsAddressInProcessRange(dataPtr))
+		if (!dataPtr || Platform::IsBadReadPtr(dataPtr))
 			return false;
 	}
 
@@ -163,20 +337,25 @@ static bool TryReadPointerArrayHeader(const void* arrayAddr, uintptr_t& outData,
 static bool IsReadableObjectAddress(const void* objAddr)
 {
 	return objAddr
-		&& !Platform::IsBadReadPtr(objAddr)
-		&& Platform::IsAddressInProcessRange(objAddr);
+		&& !Platform::IsBadReadPtr(objAddr);
+}
+
+static bool TryGetObjectFlags(const void* objAddr, uint32& outFlags)
+{
+	outFlags = 0;
+	if (!IsReadableObjectAddress(objAddr))
+		return false;
+	if (Off::UObject::Flags < 0)
+		return false;
+
+	return TryReadUInt32Field(objAddr, Off::UObject::Flags, outFlags);
 }
 
 static bool IsTemplateObjectAddress(const void* objAddr)
 {
-	if (!IsReadableObjectAddress(objAddr))
-		return true;
-	if (Off::UObject::Flags < 0)
-		return true;
-
 	uint32 flags = 0;
-	if (!TryReadUInt32Field(objAddr, Off::UObject::Flags, flags))
-		return true;
+	if (!TryGetObjectFlags(objAddr, flags))
+		return false;
 
 	const uint32 templateMask = static_cast<uint32>(EObjectFlags::ClassDefaultObject)
 		| static_cast<uint32>(EObjectFlags::ArchetypeObject);
@@ -186,33 +365,75 @@ static bool IsTemplateObjectAddress(const void* objAddr)
 static bool TryReadObjectNameByAddress(const void* objAddr, std::string& outName)
 {
 	outName.clear();
-	if (!IsReadableObjectAddress(objAddr) || Off::UObject::Name < 0)
+	if (!objAddr)
 		return false;
 
-	const uint8* fnameAddr = reinterpret_cast<const uint8*>(objAddr) + Off::UObject::Name;
-	if (Platform::IsBadReadPtr(fnameAddr))
+	int32 idx = -1;
+	if (!IsBackedByObjectArray(objAddr, idx))
 		return false;
 
-	int32 compIdx = -1;
-	if (!TryReadInt32Field(fnameAddr, Off::FName::CompIdx, compIdx))
-		return false;
-	if (compIdx < 0)
+	UEObject obj = ObjectArray::GetByIndex(idx);
+	if (!obj || obj.GetAddress() != objAddr)
 		return false;
 
-	std::string name = NameArray::GetNameEntry(compIdx).GetString();
-	if (name.empty() && compIdx != 0)
-		return false;
-
-	int32 rawNum = 0;
-	if (TryReadInt32Field(fnameAddr, Off::FName::Number, rawNum))
+	try
 	{
-		const uint32 number = static_cast<uint32>(rawNum);
-		if (!Settings::Internal::bUseOutlineNumberName && number > 0)
-			name += "_" + std::to_string(number - 1);
+		outName = obj.GetName();
+	}
+	catch (...)
+	{
+		outName.clear();
+		return false;
+	}
+	return !outName.empty() && outName != "None";
+}
+
+static bool TryReadFNameAtAddress(const void* fnameAddr, std::string& outName, int32& outCompIdx, uint32& outNumber, std::string& outReason)
+{
+	outName.clear();
+	outCompIdx = -1;
+	outNumber = 0;
+	outReason.clear();
+
+	if (!fnameAddr)
+	{
+		outReason = "null_fname_address";
+		return false;
 	}
 
-	outName = std::move(name);
-	return true;
+	if (Platform::IsBadReadPtr(fnameAddr))
+	{
+		outReason = "bad_fname_address";
+		return false;
+	}
+
+	try
+	{
+		FName fname(fnameAddr);
+		const int32 compIdx = fname.GetCompIdx();
+		if (compIdx < 0)
+		{
+			outReason = "negative_comp_idx";
+			return false;
+		}
+
+		outCompIdx = compIdx;
+		outNumber = fname.GetNumber();
+		outName = fname.ToString();
+		if (outName.empty() || outName == "None")
+		{
+			outReason = "name_empty";
+			return false;
+		}
+
+		outReason = "ok";
+		return true;
+	}
+	catch (...)
+	{
+		outReason = "fname_read_failed";
+		return false;
+	}
 }
 
 static bool TryReadObjectClassAddress(const void* objAddr, void*& outClassAddr)
@@ -229,14 +450,31 @@ static bool TryReadObjectClassAddress(const void* objAddr, void*& outClassAddr)
 
 static std::string GetSafeClassNameByAddress(const void* objAddr)
 {
-	void* classAddr = nullptr;
-	if (!TryReadObjectClassAddress(objAddr, classAddr))
+	if (!objAddr)
 		return "Unknown";
 
-	std::string className;
-	if (!TryReadObjectNameByAddress(classAddr, className) || className.empty())
+	int32 idx = -1;
+	if (!IsBackedByObjectArray(objAddr, idx))
 		return "Unknown";
-	return className;
+
+	UEObject obj = ObjectArray::GetByIndex(idx);
+	if (!obj || obj.GetAddress() != objAddr)
+		return "Unknown";
+
+	try
+	{
+		UEObject cls = obj.GetClass();
+		if (!cls)
+			return "Unknown";
+		const std::string className = cls.GetName();
+		if (className.empty() || className == "None")
+			return "Unknown";
+		return className;
+	}
+	catch (...)
+	{
+		return "Unknown";
+	}
 }
 
 static std::string BuildSafeFullNameByAddress(const void* objAddr, const std::string& className, const std::string& objName)
@@ -391,15 +629,47 @@ static std::vector<UEObject> CollectWorldLevels(UEObject worldObj)
 	return levels;
 }
 
-static std::vector<UEObject> CollectWorldActorInstances(UEObject worldObj)
+static std::vector<UEObject> CollectWorldActorInstances(UEObject worldObj, json* outDebug = nullptr)
 {
 	std::vector<UEObject> actors;
+	json debug = json::object();
+	debug["world_valid"] = static_cast<bool>(worldObj);
+	debug["offsets"] = {
+		{ "ULevel::Actors", Off::InSDK::ULevel::Actors },
+		{ "UObject::Outer", Off::UObject::Outer },
+		{ "UObject::Flags", Off::UObject::Flags },
+		{ "UObject::Name", Off::UObject::Name },
+		{ "UObject::Index", Off::UObject::Index }
+	};
+
+	debug["levels_total"] = 0;
+	debug["level_actor_array_header_fail"] = 0;
+	debug["level_actor_slots_total"] = 0;
+	debug["actor_ptr_read_fail"] = 0;
+	debug["actor_ptr_invalid"] = 0;
+	debug["actor_duplicate"] = 0;
+	debug["actor_flag_read_fail"] = 0;
+	debug["actor_template_filtered"] = 0;
+	debug["actor_outer_read_fail"] = 0;
+	debug["actor_outer_not_level"] = 0;
+	debug["actor_not_actor_type"] = 0;
+	debug["actor_name_read_fail"] = 0;
+	debug["actor_name_default_filtered"] = 0;
+	debug["actor_accepted"] = 0;
+
 	if (!worldObj || Off::InSDK::ULevel::Actors <= 0)
+	{
+		if (outDebug) *outDebug = std::move(debug);
 		return actors;
+	}
 
 	const std::vector<UEObject> levels = CollectWorldLevels(worldObj);
+	debug["levels_total"] = static_cast<int>(levels.size());
 	if (levels.empty())
+	{
+		if (outDebug) *outDebug = std::move(debug);
 		return actors;
+	}
 
 	std::set<uintptr_t> levelAddrSet;
 	for (const UEObject& level : levels)
@@ -417,7 +687,11 @@ static std::vector<UEObject> CollectWorldActorInstances(UEObject worldObj)
 		int32 num = 0;
 		int32 max = 0;
 		if (!TryReadPointerArrayHeader(arrAddr, data, num, max))
+		{
+			debug["level_actor_array_header_fail"] = debug["level_actor_array_header_fail"].get<int>() + 1;
 			continue;
+		}
+		debug["level_actor_slots_total"] = debug["level_actor_slots_total"].get<int>() + num;
 
 		for (int32 i = 0; i < num; i++)
 		{
@@ -427,38 +701,80 @@ static std::vector<UEObject> CollectWorldActorInstances(UEObject worldObj)
 
 			void* actorPtr = nullptr;
 			if (!TryReadPointerAt(itemAddr, actorPtr))
+			{
+				debug["actor_ptr_read_fail"] = debug["actor_ptr_read_fail"].get<int>() + 1;
 				continue;
+			}
 
 			if (!actorPtr || !IsReadableObjectAddress(actorPtr))
+			{
+				debug["actor_ptr_invalid"] = debug["actor_ptr_invalid"].get<int>() + 1;
 				continue;
+			}
 
 			const uintptr_t actorAddr = reinterpret_cast<uintptr_t>(actorPtr);
 			if (actorAddrSet.count(actorAddr))
+			{
+				debug["actor_duplicate"] = debug["actor_duplicate"].get<int>() + 1;
 				continue;
-			if (IsTemplateObjectAddress(actorPtr))
+			}
+
+			uint32 flags = 0;
+			if (!TryGetObjectFlags(actorPtr, flags))
+			{
+				debug["actor_flag_read_fail"] = debug["actor_flag_read_fail"].get<int>() + 1;
+			}
+			else
+			{
+				const uint32 templateMask = static_cast<uint32>(EObjectFlags::ClassDefaultObject)
+					| static_cast<uint32>(EObjectFlags::ArchetypeObject);
+				if ((flags & templateMask) != 0)
+				{
+					debug["actor_template_filtered"] = debug["actor_template_filtered"].get<int>() + 1;
+					continue;
+				}
+			}
+
+			if (Off::UObject::Outer < 0)
+			{
+				debug["actor_outer_read_fail"] = debug["actor_outer_read_fail"].get<int>() + 1;
 				continue;
+			}
 
 			void* outerPtr = nullptr;
 			if (!TryReadPtrField(actorPtr, Off::UObject::Outer, outerPtr))
+			{
+				debug["actor_outer_read_fail"] = debug["actor_outer_read_fail"].get<int>() + 1;
 				continue;
+			}
 			if (!outerPtr || !levelAddrSet.count(reinterpret_cast<uintptr_t>(outerPtr)))
+			{
+				debug["actor_outer_not_level"] = debug["actor_outer_not_level"].get<int>() + 1;
 				continue;
+			}
 
 			UEObject actor(actorPtr);
 			if (!actor || !actor.IsA(EClassCastFlags::Actor))
+			{
+				debug["actor_not_actor_type"] = debug["actor_not_actor_type"].get<int>() + 1;
 				continue;
+			}
 
 			std::string actorName;
 			if (!TryReadObjectNameByAddress(actorPtr, actorName) || actorName.empty())
+			{
+				debug["actor_name_read_fail"] = debug["actor_name_read_fail"].get<int>() + 1;
 				continue;
-			if (actorName.rfind("Default__", 0) == 0)
-				continue;
+			}
 
 			actorAddrSet.insert(actorAddr);
 			actors.push_back(actor);
+			debug["actor_accepted"] = debug["actor_accepted"].get<int>() + 1;
 		}
 	}
 
+	debug["result_count"] = static_cast<int>(actors.size());
+	if (outDebug) *outDebug = std::move(debug);
 	return actors;
 }
 
@@ -485,8 +801,6 @@ static bool IsWorldActorInstance(UEObject actor, UEObject worldObj)
 
 	std::string actorName;
 	if (!TryReadObjectNameByAddress(actor.GetAddress(), actorName) || actorName.empty())
-		return false;
-	if (actorName.rfind("Default__", 0) == 0)
 		return false;
 
 	return true;
@@ -738,9 +1052,10 @@ void RegisterWorldRoutes(HttpServer& server)
 	// GET /api/v1/world — current world info
 	server.Get("/api/v1/world", [](const HttpRequest&) -> HttpResponse {
 		try {
-			void* world = GetGWorld();
+			const GWorldResolveResult worldResolved = ResolveGWorld();
+			void* world = worldResolved.World;
 			if (!world)
-				return { 500, "application/json", MakeError("GWorld not available") };
+				return { 500, "application/json", MakeError("GWorld not available (" + worldResolved.Reason + ")") };
 
 			UEObject worldObj(world);
 			json data;
@@ -748,6 +1063,8 @@ void RegisterWorldRoutes(HttpServer& server)
 			data["name"] = worldBrief["name"];
 			data["address"] = worldBrief["address"];
 			data["index"] = worldBrief["index"];
+			data["gworld_source"] = worldResolved.Source;
+			data["gworld_debug"] = worldResolved.Debug;
 
 			const std::vector<UEObject> actors = CollectWorldActorInstances(worldObj);
 			data["actor_count"] = static_cast<int>(actors.size());
@@ -762,9 +1079,10 @@ void RegisterWorldRoutes(HttpServer& server)
 	// GET /api/v1/world/levels — loaded levels in current world
 	server.Get("/api/v1/world/levels", [](const HttpRequest&) -> HttpResponse {
 		try {
-			void* world = GetGWorld();
+			const GWorldResolveResult worldResolved = ResolveGWorld();
+			void* world = worldResolved.World;
 			if (!world)
-				return { 500, "application/json", MakeError("GWorld not available") };
+				return { 500, "application/json", MakeError("GWorld not available (" + worldResolved.Reason + ")") };
 
 			UEObject worldObj(world);
 			if (!worldObj)
@@ -868,6 +1186,8 @@ void RegisterWorldRoutes(HttpServer& server)
 
 			json data;
 			data["world"] = MakeObjectBrief(worldObj);
+			data["gworld_source"] = worldResolved.Source;
+			data["gworld_debug"] = worldResolved.Debug;
 			data["levels"] = std::move(levels);
 			data["count"] = static_cast<int>(levelAddrs.size());
 			return { 200, "application/json", MakeResponse(data) };
@@ -880,9 +1200,10 @@ void RegisterWorldRoutes(HttpServer& server)
 	// GET /api/v1/world/actors — paginated actor list
 	server.Get("/api/v1/world/actors", [](const HttpRequest& req) -> HttpResponse {
 		try {
-			void* world = GetGWorld();
+			const GWorldResolveResult worldResolved = ResolveGWorld();
+			void* world = worldResolved.World;
 			if (!world)
-				return { 500, "application/json", MakeError("GWorld not available") };
+				return { 500, "application/json", MakeError("GWorld not available (" + worldResolved.Reason + ")") };
 
 			UEObject worldObj(world);
 			if (!worldObj)
@@ -899,7 +1220,8 @@ void RegisterWorldRoutes(HttpServer& server)
 			std::string filter = params.count("q") ? params["q"] : "";
 			std::string classFilter = params.count("class") ? params["class"] : "";
 
-			const std::vector<UEObject> actors = CollectWorldActorInstances(worldObj);
+			json actorCollectDebug;
+			const std::vector<UEObject> actors = CollectWorldActorInstances(worldObj, &actorCollectDebug);
 			json items = json::array();
 			int count = 0;
 			int skipped = 0;
@@ -949,6 +1271,9 @@ void RegisterWorldRoutes(HttpServer& server)
 			data["matched"] = matched;
 			data["offset"] = offset;
 			data["limit"] = limit;
+			data["debug"] = std::move(actorCollectDebug);
+			data["gworld_source"] = worldResolved.Source;
+			data["gworld_debug"] = worldResolved.Debug;
 			return { 200, "application/json", MakeResponse(data) };
 		}
 		catch (...) {
@@ -965,9 +1290,10 @@ void RegisterWorldRoutes(HttpServer& server)
 		UEObject actor = ObjectArray::GetByIndex(idx);
 		if (!actor)
 			return { 404, "application/json", MakeError("Actor is null") };
-		void* world = GetGWorld();
+		const GWorldResolveResult worldResolved = ResolveGWorld();
+		void* world = worldResolved.World;
 		if (!world)
-			return { 500, "application/json", MakeError("GWorld not available") };
+			return { 500, "application/json", MakeError("GWorld not available (" + worldResolved.Reason + ")") };
 		UEObject worldObj(world);
 		if (!worldObj)
 			return { 500, "application/json", MakeError("GWorld object is invalid") };
@@ -1005,9 +1331,10 @@ void RegisterWorldRoutes(HttpServer& server)
 		UEObject actor = ObjectArray::GetByIndex(idx);
 		if (!actor)
 			return { 404, "application/json", MakeError("Actor is null") };
-		void* world = GetGWorld();
+		const GWorldResolveResult worldResolved = ResolveGWorld();
+		void* world = worldResolved.World;
 		if (!world)
-			return { 500, "application/json", MakeError("GWorld not available") };
+			return { 500, "application/json", MakeError("GWorld not available (" + worldResolved.Reason + ")") };
 		UEObject worldObj(world);
 		if (!worldObj)
 			return { 500, "application/json", MakeError("GWorld object is invalid") };
@@ -1031,9 +1358,10 @@ void RegisterWorldRoutes(HttpServer& server)
 		UEObject actor = ObjectArray::GetByIndex(idx);
 		if (!actor)
 			return { 404, "application/json", MakeError("Actor is null") };
-		void* world = GetGWorld();
+		const GWorldResolveResult worldResolved = ResolveGWorld();
+		void* world = worldResolved.World;
 		if (!world)
-			return { 500, "application/json", MakeError("GWorld not available") };
+			return { 500, "application/json", MakeError("GWorld not available (" + worldResolved.Reason + ")") };
 		UEObject worldObj(world);
 		if (!worldObj)
 			return { 500, "application/json", MakeError("GWorld object is invalid") };
@@ -1137,6 +1465,76 @@ void RegisterWorldRoutes(HttpServer& server)
 	});
 
 	// GET /api/v1/world/shortcuts — quick access objects
+	// GET /api/v1/world/debug/fname?address=0x...&mode=object|fname
+	// mode=object: address is UObject*, decoder reads FName at address + Off::UObject::Name
+	// mode=fname : address is FName*
+	server.Get("/api/v1/world/debug/fname", [](const HttpRequest& req) -> HttpResponse {
+		try {
+			auto params = ParseQuery(req.Query);
+			auto itAddr = params.find("address");
+			if (itAddr == params.end() || itAddr->second.empty())
+				return { 400, "application/json", MakeError("Missing address query param") };
+
+			uintptr_t inputAddr = 0;
+			try
+			{
+				inputAddr = std::stoull(itAddr->second, nullptr, 16);
+			}
+			catch (...)
+			{
+				return { 400, "application/json", MakeError("Invalid address") };
+			}
+
+			const std::string mode = params.count("mode") ? params["mode"] : "object";
+			if (mode != "object" && mode != "fname")
+				return { 400, "application/json", MakeError("Invalid mode, expected object|fname") };
+
+			if (inputAddr == 0)
+				return { 400, "application/json", MakeError("Address must be non-zero") };
+
+			uintptr_t fnameAddr = inputAddr;
+			if (mode == "object")
+			{
+				if (Off::UObject::Name < 0)
+					return { 500, "application/json", MakeError("Off::UObject::Name is invalid") };
+				fnameAddr += static_cast<uintptr_t>(Off::UObject::Name);
+			}
+
+			std::string decodedName;
+			std::string reason;
+			int32 compIdx = -1;
+			uint32 number = 0;
+			const bool ok = TryReadFNameAtAddress(reinterpret_cast<const void*>(fnameAddr), decodedName, compIdx, number, reason);
+
+			json data;
+			data["mode"] = mode;
+			data["input_address"] = std::format("0x{:X}", inputAddr);
+			data["fname_address"] = std::format("0x{:X}", fnameAddr);
+			data["comp_idx"] = compIdx;
+			data["number"] = number;
+			data["decoded_name"] = ok ? json(decodedName) : json(nullptr);
+			data["decode_ok"] = ok;
+			data["reason"] = reason;
+			data["offsets"] = {
+				{ "UObject::Name", Off::UObject::Name },
+				{ "FName::CompIdx", Off::FName::CompIdx },
+				{ "FName::Number", Off::FName::Number }
+			};
+
+			if (mode == "object")
+			{
+				const void* objPtr = reinterpret_cast<const void*>(inputAddr);
+				data["object_address_readable"] = !Platform::IsBadReadPtr(objPtr);
+				data["object_class"] = GetSafeClassNameByAddress(objPtr);
+			}
+
+			return { 200, "application/json", MakeResponse(data) };
+		}
+		catch (...) {
+			return { 500, "application/json", MakeError("Failed to decode FName") };
+		}
+	});
+
 	server.Get("/api/v1/world/shortcuts", [](const HttpRequest&) -> HttpResponse {
 		try {
 			json data;
@@ -1150,8 +1548,7 @@ void RegisterWorldRoutes(HttpServer& server)
 						UEObject cls = obj.GetClass();
 						if (!cls) continue;
 						std::string cn = cls.GetName();
-						if (cn.find(className) != std::string::npos
-							&& obj.GetName().find("Default__") == std::string::npos)
+						if (cn.find(className) != std::string::npos)
 						{
 							json r;
 							r["index"] = i;
