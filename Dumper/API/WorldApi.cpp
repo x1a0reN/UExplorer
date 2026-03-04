@@ -523,6 +523,18 @@ void RegisterWorldRoutes(HttpServer& server)
 					if (propName.find("Level") == std::string::npos)
 						continue;
 
+					UEArrayProperty arrProp = prop.Cast<UEArrayProperty>();
+					UEProperty inner = arrProp.GetInnerProperty();
+					if (!inner)
+						continue;
+					const EClassCastFlags innerFlags = inner.GetCastFlags();
+					const bool isDirectObjectArray = !!(innerFlags & EClassCastFlags::ObjectProperty)
+						|| !!(innerFlags & EClassCastFlags::ObjectPropertyBase)
+						|| !!(innerFlags & EClassCastFlags::ClassProperty)
+						|| !!(innerFlags & EClassCastFlags::InterfaceProperty);
+					if (!isDirectObjectArray)
+						continue;
+
 					UC::TArray<void*>* arr = reinterpret_cast<UC::TArray<void*>*>(worldAddr + prop.GetOffset());
 					if (!arr) continue;
 					int32 num = arr->Num();
@@ -534,17 +546,19 @@ void RegisterWorldRoutes(HttpServer& server)
 						try { ptr = (*arr)[i]; }
 						catch (...) { break; }
 						if (!ptr) continue;
+						if (!IsReadableObjectAddress(ptr)) continue;
 
 						UEObject lv(ptr);
 						if (!lv) continue;
 
 						std::string clsName = GetSafeClassNameByAddress(lv.GetAddress());
+						if (clsName.empty() || clsName == "Unknown")
+							continue;
 						if (clsName.find("LevelStreaming") != std::string::npos)
 						{
 							void* streamingClassAddr = nullptr;
 							if (!TryReadObjectClassAddress(lv.GetAddress(), streamingClassAddr))
 							{
-								addLevel(lv, propName);
 								continue;
 							}
 
@@ -559,6 +573,8 @@ void RegisterWorldRoutes(HttpServer& server)
 						}
 						else
 						{
+							if (clsName.find("Level") == std::string::npos)
+								continue;
 							addLevel(lv, propName);
 						}
 					}
@@ -602,15 +618,22 @@ void RegisterWorldRoutes(HttpServer& server)
 				if (!obj) continue;
 				if (!obj.IsA(EClassCastFlags::Actor)) continue;
 
-				const void* objAddr = obj.GetAddress();
 				std::string name;
-				if (!TryReadObjectNameByAddress(objAddr, name) || name.empty())
-					continue;
+				try { name = obj.GetName(); }
+				catch (...) { continue; }
+				if (name.empty()) continue;
 
 				if (!filter.empty() && name.find(filter) == std::string::npos)
 					continue;
 
-				std::string className = GetSafeClassNameByAddress(objAddr);
+				std::string className;
+				try {
+					UEObject cls = obj.GetClass();
+					className = cls ? cls.GetName() : "Unknown";
+				}
+				catch (...) {
+					className = "Unknown";
+				}
 
 				if (!classFilter.empty() && className.find(classFilter) == std::string::npos)
 					continue;
