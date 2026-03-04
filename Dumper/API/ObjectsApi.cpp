@@ -31,6 +31,46 @@ template<typename T>
 static bool TryReadValueSafe(const uint8* addr, T& outValue);
 static bool TryReadFNameStringSafe(const uint8* addr, std::string& outValue, std::string& outReason);
 
+static int HexNibble(char ch)
+{
+	if (ch >= '0' && ch <= '9') return ch - '0';
+	if (ch >= 'a' && ch <= 'f') return ch - 'a' + 10;
+	if (ch >= 'A' && ch <= 'F') return ch - 'A' + 10;
+	return -1;
+}
+
+static std::string UrlDecode(const std::string& raw)
+{
+	std::string out;
+	out.reserve(raw.size());
+
+	for (size_t i = 0; i < raw.size(); i++)
+	{
+		const char ch = raw[i];
+		if (ch == '+')
+		{
+			out.push_back(' ');
+			continue;
+		}
+
+		if (ch == '%' && i + 2 < raw.size())
+		{
+			const int hi = HexNibble(raw[i + 1]);
+			const int lo = HexNibble(raw[i + 2]);
+			if (hi >= 0 && lo >= 0)
+			{
+				out.push_back(static_cast<char>((hi << 4) | lo));
+				i += 2;
+				continue;
+			}
+		}
+
+		out.push_back(ch);
+	}
+
+	return out;
+}
+
 static PropertyReadResult MakeUnknown(const std::string& typeName, const std::string& reason = "")
 {
 	json v;
@@ -72,49 +112,46 @@ static json SerializeObjectRef(void* ptr)
 	out["index"] = nullptr;
 
 	const uint8* obj = reinterpret_cast<const uint8*>(ptr);
-	if (!Platform::IsAddressInProcessRange(ptr) || Platform::IsBadReadPtr(ptr))
+	if (Platform::IsBadReadPtr(ptr))
 	{
 		out["state"] = "invalid_pointer";
 		return out;
 	}
 
-	int32 index = -1;
-	if (TryReadValueSafe<int32>(obj + Off::UObject::Index, index))
-		out["index"] = index;
-
-	std::string objName;
-	std::string objNameReason;
-	if (TryReadFNameStringSafe(obj + Off::UObject::Name, objName, objNameReason))
+	UEObject objRef(ptr);
+	if (!objRef)
 	{
-		out["name"] = std::move(objName);
-	}
-	else if (!objNameReason.empty())
-	{
-		out["name_reason"] = objNameReason;
-	}
-
-	void* clsPtr = nullptr;
-	if (!TryReadValueSafe<void*>(obj + Off::UObject::Class, clsPtr) || !clsPtr)
-	{
-		out["class_reason"] = "class_ptr_unreadable";
+		out["state"] = "not_uobject";
 		return out;
 	}
 
-	if (!Platform::IsAddressInProcessRange(clsPtr) || Platform::IsBadReadPtr(clsPtr))
+	try
 	{
-		out["class_reason"] = "class_ptr_invalid";
-		return out;
-	}
+		out["index"] = objRef.GetIndex();
 
-	std::string clsName;
-	std::string clsNameReason;
-	if (TryReadFNameStringSafe(reinterpret_cast<const uint8*>(clsPtr) + Off::UObject::Name, clsName, clsNameReason))
-	{
-		out["class"] = std::move(clsName);
+		const std::string objName = objRef.GetName();
+		if (!objName.empty() && objName != "None")
+			out["name"] = objName;
+		else
+			out["name_reason"] = "name_empty";
+
+		UEObject cls = objRef.GetClass();
+		if (!cls)
+		{
+			out["class_reason"] = "class_ptr_unreadable";
+		}
+		else
+		{
+			const std::string clsName = cls.GetName();
+			if (!clsName.empty() && clsName != "None")
+				out["class"] = clsName;
+			else
+				out["class_reason"] = "class_name_empty";
+		}
 	}
-	else if (!clsNameReason.empty())
+	catch (...)
 	{
-		out["class_reason"] = clsNameReason;
+		out["state"] = "object_read_failed";
 	}
 
 	return out;
@@ -173,45 +210,30 @@ static bool TryReadFNameStringSafe(const uint8* addr, std::string& outValue, std
 		return false;
 	}
 
-	int32 compIdx = -1;
-	if (!TryReadValueSafe<int32>(addr + Off::FName::CompIdx, compIdx))
+	try
 	{
-		outReason = "compidx_unreadable";
-		return false;
-	}
-
-	if (compIdx < 0 || compIdx > 0x3FFFFFFF)
-	{
-		outReason = "compidx_out_of_range";
-		return false;
-	}
-
-	FNameEntry entry = NameArray::GetNameEntry(compIdx);
-	if (!entry.GetAddress())
-	{
-		outReason = "name_entry_missing";
-		return false;
-	}
-
-	std::string base = entry.GetString();
-	if (base.empty())
-	{
-		outReason = "name_entry_empty";
-		return false;
-	}
-
-	if (!Settings::Internal::bUseOutlineNumberName)
-	{
-		uint32 number = 0;
-		if (TryReadValueSafe<uint32>(addr + Off::FName::Number, number) && number > 0 && number < 0x1000000)
+		FName name(addr);
+		const int32 compIdx = name.GetCompIdx();
+		if (compIdx < 0 || compIdx > 0x3FFFFFFF)
 		{
-			outValue = std::format("{}_{}", base, number - 1);
-			return true;
+			outReason = "compidx_out_of_range";
+			return false;
 		}
-	}
 
-	outValue = std::move(base);
-	return true;
+		outValue = name.ToString();
+		if (outValue.empty() || outValue == "None")
+		{
+			outReason = "name_empty";
+			return false;
+		}
+
+		return true;
+	}
+	catch (...)
+	{
+		outReason = "fname_read_failed";
+		return false;
+	}
 }
 
 static PropertyReadResult ReadPropertyValueAt(uint8* addr, const UEProperty& prop, int depth = 0)
@@ -863,9 +885,10 @@ void RegisterObjectsRoutes(HttpServer& server)
 
 	// GET /api/v1/objects/by-path/:path — find object by full path
 	server.Get("/api/v1/objects/by-path/:path", [](const HttpRequest& req) -> HttpResponse {
-		std::string targetPath = GetPathSegment(req.Path, 4);
-		if (targetPath.empty())
+		const std::string rawPath = GetPathSegment(req.Path, 4);
+		if (rawPath.empty())
 			return { 400, "application/json", MakeError("Missing path") };
+		const std::string targetPath = UrlDecode(rawPath);
 
 		int32 total = ObjectArray::Num();
 		for (int32 i = 0; i < total; i++)
@@ -887,6 +910,8 @@ void RegisterObjectsRoutes(HttpServer& server)
 			catch (...) {}
 		}
 
+		if (targetPath != rawPath)
+			return { 404, "application/json", MakeError("No object found with path " + targetPath + " (raw=" + rawPath + ")") };
 		return { 404, "application/json", MakeError("No object found with path " + targetPath) };
 	});
 
