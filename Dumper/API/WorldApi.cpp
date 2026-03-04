@@ -219,12 +219,15 @@ static bool TryParseIndex(const std::string& raw, int32& out)
 
 static bool TryFindProperty(const UEClass& cls, const std::string& propName, UEProperty& outProp)
 {
-	for (const auto& prop : cls.GetProperties())
+	for (UEStruct current = cls; current; current = current.GetSuper())
 	{
-		if (prop.GetName() == propName)
+		for (const auto& prop : current.GetProperties())
 		{
-			outProp = prop;
-			return true;
+			if (prop.GetName() == propName)
+			{
+				outProp = prop;
+				return true;
+			}
 		}
 	}
 	return false;
@@ -866,11 +869,15 @@ static UEObject GetActorRootComponent(UEObject actor)
 	UEProperty prop;
 	if (!TryFindProperty(cls, "RootComponent", prop))
 		return nullptr;
-	if (!(prop.GetCastFlags() & EClassCastFlags::ObjectProperty))
+	const EClassCastFlags flags = prop.GetCastFlags();
+	const bool isObjectRef = (flags & EClassCastFlags::ObjectProperty)
+		|| (flags & EClassCastFlags::ObjectPropertyBase);
+	if (!isObjectRef)
 		return nullptr;
 
-	uint8* actorAddr = reinterpret_cast<uint8*>(actor.GetAddress());
-	void* ptr = *reinterpret_cast<void**>(actorAddr + prop.GetOffset());
+	void* ptr = nullptr;
+	if (!TryReadPtrField(actor.GetAddress(), prop.GetOffset(), ptr))
+		return nullptr;
 	if (!ptr)
 		return nullptr;
 
