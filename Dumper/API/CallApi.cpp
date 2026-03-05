@@ -279,7 +279,7 @@ void RegisterCallRoutes(HttpServer& server)
 			int32 objIdx = body.value("object_index", -1);
 			std::string funcName = body.value("function_name", "");
 			json params = body.value("params", json::object());
-			bool useGameThread = body.value("use_game_thread", false);
+			bool useGameThread = body.value("use_game_thread", true);
 
 			if (objIdx < 0 || objIdx >= ObjectArray::Num())
 				return { 400, "application/json", MakeError("Invalid object_index") };
@@ -328,7 +328,7 @@ void RegisterCallRoutes(HttpServer& server)
 			json body = json::parse(req.Body);
 			std::string funcName = body.value("function_name", "");
 			json params = body.value("params", json::object());
-			bool useGameThread = body.value("use_game_thread", false);
+			bool useGameThread = body.value("use_game_thread", true);
 
 			if (funcName.empty())
 				return { 400, "application/json", MakeError("Missing function_name") };
@@ -373,7 +373,7 @@ void RegisterCallRoutes(HttpServer& server)
 			std::vector<int32> objectIndices = body.value("object_indices", std::vector<int32>{});
 			std::string funcName = body.value("function_name", "");
 			json params = body.value("params", json::object());
-			bool useGameThread = body.value("use_game_thread", false);
+			bool useGameThread = body.value("use_game_thread", true);
 
 			if (objectIndices.empty())
 				return { 400, "application/json", MakeError("Missing object_indices") };

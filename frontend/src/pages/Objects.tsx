@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState, type ReactNode } from 'react';
+﻿import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from 'react';
 import { t } from '../i18n';
 import {
   Search,
@@ -17,11 +17,15 @@ import {
   ExternalLink,
   MapPin,
   Code2,
+  TerminalSquare,
+  List,
+  FolderOpen,
 } from 'lucide-react';
 import api, {
   type ActorTransformData,
   type ClassFunction,
   type ClassProperty,
+  type EnumDetail,
   type ObjectDetail,
   type OuterChainItem,
   type ObjectProperty,
@@ -33,7 +37,7 @@ import api, {
 import type { Page } from '../types';
 
 type ObjectTypeTab = 'All' | 'Class' | 'Struct' | 'Enum' | 'Function' | 'Package' | 'Actor';
-type DetailTab = 'Info' | 'Properties' | 'Fields' | 'Functions' | 'Instances' | 'World';
+type DetailTab = 'Info' | 'Properties' | 'Fields' | 'Functions' | 'Instances' | 'World' | 'Values' | 'Signature' | 'Contents';
 type VecInput = { x: string; y: string; z: string };
 type TransformInputState = { location: VecInput; rotation: VecInput; scale: VecInput };
 
@@ -50,6 +54,41 @@ interface ObjectsProps {
 }
 
 const OBJECT_TABS_KEYS: ObjectTypeTab[] = ['All', 'Class', 'Struct', 'Enum', 'Function', 'Package', 'Actor'];
+
+const TAB_META: Record<DetailTab, { icon: ComponentType<{ className?: string }>; label: string }> = {
+  Info: { icon: Info, label: 'Info' },
+  Properties: { icon: ListTree, label: 'Properties' },
+  Fields: { icon: Database, label: 'Fields' },
+  Functions: { icon: Hash, label: 'Functions' },
+  Instances: { icon: PackageSearch, label: 'Instances' },
+  World: { icon: Globe, label: 'World' },
+  Values: { icon: List, label: 'Values' },
+  Signature: { icon: TerminalSquare, label: 'Signature' },
+  Contents: { icon: FolderOpen, label: 'Contents' },
+};
+
+function getTabsForType(type: ObjectTypeTab | undefined): DetailTab[] {
+  switch (type) {
+    case 'Enum': return ['Info', 'Values'];
+    case 'Struct': return ['Info', 'Fields'];
+    case 'Function': return ['Info', 'Signature'];
+    case 'Package': return ['Info', 'Contents'];
+    case 'Class': return ['Info', 'Fields', 'Functions', 'Properties', 'Instances'];
+    case 'Actor': return ['Info', 'Properties', 'Fields', 'Functions', 'Instances', 'World'];
+    default: return ['Info', 'Properties', 'Fields', 'Functions', 'Instances'];
+  }
+}
+
+function getHeaderStyle(type: ObjectTypeTab | undefined) {
+  switch (type) {
+    case 'Enum': return { icon: Layers, gradient: 'from-yellow-500/20 to-amber-500/10', color: 'text-yellow-400', glow: 'bg-yellow-500/20' };
+    case 'Struct': return { icon: Database, gradient: 'from-orange-500/20 to-red-500/10', color: 'text-orange-400', glow: 'bg-orange-500/20' };
+    case 'Function': return { icon: TerminalSquare, gradient: 'from-green-500/20 to-emerald-500/10', color: 'text-green-400', glow: 'bg-green-500/20' };
+    case 'Package': return { icon: PackageSearch, gradient: 'from-violet-500/20 to-purple-500/10', color: 'text-violet-400', glow: 'bg-violet-500/20' };
+    case 'Actor': return { icon: MapPin, gradient: 'from-cyan-500/20 to-blue-500/10', color: 'text-cyan-400', glow: 'bg-cyan-500/20' };
+    default: return { icon: Box, gradient: 'from-blue-500/20 to-indigo-500/10', color: 'text-blue-400', glow: 'bg-primary/20' };
+  }
+}
 
 function isClassDefinitionObject(item: BrowserItem, detail: ObjectDetail | null): boolean {
   if (item.type === 'Class') return true;
@@ -147,16 +186,14 @@ export default function Objects({ onNavigate }: ObjectsProps) {
   const [worldSaving, setWorldSaving] = useState(false);
   const [worldMessage, setWorldMessage] = useState<string | null>(null);
 
-  const tabs = useMemo(
-    () => [
-      { id: 'Info' as DetailTab, icon: Info, label: t('Tab Info') },
-      { id: 'Properties' as DetailTab, icon: ListTree, label: t('Tab Properties') },
-      { id: 'Fields' as DetailTab, icon: Database, label: t('Tab Fields') },
-      { id: 'Functions' as DetailTab, icon: Hash, label: t('Tab Functions') },
-      { id: 'Instances' as DetailTab, icon: PackageSearch, label: t('Tab Instances') },
-      { id: 'World' as DetailTab, icon: Globe, label: t('Tab World') },
-    ],
-    []
+  // New state for type-specific detail panels
+  const [enumDetail, setEnumDetail] = useState<EnumDetail | null>(null);
+  const [functionMeta, setFunctionMeta] = useState<ClassFunction | null>(null);
+  const [packageContents, setPackageContents] = useState<ObjectItem[]>([]);
+
+  const visibleTabs = useMemo(
+    () => getTabsForType(selected?.type),
+    [selected?.type]
   );
 
   useEffect(() => {
@@ -281,11 +318,11 @@ export default function Objects({ onNavigate }: ObjectsProps) {
         const shouldSearch = !!q || !!packageFilter || !!classFilter;
         const res = shouldSearch
           ? await api.searchObjects(q, {
-              class: classFilter,
-              package: packageFilter.trim() || undefined,
-              offset: 0,
-              limit: 200,
-            })
+            class: classFilter,
+            package: packageFilter.trim() || undefined,
+            offset: 0,
+            limit: 200,
+          })
           : await api.getObjects(0, 200, q);
 
         if (!res.success || !res.data) throw new Error(res.error || t('Failed to load objects'));
@@ -326,6 +363,9 @@ export default function Objects({ onNavigate }: ObjectsProps) {
     setPropertyReadOnly(false);
     setPropertyHint(null);
     setClassSchemaError(null);
+    setEnumDetail(null);
+    setFunctionMeta(null);
+    setPackageContents([]);
 
     try {
       let currentDetail: ObjectDetail | null = null;
@@ -435,14 +475,35 @@ export default function Objects({ onNavigate }: ObjectsProps) {
         }
       }
 
+      if (item.type === 'Enum') {
+        const enumRes = await api.getEnumByName(item.name);
+        if (enumRes.success && enumRes.data) {
+          setEnumDetail(enumRes.data);
+        }
+      }
+
+      if (item.type === 'Function' && currentDetail) {
+        // Try to resolve owning class from outer chain and look up function metadata
+        const ownerClass = outerChain.length > 0 ? outerChain[0]?.name : currentDetail.class;
+        if (ownerClass) {
+          const funcListRes = await api.getClassFunctions(ownerClass);
+          if (funcListRes.success && funcListRes.data) {
+            const match = funcListRes.data.find((fn) => fn.name === item.name || fn.full_name === currentDetail.full_name);
+            if (match) {
+              setFunctionMeta(match);
+            }
+          }
+        }
+      }
+
       if (item.type === 'Package') {
         const packageRes = await api.getPackageContents(item.name);
         if (packageRes.success && packageRes.data) {
-          setWorldText(`Package ${item.name} contains ${packageRes.data.count} entries`);
-        } else {
-          setWorldText('未能加载包内容');
+          setPackageContents(packageRes.data.items || []);
         }
-      } else {
+      }
+
+      if (item.type === 'Actor') {
         const worldRes = await api.getWorldShortcuts();
         if (worldRes.success && worldRes.data) {
           const shortcuts = [
@@ -477,11 +538,6 @@ export default function Objects({ onNavigate }: ObjectsProps) {
           } else {
             setWorldLevels([]);
           }
-        } else {
-          setActorDetail(null);
-          setActorComponents([]);
-          setWorldLevels([]);
-          setWorldMessage(null);
         }
       }
     } catch (error) {
@@ -607,9 +663,8 @@ export default function Objects({ onNavigate }: ObjectsProps) {
               <button
                 key={tab}
                 onClick={() => setTypeTab(tab)}
-                className={`px-2.5 py-1 rounded-[6px] whitespace-nowrap text-[11px] font-semibold tracking-tight transition-colors ${
-                  typeTab === tab ? 'bg-white/10 text-white shadow-sm' : 'text-white/50 hover:text-white'
-                }`}
+                className={`px-2.5 py-1 rounded-[6px] whitespace-nowrap text-[11px] font-semibold tracking-tight transition-colors ${typeTab === tab ? 'bg-white/10 text-white shadow-sm' : 'text-white/50 hover:text-white'
+                  }`}
               >
                 {t('Tab ' + tab)}
               </button>
@@ -634,9 +689,8 @@ export default function Objects({ onNavigate }: ObjectsProps) {
               <div
                 key={`${item.type}-${item.index}-${item.name}`}
                 onClick={() => setSelected(item)}
-                className={`flex items-center gap-3 px-3 py-2 rounded-[10px] cursor-pointer transition-colors ${
-                  active ? 'bg-primary text-white shadow-sm' : 'hover:bg-white/5 text-white/70'
-                }`}
+                className={`flex items-center gap-3 px-3 py-2 rounded-[10px] cursor-pointer transition-colors ${active ? 'bg-primary text-white shadow-sm' : 'hover:bg-white/5 text-white/70'
+                  }`}
               >
                 <div className={`w-8 h-8 rounded-[8px] flex items-center justify-center ${active ? 'bg-white/10' : 'bg-white/5'} flex-none`}>
                   {item.type === 'Enum' ? (
@@ -694,21 +748,24 @@ export default function Objects({ onNavigate }: ObjectsProps) {
       <div className="flex-1 flex flex-col min-w-0 bg-[#0A0A0C] relative">
         <div className="h-14 border-b border-white/5 bg-white/[0.02] backdrop-blur-3xl flex items-center px-6 gap-6 z-20">
           <nav className="flex items-center gap-6">
-            {tabs.map((tab) => (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={`relative h-14 flex items-center gap-2 text-[13px] font-semibold tracking-tight transition-colors ${
-                  activeTab === tab.id ? 'text-white' : 'text-white/40 hover:text-white/70'
-                }`}
-              >
-                <tab.icon className="w-4 h-4" />
-                {tab.label}
-                {activeTab === tab.id && (
-                  <div className="absolute bottom-0 left-0 right-0 h-[3px] bg-primary rounded-t-full shadow-[0_-2px_8px_rgba(10,132,255,0.5)]" />
-                )}
-              </button>
-            ))}
+            {visibleTabs.map((tabId) => {
+              const meta = TAB_META[tabId];
+              const Icon = meta.icon;
+              return (
+                <button
+                  key={tabId}
+                  onClick={() => setActiveTab(tabId)}
+                  className={`relative h-14 flex items-center gap-2 text-[13px] font-semibold tracking-tight transition-colors ${activeTab === tabId ? 'text-white' : 'text-white/40 hover:text-white/70'
+                    }`}
+                >
+                  <Icon className="w-4 h-4" />
+                  {meta.label}
+                  {activeTab === tabId && (
+                    <div className="absolute bottom-0 left-0 right-0 h-[3px] bg-primary rounded-t-full shadow-[0_-2px_8px_rgba(10,132,255,0.5)]" />
+                  )}
+                </button>
+              );
+            })}
           </nav>
         </div>
 
@@ -716,39 +773,45 @@ export default function Objects({ onNavigate }: ObjectsProps) {
           {!selected && <div className="text-white/40 text-sm">{t('Select an item on the left panel.')}</div>}
           {selected && (
             <div className="max-w-5xl space-y-6">
-              <div className="apple-glass-panel rounded-[24px] p-6 relative overflow-hidden">
-                <div className="absolute right-0 top-0 w-32 h-32 bg-primary/20 blur-[60px] rounded-full pointer-events-none -mt-10 -mr-10" />
-                <div className="flex gap-6 relative z-10">
-                  <div className="w-20 h-20 rounded-[16px] bg-gradient-to-br from-blue-500/20 to-indigo-500/10 border border-white/10 flex items-center justify-center shadow-lg flex-none">
-                    <Box className="w-10 h-10 text-blue-400 stroke-[1.5]" />
-                  </div>
-                  <div className="flex-1">
-                    <h1 className="text-[24px] font-semibold text-white tracking-tight leading-tight mb-1">{selected.name}</h1>
-                    <p className="text-[13px] text-white/50 font-mono mb-4">{detail?.full_name || selected.className}</p>
-                    <div className="flex flex-wrap gap-2">
-                      <span
-                        className="px-2.5 py-1 rounded-[6px] bg-white/5 border border-white/10 text-[11px] font-mono text-blue-400 cursor-pointer hover:bg-blue-500/20 hover:border-blue-500/30 flex items-center gap-1"
-                        onClick={() => onNavigate?.('functions')}
-                        title={t('Click to view functions')}
-                      >
-                        <Code2 className="w-3 h-3" />
-                        {t('Obj Class')}: {detail?.class || selected.className}
-                      </span>
-                      <span className="px-2.5 py-1 rounded-[6px] bg-green-500/10 border border-green-500/20 text-[11px] font-mono text-green-400">
-                        {t('Index')}: {selected.index}
-                      </span>
-                      <span
-                        className="px-2.5 py-1 rounded-[6px] bg-purple-500/10 border border-purple-500/20 text-[11px] font-mono text-purple-400 cursor-pointer hover:bg-purple-500/20 hover:border-purple-500/30 flex items-center gap-1"
-                        onClick={() => onNavigate?.('memory')}
-                        title={t('Click to open in Memory Tool')}
-                      >
-                        <ExternalLink className="w-3 h-3" />
-                        {t('Address')}: {selected.address}
-                      </span>
+              {(() => {
+                const hs = getHeaderStyle(selected.type);
+                const HeaderIcon = hs.icon;
+                return (
+                  <div className="apple-glass-panel rounded-[24px] p-6 relative overflow-hidden">
+                    <div className={`absolute right-0 top-0 w-32 h-32 ${hs.glow} blur-[60px] rounded-full pointer-events-none -mt-10 -mr-10`} />
+                    <div className="flex gap-6 relative z-10">
+                      <div className={`w-20 h-20 rounded-[16px] bg-gradient-to-br ${hs.gradient} border border-white/10 flex items-center justify-center shadow-lg flex-none`}>
+                        <HeaderIcon className={`w-10 h-10 ${hs.color} stroke-[1.5]`} />
+                      </div>
+                      <div className="flex-1">
+                        <h1 className="text-[24px] font-semibold text-white tracking-tight leading-tight mb-1">{selected.name}</h1>
+                        <p className="text-[13px] text-white/50 font-mono mb-4">{detail?.full_name || selected.className}</p>
+                        <div className="flex flex-wrap gap-2">
+                          <span
+                            className="px-2.5 py-1 rounded-[6px] bg-white/5 border border-white/10 text-[11px] font-mono text-blue-400 cursor-pointer hover:bg-blue-500/20 hover:border-blue-500/30 flex items-center gap-1"
+                            onClick={() => onNavigate?.('functions')}
+                            title={t('Click to view functions')}
+                          >
+                            <Code2 className="w-3 h-3" />
+                            {t('Obj Class')}: {detail?.class || selected.className}
+                          </span>
+                          <span className="px-2.5 py-1 rounded-[6px] bg-green-500/10 border border-green-500/20 text-[11px] font-mono text-green-400">
+                            {t('Index')}: {selected.index}
+                          </span>
+                          <span
+                            className="px-2.5 py-1 rounded-[6px] bg-purple-500/10 border border-purple-500/20 text-[11px] font-mono text-purple-400 cursor-pointer hover:bg-purple-500/20 hover:border-purple-500/30 flex items-center gap-1"
+                            onClick={() => onNavigate?.('memory')}
+                            title={t('Click to open in Memory Tool')}
+                          >
+                            <ExternalLink className="w-3 h-3" />
+                            {t('Address')}: {selected.address}
+                          </span>
+                        </div>
+                      </div>
                     </div>
                   </div>
-                </div>
-              </div>
+                );
+              })()}
 
               {detailLoading && <div className="text-white/40 text-sm">{t('Loading detail...')}</div>}
               {detailError && <div className="text-red-300 text-sm">{detailError}</div>}
@@ -791,9 +854,8 @@ export default function Objects({ onNavigate }: ObjectsProps) {
                     {properties.map((prop) => (
                       <div
                         key={prop.name}
-                        className={`grid grid-cols-[160px_140px_1fr_auto_auto_auto] gap-3 items-center p-3 rounded-lg border ${
-                          cdoDiff.has(prop.name) ? 'border-yellow-500/30 bg-yellow-500/5' : 'border-white/5 bg-black/20'
-                        }`}
+                        className={`grid grid-cols-[160px_140px_1fr_auto_auto_auto] gap-3 items-center p-3 rounded-lg border ${cdoDiff.has(prop.name) ? 'border-yellow-500/30 bg-yellow-500/5' : 'border-white/5 bg-black/20'
+                          }`}
                       >
                         <div className="text-white/80 text-xs font-mono truncate" title={prop.name}>
                           {prop.name}
@@ -1025,6 +1087,126 @@ export default function Objects({ onNavigate }: ObjectsProps) {
                   </div>
                 </Panel>
               )}
+
+              {activeTab === 'Values' && (
+                <Panel title={t('Enum Values')}>
+                  {!enumDetail && <div className="text-white/40 text-sm">{t('No enum data')}</div>}
+                  {enumDetail && (
+                    <div className="space-y-3">
+                      <div className="flex gap-4 text-xs">
+                        <span className="text-white/50">{t('Underlying Type')}:</span>
+                        <span className="text-blue-400 font-mono">{enumDetail.underlying_type || 'uint8'}</span>
+                        <span className="text-white/50">{t('Count')}:</span>
+                        <span className="text-green-400 font-mono">{enumDetail.values?.length ?? 0}</span>
+                      </div>
+                      <table className="w-full text-left text-xs">
+                        <thead>
+                          <tr className="text-white/40 border-b border-white/10">
+                            <th className="py-2 w-16">#</th>
+                            <th>{t('Name')}</th>
+                            <th className="text-right">{t('Value')}</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(enumDetail.values || []).map((ev, idx) => (
+                            <tr key={`${ev.name}-${idx}`} className="border-b border-white/5 hover:bg-white/5">
+                              <td className="py-2 text-white/40 font-mono">{idx}</td>
+                              <td className="text-white/90 font-mono">{ev.name}</td>
+                              <td className="text-right text-green-400 font-mono">{ev.value}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      {(enumDetail.values || []).length === 0 && (
+                        <div className="text-white/40 text-sm">{t('No values')}</div>
+                      )}
+                    </div>
+                  )}
+                </Panel>
+              )}
+
+              {activeTab === 'Signature' && (
+                <Panel title={t('Function Signature')}>
+                  {!functionMeta && <div className="text-white/40 text-sm">{t('No function metadata')}</div>}
+                  {functionMeta && (
+                    <div className="space-y-4">
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="rounded-lg border border-white/10 bg-black/20 p-3">
+                          <div className="text-xs text-white/50 mb-1">{t('Flags')}</div>
+                          <div className="text-sm text-yellow-400 font-mono">{functionMeta.flags || 'None'}</div>
+                        </div>
+                        <div className="rounded-lg border border-white/10 bg-black/20 p-3">
+                          <div className="text-xs text-white/50 mb-1">{t('Address')}</div>
+                          <div className="text-sm text-purple-400 font-mono">{functionMeta.address}</div>
+                        </div>
+                        <div className="rounded-lg border border-white/10 bg-black/20 p-3">
+                          <div className="text-xs text-white/50 mb-1">{t('Param Size')}</div>
+                          <div className="text-sm text-white/90 font-mono">{functionMeta.param_size} bytes</div>
+                        </div>
+                        <div className="rounded-lg border border-white/10 bg-black/20 p-3">
+                          <div className="text-xs text-white/50 mb-1">{t('Has Script')}</div>
+                          <div className={`text-sm font-mono ${functionMeta.has_script ? 'text-green-400' : 'text-white/40'}`}>
+                            {functionMeta.has_script ? 'Yes (Blueprint)' : 'No (Native)'}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="text-xs uppercase tracking-wider text-white/50 mt-2">{t('Parameters')} ({functionMeta.params.length})</div>
+                      <table className="w-full text-left text-xs">
+                        <thead>
+                          <tr className="text-white/40 border-b border-white/10">
+                            <th className="py-2">{t('Name')}</th>
+                            <th>{t('Type')}</th>
+                            <th>{t('Offset')}</th>
+                            <th>{t('Size')}</th>
+                            <th>{t('Flags')}</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {functionMeta.params.map((p) => (
+                            <tr key={`${p.name}-${p.offset}`} className="border-b border-white/5 hover:bg-white/5">
+                              <td className="py-2 text-white/90 font-mono">{p.name}</td>
+                              <td className="text-blue-400 font-mono">{p.type}</td>
+                              <td className="text-white/60 font-mono">{p.offset}</td>
+                              <td className="text-white/60 font-mono">{p.size}</td>
+                              <td className="text-white/40 font-mono">{p.flags}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      {functionMeta.params.length === 0 && (
+                        <div className="text-white/40 text-sm">{t('No parameters')}</div>
+                      )}
+                    </div>
+                  )}
+                </Panel>
+              )}
+
+              {activeTab === 'Contents' && (
+                <Panel title={t('Package Contents')}>
+                  <div className="text-xs text-white/50 mb-3">
+                    {packageContents.length} {t('objects in this package')}
+                  </div>
+                  <div className="space-y-1 max-h-[600px] overflow-auto">
+                    {packageContents.map((obj) => (
+                      <div
+                        key={`${obj.index}-${obj.address}`}
+                        className="flex items-center gap-3 p-2 rounded-lg border border-white/5 bg-black/20 hover:bg-white/5 cursor-pointer"
+                        onClick={() => onNavigate?.('objects')}
+                        title={t('Click to view object')}
+                      >
+                        <span className="text-white/90 font-mono text-xs flex-1 truncate">{obj.name}</span>
+                        <span className="text-blue-400 text-xs font-mono">{obj.class}</span>
+                        <span className="text-white/30 text-xs font-mono">{obj.address}</span>
+                      </div>
+                    ))}
+                    {packageContents.length === 0 && (
+                      <div className="text-white/40 text-sm">{t('No contents')}</div>
+                    )}
+                  </div>
+                </Panel>
+              )}
+
             </div>
           )}
         </div>
