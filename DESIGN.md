@@ -208,57 +208,39 @@
 
 ---
 
-### Page 2: Objects（对象浏览器）
+### Page 2: Objects（对象浏览器）— 三模式架构
 
 **定位：** 所有对象/类/结构体/枚举/Actor 的查看和编辑
 
-**覆盖 DLL API：** Objects API、Classes API、Enums API、World API、Memory API（写属性）、Watch API
+**覆盖 DLL API：** Objects API、Classes API、Enums API、World API、Memory API（写属性）
 
-**功能区域：**
+**架构：** 拆分为三个独立浏览模式（顶部 Tab 切换），各模式有专用的列表+详情布局
 
-1. **搜索与过滤栏**（顶部）
-   - 搜索框（支持名称/路径搜索）
-   - 类型切换 Tab：All / Class / Struct / Enum / Function / Package / Actor
-   - 包过滤器（输入包名过滤）
-   - 对象标志过滤（RF_Public, RF_Standalone 等）
+**文件结构：**
+- `Objects.tsx` — 模式切换器容器（~65 行）
+- `objects/shared.tsx` — 共享组件（Panel/InfoRow/HeaderCard/工具函数）
+- `objects/TypeBrowser.tsx` — 模式 1: 类型浏览器
+- `objects/InstanceBrowser.tsx` — 模式 2: 实例浏览器
+- `objects/WorldBrowser.tsx` — 模式 3: 世界浏览器
 
-2. **左侧面板 — 对象列表**
-   - 虚拟滚动列表，支持 5 万+ 对象
-   - 每行显示：索引、名称、类名、地址（紧凑格式）
-   - 总数 + 当前过滤匹配数
-   - 双击或回车打开详情
+**模式 1: Types（类型浏览器）** — Class / Struct / Enum 定义
+- 左侧：子 Tab（Class/Struct/Enum）+ 搜索，列表显示名称+大小+父类
+- 右侧：HeaderCard + 动态 Tab（Fields/Functions/Instances/Values）
+- Class → Fields + Functions + Instances
+- Struct → Fields
+- Enum → Values（名称+值+底层类型）
+- 支持继承链展示
 
-3. **右侧面板 — 详情**（多 Tab 切换）
-   - **Info Tab**：名称、完整路径、地址、类名、Outer 链、Index、Flags、内存大小
-   - **Properties Tab**：属性表格
-     - 列：名称、类型、值
-     - 值可点击编辑（调用 Property Write API）
-     - 类型感知渲染：FVector 显示 (X,Y,Z)、颜色显示色块、对象指针显示名称
-     - Watch 按钮：添加到监视列表
-     - 展开嵌套：结构体/数组/Map 可内联展开
-     - CDO 对比：高亮与默认值不同的属性
-   - **Fields Tab**（仅类/结构体）：字段表格
-     - 列：偏移、名称、类型、大小、Flags
-     - 按偏移排序
-     - "仅本类" / "含继承字段" 切换
-     - 点击类型跳转到该类型定义
-   - **Functions Tab**（仅类）：函数列表
-     - 列：名称、Flags、参数数量
-     - 可点击跳转到 Functions 页面
-   - **Instances Tab**（仅类）：该类的所有实例列表
-     - 列：名称、地址
-     - 可点击跳转到详情
-   - **World Tab**（仅 Actor/ActorComponent）：世界信息
-     - 位置：Location (X,Y,Z)
-     - 旋转：Rotation (P,Y,R)
-     - 缩放：Scale (X,Y,Z)
-     - 组件树层级
+**模式 2: Instances（实例浏览器）** — 运行时对象属性编辑
+- 左侧：搜索 + Class 过滤器，列表显示名称+类名+地址
+- 右侧：Properties Tab（内联编辑/保存/刷新）+ Info Tab（OuterChain）
+- 支持从 Types 模式跳转（自动填入 Class 过滤）
 
-4. **右键菜单**
-   - 复制地址
-   - 复制路径
-   - 在新标签页打开
-   - 添加到收藏夹
+**模式 3: World（世界浏览器）** — Actor 和 Level
+- 左侧：Level 树（可展开/折叠）+ Actor 搜索 + Class 过滤
+- 右侧：Transform 编辑器（Location/Rotation/Scale + Apply/Reset）+ Components 列表
+- 支持跳转到 Types/Instances 模式
+
 
 ---
 
