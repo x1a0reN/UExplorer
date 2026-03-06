@@ -54,6 +54,7 @@ export const translations = {
     'Failed to connect': '连接失败',
     'Engine reconnect failed': '引擎重连失败',
     'Packages': '包',
+    'Package': '包',
 
     // ── Process Selector ──
     'Select Process': '选择进程',

@@ -1,10 +1,10 @@
 import { useEffect, useState, useRef } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { Box, Database, Layers, ChevronRight } from 'lucide-react';
+import { Box, Database, Layers, ChevronRight, Package } from 'lucide-react';
 import { t } from '../../i18n';
 import api from '../../api';
 
-type TypeSubTab = 'Class' | 'Struct' | 'Enum';
+type TypeSubTab = 'Class' | 'Struct' | 'Enum' | 'Package';
 
 interface TypeItem {
     index: number;
@@ -53,6 +53,13 @@ export default function HierarchyPane({ onSelectClass }: HierarchyPaneProps) {
                     setItems(append ? [...items, ...mapped] : mapped);
                     setTotal(res.data.total);
                 }
+            } else if (subTab === 'Package') {
+                const res = await api.getPackages(offset, PAGE_SIZE, search);
+                if (res.success && res.data) {
+                    const mapped = res.data.items.map((p) => ({ index: p.index, name: p.name }));
+                    setItems(append ? [...items, ...mapped] : mapped);
+                    setTotal(res.data.total);
+                }
             }
         } catch (error) {
             console.error("Failed to load list", error);
@@ -94,6 +101,7 @@ export default function HierarchyPane({ onSelectClass }: HierarchyPaneProps) {
         { id: 'Class', icon: Box, color: 'text-blue-400' },
         { id: 'Struct', icon: Database, color: 'text-orange-400' },
         { id: 'Enum', icon: Layers, color: 'text-yellow-400' },
+        { id: 'Package', icon: Package, color: 'text-green-400' },
     ];
 
     return (

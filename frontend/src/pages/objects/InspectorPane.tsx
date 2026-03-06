@@ -2,14 +2,14 @@ import { useEffect, useState } from 'react';
 import { MoreHorizontal, Save, RefreshCw } from 'lucide-react';
 import { t } from '../../i18n';
 import api from '../../api';
-import type { ClassFunction, ClassProperty, ObjectDetail, ObjectProperty } from '../../api';
+import type { ClassFunction, ClassProperty, ClassHierarchy, ObjectDetail, ObjectProperty } from '../../api';
 
 interface InspectorPaneProps {
     selectedClass: string | null;
     selectedIndex: number | null;
 }
 
-type TabType = 'Properties' | 'Fields' | 'Functions' | 'SuperStruct';
+type TabType = 'Properties' | 'Fields' | 'Functions' | 'CDO';
 
 // Helper to reliably convert various value types to string for inputs
 function toEditable(val: unknown): string {
@@ -38,10 +38,10 @@ export default function InspectorPane({ selectedClass, selectedIndex }: Inspecto
     // Context state
     const isInstanceMode = selectedIndex !== null;
 
-    // Render State
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [activeTab, setActiveTab] = useState<TabType>('Properties');
+    const [saveStatus, setSaveStatus] = useState<Record<string, 'ok' | 'err' | null>>({});
 
     // Instance State
     const [instanceDetail, setInstanceDetail] = useState<ObjectDetail | null>(null);
@@ -49,14 +49,15 @@ export default function InspectorPane({ selectedClass, selectedIndex }: Inspecto
     const [propertyEditMap, setPropertyEditMap] = useState<Record<string, string>>({});
     const [propertyRefreshing, setPropertyRefreshing] = useState<Record<string, boolean>>({});
 
-    // Class State
     const [classFields, setClassFields] = useState<ClassProperty[]>([]);
     const [classFunctions, setClassFunctions] = useState<ClassFunction[]>([]);
     const [classFullName, setClassFullName] = useState<string>('');
+    const [hierarchy, setHierarchy] = useState<ClassHierarchy | null>(null);
+    const [cdoProperties, setCdoProperties] = useState<ObjectProperty[]>([]);
 
     const availableTabs: TabType[] = isInstanceMode
         ? ['Properties']
-        : ['Fields', 'Functions'];
+        : ['Fields', 'Functions', 'CDO'];
 
     useEffect(() => {
         if (!isInstanceMode && !selectedClass) return;
@@ -82,14 +83,18 @@ export default function InspectorPane({ selectedClass, selectedIndex }: Inspecto
                         setPropertyEditMap(editMap);
                     }
                 } else if (selectedClass) {
-                    const [fieldRes, funcRes, classRes] = await Promise.all([
+                    const [fieldRes, funcRes, classRes, hierRes, cdoRes] = await Promise.all([
                         api.getClassFields(selectedClass),
                         api.getClassFunctions(selectedClass),
-                        api.getClassByName(selectedClass)
+                        api.getClassByName(selectedClass),
+                        api.getClassHierarchy(selectedClass),
+                        api.getClassCDO(selectedClass),
                     ]);
                     if (fieldRes.success && fieldRes.data) setClassFields(fieldRes.data);
                     if (funcRes.success && funcRes.data) setClassFunctions(funcRes.data);
                     if (classRes.success && classRes.data) setClassFullName(classRes.data.full_name);
+                    if (hierRes.success && hierRes.data) setHierarchy(hierRes.data);
+                    if (cdoRes.success && cdoRes.data) setCdoProperties(cdoRes.data.properties ?? []);
                 }
             } catch (err) {
                 setError(err instanceof Error ? err.message : String(err));
@@ -105,7 +110,19 @@ export default function InspectorPane({ selectedClass, selectedIndex }: Inspecto
         if (!isInstanceMode || selectedIndex === null) return;
         const raw = propertyEditMap[propName];
         const parsed = parseInputValue(raw);
-        await api.setObjectProperty(selectedIndex, propName, parsed);
+        const res = await api.setObjectProperty(selectedIndex, propName, parsed);
+        setSaveStatus((prev) => ({ ...prev, [propName]: res.success ? 'ok' : 'err' }));
+        setTimeout(() => setSaveStatus((prev) => ({ ...prev, [propName]: null })), 2000);
+    };
+
+    const handleCopyAddress = () => {
+        const addr = instanceDetail?.address;
+        if (addr) void navigator.clipboard.writeText(`0x${addr}`);
+    };
+
+    const handleWatchObject = async () => {
+        if (!isInstanceMode || selectedIndex === null || properties.length === 0) return;
+        await api.addWatch(selectedIndex, properties[0].name);
     };
 
     const handlePropertyRefresh = async (propName: string) => {
@@ -194,7 +211,7 @@ export default function InspectorPane({ selectedClass, selectedIndex }: Inspecto
                         {properties.map((p, index) => {
                             const isBool = p.type === 'bool';
                             return (
-                                <div key={p.name} className={`flex items-center border-b border-border-subtle px-3 py-2 hover:bg-white/5 group/row relative ${index % 2 === 0 ? 'bg-transparent' : 'bg-surface-stripe'}`}>
+                                <div key={p.name} className={`flex items-center border-b border-border-subtle px-3 py-2 hover:bg-white/5 group/row relative ${saveStatus[p.name] === 'ok' ? 'bg-accent-green/5' : saveStatus[p.name] === 'err' ? 'bg-accent-red/5' : index % 2 === 0 ? 'bg-transparent' : 'bg-surface-stripe'}`}>
                                     <div className="w-[45%] pr-2 flex items-center gap-2">
                                         <span className="w-1 h-1 rounded-full bg-transparent group-hover/row:bg-text-low"></span>
                                         <span className="text-xs text-text-mid font-mono truncate max-w-[120px]" title={p.name}>{p.name}</span>
@@ -239,7 +256,18 @@ export default function InspectorPane({ selectedClass, selectedIndex }: Inspecto
                     </div>
                 )}
 
-                {/* Tab: Fields (Class Mode) */}
+                {/* Hierarchy breadcrumb */}
+                {!isInstanceMode && hierarchy && hierarchy.parents.length > 0 && (
+                    <div className="px-3 py-2 border-b border-border-subtle bg-surface-stripe/30 flex items-center gap-1 text-[10px] text-text-low font-mono overflow-x-auto flex-none">
+                        <span className="text-text-mid font-display font-bold mr-1">{t('Inheritance:')}</span>
+                        {hierarchy.parents.map((p, i) => (
+                            <span key={p}>{i > 0 && <span className="text-text-low mx-0.5">&rarr;</span>}{p}</span>
+                        ))}
+                        <span className="text-text-low mx-0.5">&rarr;</span>
+                        <span className="text-primary font-bold">{hierarchy.name}</span>
+                    </div>
+                )}
+
                 {activeTab === 'Fields' && !isInstanceMode && (
                     <div className="flex flex-col">
                         {classFields.length === 0 && !loading && (
@@ -271,16 +299,36 @@ export default function InspectorPane({ selectedClass, selectedIndex }: Inspecto
                         ))}
                     </div>
                 )}
+
+                {activeTab === 'CDO' && !isInstanceMode && (
+                    <div className="flex flex-col">
+                        <div className="px-3 py-2 border-b border-border-subtle bg-surface-stripe/20 text-[10px] text-text-low font-display">
+                            {t('CDO Readonly Hint')}
+                        </div>
+                        {cdoProperties.length === 0 && !loading && (
+                            <div className="p-4 text-center text-text-low text-xs">{t('No properties')}</div>
+                        )}
+                        {cdoProperties.map((p, i) => (
+                            <div key={p.name} className={`flex items-center border-b border-border-subtle px-3 py-2 ${i % 2 === 0 ? 'bg-transparent' : 'bg-surface-stripe'}`}>
+                                <div className="w-[45%] pr-2 text-xs text-text-mid font-mono truncate" title={p.name}>{p.name}</div>
+                                <div className="w-[55%] flex items-center gap-2">
+                                    <span className="text-2xs text-text-low border border-border-subtle rounded px-1 font-mono truncate max-w-[70px]" title={p.type}>{p.type}</span>
+                                    <span className="text-xs text-text-high font-mono truncate flex-1">{typeof p.value === 'object' ? JSON.stringify(p.value) : String(p.value ?? '')}</span>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                )}
             </div>
 
             {/* Quick Actions Footer */}
             <div className="p-3 border-t border-border-subtle bg-surface-dark flex gap-2 flex-none">
                 {isInstanceMode && (
-                    <button className="flex-1 py-1.5 bg-surface-stripe hover:bg-white/10 border border-border-subtle rounded text-xs text-text-mid font-medium transition-colors">
+                    <button onClick={handleCopyAddress} className="flex-1 py-1.5 bg-surface-stripe hover:bg-white/10 border border-border-subtle rounded text-xs text-text-mid font-medium transition-colors">
                         {t('Copy Address')}
                     </button>
                 )}
-                <button className="flex-1 py-1.5 bg-surface-stripe hover:bg-white/10 border border-border-subtle rounded text-xs text-text-mid font-medium transition-colors">
+                <button onClick={isInstanceMode ? () => void handleWatchObject() : undefined} className="flex-1 py-1.5 bg-surface-stripe hover:bg-white/10 border border-border-subtle rounded text-xs text-text-mid font-medium transition-colors">
                     {isInstanceMode ? t('Watch Object') : t('Find References')}
                 </button>
             </div>

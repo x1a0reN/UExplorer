@@ -231,9 +231,15 @@ export default function Memory() {
     void loadTypedValues();
   }, [currentAddress, cursorOffset, hexBytes.length]);
 
+  const consoleEndRef = useRef<HTMLDivElement>(null);
+
   function pushConsole(line: string) {
     setConsoleLogs((prev) => [...prev, line]);
   }
+
+  useEffect(() => {
+    consoleEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [consoleLogs]);
 
   const loadMemory = async (addr: string, pushHistory = true) => {
     setLoading(true);
@@ -644,6 +650,7 @@ export default function Memory() {
               {line}
             </div>
           ))}
+          <div ref={consoleEndRef} />
           <div className="flex items-center gap-2 mt-2">
             <span className="text-primary font-bold">{'>'}</span>
             <input
