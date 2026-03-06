@@ -5,6 +5,7 @@
 
 #include "Unreal/ObjectArray.h"
 #include "Unreal/UnrealObjects.h"
+#include "Platform.h"
 
 #include <format>
 #include <sstream>
@@ -13,7 +14,6 @@
 namespace UExplorer::API
 {
 
-// Helper: format bytes as hex string
 static std::string BytesToHex(const uint8* data, size_t size)
 {
 	std::ostringstream ss;
@@ -25,35 +25,82 @@ static std::string BytesToHex(const uint8* data, size_t size)
 	return ss.str();
 }
 
+static bool IsReadable(const void* addr, size_t size = 1)
+{
+	if (!addr) return false;
+	if (Platform::IsBadReadPtr(addr)) return false;
+	if (size > 1 && Platform::IsBadReadPtr(reinterpret_cast<const uint8*>(addr) + size - 1)) return false;
+	return true;
+}
+
+template<typename T>
+static bool SafeRead(uintptr_t addr, T& out)
+{
+	if (!IsReadable(reinterpret_cast<const void*>(addr), sizeof(T))) return false;
+	__try
+	{
+		out = *reinterpret_cast<const T*>(addr);
+		return true;
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		return false;
+	}
+}
+
+static bool SafeReadBytes(uintptr_t addr, uint8* out, size_t size)
+{
+	if (!IsReadable(reinterpret_cast<const void*>(addr), size)) return false;
+	__try
+	{
+		memcpy(out, reinterpret_cast<const void*>(addr), size);
+		return true;
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		return false;
+	}
+}
+
+static std::string SafeBytesToHex(uintptr_t addr, size_t size)
+{
+	std::vector<uint8> buf(size, 0);
+	if (!SafeReadBytes(addr, buf.data(), size))
+		return "";
+	return BytesToHex(buf.data(), size);
+}
+
 void RegisterMemoryRoutes(HttpServer& server)
 {
-	// POST /api/v1/memory/read — read raw bytes
 	server.Post("/api/v1/memory/read", [](const HttpRequest& req) -> HttpResponse {
 		try {
 			json body = json::parse(req.Body);
 			std::string addrStr = body.value("address", "");
 			int size = body.value("size", 64);
+			if (size < 1) size = 1;
 			if (size > 4096) size = 4096;
 
 			uintptr_t addr = std::stoull(addrStr, nullptr, 16);
 			if (!addr)
 				return { 400, "application/json", MakeError("Invalid address") };
 
-			const uint8* ptr = reinterpret_cast<const uint8*>(addr);
+			std::string hexStr = SafeBytesToHex(addr, static_cast<size_t>(size));
+			if (hexStr.empty())
+				return { 400, "application/json", MakeError("Access violation: cannot read at " + addrStr) };
 
 			json data;
 			data["address"] = std::format("0x{:X}", addr);
 			data["size"] = size;
-			data["hex"] = BytesToHex(ptr, size);
+			data["hex"] = hexStr;
 
-			// Also provide typed interpretations at offset 0
 			json interp;
-			if (size >= 1) interp["uint8"] = *reinterpret_cast<const uint8*>(ptr);
-			if (size >= 4) interp["int32"] = *reinterpret_cast<const int32*>(ptr);
-			if (size >= 4) interp["float"] = *reinterpret_cast<const float*>(ptr);
-			if (size >= 8) interp["int64"] = *reinterpret_cast<const int64*>(ptr);
-			if (size >= 8) interp["double"] = *reinterpret_cast<const double*>(ptr);
-			if (size >= 8) interp["pointer"] = std::format("0x{:X}", *reinterpret_cast<const uintptr_t*>(ptr));
+			uint8 u8v; int32 i32v; float fv; int64 i64v; double dv; uintptr_t pv;
+			if (size >= 1 && SafeRead(addr, u8v)) interp["uint8"] = u8v;
+			if (size >= 4 && SafeRead(addr, i32v)) interp["int32"] = i32v;
+			if (size >= 4 && SafeRead(addr, fv))   interp["float"] = fv;
+			if (size >= 8 && SafeRead(addr, i64v)) interp["int64"] = i64v;
+			if (size >= 8 && SafeRead(addr, dv))   interp["double"] = dv;
+			if (size >= 8 && SafeRead(addr, pv))   interp["pointer"] = std::format("0x{:X}", pv);
 			data["interpret"] = interp;
 
 			return { 200, "application/json", MakeResponse(data) };
@@ -62,11 +109,10 @@ void RegisterMemoryRoutes(HttpServer& server)
 			return { 400, "application/json", MakeError(std::string("Bad JSON: ") + e.what()) };
 		}
 		catch (...) {
-			return { 500, "application/json", MakeError("Memory read failed (access violation?)") };
+			return { 500, "application/json", MakeError("Memory read failed") };
 		}
 	});
 
-	// POST /api/v1/memory/read-typed — typed memory read
 	server.Post("/api/v1/memory/read-typed", [](const HttpRequest& req) -> HttpResponse {
 		try {
 			json body = json::parse(req.Body);
@@ -81,24 +127,29 @@ void RegisterMemoryRoutes(HttpServer& server)
 			data["address"] = std::format("0x{:X}", addr);
 			data["type"] = type;
 
-			if (type == "byte" || type == "uint8")
-				data["value"] = *reinterpret_cast<uint8*>(addr);
-			else if (type == "int32")
-				data["value"] = *reinterpret_cast<int32*>(addr);
-			else if (type == "uint32")
-				data["value"] = *reinterpret_cast<uint32*>(addr);
-			else if (type == "int64")
-				data["value"] = *reinterpret_cast<int64*>(addr);
-			else if (type == "uint64")
-				data["value"] = *reinterpret_cast<uint64*>(addr);
-			else if (type == "float")
-				data["value"] = *reinterpret_cast<float*>(addr);
-			else if (type == "double")
-				data["value"] = *reinterpret_cast<double*>(addr);
-			else if (type == "pointer")
-				data["value"] = std::format("0x{:X}", *reinterpret_cast<uintptr_t*>(addr));
-			else
+			bool ok = false;
+			if (type == "byte" || type == "uint8") {
+				uint8 v; ok = SafeRead(addr, v); if (ok) data["value"] = v;
+			} else if (type == "int32") {
+				int32 v; ok = SafeRead(addr, v); if (ok) data["value"] = v;
+			} else if (type == "uint32") {
+				uint32 v; ok = SafeRead(addr, v); if (ok) data["value"] = v;
+			} else if (type == "int64") {
+				int64 v; ok = SafeRead(addr, v); if (ok) data["value"] = v;
+			} else if (type == "uint64") {
+				uint64 v; ok = SafeRead(addr, v); if (ok) data["value"] = v;
+			} else if (type == "float") {
+				float v; ok = SafeRead(addr, v); if (ok) data["value"] = v;
+			} else if (type == "double") {
+				double v; ok = SafeRead(addr, v); if (ok) data["value"] = v;
+			} else if (type == "pointer") {
+				uintptr_t v; ok = SafeRead(addr, v); if (ok) data["value"] = std::format("0x{:X}", v);
+			} else {
 				return { 400, "application/json", MakeError("Unknown type: " + type) };
+			}
+
+			if (!ok)
+				return { 400, "application/json", MakeError("Access violation: cannot read at " + addrStr) };
 
 			return { 200, "application/json", MakeResponse(data) };
 		}
@@ -110,7 +161,6 @@ void RegisterMemoryRoutes(HttpServer& server)
 		}
 	});
 
-	// POST /api/v1/memory/write — write raw bytes
 	server.Post("/api/v1/memory/write", [](const HttpRequest& req) -> HttpResponse {
 		try {
 			json body = json::parse(req.Body);
@@ -124,6 +174,9 @@ void RegisterMemoryRoutes(HttpServer& server)
 				return { 400, "application/json", MakeError("No bytes to write") };
 			if (bytes.size() > 4096)
 				return { 400, "application/json", MakeError("Too many bytes (max 4096)") };
+
+			if (!IsReadable(reinterpret_cast<const void*>(addr), bytes.size()))
+				return { 400, "application/json", MakeError("Access violation: cannot write at " + addrStr) };
 
 			uint8* ptr = reinterpret_cast<uint8*>(addr);
 			DWORD oldProtect;
@@ -145,7 +198,6 @@ void RegisterMemoryRoutes(HttpServer& server)
 		}
 	});
 
-	// POST /api/v1/memory/write-typed — typed memory write
 	server.Post("/api/v1/memory/write-typed", [](const HttpRequest& req) -> HttpResponse {
 		try {
 			json body = json::parse(req.Body);
@@ -156,30 +208,26 @@ void RegisterMemoryRoutes(HttpServer& server)
 			if (!addr)
 				return { 400, "application/json", MakeError("Invalid address") };
 
+			size_t typeSize = 0;
+			if (type == "byte" || type == "uint8") typeSize = 1;
+			else if (type == "int32" || type == "float") typeSize = 4;
+			else if (type == "double") typeSize = 8;
+			else return { 400, "application/json", MakeError("Unknown type: " + type) };
+
+			if (!IsReadable(reinterpret_cast<const void*>(addr), typeSize))
+				return { 400, "application/json", MakeError("Access violation: cannot write at " + addrStr) };
+
 			DWORD oldProtect;
-			if (type == "byte" || type == "uint8") {
-				VirtualProtect(reinterpret_cast<void*>(addr), 1, PAGE_EXECUTE_READWRITE, &oldProtect);
+			VirtualProtect(reinterpret_cast<void*>(addr), typeSize, PAGE_EXECUTE_READWRITE, &oldProtect);
+			if (type == "byte" || type == "uint8")
 				*reinterpret_cast<uint8*>(addr) = static_cast<uint8>(body.value("value", 0));
-				VirtualProtect(reinterpret_cast<void*>(addr), 1, oldProtect, &oldProtect);
-			}
-			else if (type == "int32") {
-				VirtualProtect(reinterpret_cast<void*>(addr), 4, PAGE_EXECUTE_READWRITE, &oldProtect);
+			else if (type == "int32")
 				*reinterpret_cast<int32*>(addr) = body.value("value", 0);
-				VirtualProtect(reinterpret_cast<void*>(addr), 4, oldProtect, &oldProtect);
-			}
-			else if (type == "float") {
-				VirtualProtect(reinterpret_cast<void*>(addr), 4, PAGE_EXECUTE_READWRITE, &oldProtect);
+			else if (type == "float")
 				*reinterpret_cast<float*>(addr) = body.value("value", 0.0f);
-				VirtualProtect(reinterpret_cast<void*>(addr), 4, oldProtect, &oldProtect);
-			}
-			else if (type == "double") {
-				VirtualProtect(reinterpret_cast<void*>(addr), 8, PAGE_EXECUTE_READWRITE, &oldProtect);
+			else if (type == "double")
 				*reinterpret_cast<double*>(addr) = body.value("value", 0.0);
-				VirtualProtect(reinterpret_cast<void*>(addr), 8, oldProtect, &oldProtect);
-			}
-			else {
-				return { 400, "application/json", MakeError("Unknown type: " + type) };
-			}
+			VirtualProtect(reinterpret_cast<void*>(addr), typeSize, oldProtect, &oldProtect);
 
 			json data;
 			data["address"] = std::format("0x{:X}", addr);
@@ -195,7 +243,6 @@ void RegisterMemoryRoutes(HttpServer& server)
 		}
 	});
 
-	// POST /api/v1/memory/pointer-chain — follow pointer chain
 	server.Post("/api/v1/memory/pointer-chain", [](const HttpRequest& req) -> HttpResponse {
 		try {
 			json body = json::parse(req.Body);
@@ -214,8 +261,12 @@ void RegisterMemoryRoutes(HttpServer& server)
 
 			for (size_t i = 0; i < offsets.size(); i++)
 			{
-				// Dereference pointer
-				uintptr_t deref = *reinterpret_cast<uintptr_t*>(addr);
+				uintptr_t deref = 0;
+				if (!SafeRead(addr, deref))
+					return { 200, "application/json", MakeResponse(json{
+						{"error", "Access violation at step " + std::to_string(i) + " (0x" + std::format("{:X}", addr) + ")"},
+						{"steps", steps}
+					})};
 				if (!deref)
 					return { 200, "application/json", MakeResponse(json{
 						{"error", "Null pointer at step " + std::to_string(i)},
@@ -234,11 +285,11 @@ void RegisterMemoryRoutes(HttpServer& server)
 			data["final_address"] = std::format("0x{:X}", addr);
 			data["steps"] = steps;
 
-			// Read value at final address
 			json val;
-			val["int32"] = *reinterpret_cast<int32*>(addr);
-			val["float"] = *reinterpret_cast<float*>(addr);
-			val["pointer"] = std::format("0x{:X}", *reinterpret_cast<uintptr_t*>(addr));
+			int32 i32v; float fv; uintptr_t pv;
+			if (SafeRead(addr, i32v)) val["int32"] = i32v;
+			if (SafeRead(addr, fv))   val["float"] = fv;
+			if (SafeRead(addr, pv))   val["pointer"] = std::format("0x{:X}", pv);
 			data["value"] = val;
 
 			return { 200, "application/json", MakeResponse(data) };

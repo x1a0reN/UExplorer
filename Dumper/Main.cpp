@@ -14,6 +14,7 @@
 #include "Server/HttpServer.h"
 #include "API/Router.h"
 #include "API/HookApi.h"
+#include "API/EventsApi.h"
 #include "Settings.h"
 #include "OffsetFinder/Offsets.h"
 
@@ -161,6 +162,9 @@ static std::string TryProbeEngineVersionFromImage()
 	if (!dos || dos->e_magic != IMAGE_DOS_SIGNATURE)
 		return "";
 
+	if (dos->e_lfanew <= 0 || dos->e_lfanew > 0x10000)
+		return "";
+
 	const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
 	if (!nt || nt->Signature != IMAGE_NT_SIGNATURE || nt->OptionalHeader.SizeOfImage == 0)
 		return "";
@@ -230,10 +234,12 @@ static void PrimeGameVersionBeforeOffsetInit()
 	}
 }
 
-DWORD MainThread(HMODULE Module)
+static DWORD WINAPI MainThread(LPVOID lpParam)
 {
+	HMODULE Module = reinterpret_cast<HMODULE>(lpParam);
+
 	AllocConsole();
-	FILE* Dummy;
+	FILE* Dummy = nullptr;
 	freopen_s(&Dummy, "CONOUT$", "w", stderr);
 	freopen_s(&Dummy, "CONIN$", "r", stdin);
 
@@ -249,26 +255,58 @@ DWORD MainThread(HMODULE Module)
 
 	PrimeGameVersionBeforeOffsetInit();
 
-	// Initialize Unreal Engine core (GObjects, GNames, offsets)
-	Generator::InitEngineCore();
-	Generator::InitInternal();
+	try
+	{
+		Generator::InitEngineCore();
+		Generator::InitInternal();
+	}
+	catch (const std::exception& e)
+	{
+		std::cerr << "[UExplorer] FATAL: Engine init failed: " << e.what() << "\n";
+		std::cerr << "[UExplorer] DLL will remain loaded but non-functional.\n";
+		if (Dummy) fclose(Dummy);
+		FreeConsole();
+		FreeLibraryAndExitThread(Module, 1);
+		return 1;
+	}
+	catch (...)
+	{
+		std::cerr << "[UExplorer] FATAL: Engine init crashed with unknown exception.\n";
+		if (Dummy) fclose(Dummy);
+		FreeConsole();
+		FreeLibraryAndExitThread(Module, 1);
+		return 1;
+	}
 
 	std::cerr << "[UExplorer] Engine core initialized.\n";
 
-	// Retrieve game info via ProcessEvent
 	if (Settings::Generator::GameName.empty() && Settings::Generator::GameVersion.empty())
 	{
-		FString Name;
-		FString Version;
-		UEClass Kismet = ObjectArray::FindClassFast("KismetSystemLibrary");
-		UEFunction GetGameName = Kismet.GetFunction("KismetSystemLibrary", "GetGameName");
-		UEFunction GetEngineVersion = Kismet.GetFunction("KismetSystemLibrary", "GetEngineVersion");
+		try
+		{
+			FString Name;
+			FString Version;
+			UEClass Kismet = ObjectArray::FindClassFast("KismetSystemLibrary");
+			if (Kismet)
+			{
+				UEFunction GetGameName = Kismet.GetFunction("KismetSystemLibrary", "GetGameName");
+				UEFunction GetEngineVersion = Kismet.GetFunction("KismetSystemLibrary", "GetEngineVersion");
 
-		Kismet.ProcessEvent(GetGameName, &Name);
-		Kismet.ProcessEvent(GetEngineVersion, &Version);
+				if (GetGameName) Kismet.ProcessEvent(GetGameName, &Name);
+				if (GetEngineVersion) Kismet.ProcessEvent(GetEngineVersion, &Version);
 
-		Settings::Generator::GameName = Name.ToString();
-		Settings::Generator::GameVersion = Version.ToString();
+				Settings::Generator::GameName = Name.ToString();
+				Settings::Generator::GameVersion = Version.ToString();
+			}
+			else
+			{
+				std::cerr << "[UExplorer] Warning: KismetSystemLibrary not found, game info unavailable.\n";
+			}
+		}
+		catch (...)
+		{
+			std::cerr << "[UExplorer] Warning: Failed to query game info via ProcessEvent.\n";
+		}
 	}
 
 	std::cerr << "[UExplorer] Game: " << Settings::Generator::GameName << "\n";
@@ -320,16 +358,15 @@ DWORD MainThread(HMODULE Module)
 		Sleep(100);
 	}
 
-	// Cleanup
 	std::cerr << "[UExplorer] Shutting down...\n";
 
-	// Shutdown hooks first (before server stops, while game thread is still running)
 	UExplorer::API::ShutdownHooks();
+	UExplorer::API::SetServer(nullptr);
 
 	if (g_Server) g_Server->Stop();
+	g_Server.reset();
 	WriteRuntimeState(0, token, false);
 
-	fclose(stderr);
 	if (Dummy) fclose(Dummy);
 	FreeConsole();
 	FreeLibraryAndExitThread(Module, 0);
@@ -343,7 +380,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID lpReserved)
 	{
 	case DLL_PROCESS_ATTACH:
 		g_Module = hModule;
-		CreateThread(0, 0, (LPTHREAD_START_ROUTINE)MainThread, hModule, 0, 0);
+		CreateThread(nullptr, 0, MainThread, hModule, 0, nullptr);
 		break;
 	}
 	return TRUE;

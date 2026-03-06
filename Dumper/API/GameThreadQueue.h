@@ -5,10 +5,6 @@
 #include <atomic>
 #include <cstdint>
 
-// Single-slot game-thread dispatch queue.
-// HTTP thread submits a ProcessEvent call and blocks until the game thread executes it.
-// Game thread polls from HookedProcessEvent (called thousands of times/sec).
-
 namespace UExplorer::GameThread
 {
 
@@ -26,26 +22,34 @@ inline std::condition_variable g_QueueCV;
 inline PendingCall g_Pending;
 inline bool g_Enabled = false;
 inline void (*g_OrigProcessEvent)(void*, void*, void*) = nullptr;
-inline std::atomic<bool> g_Processing{false};  // reentrancy guard
+inline std::atomic<bool> g_Processing{false};
 
-// Called from game thread (inside HookedProcessEvent) - non-blocking
 inline void ProcessQueue()
 {
 	if (!g_Enabled || !g_OrigProcessEvent) return;
 
-	// Reentrancy guard: ProcessEvent can recurse, don't re-enter
 	if (g_Processing.load(std::memory_order_relaxed)) return;
 
+	void* callObj = nullptr;
+	void* callFunc = nullptr;
+	void* callParams = nullptr;
 	bool hasWork = false;
+
 	{
 		std::lock_guard<std::mutex> lk(g_QueueMutex);
-		hasWork = g_Pending.Submitted && !g_Pending.Done.load();
+		if (g_Pending.Submitted && !g_Pending.Done.load())
+		{
+			hasWork = true;
+			callObj = g_Pending.Object;
+			callFunc = g_Pending.Function;
+			callParams = g_Pending.Params;
+		}
 	}
 
 	if (hasWork)
 	{
 		g_Processing.store(true, std::memory_order_relaxed);
-		g_OrigProcessEvent(g_Pending.Object, g_Pending.Function, g_Pending.Params);
+		g_OrigProcessEvent(callObj, callFunc, callParams);
 		g_Processing.store(false, std::memory_order_relaxed);
 
 		{
@@ -56,12 +60,17 @@ inline void ProcessQueue()
 	}
 }
 
-// Called from HTTP thread - blocks until game thread executes (or timeout)
 inline bool Submit(void* obj, void* func, void* params, int timeoutMs = 5000)
 {
 	if (!g_Enabled || !g_OrigProcessEvent) return false;
 
 	std::unique_lock<std::mutex> lk(g_QueueMutex);
+
+	if (!g_QueueCV.wait_for(lk, std::chrono::milliseconds(timeoutMs),
+		[] { return !g_Pending.Submitted || g_Pending.Done.load(); }))
+	{
+		return false;
+	}
 
 	g_Pending.Object = obj;
 	g_Pending.Function = func;

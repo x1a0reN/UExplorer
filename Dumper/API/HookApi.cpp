@@ -1,4 +1,4 @@
-﻿#include "WinMemApi.h"
+#include "WinMemApi.h"
 
 #include "HookApi.h"
 #include "ApiCommon.h"
@@ -13,6 +13,7 @@
 
 #include <format>
 #include <mutex>
+#include <shared_mutex>
 #include <map>
 #include <set>
 #include <atomic>
@@ -59,7 +60,8 @@ static std::deque<HookLogEntry> g_HookLog;
 static constexpr size_t MAX_LOG_SIZE = 2000;
 
 // Set of monitored UFunction addresses for fast lookup in hot path.
-static std::mutex g_MonitorMutex;
+// Uses shared_mutex: HookedProcessEvent takes shared (read) lock, add/remove take unique (write) lock.
+static std::shared_mutex g_MonitorMutex;
 static std::set<void*> g_MonitoredFunctions;
 
 // PostRender vtable hook is only used for game-thread dispatch queue.
@@ -236,7 +238,7 @@ static void HookedProcessEvent(void* Object, void* Function, void* Params)
 
 	bool monitored = false;
 	{
-		std::lock_guard<std::mutex> lk(g_MonitorMutex);
+		std::shared_lock<std::shared_mutex> lk(g_MonitorMutex);
 		monitored = g_MonitoredFunctions.count(Function) > 0;
 	}
 
@@ -594,7 +596,7 @@ static bool InstallHook(const std::string& functionPath, std::string& outNormali
 	outNormalizedPath = className + "." + funcName;
 
 	{
-		std::lock_guard<std::mutex> lk(g_MonitorMutex);
+		std::unique_lock<std::shared_mutex> lk(g_MonitorMutex);
 		g_MonitoredFunctions.insert(outFuncAddr);
 	}
 
@@ -613,7 +615,7 @@ static void UninstallHook(int id)
 	const std::vector<void*> removeAddresses = it->second.FunctionAddresses;
 	g_Hooks.erase(it);
 
-	std::lock_guard<std::mutex> mlk(g_MonitorMutex);
+	std::unique_lock<std::shared_mutex> mlk(g_MonitorMutex);
 	for (void* addr : removeAddresses)
 	{
 		bool stillUsed = false;
@@ -802,7 +804,10 @@ void RegisterHookRoutes(HttpServer& server)
 			hooks.push_back(hook);
 		}
 		data["hooks"] = hooks;
-		data["monitored_count"] = g_MonitoredFunctions.size();
+		{
+			std::shared_lock<std::shared_mutex> mlk(g_MonitorMutex);
+			data["monitored_count"] = g_MonitoredFunctions.size();
+		}
 		data["total_pe_calls"] = g_TotalPECalls.load();
 		data["vtable_hook_installed"] = g_PostRenderHookInstalled;
 		data["postrender_vtable_hook_installed"] = g_PostRenderHookInstalled;
@@ -859,7 +864,7 @@ void ShutdownHooks()
 	std::lock_guard<std::mutex> lk(g_HookMutex);
 	g_Hooks.clear();
 
-	std::lock_guard<std::mutex> mlk(g_MonitorMutex);
+	std::unique_lock<std::shared_mutex> mlk(g_MonitorMutex);
 	g_MonitoredFunctions.clear();
 }
 

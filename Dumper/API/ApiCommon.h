@@ -24,13 +24,25 @@ inline std::string MakeResponse(const json& data)
 	return envelope.dump();
 }
 
-inline std::string MakeError(const std::string& error, int code = 400)
+inline std::string MakeError(const std::string& error)
 {
 	json envelope;
 	envelope["success"] = false;
 	envelope["data"] = nullptr;
 	envelope["error"] = error;
 	return envelope.dump();
+}
+
+inline int SafeParseInt(const std::string& s, int defaultVal = 0)
+{
+	try { size_t pos = 0; int v = std::stoi(s, &pos); return (pos > 0) ? v : defaultVal; }
+	catch (...) { return defaultVal; }
+}
+
+inline uint64_t SafeParseUInt64(const std::string& s, uint64_t defaultVal = 0)
+{
+	try { return std::stoull(s, nullptr, 0); }
+	catch (...) { return defaultVal; }
 }
 
 // Parse query string "key1=val1&key2=val2" into map

@@ -7,6 +7,7 @@
 #include "Unreal/Enums.h"
 #include "Unreal/UnrealTypes.h"
 #include "Unreal/UnrealContainers.h"
+#include "Platform.h"
 
 #include <format>
 #include <mutex>
@@ -47,7 +48,14 @@ static int64_t WatchNowMs()
 		std::chrono::system_clock::now().time_since_epoch()).count();
 }
 
-// Helper: read a property value by name (reuses ObjectsApi pattern)
+template<typename T>
+static bool WatchSafeRead(const void* src, T& out)
+{
+	if (!src || Platform::IsBadReadPtr(src)) return false;
+	__try { out = *reinterpret_cast<const T*>(src); return true; }
+	__except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+
 static json ReadPropByName(int32 objIdx, const std::string& propName)
 {
 	UEObject obj = ObjectArray::GetByIndex(objIdx);
@@ -55,23 +63,33 @@ static json ReadPropByName(int32 objIdx, const std::string& propName)
 	UEClass cls = obj.GetClass();
 	if (!cls) return nullptr;
 	uint8* objAddr = reinterpret_cast<uint8*>(obj.GetAddress());
+	if (!objAddr || Platform::IsBadReadPtr(objAddr)) return nullptr;
 
-	for (const auto& prop : cls.GetProperties())
+	for (UEStruct current = cls; current; current = current.GetSuper())
 	{
-		if (prop.GetName() != propName) continue;
-		uint8* addr = objAddr + prop.GetOffset();
-		EClassCastFlags type = prop.GetCastFlags();
+		for (const auto& prop : current.GetProperties())
+		{
+			if (prop.GetName() != propName) continue;
+			uint8* addr = objAddr + prop.GetOffset();
+			if (Platform::IsBadReadPtr(addr)) return json("(unreadable)");
 
-		if (type & EClassCastFlags::IntProperty) return *reinterpret_cast<int32*>(addr);
-		if (type & EClassCastFlags::FloatProperty) return *reinterpret_cast<float*>(addr);
-		if (type & EClassCastFlags::DoubleProperty) return *reinterpret_cast<double*>(addr);
-		if (type & EClassCastFlags::BoolProperty) {
-			UEBoolProperty bp = prop.Cast<UEBoolProperty>();
-			return (*(addr + bp.GetByteOffset()) & bp.GetFieldMask()) != 0;
+			EClassCastFlags type = prop.GetCastFlags();
+
+			if (type & EClassCastFlags::IntProperty) { int32 v; return WatchSafeRead(addr, v) ? json(v) : json("(err)"); }
+			if (type & EClassCastFlags::FloatProperty) { float v; return WatchSafeRead(addr, v) ? json(v) : json("(err)"); }
+			if (type & EClassCastFlags::DoubleProperty) { double v; return WatchSafeRead(addr, v) ? json(v) : json("(err)"); }
+			if (type & EClassCastFlags::BoolProperty) {
+				UEBoolProperty bp = prop.Cast<UEBoolProperty>();
+				uint8 raw; if (!WatchSafeRead(addr + bp.GetByteOffset(), raw)) return json("(err)");
+				return (raw & bp.GetFieldMask()) != 0;
+			}
+			if (type & EClassCastFlags::ByteProperty) { uint8 v; return WatchSafeRead(addr, v) ? json(static_cast<int>(v)) : json("(err)"); }
+			if (type & EClassCastFlags::NameProperty) {
+				try { return reinterpret_cast<FName*>(addr)->ToString(); }
+				catch (...) { return json("(err)"); }
+			}
+			return std::format("({})", prop.GetCppType());
 		}
-		if (type & EClassCastFlags::ByteProperty) return static_cast<int>(*addr);
-		if (type & EClassCastFlags::NameProperty) return reinterpret_cast<FName*>(addr)->ToString();
-		return std::format("({})", prop.GetCppType());
 	}
 	return nullptr;
 }
