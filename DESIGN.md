@@ -733,7 +733,12 @@ D:\Projects\UExplorer\
 - [x] 前端全页面 i18n 完善 — Functions/Memory/SDKDump/Objects/InspectorPane/InstancePane/HierarchyPane 所有可见文本用 t() 包裹
 - [x] Memory.tsx CSS 拼写修复（`p-2(` → `p-2 `）
 - [x] TypeScript 编译零错误验证通过
-- [ ] 前端功能对接（全局搜索、继承树、CDO 对比等）
+- [x] C++ Medium/Low 审计全量修复（17 项）— HttpServer 安全加固、ObjectsApi FString SEH、TryFindProperty 父类搜索、WritePropertyValue 存活检查、DumpApi 线程管理、CallApi 参数安全、代码去重、WorldApi 线程安全
+- [x] 前端功能对接 — InspectorPane: Copy Address + Watch Object + 属性保存反馈 + 继承链面包屑 + CDO 默认值标签页
+- [x] Objects 面板拖拽调整大小 + 真实连接状态检测
+- [x] Memory Console 自动滚动
+- [x] HierarchyPane Package 子标签（对接 getPackages API）
+- [x] getClassHierarchy / getClassCDO / getPackages 全部对接到前端
 
 ### 页面实现状态总览（重点 8 项）
 1. SDK Dump Center 页面：已实现（独立页）。
