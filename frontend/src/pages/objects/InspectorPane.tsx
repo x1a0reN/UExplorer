@@ -6,10 +6,11 @@ import type { ClassFunction, ClassProperty, ClassHierarchy, ObjectDetail, Object
 
 interface InspectorPaneProps {
     selectedClass: string | null;
+    selectedType: 'Class' | 'Struct' | 'Enum' | 'Package';
     selectedIndex: number | null;
 }
 
-type TabType = 'Properties' | 'Fields' | 'Functions' | 'CDO';
+type TabType = 'Properties' | 'Fields' | 'Functions' | 'CDO' | 'Values';
 
 // Helper to reliably convert various value types to string for inputs
 function toEditable(val: unknown): string {
@@ -34,7 +35,7 @@ function parseInputValue(valStr: string): any {
     }
 }
 
-export default function InspectorPane({ selectedClass, selectedIndex }: InspectorPaneProps) {
+export default function InspectorPane({ selectedClass, selectedType, selectedIndex }: InspectorPaneProps) {
     // Context state
     const isInstanceMode = selectedIndex !== null;
 
@@ -54,17 +55,27 @@ export default function InspectorPane({ selectedClass, selectedIndex }: Inspecto
     const [classFullName, setClassFullName] = useState<string>('');
     const [hierarchy, setHierarchy] = useState<ClassHierarchy | null>(null);
     const [cdoProperties, setCdoProperties] = useState<ObjectProperty[]>([]);
+    const [enumValues, setEnumValues] = useState<Array<{ name: string, value: number }>>([]);
 
     const availableTabs: TabType[] = isInstanceMode
         ? ['Properties']
-        : ['Fields', 'Functions', 'CDO'];
+        : selectedType === 'Class'
+            ? ['Fields', 'Functions', 'CDO']
+            : selectedType === 'Struct'
+                ? ['Fields']
+                : selectedType === 'Enum'
+                    ? ['Values']
+                    : [];
 
     useEffect(() => {
         if (!isInstanceMode && !selectedClass) return;
 
         // Switch to valid tab automatically
         if (isInstanceMode) setActiveTab('Properties');
-        else if (!isInstanceMode && activeTab === 'Properties') setActiveTab('Fields');
+        else if (!isInstanceMode) {
+            if (selectedType === 'Enum') setActiveTab('Values');
+            else if (selectedType === 'Struct' || selectedType === 'Class') setActiveTab('Fields');
+        }
 
         const loadData = async () => {
             setLoading(true);
@@ -83,18 +94,38 @@ export default function InspectorPane({ selectedClass, selectedIndex }: Inspecto
                         setPropertyEditMap(editMap);
                     }
                 } else if (selectedClass) {
-                    const [fieldRes, funcRes, classRes, hierRes, cdoRes] = await Promise.all([
-                        api.getClassFields(selectedClass),
-                        api.getClassFunctions(selectedClass),
-                        api.getClassByName(selectedClass),
-                        api.getClassHierarchy(selectedClass),
-                        api.getClassCDO(selectedClass),
-                    ]);
-                    if (fieldRes.success && fieldRes.data) setClassFields(fieldRes.data);
-                    if (funcRes.success && funcRes.data) setClassFunctions(funcRes.data);
-                    if (classRes.success && classRes.data) setClassFullName(classRes.data.full_name);
-                    if (hierRes.success && hierRes.data) setHierarchy(hierRes.data);
-                    if (cdoRes.success && cdoRes.data) setCdoProperties(cdoRes.data.properties ?? []);
+                    if (selectedType === 'Class') {
+                        const [fieldRes, funcRes, classRes, hierRes, cdoRes] = await Promise.all([
+                            api.getClassFields(selectedClass),
+                            api.getClassFunctions(selectedClass),
+                            api.getClassByName(selectedClass),
+                            api.getClassHierarchy(selectedClass),
+                            api.getClassCDO(selectedClass),
+                        ]);
+                        if (fieldRes.success && fieldRes.data) setClassFields(fieldRes.data);
+                        if (funcRes.success && funcRes.data) setClassFunctions(funcRes.data);
+                        if (classRes.success && classRes.data) setClassFullName(classRes.data.full_name);
+                        if (hierRes.success && hierRes.data) setHierarchy(hierRes.data);
+                        if (cdoRes.success && cdoRes.data) setCdoProperties(cdoRes.data.properties ?? []);
+                    } else if (selectedType === 'Struct') {
+                        const res = await api.getStructByName(selectedClass);
+                        if (res.success && res.data) {
+                            setClassFields(res.data.fields);
+                            setClassFullName(res.data.full_name);
+                            if (res.data.super) {
+                                setHierarchy({ name: res.data.name, parents: [res.data.super], children: [] });
+                            } else {
+                                setHierarchy(null);
+                            }
+                        }
+                    } else if (selectedType === 'Enum') {
+                        const res = await api.getEnumByName(selectedClass);
+                        if (res.success && res.data) {
+                            setClassFullName(res.data.full_name);
+                            setEnumValues(res.data.values);
+                            setHierarchy(null);
+                        }
+                    }
                 }
             } catch (err) {
                 setError(err instanceof Error ? err.message : String(err));
@@ -300,7 +331,7 @@ export default function InspectorPane({ selectedClass, selectedIndex }: Inspecto
                     </div>
                 )}
 
-                {activeTab === 'CDO' && !isInstanceMode && (
+                {activeTab === 'CDO' && !isInstanceMode && selectedType === 'Class' && (
                     <div className="flex flex-col">
                         <div className="px-3 py-2 border-b border-border-subtle bg-surface-stripe/20 text-[10px] text-text-low font-display">
                             {t('CDO Readonly Hint')}
@@ -315,6 +346,21 @@ export default function InspectorPane({ selectedClass, selectedIndex }: Inspecto
                                     <span className="text-2xs text-text-low border border-border-subtle rounded px-1 font-mono truncate max-w-[70px]" title={p.type}>{p.type}</span>
                                     <span className="text-xs text-text-high font-mono truncate flex-1">{typeof p.value === 'object' ? JSON.stringify(p.value) : String(p.value ?? '')}</span>
                                 </div>
+                            </div>
+                        ))}
+                    </div>
+                )}
+
+                {/* Tab: Values (Enum Mode) */}
+                {activeTab === 'Values' && !isInstanceMode && selectedType === 'Enum' && (
+                    <div className="flex flex-col">
+                        {enumValues.length === 0 && !loading && (
+                            <div className="p-4 text-center text-text-low text-xs">{t('No values found.')}</div>
+                        )}
+                        {enumValues.map((v, i) => (
+                            <div key={v.name} className={`flex items-center justify-between border-b border-border-subtle px-3 py-2 hover:bg-white/5 ${i % 2 === 0 ? 'bg-transparent' : 'bg-surface-stripe'}`}>
+                                <div className="text-xs text-text-mid font-mono truncate flex-1 pr-2" title={v.name}>{v.name}</div>
+                                <div className="text-xs text-primary font-mono font-medium">{v.value}</div>
                             </div>
                         ))}
                     </div>

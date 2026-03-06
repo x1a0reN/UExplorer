@@ -684,7 +684,7 @@ D:\Projects\UExplorer\
 
 **目标：** 实现实时对象浏览和类型检查
 
-- [x] Object Browser 页面（对象列表 + 属性查看）— 前端（已实现，见 `frontend/src/pages/Objects.tsx`）
+- [x] Object Browser 页面（支持 Class/Struct/Enum 列表嵌套展开与详细属性查看）— 前端（已实现，见 `frontend/src/pages/Objects.tsx`）
 - [ ] Class Inspector 页面（继承树 + 字段/函数详情）— 前端（部分实现：字段/函数/实例已在 Objects 页；继承树与独立页面未完成）
 - [x] 内存读取 API — `POST /memory/read`, `/memory/read-typed`, `/memory/pointer-chain`
 - [x] 属性值读取（按名称自动解析偏移）— `GET /objects/:index/properties`，支持 Bool/Int/Float/Double/FName/FString/Object/Array 等
@@ -742,7 +742,7 @@ D:\Projects\UExplorer\
 
 ### 页面实现状态总览（重点 8 项）
 1. SDK Dump Center 页面：已实现（独立页）。
-2. Object Browser 页面：已实现（独立页）。
+2. Object Browser 页面：已实现（独立页，支持多类型嵌套结构展开与上下文内容级联渲染）。
 3. Class Inspector 页面：部分实现（能力在 Objects 页面，未独立拆页，继承树未完成）。
 4. 基础 Console 页面：已实现（Memory 页面底部 Console）。
 5. Function Browser 页面（含调用器）：已实现（独立页）。

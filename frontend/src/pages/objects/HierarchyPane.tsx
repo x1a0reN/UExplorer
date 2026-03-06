@@ -15,7 +15,7 @@ interface TypeItem {
 }
 
 interface HierarchyPaneProps {
-    onSelectClass: (className: string) => void;
+    onSelectClass: (className: string, type: TypeSubTab) => void;
 }
 
 export default function HierarchyPane({ onSelectClass }: HierarchyPaneProps) {
@@ -25,6 +25,7 @@ export default function HierarchyPane({ onSelectClass }: HierarchyPaneProps) {
     const [total, setTotal] = useState(0);
     const [listLoading, setListLoading] = useState(false);
     const [selectedName, setSelectedName] = useState<string | null>(null);
+    const [expandedItems, setExpandedItems] = useState<Record<string, { loading: boolean, data?: any[] }>>({});
 
     const PAGE_SIZE = 500;
 
@@ -71,8 +72,43 @@ export default function HierarchyPane({ onSelectClass }: HierarchyPaneProps) {
     // Reload when tab or search changes
     useEffect(() => {
         setItems([]);
+        setExpandedItems({});
         void loadList(false);
     }, [subTab, search]);
+
+    const toggleExpand = async (item: TypeItem) => {
+        if (subTab === 'Package') return; // Cannot expand package directly yet
+
+        setExpandedItems(prev => {
+            if (prev[item.name]) {
+                const next = { ...prev };
+                delete next[item.name];
+                return next;
+            }
+            return { ...prev, [item.name]: { loading: true } };
+        });
+
+        try {
+            if (subTab === 'Class') {
+                const res = await api.getClassFields(item.name);
+                if (res.success && res.data) {
+                    setExpandedItems(prev => ({ ...prev, [item.name]: { loading: false, data: res.data! } }));
+                }
+            } else if (subTab === 'Struct') {
+                const res = await api.getStructByName(item.name);
+                if (res.success && res.data) {
+                    setExpandedItems(prev => ({ ...prev, [item.name]: { loading: false, data: res.data!.fields } }));
+                }
+            } else if (subTab === 'Enum') {
+                const res = await api.getEnumByName(item.name);
+                if (res.success && res.data) {
+                    setExpandedItems(prev => ({ ...prev, [item.name]: { loading: false, data: res.data!.values } }));
+                }
+            }
+        } catch (error) {
+            setExpandedItems(prev => ({ ...prev, [item.name]: { loading: false, data: [] } }));
+        }
+    };
 
     // ─── Virtualization ─────────────────────────────────────────
     const parentRef = useRef<HTMLDivElement>(null);
@@ -118,7 +154,7 @@ export default function HierarchyPane({ onSelectClass }: HierarchyPaneProps) {
                     {SUB_TABS.map((st) => (
                         <button
                             key={st.id}
-                            onClick={() => { setSubTab(st.id); setSelectedName(null); onSelectClass(''); }}
+                            onClick={() => { setSubTab(st.id); setSelectedName(null); onSelectClass('', st.id); }}
                             className={`flex-1 py-1 px-1 text-[11px] font-medium rounded text-center font-display transition-colors ${subTab === st.id ? 'bg-primary text-white shadow-sm' : 'text-text-mid hover:text-text-high'}`}
                         >
                             {t(st.id)}
@@ -164,20 +200,24 @@ export default function HierarchyPane({ onSelectClass }: HierarchyPaneProps) {
                         return (
                             <div
                                 key={virtualRow.key}
+                                data-index={virtualRow.index}
+                                ref={rowVirtualizer.measureElement}
                                 style={{
                                     position: 'absolute',
                                     top: 0,
                                     left: 0,
                                     width: '100%',
-                                    height: `${virtualRow.size}px`,
                                     transform: `translateY(${virtualRow.start}px)`,
                                 }}
                             >
                                 <div
-                                    onClick={() => { setSelectedName(item.name); onSelectClass(item.name); }}
+                                    onClick={() => { setSelectedName(item.name); onSelectClass(item.name, subTab); }}
                                     className={`group flex items-center gap-1 px-1 py-0.5 rounded cursor-pointer mx-1 ${isSelected ? 'bg-primary' : 'hover:bg-white/5'}`}
                                 >
-                                    <ChevronRight className={`w-3.5 h-3.5 flex-none ${isSelected ? 'text-white/60' : 'text-text-low group-hover:text-text-mid'}`} />
+                                    <ChevronRight
+                                        className={`w-3.5 h-3.5 flex-none transition-transform cursor-pointer ${expandedItems[item.name] ? 'rotate-90' : ''} ${isSelected ? 'text-white/60 hover:text-white' : 'text-text-low group-hover:text-text-mid'}`}
+                                        onClick={(e) => { e.stopPropagation(); toggleExpand(item); }}
+                                    />
                                     {subTab === 'Class' && <Box className={`w-3.5 h-3.5 flex-none ${isSelected ? 'text-white' : activeTabColor}`} />}
                                     {subTab === 'Struct' && <Database className={`w-3.5 h-3.5 flex-none ${isSelected ? 'text-white' : activeTabColor}`} />}
                                     {subTab === 'Enum' && <Layers className={`w-3.5 h-3.5 flex-none ${isSelected ? 'text-white' : activeTabColor}`} />}
@@ -191,6 +231,35 @@ export default function HierarchyPane({ onSelectClass }: HierarchyPaneProps) {
                                         </span>
                                     )}
                                 </div>
+                                {expandedItems[item.name] && (
+                                    <div className="pl-6 pb-2 border-l border-border-subtle ml-[11px] mt-1 flex flex-col gap-1 mr-2 bg-surface-dark/20 pr-1 rounded-r">
+                                        {expandedItems[item.name].loading ? (
+                                            <div className="text-[10px] text-text-low font-mono py-1">{t('Loading...')}</div>
+                                        ) : (
+                                            expandedItems[item.name].data?.map((child: any, i: number) => (
+                                                <div key={i} className="flex flex-col border-b border-white/5 last:border-0 py-0.5">
+                                                    {subTab === 'Enum' ? (
+                                                        <div className="flex items-center justify-between">
+                                                            <span className="text-[10px] text-text-mid font-mono truncate" title={child.name}>{child.name}</span>
+                                                            <span className="text-[10px] text-primary font-mono ml-2">{child.value}</span>
+                                                        </div>
+                                                    ) : (
+                                                        <div className="flex items-center justify-between">
+                                                            <span className="text-[10px] text-text-mid font-mono truncate max-w-[120px]" title={child.name}>{child.name}</span>
+                                                            <div className="flex items-center gap-2">
+                                                                <span className="text-[9px] text-text-low border border-border-subtle rounded px-0.5 font-mono truncate max-w-[60px]" title={child.type}>{child.type}</span>
+                                                                <span className="text-[9px] text-text-low font-mono">+0x{child.offset.toString(16).toUpperCase().padStart(2, '0')}</span>
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            ))
+                                        )}
+                                        {expandedItems[item.name].data?.length === 0 && (
+                                            <div className="text-[10px] text-text-low font-mono py-1">{t('No fields/values')}</div>
+                                        )}
+                                    </div>
+                                )}
                             </div>
                         );
                     })}
