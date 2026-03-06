@@ -122,8 +122,8 @@ export default function InspectorPane({ selectedClass, selectedIndex }: Inspecto
         return (
             <aside className="w-[400px] flex flex-col bg-surface-dark/30 backdrop-blur-sm shrink-0 border-l border-border-subtle">
                 <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-text-low">
-                    <span className="text-sm font-display mb-2">No Item Selected</span>
-                    <span className="text-xs">Select a class or instance to view its structural properties and runtime details.</span>
+                    <span className="text-sm font-display mb-2">{t('No Item Selected')}</span>
+                    <span className="text-xs">{t('Select a class or instance to view...')}</span>
                 </div>
             </aside>
         )
@@ -146,7 +146,7 @@ export default function InspectorPane({ selectedClass, selectedIndex }: Inspecto
                                 <span className="text-2xs text-text-low font-mono">0x{instanceDetail.address}</span>
                             )}
                             {!isInstanceMode && (
-                                <span className="text-2xs text-text-low font-mono">Definition</span>
+                                <span className="text-2xs text-text-low font-mono">{t('Definition')}</span>
                             )}
                         </div>
                     </div>
@@ -176,7 +176,7 @@ export default function InspectorPane({ selectedClass, selectedIndex }: Inspecto
             <div className="flex-1 overflow-y-auto relative">
                 {loading && (
                     <div className="absolute inset-0 bg-background-base/50 flex flex-col items-center justify-center text-text-low text-xs z-10">
-                        <span>Loading structure...</span>
+                        <span>{t('Loading structure...')}</span>
                     </div>
                 )}
                 {error && (
@@ -189,7 +189,7 @@ export default function InspectorPane({ selectedClass, selectedIndex }: Inspecto
                 {activeTab === 'Properties' && isInstanceMode && (
                     <div className="flex flex-col">
                         {properties.length === 0 && !loading && (
-                            <div className="p-4 text-center text-text-low text-xs">No properties found.</div>
+                            <div className="p-4 text-center text-text-low text-xs">{t('No properties found.')}</div>
                         )}
                         {properties.map((p, index) => {
                             const isBool = p.type === 'bool';
@@ -212,7 +212,7 @@ export default function InspectorPane({ selectedClass, selectedIndex }: Inspecto
                                                     }}
                                                     className="form-checkbox h-3.5 w-3.5 text-primary bg-[#0a0a0a] border-border-subtle rounded focus:ring-0"
                                                 />
-                                                <span className="text-xs text-text-low font-mono">{propertyEditMap[p.name] === 'true' ? 'True' : 'False'}</span>
+                                                <span className="text-xs text-text-low font-mono">{propertyEditMap[p.name] === 'true' ? t('True') : t('False')}</span>
                                             </div>
                                         ) : (
                                             <input
@@ -243,7 +243,7 @@ export default function InspectorPane({ selectedClass, selectedIndex }: Inspecto
                 {activeTab === 'Fields' && !isInstanceMode && (
                     <div className="flex flex-col">
                         {classFields.length === 0 && !loading && (
-                            <div className="p-4 text-center text-text-low text-xs">No fields found.</div>
+                            <div className="p-4 text-center text-text-low text-xs">{t('No fields found.')}</div>
                         )}
                         {classFields.map((f, i) => (
                             <div key={f.name} className={`flex items-center border-b border-border-subtle px-3 py-2 hover:bg-white/5 ${i % 2 === 0 ? 'bg-transparent' : 'bg-surface-stripe'}`}>
@@ -259,14 +259,14 @@ export default function InspectorPane({ selectedClass, selectedIndex }: Inspecto
                 {activeTab === 'Functions' && !isInstanceMode && (
                     <div className="flex flex-col">
                         {classFunctions.length === 0 && !loading && (
-                            <div className="p-4 text-center text-text-low text-xs">No functions found.</div>
+                            <div className="p-4 text-center text-text-low text-xs">{t('No functions found.')}</div>
                         )}
                         {classFunctions.map((f, i) => (
                             <div key={f.name} className={`flex flex-col border-b border-border-subtle px-3 py-2 hover:bg-white/5 ${i % 2 === 0 ? 'bg-transparent' : 'bg-surface-stripe'}`}>
                                 <div className="flex items-center gap-2">
                                     <span className="text-primary text-xs font-mono truncate flex-1" title={f.name}>{f.name}()</span>
                                 </div>
-                                {f.flags && <div className="text-[10px] text-text-low font-mono mt-1 opacity-60">Flags: {f.flags}</div>}
+                                {f.flags && <div className="text-[10px] text-text-low font-mono mt-1 opacity-60">{t('Flags')}: {f.flags}</div>}
                             </div>
                         ))}
                     </div>
@@ -277,11 +277,11 @@ export default function InspectorPane({ selectedClass, selectedIndex }: Inspecto
             <div className="p-3 border-t border-border-subtle bg-surface-dark flex gap-2 flex-none">
                 {isInstanceMode && (
                     <button className="flex-1 py-1.5 bg-surface-stripe hover:bg-white/10 border border-border-subtle rounded text-xs text-text-mid font-medium transition-colors">
-                        Copy Address
+                        {t('Copy Address')}
                     </button>
                 )}
                 <button className="flex-1 py-1.5 bg-surface-stripe hover:bg-white/10 border border-border-subtle rounded text-xs text-text-mid font-medium transition-colors">
-                    {isInstanceMode ? 'Watch Object' : 'Find References'}
+                    {isInstanceMode ? t('Watch Object') : t('Find References')}
                 </button>
             </div>
         </aside>

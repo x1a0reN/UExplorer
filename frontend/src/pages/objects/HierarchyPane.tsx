@@ -101,7 +101,7 @@ export default function HierarchyPane({ onSelectClass }: HierarchyPaneProps) {
             {/* Header */}
             <div className="h-8 flex flex-none items-center justify-between px-3 border-b border-border-subtle bg-background-base">
                 <span className="text-xs font-bold text-text-mid uppercase tracking-wider font-display">{t('Hierarchy')}</span>
-                <span className="text-2xs text-text-low font-mono">{total.toLocaleString()} Loaded</span>
+                <span className="text-2xs text-text-low font-mono">{total.toLocaleString()} {t('Loaded')}</span>
             </div>
 
             {/* Sub-tabs & Search */}
@@ -113,7 +113,7 @@ export default function HierarchyPane({ onSelectClass }: HierarchyPaneProps) {
                             onClick={() => { setSubTab(st.id); setSelectedName(null); onSelectClass(''); }}
                             className={`flex-1 py-1 px-1 text-[11px] font-medium rounded text-center font-display transition-colors ${subTab === st.id ? 'bg-primary text-white shadow-sm' : 'text-text-mid hover:text-text-high'}`}
                         >
-                            {st.id}
+                            {t(st.id)}
                         </button>
                     ))}
                 </div>
@@ -144,7 +144,7 @@ export default function HierarchyPane({ onSelectClass }: HierarchyPaneProps) {
                                     }}
                                     className="flex items-center justify-center text-text-low text-xs"
                                 >
-                                    Loading...
+                                    {t('Loading...')}
                                 </div>
                             );
                         }

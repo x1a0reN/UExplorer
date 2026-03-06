@@ -101,12 +101,12 @@ export default function InstancePane({ selectedClass, onSelectInstance }: Instan
             <div className="h-6 flex-none flex items-center px-0 border-b border-border-subtle bg-surface-dark">
                 <div className="grid grid-cols-12 w-full px-2 gap-2">
                     <div className="col-span-3 text-[10px] font-bold text-text-mid uppercase tracking-wider font-display flex items-center gap-1 cursor-pointer hover:text-text-high">
-                        Address
+                        {t('Address')}
                         <ArrowDown className="w-3 h-3 text-text-low" />
                     </div>
-                    <div className="col-span-1 text-[10px] font-bold text-text-mid uppercase tracking-wider font-display border-l border-border-subtle pl-2">#</div>
-                    <div className="col-span-4 text-[10px] font-bold text-text-mid uppercase tracking-wider font-display border-l border-border-subtle pl-2">Name</div>
-                    <div className="col-span-4 text-[10px] font-bold text-text-mid uppercase tracking-wider font-display border-l border-border-subtle pl-2">Outer</div>
+                    <div className="col-span-1 text-[10px] font-bold text-text-mid uppercase tracking-wider font-display border-l border-border-subtle pl-2">{t('#')}</div>
+                    <div className="col-span-4 text-[10px] font-bold text-text-mid uppercase tracking-wider font-display border-l border-border-subtle pl-2">{t('Name')}</div>
+                    <div className="col-span-4 text-[10px] font-bold text-text-mid uppercase tracking-wider font-display border-l border-border-subtle pl-2">{t('Outer')}</div>
                 </div>
             </div>
 
@@ -119,7 +119,7 @@ export default function InstancePane({ selectedClass, onSelectInstance }: Instan
                 )}
                 {selectedClass && items.length === 0 && !listLoading && (
                     <div className="absolute inset-0 flex items-center justify-center text-text-low text-xs p-4 text-center">
-                        No instances found for {selectedClass}.
+                        {t('No instances found for')} {selectedClass}
                     </div>
                 )}
                 <div style={{ height: `${rowVirtualizer.getTotalSize()}px`, width: '100%', position: 'relative' }}>
@@ -138,7 +138,7 @@ export default function InstancePane({ selectedClass, onSelectInstance }: Instan
                                     }}
                                     className="flex items-center justify-center text-text-low text-xs"
                                 >
-                                    Loading...
+                                    {t('Loading...')}
                                 </div>
                             );
                         }
@@ -192,8 +192,8 @@ export default function InstancePane({ selectedClass, onSelectInstance }: Instan
             <div className="h-6 flex-none border-t border-border-subtle bg-surface-dark flex items-center px-2">
                 <span className="text-2xs font-mono text-text-low">
                     {selectedIndexState !== null
-                        ? `Selected: Index ${selectedIndexState}`
-                        : `${total.toLocaleString()} Instances`}
+                        ? `${t('Selected: Index')} ${selectedIndexState}`
+                        : `${total.toLocaleString()} ${t('Instances')}`}
                 </span>
             </div>
         </section>

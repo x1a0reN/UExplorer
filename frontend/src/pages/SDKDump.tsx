@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useMemo, useState, type ComponentType } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ComponentType } from 'react';
 import { Download, Code2, Database, LayoutTemplate, Coffee, CheckCircle2, RotateCcw, PlayCircle, RefreshCw } from 'lucide-react';
 import { t } from '../i18n';
 import api, { type DumpJob, type DumpType } from '../api';
@@ -10,14 +10,17 @@ interface DumpFormat {
   desc: string;
 }
 
-const formats: DumpFormat[] = [
-  { id: 'sdk', name: 'C++ Headers', icon: Code2, desc: 'Ready-to-use C++ pointers and structs' },
-  { id: 'usmap', name: 'USMAP', icon: Database, desc: '.usmap format for FModel/CUE4Parse' },
-  { id: 'dumpspace', name: 'Dumpspace JSON', icon: LayoutTemplate, desc: 'Web format for dumpspace.net' },
-  { id: 'ida-script', name: 'IDA Script', icon: Coffee, desc: 'Python script for Ghidra / IDA Pro' },
-];
+function getFormats(): DumpFormat[] {
+  return [
+    { id: 'sdk', name: t('C++ Headers'), icon: Code2, desc: t('C++ SDK headers for use with game modding') },
+    { id: 'usmap', name: t('USMAP'), icon: Database, desc: t('USMAP mappings for FModel/CUE4Parse') },
+    { id: 'dumpspace', name: t('Dumpspace JSON'), icon: LayoutTemplate, desc: t('JSON dump for dumpspace.net viewer') },
+    { id: 'ida-script', name: t('IDA Script'), icon: Coffee, desc: t('IDA Pro import script with structs/enums') },
+  ];
+}
 
 export default function SDKDump() {
+  const formats = getFormats();
   const [activeFormat, setActiveFormat] = useState<DumpType>('sdk');
   const [includePackages, setIncludePackages] = useState('');
   const [excludePackages, setExcludePackages] = useState('');
@@ -103,8 +106,8 @@ export default function SDKDump() {
           <div className="w-16 h-16 mx-auto rounded-[20px] bg-surface-dark border border-border-subtle flex items-center justify-center mb-5 shadow-xl">
             <Download className="w-8 h-8 text-primary stroke-[1.5]" />
           </div>
-          <h1 className="text-2xl font-semibold text-text-high tracking-tight mb-2 font-display">Export Center</h1>
-          <p className="text-text-low text-[13px] max-w-lg mx-auto font-medium">Generate game structures into standard formats for reverse engineering workflows.</p>
+          <h1 className="text-2xl font-semibold text-text-high tracking-tight mb-2 font-display">{t('Export Center')}</h1>
+          <p className="text-text-low text-[13px] max-w-lg mx-auto font-medium">{t('Generate game structures into standard formats for SDK development, reverse engineering, and tool integration.')}</p>
         </div>
 
         <div className="grid grid-cols-2 gap-5 mb-10">
@@ -134,12 +137,12 @@ export default function SDKDump() {
         </div>
 
         <div className="bg-surface-dark border border-border-subtle rounded-xl p-6 mb-8 space-y-5">
-          <h3 className="text-sm font-semibold text-text-high font-display">Export Configuration</h3>
+          <h3 className="text-sm font-semibold text-text-high font-display">{t('Export Configuration')}</h3>
 
           <div className="grid grid-cols-2 gap-8">
             <div className="space-y-4">
               <div>
-                <label className="text-[10px] font-bold text-text-low uppercase tracking-widest block mb-1.5 font-display">Include Packages</label>
+                <label className="text-[10px] font-bold text-text-low uppercase tracking-widest block mb-1.5 font-display">{t('Include Packages')}</label>
                 <input
                   type="text"
                   value={includePackages}
@@ -149,7 +152,7 @@ export default function SDKDump() {
                 />
               </div>
               <div>
-                <label className="text-[10px] font-bold text-text-low uppercase tracking-widest block mb-1.5 font-display">Exclude Packages</label>
+                <label className="text-[10px] font-bold text-text-low uppercase tracking-widest block mb-1.5 font-display">{t('Exclude Packages')}</label>
                 <input
                   type="text"
                   value={excludePackages}
@@ -162,21 +165,21 @@ export default function SDKDump() {
 
             <div className="space-y-4">
               <ToggleRow
-                title="Include Blueprint Classes"
-                subtitle="BlueprintGeneratedClass support"
+                title={t('Include Blueprint Classes')}
+                subtitle={t('BlueprintGeneratedClass support')}
                 checked={includeBlueprint}
                 onChange={setIncludeBlueprint}
               />
               <ToggleRow
-                title="Static Asserts"
-                subtitle="Generate offset/size assertions"
+                title={t('Static Asserts')}
+                subtitle={t('Generate offset/size assertions')}
                 checked={staticAssert}
                 onChange={setStaticAssert}
               />
               <div className="flex items-center justify-between">
                 <div>
-                  <div className="text-xs font-medium text-text-high mb-0.5 font-display">Padding Style</div>
-                  <div className="text-[11px] text-text-low">C++ unknown bytes style</div>
+                  <div className="text-xs font-medium text-text-high mb-0.5 font-display">{t('Padding Style')}</div>
+                  <div className="text-[11px] text-text-low">{t('C++ unknown bytes style')}</div>
                 </div>
                 <select
                   value={paddingStyle}
@@ -197,12 +200,12 @@ export default function SDKDump() {
             onClick={() => void startGenerate(activeFormat)}
             className="h-12 rounded-xl bg-primary hover:bg-primary/90 text-white font-semibold text-sm tracking-tight transition-all active:scale-[0.98] disabled:opacity-50 font-display"
           >
-            {busy ? 'Creating Task...' : `Generate ${formats.find((f) => f.id === activeFormat)?.name}`}
+            {busy ? t('Creating Task...') : `${t('Generate')} ${formats.find((f) => f.id === activeFormat)?.name}`}
           </button>
 
           <div className="bg-surface-dark border border-border-subtle rounded-xl px-4 py-2 flex items-center justify-between">
             <div>
-              <div className="text-text-low text-[10px] font-bold uppercase tracking-widest font-display">Current Task</div>
+              <div className="text-text-low text-[10px] font-bold uppercase tracking-widest font-display">{t('Current Task')}</div>
               <div className="text-text-high text-[11px] font-mono truncate max-w-[190px]">{runningJob?.id || 'none'}</div>
             </div>
             <button
@@ -217,7 +220,7 @@ export default function SDKDump() {
         {runningJob && (
           <div className="bg-surface-dark border border-border-subtle rounded-xl p-4 mb-8">
             <div className="flex items-center justify-between mb-3">
-              <div className="text-sm text-text-high font-medium font-display">Running: {runningJob.format}</div>
+              <div className="text-sm text-text-high font-medium font-display">{t('Running:')} {runningJob.format}</div>
               <div className="text-xs font-mono text-text-low">{runningJob.status}</div>
             </div>
             <div className="h-2 rounded bg-surface-stripe overflow-hidden">
@@ -226,7 +229,7 @@ export default function SDKDump() {
                 style={{ width: runningJob.status === 'running' ? '60%' : '100%' }}
               />
             </div>
-            <div className="mt-2 text-[11px] text-text-low font-mono">Duration: {runningJob.duration_ms} ms</div>
+            <div className="mt-2 text-[11px] text-text-low font-mono">{t('Duration:')} {runningJob.duration_ms} ms</div>
           </div>
         )}
 
@@ -236,7 +239,7 @@ export default function SDKDump() {
               type="text"
               value={selectedJobId}
               onChange={(e) => setSelectedJobId(e.target.value)}
-              placeholder="Enter Job ID (e.g. job-3)"
+              placeholder={t('Enter Job ID (e.g. job-3)')}
               className="flex-1 bg-background-base border border-border-subtle text-text-high text-xs font-mono rounded-lg px-3 py-1.5 outline-none focus:border-primary placeholder:text-text-low/50"
             />
             <button
@@ -260,14 +263,14 @@ export default function SDKDump() {
               ? JSON.stringify(selectedJobDetail, null, 2)
               : detailLoading
                 ? 'Loading...'
-                : 'No job selected'}
+                : t('No data')}
           </pre>
         </div>
 
         {error && <div className="text-red-300 text-sm mb-6">{error}</div>}
 
         <div className="mt-8 space-y-4">
-          <h3 className="text-[10px] font-bold text-text-low uppercase tracking-widest ml-1 font-display">Task History</h3>
+          <h3 className="text-[10px] font-bold text-text-low uppercase tracking-widest ml-1 font-display">{t('Task History')}</h3>
           <div className="space-y-2">
             {sortedJobs.map((job) => (
               <div key={job.id} className="bg-surface-dark border border-border-subtle rounded-xl p-3.5 flex items-center justify-between group hover:bg-surface-stripe/50 transition-colors">
@@ -290,7 +293,7 @@ export default function SDKDump() {
                   <button
                     onClick={() => void startGenerate(job.format)}
                     className="w-7 h-7 rounded-lg bg-surface-stripe hover:bg-surface-stripe/80 flex items-center justify-center text-text-mid border border-border-subtle"
-                    title="Rerun"
+                    title={t('Rerun')}
                   >
                     <RotateCcw className="w-3.5 h-3.5" />
                   </button>
@@ -307,7 +310,7 @@ export default function SDKDump() {
                 </div>
               </div>
             ))}
-            {sortedJobs.length === 0 && <div className="text-text-low text-xs px-2 font-display">No jobs yet</div>}
+            {sortedJobs.length === 0 && <div className="text-text-low text-xs px-2 font-display">{t('No jobs yet')}</div>}
           </div>
         </div>
       </div>

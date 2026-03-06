@@ -575,7 +575,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="ClassName::FunctionName..."
+              placeholder={t('ClassName::FunctionName...')}
               className="w-full bg-background-base border border-border-subtle text-text-high text-xs rounded-lg pl-9 pr-3 py-2 outline-none focus:border-primary transition-all font-mono placeholder:text-text-low/50"
             />
           </div>
@@ -585,7 +585,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
               type="text"
               value={classFilter}
               onChange={(e) => setClassFilter(e.target.value)}
-              placeholder="Package/class filter"
+              placeholder={t('Package/class filter')}
               className="w-full bg-background-base border border-border-subtle text-text-high text-xs rounded-lg pl-9 pr-3 py-2 outline-none focus:border-primary transition-all font-mono placeholder:text-text-low/50"
             />
           </div>
@@ -613,9 +613,9 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
         </div>
 
         <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
-          {listLoading && <div className="text-text-low text-xs p-3 font-display">Loading...</div>}
+          {listLoading && <div className="text-text-low text-xs p-3 font-display">{t('Loading...')}</div>}
           {listError && <div className="text-accent-red text-xs p-3 font-display">{listError}</div>}
-          {!listLoading && !listError && items.length === 0 && <div className="text-text-low text-xs p-3 font-display">No functions</div>}
+          {!listLoading && !listError && items.length === 0 && <div className="text-text-low text-xs p-3 font-display">{t('No functions loaded')}</div>}
           {items.map((item) => {
             const active = selected?.index === item.index;
             return (
@@ -680,19 +680,19 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
               <div className="bg-surface-dark border border-border-subtle rounded-xl p-6 shadow-sm">
                 <div className="grid grid-cols-4 gap-4 text-sm font-display">
                   <div>
-                    <div className="text-text-low text-xs mb-1">Total Hooks</div>
+                    <div className="text-text-low text-xs mb-1">{t('Total Hooks')}</div>
                     <div className="text-text-high text-xl font-mono">{hooks.length}</div>
                   </div>
                   <div>
-                    <div className="text-text-low text-xs mb-1">Enabled</div>
+                    <div className="text-text-low text-xs mb-1">{t('Enabled')}</div>
                     <div className="text-accent-green text-xl font-mono">{hooks.filter((h) => h.enabled).length}</div>
                   </div>
                   <div>
-                    <div className="text-text-low text-xs mb-1">Filtered</div>
+                    <div className="text-text-low text-xs mb-1">{t('Filtered')}</div>
                     <div className="text-primary text-xl font-mono">{filteredHooks.length}</div>
                   </div>
                   <div>
-                    <div className="text-text-low text-xs mb-1">Selected Hook</div>
+                    <div className="text-text-low text-xs mb-1">{t('Selected Hook')}</div>
                     <div className="text-text-high text-sm font-mono truncate bg-background-base px-2 py-1 rounded inline-block border border-border-subtle">
                       {hooks.find((h) => h.id === managerSelectedHookId)?.function_path || '-'}
                     </div>
@@ -743,10 +743,10 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
 
                 <div className="border border-border-subtle rounded-xl overflow-hidden bg-background-base">
                   <div className="grid grid-cols-[90px_1fr_120px_140px] bg-surface-dark text-text-low text-[10px] uppercase font-bold tracking-widest px-4 py-2.5 font-display border-b border-border-subtle">
-                    <div>ID</div>
-                    <div>Function Path</div>
-                    <div>Status</div>
-                    <div>Hit Count</div>
+                    <div>{t('ID')}</div>
+                    <div>{t('Function Path')}</div>
+                    <div>{t('Status')}</div>
+                    <div>{t('Hit Count')}</div>
                   </div>
                   <div className="max-h-[380px] overflow-auto">
                     {pagedHooks.map((hook) => (
@@ -758,7 +758,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
                       >
                         <div className="font-mono">{hook.id}</div>
                         <div className="font-mono truncate">{hook.function_path}</div>
-                        <div className="font-display">{hook.enabled ? <span className="text-accent-green">Enabled</span> : <span className="text-text-low">Disabled</span>}</div>
+                        <div className="font-display">{hook.enabled ? <span className="text-accent-green">{t('Enabled')}</span> : <span className="text-text-low">{t('Disabled')}</span>}</div>
                         <div className="font-mono">{hook.hit_count}</div>
                       </button>
                     ))}
@@ -789,7 +789,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
 
               <div className="bg-surface-dark border border-border-subtle rounded-xl p-6 space-y-4 shadow-sm">
                 <div className="flex items-center justify-between">
-                  <h3 className="text-text-high font-semibold font-display">Hook Log</h3>
+                  <h3 className="text-text-high font-semibold font-display">{t('Hook Log')}</h3>
                   <div className="text-xs text-text-low font-mono bg-background-base px-2 py-1 rounded border border-border-subtle">
                     Active Hook ID: {managerSelectedHookId ?? '-'}
                   </div>
@@ -802,7 +802,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
                       <div className="text-primary mt-0.5">{entry.function_name}</div>
                     </div>
                   ))}
-                  {pagedHookLogs.length === 0 && <div className="text-text-low text-xs font-display text-center py-4">No hook logs</div>}
+                  {pagedHookLogs.length === 0 && <div className="text-text-low text-xs font-display text-center py-4">{t('No hook logs')}</div>}
                 </div>
                 <div className="flex items-center justify-between text-xs text-text-low font-display">
                   <div>{t('Page')} {hookLogPage} {t('of')} {hookLogTotalPages} ({hookLogPageSize} {t('per page')})</div>
@@ -827,7 +827,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
             </div>
           ) : (
             <>
-              {!selected && <div className="text-white/40 text-sm">Select a function on the left panel.</div>}
+              {!selected && <div className="text-white/40 text-sm">{t('Select a function on the left panel.')}</div>}
               {selected && (
                 <div className="max-w-5xl space-y-6">
                   <div className="bg-surface-dark border border-border-subtle rounded-xl p-6 relative overflow-hidden shadow-sm">
@@ -888,7 +888,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
                           ))}
                         </tbody>
                       </table>
-                      {!functionMeta && <div className="text-text-low text-sm font-display text-center py-4">No metadata</div>}
+                      {!functionMeta && <div className="text-text-low text-sm font-display text-center py-4">{t('No metadata')}</div>}
                     </div>
                   )}
 
@@ -896,10 +896,10 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
                     <div className="grid grid-cols-2 gap-6">
                       <div className="space-y-6">
                         <div className="bg-surface-dark border border-border-subtle rounded-xl overflow-hidden p-6 shadow-sm">
-                          <h3 className="text-sm font-semibold text-text-high mb-4 tracking-tight font-display">Invoke Parameters</h3>
+                          <h3 className="text-sm font-semibold text-text-high mb-4 tracking-tight font-display">{t('Invoke Parameters')}</h3>
                           <div className="space-y-4">
                             <div className="space-y-1.5">
-                              <label className="text-[10px] font-bold text-text-low uppercase tracking-widest font-display">Call Mode</label>
+                              <label className="text-[10px] font-bold text-text-low uppercase tracking-widest font-display">{t('Call Mode')}</label>
                               <div className="flex gap-2 bg-background-base p-1 rounded-lg border border-border-subtle inline-flex">
                                 {([
                                   { id: 'instance' as CallMode, label: 'Instance' },
@@ -927,7 +927,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
                                   type="text"
                                   value={targetIndex}
                                   onChange={(e) => setTargetIndex(e.target.value)}
-                                  placeholder="Object index"
+                                  placeholder={t('Object index')}
                                   className="w-full bg-background-base border border-border-subtle text-text-high font-mono text-[13px] rounded-lg px-3 py-2 outline-none focus:border-primary transition-colors placeholder:text-text-low/50"
                                 />
                               </div>
@@ -1006,7 +1006,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
                       <div className="space-y-6">
                         <div className="bg-surface-dark border border-border-subtle rounded-xl overflow-hidden p-6 flex flex-col h-full shadow-sm">
                           <div className="flex items-center justify-between mb-4">
-                            <h3 className="text-sm font-semibold text-text-high tracking-tight font-display">Execution Result</h3>
+                            <h3 className="text-sm font-semibold text-text-high tracking-tight font-display">{t('Execution Result')}</h3>
                             <History className="w-4 h-4 text-text-low" />
                           </div>
                           <pre className="flex-1 bg-background-base border border-border-subtle rounded-xl p-4 font-mono text-[12px] text-accent-green overflow-y-auto whitespace-pre-wrap custom-scrollbar">
@@ -1060,7 +1060,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
                             <div className="text-primary mt-0.5">{entry.function_name}</div>
                           </div>
                         ))}
-                        {hookLog.length === 0 && <div className="text-text-low text-xs font-display text-center py-4">No hook logs</div>}
+                        {hookLog.length === 0 && <div className="text-text-low text-xs font-display text-center py-4">{t('No hook logs')}</div>}
                       </div>
                     </div>
                   )}
@@ -1088,7 +1088,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
 
                       <div className="grid grid-cols-2 gap-4 pt-2">
                         <div>
-                          <div className="text-text-low text-[10px] uppercase font-bold tracking-widest font-display mb-1.5">Bytecode</div>
+                          <div className="text-text-low text-[10px] uppercase font-bold tracking-widest font-display mb-1.5">{t('Bytecode')}</div>
                           <textarea
                             readOnly
                             value={bytecode}
@@ -1096,7 +1096,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
                           />
                         </div>
                         <div>
-                          <div className="text-text-low text-[10px] uppercase font-bold tracking-widest font-display mb-1.5">Pseudocode</div>
+                          <div className="text-text-low text-[10px] uppercase font-bold tracking-widest font-display mb-1.5">{t('Pseudocode')}</div>
                           <textarea
                             readOnly
                             value={decompiled}

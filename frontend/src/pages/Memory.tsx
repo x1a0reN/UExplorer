@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Terminal, Binary, Bookmark, Search, ArrowRight, ArrowLeft, RefreshCw, Layers, Plus, Trash2 } from 'lucide-react';
 import { t } from '../i18n';
 import api, { type WatchHistoryEntry, type WatchItem } from '../api';
@@ -442,7 +442,7 @@ export default function Memory() {
         <div className="flex items-center gap-4 text-xs font-medium text-text-low font-display">
           <button className="flex items-center gap-2 hover:text-text-high transition-colors">
             <Bookmark className="w-3.5 h-3.5" />
-            Bookmarks
+            {t('Bookmarks')}
           </button>
         </div>
       </div>
@@ -450,8 +450,8 @@ export default function Memory() {
       <div className="flex-1 flex min-h-0">
         <div className="flex-1 flex flex-col min-w-0 border-r border-border-subtle bg-background-base">
           <div className="h-8 border-b border-border-subtle flex items-center gap-4 bg-surface-dark px-6">
-            <span className="text-[10px] font-bold text-text-low uppercase tracking-widest font-display">Hex Editor</span>
-            <span className="text-[10px] font-mono text-text-low">16 Bytes/Row</span>
+            <span className="text-[10px] font-bold text-text-low uppercase tracking-widest font-display">{t('Hex Editor')}</span>
+            <span className="text-[10px] font-mono text-text-low">{t('16 Bytes/Row')}</span>
             {readError && <span className="text-[10px] text-accent-red font-medium">{readError}</span>}
           </div>
           <div className="flex-1 overflow-auto p-4 font-mono text-xs leading-none relative bg-background-base">
@@ -486,7 +486,7 @@ export default function Memory() {
         <div className="w-[320px] flex-none bg-surface-dark flex flex-col border-r border-border-subtle">
           <div className="h-8 border-b border-border-subtle flex items-center px-4 bg-surface-dark">
             <span className="text-[10px] font-bold text-text-low uppercase tracking-widest flex items-center gap-1.5 font-display">
-              <Binary className="w-3.5 h-3.5" /> Data Inspector
+              <Binary className="w-3.5 h-3.5" /> {t('Data Inspector')}
             </span>
           </div>
 
@@ -498,7 +498,7 @@ export default function Memory() {
             </div>
 
             <div className="border-t border-border-subtle pt-5 space-y-3">
-              <div className="text-[10px] font-bold text-text-low uppercase tracking-widest font-display">Typed Write</div>
+              <div className="text-[10px] font-bold text-text-low uppercase tracking-widest font-display">{t('Typed Write')}</div>
               <div className="bg-background-base border border-border-subtle rounded-lg p-3 space-y-2.5 shadow-sm">
                 <select
                   value={writeType}
@@ -517,14 +517,14 @@ export default function Memory() {
                   className="w-full bg-surface-dark border border-border-subtle text-text-high text-xs rounded px-2 py-1 outline-none focus:border-primary font-mono placeholder:text-text-low/50"
                 />
                 <button onClick={() => void writeTypedValue()} className="w-full bg-primary hover:bg-primary/90 text-white text-xs py-1.5 rounded transition-colors font-display">
-                  Write At Cursor
+                  {t('Write At Cursor')}
                 </button>
               </div>
             </div>
 
             <div className="border-t border-border-subtle pt-5 space-y-3">
               <div className="text-[10px] font-bold text-text-low uppercase tracking-widest flex items-center justify-between font-display">
-                <span>Pointer Chain</span>
+                <span>{t('Pointer Chain')}</span>
                 <Layers className="w-3.5 h-3.5 text-text-mid" />
               </div>
               <div className="bg-background-base border border-border-subtle rounded-lg p-3 space-y-2.5 shadow-sm">
@@ -543,9 +543,9 @@ export default function Memory() {
                   placeholder="Offsets (e.g. 10, 20)"
                 />
                 <button onClick={() => void resolvePointerChain()} className="w-full bg-surface-stripe hover:bg-surface-stripe/80 border border-border-subtle text-text-high text-xs py-1.5 rounded transition-colors font-display">
-                  Resolve
+                  {t('Resolve')}
                 </button>
-                <pre className="max-h-40 overflow-auto text-[10px] text-text-mid bg-surface-dark border border-border-subtle rounded p-2(whitespace-pre-wrap font-mono">{pointerResult || 'No result'}</pre>
+                <pre className="max-h-40 overflow-auto text-[10px] text-text-mid bg-surface-dark border border-border-subtle rounded p-2 whitespace-pre-wrap font-mono">{pointerResult || t('No result')}</pre>
               </div>
             </div>
           </div>
@@ -553,7 +553,7 @@ export default function Memory() {
 
         <div className="w-[320px] flex-none bg-surface-dark flex flex-col">
           <div className="h-8 border-b border-border-subtle flex items-center justify-between px-4 bg-surface-dark">
-            <span className="text-[10px] font-bold text-text-low uppercase tracking-widest font-display">Watch Panel</span>
+            <span className="text-[10px] font-bold text-text-low uppercase tracking-widest font-display">{t('Watch Panel')}</span>
             <button
               onClick={() => void refreshWatches()}
               className="w-6 h-6 rounded flex items-center justify-center hover:bg-surface-stripe transition-colors"
@@ -572,7 +572,7 @@ export default function Memory() {
                     onClick={() => void toggleWatchHistory(w.id)}
                     className="px-2 py-1 rounded bg-surface-stripe hover:bg-surface-stripe/80 text-[10px] text-text-high font-display border border-border-subtle transition-colors"
                   >
-                    History
+                    {t('History')}
                   </button>
                   <button
                     onClick={() => {
@@ -596,9 +596,9 @@ export default function Memory() {
                 </div>
                 {expandedWatchId === w.id && (
                   <div className="mt-2 text-xs rounded border border-border-subtle bg-surface-dark p-2 max-h-36 overflow-auto space-y-1">
-                    {watchHistoryLoading[w.id] && <div className="text-[10px] text-text-low">Loading...</div>}
+                    {watchHistoryLoading[w.id] && <div className="text-[10px] text-text-low">{t('Loading...')}</div>}
                     {!watchHistoryLoading[w.id] && (watchHistory[w.id] || []).length === 0 && (
-                      <div className="text-[10px] text-text-low font-display">No history</div>
+                      <div className="text-[10px] text-text-low font-display">{t('No history')}</div>
                     )}
                     {!watchHistoryLoading[w.id] &&
                       (watchHistory[w.id] || []).map((entry, idx) => (
@@ -611,7 +611,7 @@ export default function Memory() {
                 )}
               </div>
             ))}
-            {watches.length === 0 && <div className="text-text-low text-xs text-center mt-4 font-display">No watches active</div>}
+            {watches.length === 0 && <div className="text-text-low text-xs text-center mt-4 font-display">{t('No watches active')}</div>}
           </div>
           <div className="p-2 border-t border-border-subtle bg-surface-dark">
             <button
@@ -623,7 +623,7 @@ export default function Memory() {
               className="w-full flex items-center justify-center gap-2 py-1.5 rounded-lg bg-surface-stripe hover:bg-surface-stripe/80 text-text-high text-xs font-display border border-border-subtle transition-colors"
             >
               <Plus className="w-3.5 h-3.5 text-text-low" />
-              Use Cursor Address
+              {t('Use Cursor Address')}
             </button>
           </div>
         </div>
@@ -632,10 +632,10 @@ export default function Memory() {
       <div className="h-[220px] flex-none border-t border-border-subtle bg-background-base flex flex-col">
         <div className="h-8 border-b border-border-subtle flex items-center px-4 bg-surface-dark">
           <span className="text-[10px] font-bold text-text-low uppercase tracking-widest flex items-center gap-2 font-display">
-            <Terminal className="w-3.5 h-3.5" /> UExplorer Console
+            <Terminal className="w-3.5 h-3.5" /> {t('UExplorer Console')}
           </span>
           <span className={`ml-auto text-[10px] font-mono font-medium px-2 py-0.5 rounded border ${wsConsoleConnected ? 'text-accent-green border-accent-green/20 bg-accent-green/10' : 'text-accent-yellow border-accent-yellow/20 bg-accent-yellow/10'}`}>
-            {wsConsoleConnected ? 'WS:CONNECTED' : 'WS:FALLBACK'}
+            {wsConsoleConnected ? t('WS:CONNECTED') : t('WS:FALLBACK')}
           </span>
         </div>
         <div className="flex-1 overflow-auto p-4 font-mono text-xs space-y-1">
@@ -656,7 +656,7 @@ export default function Memory() {
                 }
               }}
               className="flex-1 bg-transparent text-text-high outline-none font-mono placeholder:text-text-low/50"
-              placeholder="Enter command..."
+              placeholder={t('Enter command...')}
             />
           </div>
         </div>

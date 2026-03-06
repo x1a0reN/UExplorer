@@ -1,4 +1,4 @@
-﻿import { useState } from 'react';
+import { useState } from 'react';
 import { Diamond, Settings, Terminal } from 'lucide-react';
 import { t } from '../i18n';
 import HierarchyPane from './objects/HierarchyPane';
@@ -26,13 +26,13 @@ export default function Objects() {
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2 text-text-high">
             <Diamond className="w-5 h-5 text-primary fill-primary/20" />
-            <span className="font-display font-bold text-sm tracking-wide">CRYSTAL IDE</span>
+            <span className="font-display font-bold text-sm tracking-wide">{t('UExplorer')}</span>
           </div>
           <div className="h-4 w-[1px] bg-border-subtle"></div>
           {/* Process Selector (Static for now) */}
           <button className="flex items-center gap-2 px-2 py-1 rounded hover:bg-white/5 transition-colors group">
             <Terminal className="w-4 h-4 text-accent-green" />
-            <span className="text-xs font-mono text-text-high">UExplorer Process</span>
+            <span className="text-xs font-mono text-text-high">{t('UExplorer Process')}</span>
           </button>
         </div>
 
@@ -78,10 +78,10 @@ export default function Objects() {
         <div className="flex items-center gap-4">
           <span className="flex items-center gap-1">
             <span className="w-1.5 h-1.5 bg-white rounded-full animate-pulse"></span>
-            Connected
+            {t('Connected')}
           </span>
         </div>
-        <div className="opacity-80">Crystal IDE layout for UExplorer</div>
+        <div className="opacity-80">{t('UExplorer')}</div>
       </footer>
     </div>
   );
