@@ -52,6 +52,9 @@ public:
 		std::string Path;
 	};
 
+	static constexpr int kMaxRequestBodyBytes = 10 * 1024 * 1024;
+	static constexpr int kMaxConcurrentClients = 64;
+
 public:
 	uint16_t Port;
 	std::string Token;
@@ -61,6 +64,7 @@ public:
 	SOCKET ListenSocket = INVALID_SOCKET;
 	std::thread ServerThread;
 	std::atomic<bool> Running{ false };
+	std::atomic<int> ActiveClients{ 0 };
 
 	// SSE support
 	std::mutex SSEClientsMutex;
@@ -155,7 +159,7 @@ public:
 			return handler(req);
 		}
 		catch (const std::exception& e) {
-			std::string err = std::string(R"({"success":false,"error":"Internal error: )") + e.what() + R"("})";
+			std::string err = std::string(R"({"success":false,"error":"Internal error: )") + EscapeJson(e.what()) + R"("})";
 			return { 500, "application/json", err };
 		}
 		catch (...) {
@@ -221,7 +225,12 @@ public:
 
 				std::string keyLower = ToLower(key);
 				if (keyLower == "content-length")
-					contentLength = std::stoi(val);
+				{
+					try { contentLength = std::stoi(val); }
+					catch (...) { contentLength = 0; }
+					if (contentLength > kMaxRequestBodyBytes)
+						contentLength = kMaxRequestBodyBytes;
+				}
 			}
 		}
 
@@ -597,6 +606,9 @@ public:
 
 	void HandleClient(SOCKET clientSock)
 	{
+		ActiveClients.fetch_add(1, std::memory_order_relaxed);
+		struct ClientGuard { std::atomic<int>& ref; ~ClientGuard() { ref.fetch_sub(1, std::memory_order_relaxed); } } clientGuard{ ActiveClients };
+
 		try {
 			char buf[65536];
 			int total = 0;
@@ -846,6 +858,12 @@ public:
 				continue;
 			}
 
+			if (ActiveClients.load(std::memory_order_relaxed) >= kMaxConcurrentClients)
+			{
+				closesocket(client);
+				continue;
+			}
+
 			std::thread([this, client]() {
 				HandleClient(client);
 			}).detach();
@@ -853,6 +871,10 @@ public:
 
 		closesocket(ListenSocket);
 		ListenSocket = INVALID_SOCKET;
+
+		for (int i = 0; i < 30 && ActiveClients.load() > 0; ++i)
+			std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
 		WSACleanup();
 	}
 }; // end Impl

@@ -236,6 +236,27 @@ static bool TryReadFNameStringSafe(const uint8* addr, std::string& outValue, std
 	}
 }
 
+static bool TryReadFStringSafe(UC::FString* fs, std::string& outValue)
+{
+	if (!fs || Platform::IsBadReadPtr(fs))
+		return false;
+
+	try
+	{
+		if (!fs->IsValid())
+		{
+			outValue.clear();
+			return true;
+		}
+		outValue = fs->ToString();
+		return true;
+	}
+	catch (...)
+	{
+		return false;
+	}
+}
+
 static PropertyReadResult ReadPropertyValueAt(uint8* addr, const UEProperty& prop, int depth = 0)
 {
 	if (!addr)
@@ -294,9 +315,15 @@ static PropertyReadResult ReadPropertyValueAt(uint8* addr, const UEProperty& pro
 		if (type & EClassCastFlags::StrProperty)
 		{
 			UC::FString* fs = reinterpret_cast<UC::FString*>(addr);
-			if (!fs->IsValid())
+			if (Platform::IsBadReadPtr(fs))
+				return MakeUnknown(prop.GetCppType(), "fstring_bad_ptr");
+			std::string strVal;
+			bool strOk = TryReadFStringSafe(fs, strVal);
+			if (!strOk)
+				return MakeUnknown(prop.GetCppType(), "fstring_access_violation");
+			if (strVal.empty())
 				return MakeEmpty("");
-			return MakeOk(fs->ToString());
+			return MakeOk(std::move(strVal));
 		}
 		if (type & EClassCastFlags::TextProperty)
 		{
@@ -591,7 +618,13 @@ json SerializeFunctionUnified(const UEFunction& func)
 // Helper: write a property value from JSON
 static bool WritePropertyValue(uint8* objAddr, const UEProperty& prop, const json& value)
 {
+	if (!objAddr || Platform::IsBadReadPtr(objAddr))
+		return false;
+
 	uint8* addr = objAddr + prop.GetOffset();
+	if (Platform::IsBadReadPtr(addr))
+		return false;
+
 	EClassCastFlags type = prop.GetCastFlags();
 
 	DWORD oldProtect = 0;
@@ -648,12 +681,15 @@ static bool TryParseObjectIndex(const std::string& idxStr, int32& outIdx)
 
 static bool TryFindProperty(const UEClass& cls, const std::string& propName, UEProperty& outProp)
 {
-	for (const auto& prop : cls.GetProperties())
+	for (UEStruct cur = cls; cur; cur = cur.GetSuper())
 	{
-		if (prop.GetName() == propName)
+		for (const auto& prop : cur.GetProperties())
 		{
-			outProp = prop;
-			return true;
+			if (prop.GetName() == propName)
+			{
+				outProp = prop;
+				return true;
+			}
 		}
 	}
 	return false;

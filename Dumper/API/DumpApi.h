@@ -5,4 +5,5 @@
 namespace UExplorer::API
 {
 void RegisterDumpRoutes(HttpServer& server);
+void ShutdownDumpJobs();
 } // namespace UExplorer::API

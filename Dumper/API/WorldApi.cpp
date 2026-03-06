@@ -1403,7 +1403,7 @@ void RegisterWorldRoutes(HttpServer& server)
 			double x = 0.0, y = 0.0, z = 0.0;
 			if (!ParseVec3(body[requestField], x, y, z))
 			{
-				static HttpResponse badInput;
+				thread_local HttpResponse badInput;
 				badInput = { 400, "application/json", MakeError(std::string("Invalid vector format for ") + requestField) };
 				return &badInput;
 			}
@@ -1411,7 +1411,7 @@ void RegisterWorldRoutes(HttpServer& server)
 			json original;
 			if (!ReadVec3Property(root, propertyName, original))
 			{
-				static HttpResponse readFail;
+				thread_local HttpResponse readFail;
 				readFail = { 500, "application/json", MakeError(std::string("Failed to capture original ") + propertyName) };
 				return &readFail;
 			}

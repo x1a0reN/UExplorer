@@ -15,6 +15,7 @@
 #include "API/Router.h"
 #include "API/HookApi.h"
 #include "API/EventsApi.h"
+#include "API/DumpApi.h"
 #include "Settings.h"
 #include "OffsetFinder/Offsets.h"
 
@@ -361,6 +362,7 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 	std::cerr << "[UExplorer] Shutting down...\n";
 
 	UExplorer::API::ShutdownHooks();
+	UExplorer::API::ShutdownDumpJobs();
 	UExplorer::API::SetServer(nullptr);
 
 	if (g_Server) g_Server->Stop();

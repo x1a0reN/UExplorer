@@ -102,7 +102,8 @@ static bool ExecuteFunctionCall(
 
 	const bool isStatic = forceStatic || IsStaticFunction(func);
 	const int32 paramSize = func.GetStructSize();
-	std::vector<uint8> paramBuf(paramSize > 0 ? paramSize : 256, 0);
+	const int bufSize = paramSize > 0 ? paramSize : 256;
+	std::vector<uint8> paramBuf(bufSize, 0);
 
 	for (const auto& prop : func.GetProperties())
 	{
@@ -146,7 +147,7 @@ static bool ExecuteFunctionCall(
 	}
 
 	const int32 peIdx = Off::InSDK::ProcessEvent::PEIndex;
-	if (peIdx <= 0 || peIdx >= 200)
+	if (peIdx <= 0 || peIdx >= kMaxVTableIndex)
 	{
 		outError = "Invalid ProcessEvent index";
 		return false;

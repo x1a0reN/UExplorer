@@ -85,4 +85,44 @@ inline std::string GetPathSegment(const std::string& path, int index)
 	return "";
 }
 
+constexpr int32_t kMaxVTableIndex = 512;
+
+// Shared extern declarations for script offset diagnostics (defined in OffsetFinder.cpp)
+extern "C" const char* UExplorer_GetScriptOffsetConfidence();
+extern "C" const char* UExplorer_GetScriptOffsetAnomalyTags();
+extern "C" int32_t UExplorer_GetScriptOffsetSelectedOffset();
+extern "C" int32_t UExplorer_GetScriptOffsetSelectedScore();
+extern "C" int32_t UExplorer_GetScriptOffsetScoreGapTop2();
+extern "C" int32_t UExplorer_GetScriptOffsetBpEndHits();
+extern "C" int32_t UExplorer_GetScriptOffsetWeightedBpEndHits();
+extern "C" int32_t UExplorer_GetScriptOffsetGenericScriptHits();
+extern "C" int32_t UExplorer_GetScriptOffsetVerifyProbed();
+extern "C" int32_t UExplorer_GetScriptOffsetVerifyHeaderValid();
+extern "C" int32_t UExplorer_GetScriptOffsetVerifyEndHits();
+extern "C" int32_t UExplorer_GetScriptOffsetVerifyFirstOpcodeValid();
+extern "C" int32_t UExplorer_GetScriptOffsetVerifySizeSane();
+extern "C" int32_t UExplorer_GetScriptOffsetVerifyEndRate();
+extern "C" int32_t UExplorer_GetScriptOffsetVerifyOpcodeRate();
+
+inline json BuildScriptOffsetDiagnosticsJson()
+{
+	json diag;
+	diag["selected_offset"] = UExplorer_GetScriptOffsetSelectedOffset();
+	diag["selected_score"] = UExplorer_GetScriptOffsetSelectedScore();
+	diag["score_gap_top2"] = UExplorer_GetScriptOffsetScoreGapTop2();
+	diag["bp_end_hits"] = UExplorer_GetScriptOffsetBpEndHits();
+	diag["weighted_bp_end_hits"] = UExplorer_GetScriptOffsetWeightedBpEndHits();
+	diag["generic_script_hits"] = UExplorer_GetScriptOffsetGenericScriptHits();
+	diag["verify_probed"] = UExplorer_GetScriptOffsetVerifyProbed();
+	diag["verify_header_valid"] = UExplorer_GetScriptOffsetVerifyHeaderValid();
+	diag["verify_end_hits"] = UExplorer_GetScriptOffsetVerifyEndHits();
+	diag["verify_first_opcode_valid"] = UExplorer_GetScriptOffsetVerifyFirstOpcodeValid();
+	diag["verify_size_sane"] = UExplorer_GetScriptOffsetVerifySizeSane();
+	diag["verify_end_rate"] = UExplorer_GetScriptOffsetVerifyEndRate();
+	diag["verify_opcode_rate"] = UExplorer_GetScriptOffsetVerifyOpcodeRate();
+	diag["confidence"] = UExplorer_GetScriptOffsetConfidence();
+	diag["anomaly_tags"] = UExplorer_GetScriptOffsetAnomalyTags();
+	return diag;
+}
+
 } // namespace UExplorer::API

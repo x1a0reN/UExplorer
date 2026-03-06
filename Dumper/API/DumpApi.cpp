@@ -13,19 +13,19 @@
 #include <thread>
 #include <atomic>
 #include <unordered_map>
+#include <vector>
 #include <chrono>
+#include <algorithm>
 
 namespace UExplorer::API
 {
-
-// ---- Job tracking ----
 
 enum class JobStatus { Running, Completed, Failed };
 
 struct DumpJob
 {
 	std::string Id;
-	std::string Format;     // "sdk", "usmap", "dumpspace", "ida-script"
+	std::string Format;
 	JobStatus Status = JobStatus::Running;
 	std::string Error;
 	std::string OutputPath;
@@ -36,6 +36,11 @@ struct DumpJob
 static std::mutex g_JobsMutex;
 static std::unordered_map<std::string, DumpJob> g_Jobs;
 static std::atomic<int> g_JobCounter{ 0 };
+
+static std::mutex g_ThreadsMutex;
+static std::vector<std::thread> g_DumpThreads;
+
+static constexpr size_t kMaxRetainedJobs = 50;
 
 static int64_t NowMs()
 {
@@ -64,7 +69,27 @@ static json JobToJson(const DumpJob& job)
 	return j;
 }
 
-// Run a generator in a background thread, tracking via job ID
+static void PruneOldJobs()
+{
+	if (g_Jobs.size() <= kMaxRetainedJobs)
+		return;
+
+	std::string oldestId;
+	int64_t oldestTime = INT64_MAX;
+	for (const auto& [id, job] : g_Jobs)
+	{
+		if (job.Status == JobStatus::Running)
+			continue;
+		if (job.EndTime < oldestTime)
+		{
+			oldestTime = job.EndTime;
+			oldestId = id;
+		}
+	}
+	if (!oldestId.empty())
+		g_Jobs.erase(oldestId);
+}
+
 template<typename GeneratorType>
 static std::string LaunchGeneratorJob(const std::string& format)
 {
@@ -78,10 +103,11 @@ static std::string LaunchGeneratorJob(const std::string& format)
 
 	{
 		std::lock_guard<std::mutex> lock(g_JobsMutex);
+		PruneOldJobs();
 		g_Jobs[jobId] = job;
 	}
 
-	std::thread([jobId]() {
+	std::thread t([jobId]() {
 		try {
 			Generator::Generate<GeneratorType>();
 
@@ -106,14 +132,40 @@ static std::string LaunchGeneratorJob(const std::string& format)
 			j.EndTime = NowMs();
 			j.Error = "Unknown error";
 		}
-	}).detach();
+	});
+
+	{
+		std::lock_guard<std::mutex> lk(g_ThreadsMutex);
+		// Clean up finished threads
+		g_DumpThreads.erase(
+			std::remove_if(g_DumpThreads.begin(), g_DumpThreads.end(),
+				[](std::thread& th) {
+					if (th.joinable()) {
+						th.join();
+						return true;
+					}
+					return true;
+				}),
+			g_DumpThreads.end());
+		g_DumpThreads.push_back(std::move(t));
+	}
 
 	return jobId;
 }
 
+void ShutdownDumpJobs()
+{
+	std::lock_guard<std::mutex> lk(g_ThreadsMutex);
+	for (auto& th : g_DumpThreads)
+	{
+		if (th.joinable())
+			th.join();
+	}
+	g_DumpThreads.clear();
+}
+
 void RegisterDumpRoutes(HttpServer& server)
 {
-	// POST /api/v1/dump/sdk — generate C++ SDK
 	server.Post("/api/v1/dump/sdk", [](const HttpRequest& req) -> HttpResponse {
 		std::string jobId = LaunchGeneratorJob<CppGenerator>("sdk");
 		json data;
@@ -122,7 +174,6 @@ void RegisterDumpRoutes(HttpServer& server)
 		return { 200, "application/json", MakeResponse(data) };
 	});
 
-	// POST /api/v1/dump/usmap — generate USMAP mappings
 	server.Post("/api/v1/dump/usmap", [](const HttpRequest& req) -> HttpResponse {
 		std::string jobId = LaunchGeneratorJob<MappingGenerator>("usmap");
 		json data;
@@ -131,7 +182,6 @@ void RegisterDumpRoutes(HttpServer& server)
 		return { 200, "application/json", MakeResponse(data) };
 	});
 
-	// POST /api/v1/dump/dumpspace — generate Dumpspace JSON
 	server.Post("/api/v1/dump/dumpspace", [](const HttpRequest& req) -> HttpResponse {
 		std::string jobId = LaunchGeneratorJob<DumpspaceGenerator>("dumpspace");
 		json data;
@@ -140,7 +190,6 @@ void RegisterDumpRoutes(HttpServer& server)
 		return { 200, "application/json", MakeResponse(data) };
 	});
 
-	// POST /api/v1/dump/ida-script — generate IDA mapping
 	server.Post("/api/v1/dump/ida-script", [](const HttpRequest& req) -> HttpResponse {
 		std::string jobId = LaunchGeneratorJob<IDAMappingGenerator>("ida-script");
 		json data;
@@ -149,7 +198,6 @@ void RegisterDumpRoutes(HttpServer& server)
 		return { 200, "application/json", MakeResponse(data) };
 	});
 
-	// GET /api/v1/dump/jobs — list all jobs
 	server.Get("/api/v1/dump/jobs", [](const HttpRequest& req) -> HttpResponse {
 		std::lock_guard<std::mutex> lock(g_JobsMutex);
 		json items = json::array();
@@ -158,7 +206,6 @@ void RegisterDumpRoutes(HttpServer& server)
 		return { 200, "application/json", MakeResponse(items) };
 	});
 
-	// GET /api/v1/dump/jobs/:id — get job status
 	server.Get("/api/v1/dump/jobs/:id", [](const HttpRequest& req) -> HttpResponse {
 		std::string id = GetPathSegment(req.Path, 4);
 		if (id.empty())

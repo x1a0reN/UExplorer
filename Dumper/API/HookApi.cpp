@@ -316,7 +316,7 @@ static bool InstallPEVTableHook()
 	}
 
 	const int32 peIdx = Off::InSDK::ProcessEvent::PEIndex;
-	if (peIdx <= 0 || peIdx >= 512)
+	if (peIdx <= 0 || peIdx >= kMaxVTableIndex)
 	{
 		std::cerr << "[HookApi] Invalid ProcessEvent index: " << peIdx << std::endl;
 		return false;
