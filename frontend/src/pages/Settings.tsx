@@ -1,6 +1,7 @@
-﻿import { useMemo, useState, type ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { Settings, Globe, Shield, HardDrive, Monitor, TestTube2, Save, Info } from 'lucide-react';
 import api, { type ApiClientSettings, type DumpType } from '../api';
+import { t, getLanguage, setLanguage, type Language } from '../i18n';
 
 type TabId = 'Connection' | 'Injection' | 'Dump' | 'Display';
 
@@ -49,12 +50,20 @@ function readDisplaySettings(): DisplaySettings {
   }
 }
 
+const tabLabelMap: Record<TabId, string> = {
+  Connection: 'Connection',
+  Injection: 'Injection',
+  Dump: 'Dump',
+  Display: 'Display',
+};
+
 export default function SettingsView() {
   const [activeTab, setActiveTab] = useState<TabId>('Connection');
   const [settings, setSettings] = useState<ApiClientSettings>(api.getSettings());
   const [display, setDisplay] = useState<DisplaySettings>(readDisplaySettings());
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [currentLang, setCurrentLang] = useState<Language>(getLanguage());
 
   const tabs = useMemo(
     () => [
@@ -81,14 +90,20 @@ export default function SettingsView() {
     const persisted = await api.persistConnectionSettings();
     localStorage.setItem(DISPLAY_KEY, JSON.stringify(display));
     setSaving(false);
-    setMessage(persisted ? 'Settings saved' : 'Settings saved (native sync failed)');
+    setMessage(persisted ? t('Settings saved') : t('Settings saved (native sync failed)'));
   };
 
   const testConnection = async () => {
     api.updateSettings(settings);
     await api.persistConnectionSettings();
     const ok = await api.healthCheck();
-    setMessage(ok ? 'Health check: alive' : 'Health check failed');
+    setMessage(ok ? t('Health check: alive') : t('Health check failed'));
+  };
+
+  const handleLanguageChange = (lang: Language) => {
+    setCurrentLang(lang);
+    setLanguage(lang);
+    window.location.reload();
   };
 
   return (
@@ -106,7 +121,7 @@ export default function SettingsView() {
               <div className={`w-7 h-7 rounded-[8px] flex items-center justify-center ${activeTab === tab.id ? 'bg-white/20' : 'bg-background-base border border-border-subtle'}`}>
                 <tab.icon className={`w-3.5 h-3.5 stroke-[2] ${activeTab === tab.id ? 'text-white' : 'text-text-low'}`} />
               </div>
-              <span className="text-[13px] font-medium tracking-tight font-display">{tab.id}</span>
+              <span className="text-[13px] font-medium tracking-tight font-display">{t(tabLabelMap[tab.id])}</span>
             </button>
           ))}
         </div>
@@ -114,14 +129,14 @@ export default function SettingsView() {
 
       <div className="flex-1 overflow-y-auto w-full max-w-4xl px-12 py-10">
         <div className="mb-8 flex items-center justify-between">
-          <h1 className="text-3xl font-semibold text-text-high tracking-tight font-display">{activeTab}</h1>
+          <h1 className="text-3xl font-semibold text-text-high tracking-tight font-display">{t(tabLabelMap[activeTab])}</h1>
           <div className="flex items-center gap-2">
             <button
               onClick={() => void testConnection()}
               className="px-3 py-1.5 rounded-lg bg-surface-stripe hover:bg-surface-stripe/80 text-text-high border border-border-subtle text-sm flex items-center gap-2 font-display"
             >
               <TestTube2 className="w-4 h-4 text-text-low" />
-              Test
+              {t('Test')}
             </button>
             <button
               onClick={() => void saveAll()}
@@ -129,7 +144,7 @@ export default function SettingsView() {
               className="px-4 py-1.5 rounded-lg bg-primary hover:bg-primary/90 text-white text-sm flex items-center gap-2 disabled:opacity-50 font-display"
             >
               <Save className="w-4 h-4" />
-              {saving ? 'Saving...' : 'Save'}
+              {saving ? t('Saving...') : t('Save')}
             </button>
           </div>
         </div>
@@ -140,7 +155,7 @@ export default function SettingsView() {
           {activeTab === 'Connection' && (
             <>
               <Card>
-                <SettingLine label="HTTP Port" desc="Port used to communicate with the injected DLL (0 = auto-select free port).">
+                <SettingLine label={t('API Port')} desc={t('Port used by the DLL HTTP server')}>
                   <input
                     type="number"
                     value={settings.port}
@@ -156,7 +171,7 @@ export default function SettingsView() {
                     className="bg-background-base border border-border-subtle text-text-high text-xs font-mono placeholder:text-text-low/50 rounded-lg px-3 py-1.5 w-24 text-center outline-none focus:border-primary"
                   />
                 </SettingLine>
-                <SettingLine label="Access Token" desc="Shared secret for API requests.">
+                <SettingLine label={t('API Token')} desc={t('Shared secret for X-UExplorer-Token header')}>
                   <input
                     type="text"
                     value={settings.token}
@@ -167,7 +182,7 @@ export default function SettingsView() {
               </Card>
 
               <Card>
-                <SettingLine label="Auto Reconnect" desc="Poll and reconnect automatically when disconnected.">
+                <SettingLine label={t('Auto Reconnect')} desc={t('Automatically reconnect when connection is lost')}>
                   <Toggle checked={settings.autoReconnect} onChange={(v) => setSettingsField('autoReconnect', v)} />
                 </SettingLine>
               </Card>
@@ -176,7 +191,7 @@ export default function SettingsView() {
 
           {activeTab === 'Injection' && (
             <Card>
-              <SettingLine label="DLL Path" desc="Path to UExplorerCore.dll">
+              <SettingLine label={t('DLL File Path')} desc={t('Path to UExplorerCore.dll')}>
                 <input
                   type="text"
                   value={settings.dllPath}
@@ -184,7 +199,7 @@ export default function SettingsView() {
                   className="bg-background-base border border-border-subtle text-text-high text-xs font-mono placeholder:text-text-low/50 rounded-lg px-3 py-1.5 w-[420px] outline-none focus:border-primary"
                 />
               </SettingLine>
-              <SettingLine label="Injection Method" desc="Remote thread or proxy mode.">
+              <SettingLine label={t('Injection Method')} desc={t('Method used to inject DLL into target process')}>
                 <select
                   value={settings.injectionMethod}
                   onChange={(e) => setSettingsField('injectionMethod', e.target.value as ApiClientSettings['injectionMethod'])}
@@ -199,7 +214,7 @@ export default function SettingsView() {
 
           {activeTab === 'Dump' && (
             <Card>
-              <SettingLine label="Default Dump Format" desc="Default format shown in SDK Dump page.">
+              <SettingLine label={t('Default Dump Format')} desc={t('Default format for SDK generation')}>
                 <select
                   value={settings.defaultDumpFormat}
                   onChange={(e) => setSettingsField('defaultDumpFormat', e.target.value as DumpType)}
@@ -211,7 +226,7 @@ export default function SettingsView() {
                   <option value="ida-script">ida-script</option>
                 </select>
               </SettingLine>
-              <SettingLine label="Default Output Directory" desc="Metadata only for UI display.">
+              <SettingLine label={t('Output Directory')} desc={t('Directory for generated SDK files')}>
                 <input
                   type="text"
                   value={settings.outputDir}
@@ -225,34 +240,44 @@ export default function SettingsView() {
           {activeTab === 'Display' && (
             <>
               <Card>
-                <SettingLine label="Theme" desc="UI theme preference.">
+                <SettingLine label={t('Language')} desc={t('Interface language')}>
+                  <select
+                    value={currentLang}
+                    onChange={(e) => handleLanguageChange(e.target.value as Language)}
+                    className="bg-background-base border border-border-subtle text-text-high text-xs rounded-lg px-3 py-1.5 outline-none focus:border-primary"
+                  >
+                    <option value="zh">{t('Chinese')}</option>
+                    <option value="en">{t('English')}</option>
+                  </select>
+                </SettingLine>
+                <SettingLine label={t('Theme')} desc={t('Application color theme')}>
                   <select
                     value={display.theme}
                     onChange={(e) => setDisplayField('theme', e.target.value as DisplaySettings['theme'])}
                     className="bg-background-base border border-border-subtle text-text-high text-xs rounded-lg px-3 py-1.5 outline-none focus:border-primary"
                   >
-                    <option>Dark</option>
-                    <option>Light</option>
+                    <option value="Dark">{t('Dark')}</option>
+                    <option value="Light">{t('Light')}</option>
                   </select>
                 </SettingLine>
-                <SettingLine label="Address Format" desc="How addresses should be displayed.">
+                <SettingLine label={t('Address Format')} desc={t('How memory addresses are displayed')}>
                   <select
                     value={display.addressFormat}
                     onChange={(e) => setDisplayField('addressFormat', e.target.value as DisplaySettings['addressFormat'])}
                     className="bg-background-base border border-border-subtle text-text-high text-xs rounded-lg px-3 py-1.5 outline-none focus:border-primary"
                   >
-                    <option>0x Prefix</option>
-                    <option>No Prefix</option>
+                    <option value="0x Prefix">{t('0x Prefix')}</option>
+                    <option value="No Prefix">{t('No Prefix')}</option>
                   </select>
                 </SettingLine>
-                <SettingLine label="Number Format" desc="Default numeric format for inspectors.">
+                <SettingLine label={t('Number Format')} desc={t('Default number display format')}>
                   <select
                     value={display.numberFormat}
                     onChange={(e) => setDisplayField('numberFormat', e.target.value as DisplaySettings['numberFormat'])}
                     className="bg-background-base border border-border-subtle text-text-high text-xs rounded-lg px-3 py-1.5 outline-none focus:border-primary"
                   >
-                    <option>Hex</option>
-                    <option>Dec</option>
+                    <option value="Hex">{t('Hexadecimal')}</option>
+                    <option value="Dec">{t('Decimal')}</option>
                   </select>
                 </SettingLine>
               </Card>
@@ -290,12 +315,12 @@ export default function SettingsView() {
           <Card>
             <div className="p-4 flex items-center gap-3 text-text-mid bg-surface-stripe/30">
               <Settings className="w-4 h-4 text-text-low" />
-              <span className="text-sm font-medium font-display">UExplorer Desktop Configuration</span>
+              <span className="text-sm font-medium font-display">{t('UExplorer Desktop Configuration')}</span>
               <span className="ml-auto text-xs text-text-low font-mono bg-background-base px-2 py-0.5 rounded border border-border-subtle">v0.1-pre</span>
             </div>
             <div className="px-5 py-4 text-[11px] text-text-low flex items-center gap-2 border-t border-border-subtle bg-surface-dark/50">
               <Info className="w-3.5 h-3.5 text-primary" />
-              API token/port 修改后会立即影响前端到 DLL 的请求。
+              {t('API token/port changes take effect immediately.')}
             </div>
           </Card>
         </div>
@@ -336,4 +361,3 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
     </label>
   );
 }
-

@@ -82,7 +82,7 @@ function App() {
         {/* Sidebar Content */}
         <div className="flex-1 overflow-y-auto px-2 pb-4 space-y-4">
           <div className="px-2 pt-2">
-            <h1 className="text-[10px] font-bold text-text-low uppercase tracking-widest mb-2 font-display">UExplorer</h1>
+            <h1 className="text-[10px] font-bold text-text-low uppercase tracking-widest mb-2 font-display">{t('UExplorer')}</h1>
           </div>
 
           <div className="space-y-0.5">
@@ -111,7 +111,7 @@ function App() {
 
           <div className="space-y-0.5">
             <div className="px-2.5 mb-1 pt-3">
-              <span className="text-[10px] font-bold text-text-low uppercase tracking-widest font-display">System</span>
+              <span className="text-[10px] font-bold text-text-low uppercase tracking-widest font-display">{t('System')}</span>
             </div>
             {exportItems.map((item) => {
               const isActive = currentPage === item.id;
@@ -139,8 +139,8 @@ function App() {
               <span className="text-[11px] font-bold text-white font-display">U</span>
             </div>
             <div className="flex flex-col items-start flex-1 min-w-0">
-              <span className="text-[12px] font-medium text-text-high truncate tracking-tight font-display">DevUser</span>
-              <span className="text-[10px] text-text-low truncate font-mono">Local Agent</span>
+              <span className="text-[12px] font-medium text-text-high truncate tracking-tight font-display">{t('DevUser')}</span>
+              <span className="text-[10px] text-text-low truncate font-mono">{t('Local Agent')}</span>
             </div>
           </button>
         </div>
