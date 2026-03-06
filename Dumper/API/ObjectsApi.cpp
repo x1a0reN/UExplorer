@@ -1076,6 +1076,15 @@ void RegisterObjectsRoutes(HttpServer& server)
 			data["full_name"] = obj.GetFullName();
 			data["address"] = std::format("0x{:X}", reinterpret_cast<uintptr_t>(obj.GetAddress()));
 			data["class"] = obj.GetClass() ? obj.GetClass().GetName() : "Unknown";
+			try {
+				EObjectFlags objFlags = obj.GetFlags();
+				data["flags_raw"] = static_cast<uint32>(objFlags);
+				data["flags"] = StringifyObjectFlags(objFlags);
+			}
+			catch (...) {
+				data["flags_raw"] = nullptr;
+				data["flags"] = "";
+			}
 			data["outer_chain"] = BuildOuterChain(obj);
 			return { 200, "application/json", MakeResponse(data) };
 		}

@@ -77,6 +77,8 @@ export interface ObjectItem {
 export interface ObjectDetail extends ObjectItem {
   full_name: string;
   outer_chain: string[];
+  flags?: string;
+  flags_raw?: number;
 }
 
 export interface ObjectProperty {
@@ -260,7 +262,7 @@ export interface WorldLevelsResponse {
   count: number;
 }
 
-export interface WorldActorItem extends ObjectItem {}
+export interface WorldActorItem extends ObjectItem { }
 
 export interface WorldActorResponse {
   items: WorldActorItem[];

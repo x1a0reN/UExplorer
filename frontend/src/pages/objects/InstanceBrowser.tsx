@@ -246,6 +246,10 @@ export default function InstanceBrowser({ onNavigate, onSwitchMode, navContext }
                                 <InfoRow label={t('Class')} value={selected.className} isLink onClick={() => onSwitchMode?.('types', { className: selected.className })} />
                                 <InfoRow label={t('Index')} value={String(selected.index)} />
                                 <InfoRow label={t('Address')} value={selected.address} isLink onClick={() => onNavigate?.('memory')} />
+                                <InfoRow label={t('Flags')} value={detail?.flags || ''} />
+                                {detail?.flags_raw != null && (
+                                    <InfoRow label={t('Flags (Raw)')} value={`0x${detail.flags_raw.toString(16).toUpperCase()}`} />
+                                )}
                                 {outerChain.length > 0 && (
                                     <div className="mt-4">
                                         <div className="text-white/50 text-xs mb-2">{t('Outer Chain')}</div>
