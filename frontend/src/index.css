@@ -1,12 +1,10 @@
 @import "tailwindcss";
 
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
-
 @theme {
   --color-primary: #0A84FF;
   --color-primary-dark: #0060DF;
 
-  --color-bg-base: #000000;
+  --color-bg-base: #1e1e1e;
   --color-bg-elevated: #1C1C1E;
 
   --color-glass-surface: rgba(255, 255, 255, 0.05);
@@ -19,7 +17,7 @@
 }
 
 :root {
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
   color: var(--color-text-primary);
   background: var(--color-bg-base);
   font-synthesis: none;
@@ -32,8 +30,8 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
-  background-color: #000000;
-  color: #ffffff;
+  background-color: var(--color-bg-base);
+  color: var(--color-text-primary);
   overflow: hidden;
   /* App handles its own scrolling */
 }
@@ -82,5 +80,5 @@ body {
 }
 
 .font-mono {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace;
 }

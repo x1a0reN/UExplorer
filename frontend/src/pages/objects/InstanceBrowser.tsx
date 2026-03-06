@@ -130,7 +130,8 @@ export default function InstanceBrowser({ onNavigate, onSwitchMode, navContext }
         const lastItem = virtualItems[virtualItems.length - 1];
         if (!lastItem) return;
 
-        if (lastItem.index >= items.length && !listLoading && items.length < total) {
+        // Fetch more items when scrolled to the last 150 items
+        if (lastItem.index >= items.length - 150 && !listLoading && items.length < total) {
             void loadList(true);
         }
     }, [virtualItems, items.length, listLoading, total]);
@@ -203,20 +204,20 @@ export default function InstanceBrowser({ onNavigate, onSwitchMode, navContext }
                                 >
                                     <div
                                         onClick={() => { setSelected(item); void loadDetail(item); }}
-                                        className={`px-3 py-2 rounded-lg cursor-pointer outline-none transition-all duration-200 group flex flex-col gap-1 ${selected?.index === item.index
-                                            ? 'bg-blue-500/[0.08] border-l-[3px] border-l-blue-400 border-y border-r border-transparent'
-                                            : 'bg-transparent border-l-[3px] border-l-transparent border-y border-r border-transparent hover:bg-white/[0.04]'
+                                        className={`px-3 py-2.5 rounded-lg cursor-pointer outline-none transition-all duration-200 group flex flex-col gap-1 ${selected?.index === item.index
+                                            ? 'bg-blue-500/[0.12] border-l-[3px] border-l-blue-400 border-y border-r border-transparent shadow-sm'
+                                            : 'bg-transparent border-l-[3px] border-l-transparent border-y border-r border-transparent hover:bg-white/[0.06]'
                                             }`}
                                     >
-                                        <div className="flex items-center gap-2">
-                                            <div className={`w-1.5 h-1.5 rounded-full flex-none transition-colors ${selected?.index === item.index ? 'bg-green-400 shadow-[0_0_6px_rgba(74,222,128,0.6)]' : 'bg-green-500/40 group-hover:bg-green-400/80'}`} />
-                                            <span className={`text-[13px] font-mono truncate flex-1 transition-colors ${selected?.index === item.index ? 'text-blue-200 font-semibold' : 'text-slate-300 group-hover:text-slate-100'}`}>
+                                        <div className="flex items-center gap-3">
+                                            <div className={`w-2 h-2 rounded-full flex-none transition-colors ${selected?.index === item.index ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.6)]' : 'bg-emerald-500/40 group-hover:bg-emerald-400/80'}`} />
+                                            <span className={`text-[14px] font-mono truncate flex-1 transition-colors leading-tight ${selected?.index === item.index ? 'text-blue-200 font-semibold' : 'text-slate-200 group-hover:text-white'}`}>
                                                 {item.name}
                                             </span>
                                         </div>
-                                        <div className="flex gap-3 text-[11px] mt-0.5 ml-3.5 justify-between">
-                                            <span className="text-emerald-400/60 truncate max-w-[120px]" title={item.className}>{item.className}</span>
-                                            <span className="text-slate-500 font-mono flex-none">#{item.index}</span>
+                                        <div className="flex gap-3 text-xs mt-0.5 ml-5 justify-between">
+                                            <span className="text-emerald-400/70 truncate max-w-[140px] opacity-80" title={item.className}>{item.className}</span>
+                                            <span className="text-slate-500 font-mono flex-none opacity-80">#{item.index}</span>
                                         </div>
                                     </div>
                                 </div>
@@ -273,38 +274,38 @@ export default function InstanceBrowser({ onNavigate, onSwitchMode, navContext }
                         {/* Properties Tab */}
                         {detailTab === 'Properties' && (
                             <Panel title={t('Properties')}>
-                                <div className="overflow-auto">
-                                    <table className="w-full text-xs">
+                                <div className="overflow-x-auto -mx-4 px-4 pb-2">
+                                    <table className="w-full text-left border-collapse">
                                         <thead>
-                                            <tr className="text-white/40 border-b border-white/5">
-                                                <th className="text-left py-2 px-2 font-medium w-40">Name</th>
-                                                <th className="text-left py-2 px-2 font-medium w-24">Type</th>
-                                                <th className="text-left py-2 px-2 font-medium w-16">Offset</th>
-                                                <th className="text-left py-2 px-2 font-medium">Value</th>
-                                                <th className="py-2 px-2 w-20" />
+                                            <tr className="border-b border-white/10 text-xs text-slate-400 font-medium tracking-wide">
+                                                <th className="py-3 px-3 font-normal w-12 uppercase">{t('Offset')}</th>
+                                                <th className="py-3 px-3 font-normal w-40 uppercase">{t('Name')}</th>
+                                                <th className="py-3 px-3 font-normal w-24 uppercase">{t('Type')}</th>
+                                                <th className="py-3 px-3 font-normal uppercase">{t('Value')}</th>
+                                                <th className="py-3 px-3 w-16" />
                                             </tr>
                                         </thead>
-                                        <tbody>
+                                        <tbody className="divide-y divide-white/[0.03]">
                                             {properties.map((p) => (
-                                                <tr key={p.name} className="border-b border-white/[0.03] hover:bg-white/[0.03]">
-                                                    <td className="py-1.5 px-2 font-mono text-white/90">{p.name}</td>
-                                                    <td className="py-1.5 px-2 font-mono text-blue-400">{p.type}</td>
-                                                    <td className="py-1.5 px-2 font-mono text-green-400/60">+0x{p.offset.toString(16).toUpperCase()}</td>
-                                                    <td className="py-1.5 px-2">
+                                                <tr key={p.name} className="hover:bg-white/[0.02] transition-colors group">
+                                                    <td className="py-2.5 px-3 text-sm text-slate-500 font-mono">+0x{p.offset.toString(16).toUpperCase().padStart(4, '0')}</td>
+                                                    <td className="py-2.5 px-3 text-[14px] text-slate-200 font-mono font-medium">{p.name}</td>
+                                                    <td className="py-2.5 px-3 text-sm text-emerald-400/80 font-mono truncate max-w-[150px]">{p.type}</td>
+                                                    <td className="py-2.5 px-3">
                                                         <input type="text"
                                                             value={propertyEditMap[p.name] ?? toEditable(p.value)}
                                                             onChange={(e) => setPropertyEditMap((prev) => ({ ...prev, [p.name]: e.target.value }))}
-                                                            className="w-full bg-transparent border border-white/5 rounded px-2 py-0.5 text-xs text-white font-mono focus:outline-none focus:border-white/20" />
+                                                            className="w-full bg-black/20 border border-white/10 rounded-md px-3 py-1 text-[13px] text-white font-mono focus:outline-none focus:border-blue-500/50 focus:bg-white/5 transition-all shadow-inner" />
                                                     </td>
-                                                    <td className="py-1.5 px-2">
-                                                        <div className="flex gap-1">
+                                                    <td className="py-2.5 px-3">
+                                                        <div className="flex gap-2 justify-end opacity-60 group-hover:opacity-100 transition-opacity">
                                                             <button onClick={() => void handlePropertySave(p.name)} title={t('Save')}
-                                                                className="p-1 rounded hover:bg-white/10 text-white/40 hover:text-green-400">
-                                                                <Save className="w-3 h-3" />
+                                                                className="p-1.5 rounded-md hover:bg-emerald-500/20 text-slate-400 hover:text-emerald-400 transition-colors">
+                                                                <Save className="w-3.5 h-3.5" />
                                                             </button>
                                                             <button onClick={() => void handlePropertyRefresh(p.name)} title={t('Refresh')}
-                                                                className={`p-1 rounded hover:bg-white/10 text-white/40 hover:text-blue-400 ${propertyRefreshing[p.name] ? 'animate-spin' : ''}`}>
-                                                                <RefreshCw className="w-3 h-3" />
+                                                                className={`p-1.5 rounded-md hover:bg-blue-500/20 text-slate-400 hover:text-blue-400 transition-colors ${propertyRefreshing[p.name] ? 'animate-spin text-blue-400' : ''}`}>
+                                                                <RefreshCw className="w-3.5 h-3.5" />
                                                             </button>
                                                         </div>
                                                     </td>
@@ -312,7 +313,7 @@ export default function InstanceBrowser({ onNavigate, onSwitchMode, navContext }
                                             ))}
                                         </tbody>
                                     </table>
-                                    {properties.length === 0 && <div className="text-white/40 text-sm py-3">{t('No properties')}</div>}
+                                    {properties.length === 0 && <div className="text-slate-500 text-sm py-4 text-center">{t('No properties')}</div>}
                                 </div>
                             </Panel>
                         )}

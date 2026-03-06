@@ -168,7 +168,7 @@ export default function TypeBrowser({ onNavigate: _onNavigate, onSwitchMode }: B
     const rowVirtualizer = useVirtualizer({
         count: items.length + (items.length < total && !listLoading ? 1 : 0),
         getScrollElement: () => parentRef.current,
-        estimateSize: () => 54, // Approx height of each item
+        estimateSize: () => 64, // Approx height of each item
         overscan: 10,
     });
 
@@ -178,7 +178,8 @@ export default function TypeBrowser({ onNavigate: _onNavigate, onSwitchMode }: B
         const lastItem = virtualItems[virtualItems.length - 1];
         if (!lastItem) return;
 
-        if (lastItem.index >= items.length && !listLoading && items.length < total) {
+        // Fetch more items when scrolled to the last 150 items
+        if (lastItem.index >= items.length - 150 && !listLoading && items.length < total) {
             void loadList(true);
         }
     }, [virtualItems, items.length, listLoading, total]);
@@ -275,18 +276,18 @@ export default function TypeBrowser({ onNavigate: _onNavigate, onSwitchMode }: B
                                 >
                                     <div
                                         onClick={() => { setSelected(item); void loadDetail(item); }}
-                                        className={`px-3 py-2 rounded-lg cursor-pointer outline-none transition-all duration-200 group flex flex-col gap-0.5 ${selected?.index === item.index
-                                            ? 'bg-blue-500/[0.08] border-l-[3px] border-l-blue-400 border-y border-r border-transparent'
-                                            : 'bg-transparent border-l-[3px] border-l-transparent border-y border-r border-transparent hover:bg-white/[0.04]'
+                                        className={`px-3 py-2.5 rounded-lg cursor-pointer outline-none transition-all duration-200 group flex flex-col gap-1 ${selected?.index === item.index
+                                            ? 'bg-blue-500/[0.12] border-l-[3px] border-l-blue-400 border-y border-r border-transparent shadow-sm'
+                                            : 'bg-transparent border-l-[3px] border-l-transparent border-y border-r border-transparent hover:bg-white/[0.06]'
                                             }`}
                                     >
                                         <div className="flex items-center justify-between gap-3">
-                                            <span className={`text-[13px] font-mono truncate transition-colors ${selected?.index === item.index ? 'text-blue-200 font-semibold' : 'text-slate-300 group-hover:text-slate-100'}`}>
+                                            <span className={`text-[14px] leading-tight font-mono truncate transition-colors ${selected?.index === item.index ? 'text-blue-200 font-semibold' : 'text-slate-200 group-hover:text-white'}`}>
                                                 {item.name}
                                             </span>
-                                            {item.size !== undefined && <span className="text-[10px] text-slate-500 font-mono flex-none">0x{item.size.toString(16).toUpperCase()}</span>}
+                                            {item.size !== undefined && <span className="text-xs text-slate-500 font-mono flex-none mt-0.5">0x{item.size.toString(16).toUpperCase()}</span>}
                                         </div>
-                                        {item.super && <div className="text-[11px] text-slate-400 truncate" title={item.super}>↳ {item.super}</div>}
+                                        {item.super && <div className="text-xs text-slate-400 truncate mt-0.5 opacity-80" title={item.super}>↳ {item.super}</div>}
                                     </div>
                                 </div>
                             );
@@ -315,30 +316,34 @@ export default function TypeBrowser({ onNavigate: _onNavigate, onSwitchMode }: B
                             glow={subTab === 'Class' ? 'bg-blue-500/20' : subTab === 'Struct' ? 'bg-orange-500/20' : 'bg-yellow-500/20'}
                             badges={<>
                                 {selected.size !== undefined && (
-                                    <span className="px-3 py-1.5 rounded-md bg-white/[0.03] border border-white/10 text-[11px] font-mono text-slate-300 shadow-sm backdrop-blur-md">
+                                    <span className="px-3 py-1.5 rounded-md bg-white/[0.03] border border-white/10 text-xs font-mono text-slate-300 shadow-sm backdrop-blur-md">
                                         Size: <span className="text-white/70">0x{selected.size.toString(16).toUpperCase()}</span> <span className="text-slate-500">({selected.size} B)</span>
                                     </span>
                                 )}
-                                {superChain.length > 0 && (
-                                    <span className="px-3 py-1.5 rounded-md bg-blue-500/10 border border-blue-500/20 text-[11px] font-mono text-blue-300 shadow-sm backdrop-blur-md flex flex-wrap gap-1.5 items-center">
-                                        {superChain.map((sc, i) => (
-                                            <span key={i} className="flex items-center gap-1.5">
-                                                {i > 0 && <span className="text-blue-500/40">→</span>}
-                                                <span>{sc}</span>
-                                            </span>
-                                        ))}
-                                    </span>
-                                )}
                                 {alignment > 0 && (
-                                    <span className="px-3 py-1.5 rounded-md bg-emerald-500/10 border border-emerald-500/20 text-[11px] font-mono text-emerald-300 shadow-sm backdrop-blur-md">
+                                    <span className="px-3 py-1.5 rounded-md bg-emerald-500/10 border border-emerald-500/20 text-xs font-mono text-emerald-300 shadow-sm backdrop-blur-md">
                                         Align: <span className="text-emerald-100">{alignment}</span>
                                     </span>
                                 )}
                             </>}
                         />
 
+                        {superChain.length > 0 && (
+                            <div className="flex items-center flex-wrap gap-2 px-6 py-4 bg-black/20 border border-white/5 shadow-inner rounded-xl backdrop-blur-md">
+                                <span className="text-slate-500 text-sm font-medium">{t('Inheritance:')}</span>
+                                {superChain.map((sc, i) => (
+                                    <div key={i} className="flex items-center gap-2">
+                                        {i > 0 && <span className="text-blue-500/40 text-[10px]">▶</span>}
+                                        <span className={`font-mono text-[14px] px-2 py-0.5 rounded ${i === superChain.length - 1 ? 'bg-blue-500/10 text-blue-300 border border-blue-500/20' : 'text-slate-300 hover:text-white cursor-pointer transition-colors'}`}>
+                                            {sc}
+                                        </span>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+
                         {detailLoading && <div className="text-white/40 text-sm">{t('Loading...')}</div>}
-                        {detailError && <div className="text-red-300 text-sm">{detailError}</div>}
+                        {detailError && <div className="text-red-300 text-[14px]">{detailError}</div>}
                         {classSchemaError && <div className="text-yellow-300 text-xs">{classSchemaError}</div>}
 
                         {/* Detail Tab Bar */}
@@ -389,22 +394,22 @@ export default function TypeBrowser({ onNavigate: _onNavigate, onSwitchMode }: B
                         {/* Functions */}
                         {detailTab === 'Functions' && (
                             <Panel title={t('Functions')}>
-                                <div className="space-y-1">
+                                <div className="space-y-2">
                                     {functions.map((fn, i) => (
-                                        <div key={i} className="p-2 rounded-lg border border-white/5 bg-black/20 hover:bg-white/5">
+                                        <div key={i} className="px-4 py-3 rounded-xl border border-white/[0.03] bg-black/10 hover:bg-white/[0.02] transition-colors">
                                             <div className="flex items-center gap-3">
-                                                <Hash className="w-3.5 h-3.5 text-green-400 flex-none" />
-                                                <span className="text-[13px] text-white/90 font-mono">{fn.name}</span>
-                                                <span className="text-[10px] text-white/30 ml-auto font-mono">{fn.flags}</span>
+                                                <Hash className="w-4 h-4 text-emerald-500 opacity-80 flex-none" />
+                                                <span className="text-[14px] text-slate-200 font-mono font-medium">{fn.name}</span>
+                                                <span className="text-xs text-slate-500 ml-auto font-mono max-w-[200px] truncate" title={fn.flags}>{fn.flags}</span>
                                             </div>
                                             {fn.params.length > 0 && (
-                                                <div className="mt-2 ml-7 text-[11px] text-white/50 font-mono">
-                                                    ({fn.params.map((p) => `${p.name}: ${p.type}`).join(', ')})
+                                                <div className="mt-2.5 ml-7 text-xs text-slate-400 font-mono leading-relaxed p-2 bg-black/20 rounded-md border border-white/[0.02]">
+                                                    <span className="text-slate-500">参数：</span> ({fn.params.map((p) => `${p.name}: `).map((_, idx) => <span key={idx}><span className="text-slate-300">{fn.params[idx].name}</span><span className="text-emerald-400/70">: {fn.params[idx].type}</span>{idx < fn.params.length - 1 ? ', ' : ''}</span>)})
                                                 </div>
                                             )}
                                         </div>
                                     ))}
-                                    {functions.length === 0 && <div className="text-white/40 text-sm">{t('No functions')}</div>}
+                                    {functions.length === 0 && <div className="text-slate-500 text-sm py-4 text-center">{t('No functions')}</div>}
                                 </div>
                             </Panel>
                         )}
@@ -412,21 +417,21 @@ export default function TypeBrowser({ onNavigate: _onNavigate, onSwitchMode }: B
                         {/* Instances */}
                         {detailTab === 'Instances' && (
                             <Panel title={t('Instances')}>
-                                <div className="space-y-1">
+                                <div className="space-y-1.5">
                                     {instances.map((inst) => (
                                         <div
                                             key={inst.index}
-                                            className="flex items-center gap-3 p-2 rounded-lg border border-white/5 bg-black/20 hover:bg-white/5 cursor-pointer"
+                                            className="flex items-center gap-3 px-4 py-2.5 rounded-lg border border-transparent bg-black/10 hover:bg-white/[0.03] hover:border-white/[0.05] cursor-pointer transition-all"
                                             onClick={() => onSwitchMode?.('instances', { className: selected.name, objectIndex: inst.index })}
                                         >
-                                            <div className="w-2 h-2 rounded-full bg-green-400 flex-none" />
-                                            <span className="text-[13px] text-white/90 font-mono flex-1 truncate">{inst.name}</span>
-                                            <span className="text-[11px] text-white/30 font-mono">#{inst.index}</span>
-                                            <span className="text-[11px] text-white/30 font-mono">{inst.address}</span>
-                                            <ExternalLink className="w-3 h-3 text-white/20" />
+                                            <div className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)] flex-none" />
+                                            <span className="text-[14px] text-slate-200 font-mono flex-1 truncate">{inst.name}</span>
+                                            <span className="text-sm text-slate-500 font-mono">#{inst.index}</span>
+                                            <span className="text-xs text-slate-400 font-mono">{inst.address}</span>
+                                            <ExternalLink className="w-4 h-4 text-slate-500 ml-2 hover:text-blue-400" />
                                         </div>
                                     ))}
-                                    {instances.length === 0 && <div className="text-white/40 text-sm">{t('No live instances')}</div>}
+                                    {instances.length === 0 && <div className="text-slate-500 text-sm py-4 text-center">{t('No live instances')}</div>}
                                 </div>
                             </Panel>
                         )}
