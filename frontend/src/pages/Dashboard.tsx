@@ -94,10 +94,10 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
 
   if (loading) {
     return (
-      <div className="flex-1 flex items-center justify-center h-full">
-        <div className="flex flex-col items-center gap-4">
-          <RefreshCw className="w-6 h-6 text-white/40 animate-spin stroke-[1.5]" />
-          <span className="text-white/40 text-[13px] font-medium tracking-tight">{t('Connecting to engine...')}</span>
+      <div className="flex-1 flex items-center justify-center h-full bg-background-base">
+        <div className="flex flex-col items-center gap-3">
+          <RefreshCw className="w-5 h-5 text-text-low animate-spin stroke-[1.5]" />
+          <span className="text-text-low text-xs font-medium tracking-tight font-display">{t('Connecting to engine...')}</span>
         </div>
       </div>
     );
@@ -115,93 +115,93 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
   };
 
   return (
-    <div className="flex-1 overflow-y-auto overflow-x-hidden relative scroll-smooth">
-      <div className="max-w-5xl mx-auto p-8 space-y-8 pb-16">
+    <div className="flex-1 overflow-y-auto overflow-x-hidden relative scroll-smooth bg-background-base">
+      <div className="max-w-5xl mx-auto p-6 space-y-6 pb-12">
 
         {/* Header Section */}
-        <div className="flex items-end justify-between mt-2">
+        <div className="flex items-end justify-between mt-1">
           <div>
-            <h2 className="text-[28px] font-semibold text-white tracking-tight mb-1">{t('Overview')}</h2>
-            <p className="text-white/50 text-[13px] font-medium tracking-tight">{t('Real-time statistics from the Unreal Engine runtime environment.')}</p>
+            <h2 className="text-xl font-semibold text-text-high tracking-tight mb-0.5 font-display">{t('Overview')}</h2>
+            <p className="text-text-low text-xs font-medium tracking-tight">{t('Real-time statistics from the Unreal Engine runtime environment.')}</p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
             <button
               onClick={() => setShowProcessSelector(true)}
-              className="px-4 py-2 rounded-[10px] bg-white/5 hover:bg-white/10 border border-white/10 text-[13px] font-medium text-white transition-all flex items-center gap-2 cursor-pointer shadow-sm active:scale-95"
+              className="px-3 py-1.5 rounded-lg bg-surface-stripe hover:bg-surface-stripe/80 border border-border-subtle text-xs font-medium text-text-mid transition-all flex items-center gap-1.5 cursor-pointer active:scale-95 font-display"
             >
-              <Zap className="w-4 h-4 text-white/70" />
+              <Zap className="w-3.5 h-3.5 text-text-low" />
               {t('Inject DLL')}
             </button>
             <button
               onClick={loadStatus}
-              className="px-4 py-2 rounded-[10px] bg-white/5 hover:bg-white/10 border border-white/10 text-[13px] font-medium text-white transition-all flex items-center gap-2 cursor-pointer shadow-sm active:scale-95"
+              className="px-3 py-1.5 rounded-lg bg-surface-stripe hover:bg-surface-stripe/80 border border-border-subtle text-xs font-medium text-text-mid transition-all flex items-center gap-1.5 cursor-pointer active:scale-95 font-display"
             >
-              <RefreshCw className="w-4 h-4 text-white/70" />
+              <RefreshCw className="w-3.5 h-3.5 text-text-low" />
               {t('Refresh')}
             </button>
             <button
               onClick={() => void reconnectEngine()}
-              className="px-4 py-2 rounded-[10px] bg-yellow-500/20 hover:bg-yellow-500/30 border border-yellow-500/30 text-[13px] font-medium text-yellow-100 transition-all flex items-center gap-2 cursor-pointer shadow-sm active:scale-95"
+              className="px-3 py-1.5 rounded-lg bg-accent-yellow/10 hover:bg-accent-yellow/20 border border-accent-yellow/20 text-xs font-medium text-accent-yellow transition-all flex items-center gap-1.5 cursor-pointer active:scale-95 font-display"
             >
-              <Zap className="w-4 h-4" />
+              <Zap className="w-3.5 h-3.5" />
               {t('重连引擎')}
             </button>
             <button
               onClick={() => onNavigate('sdkdump')}
-              className="px-4 py-2 rounded-[10px] bg-primary hover:bg-primary-dark text-[13px] font-medium text-white shadow-lg shadow-primary/20 transition-all flex items-center gap-2 cursor-pointer active:scale-95 border border-primary-dark"
+              className="px-3 py-1.5 rounded-lg bg-primary hover:bg-primary/80 text-xs font-medium text-white transition-all flex items-center gap-1.5 cursor-pointer active:scale-95 font-display"
             >
-              <Download className="w-4 h-4" />
+              <Download className="w-3.5 h-3.5" />
               {t('Export SDK')}
             </button>
           </div>
         </div>
 
         {/* Bento Grid layout */}
-        <div className="grid grid-cols-1 md:grid-cols-12 gap-5 auto-rows-[minmax(130px,auto)]">
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-4 auto-rows-[minmax(110px,auto)]">
 
           {/* Main Status Card - Spans 8 cols */}
-          <div className="md:col-span-8 apple-glass-panel rounded-[32px] p-7 flex flex-col justify-between group relative overflow-hidden">
-            {isConnected && <div className="absolute top-0 right-0 w-64 h-64 bg-primary/10 rounded-full blur-[80px] -mr-20 -mt-20 pointer-events-none"></div>}
+          <div className="md:col-span-8 bg-surface-dark border border-border-subtle rounded-xl p-5 flex flex-col justify-between group relative overflow-hidden">
+            {isConnected && <div className="absolute top-0 right-0 w-48 h-48 bg-primary/5 rounded-full blur-[60px] -mr-16 -mt-16 pointer-events-none"></div>}
 
             <div className="flex items-start justify-between relative z-10">
-              <div className="flex items-center gap-4">
-                <div className={`w-12 h-12 rounded-[16px] flex items-center justify-center shadow-lg ${isConnected ? 'bg-[#28C840]/10 border border-[#28C840]/20' : 'bg-[#FF5F56]/10 border border-[#FF5F56]/20'}`}>
-                  {isConnected ? <Wifi className="w-5 h-5 text-[#28C840]" /> : <WifiOff className="w-5 h-5 text-[#FF5F56]" />}
+              <div className="flex items-center gap-3">
+                <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${isConnected ? 'bg-accent-green/10 border border-accent-green/20' : 'bg-accent-red/10 border border-accent-red/20'}`}>
+                  {isConnected ? <Wifi className="w-4 h-4 text-accent-green" /> : <WifiOff className="w-4 h-4 text-accent-red" />}
                 </div>
                 <div>
-                  <h3 className="text-white/90 font-semibold text-[16px] tracking-tight">{isConnected ? t('Engine Connected') : t('Disconnected')}</h3>
-              <p className="text-white/40 text-[13px] font-medium mt-0.5">{isConnected ? t('Dumping service is active and listening.') : error || t('Waiting for game process...')}</p>
+                  <h3 className="text-text-high font-semibold text-sm tracking-tight font-display">{isConnected ? t('Engine Connected') : t('Disconnected')}</h3>
+                  <p className="text-text-low text-xs font-medium mt-0.5">{isConnected ? t('Dumping service is active and listening.') : error || t('Waiting for game process...')}</p>
                 </div>
               </div>
-              <div className="px-3 py-1 rounded-[8px] bg-white/5 border border-white/10 text-[11px] font-mono font-medium text-white/60 shadow-sm">
+              <div className="px-2 py-0.5 rounded bg-surface-stripe border border-border-subtle text-[10px] font-mono font-medium text-text-low">
                 {t('PORT')} {port}
               </div>
             </div>
 
             {status && (
-              <div className="grid grid-cols-4 gap-6 mt-8 pt-6 border-t border-white/10 relative z-10">
+              <div className="grid grid-cols-4 gap-4 mt-6 pt-4 border-t border-border-subtle relative z-10">
                 <div>
-                  <div className="text-white/40 text-[11px] font-bold uppercase tracking-widest mb-1.5">{t('Process')}</div>
-                  <div className="text-white font-semibold text-[14px] truncate tracking-tight shadow-sm" title={status.game_name}>{status.game_name}</div>
+                  <div className="text-text-low text-[10px] font-bold uppercase tracking-widest mb-1 font-display">{t('Process')}</div>
+                  <div className="text-text-high font-semibold text-xs truncate tracking-tight font-display" title={status.game_name}>{status.game_name}</div>
                 </div>
                 <div>
-                  <div className="text-white/40 text-[11px] font-bold uppercase tracking-widest mb-1.5">{t('PID')}</div>
-                  <div className="text-white/80 font-mono text-[14px]">{status.pid}</div>
+                  <div className="text-text-low text-[10px] font-bold uppercase tracking-widest mb-1 font-display">{t('PID')}</div>
+                  <div className="text-text-mid font-mono text-xs">{status.pid}</div>
                 </div>
                 <div>
-                  <div className="text-white/40 text-[11px] font-bold uppercase tracking-widest mb-1.5">{t('Version')}</div>
-                  <div className="text-primary font-mono text-[14px]">{status.game_version}</div>
+                  <div className="text-text-low text-[10px] font-bold uppercase tracking-widest mb-1 font-display">{t('Version')}</div>
+                  <div className="text-primary font-mono text-xs">{status.game_version}</div>
                 </div>
                 <div>
-                  <div className="text-white/40 text-[11px] font-bold uppercase tracking-widest mb-1.5">{t('Arch')}</div>
-                  <div className="text-white/80 font-mono text-[14px]">{status.architecture}</div>
+                  <div className="text-text-low text-[10px] font-bold uppercase tracking-widest mb-1 font-display">{t('Arch')}</div>
+                  <div className="text-text-mid font-mono text-xs">{status.architecture}</div>
                 </div>
               </div>
             )}
           </div>
 
           {/* Quick Stats - Spans 4 cols */}
-          <div className="md:col-span-4 grid grid-rows-2 gap-5">
+          <div className="md:col-span-4 grid grid-rows-2 gap-4">
             <BentoStatItem
               icon={Cpu}
               label={t('Global Objects')}
@@ -253,9 +253,9 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
           />
 
           {/* Quick Actions List - Spans 8 cols */}
-          <div className="md:col-span-8 apple-glass-panel rounded-[32px] p-7">
-            <h3 className="text-white/90 font-semibold tracking-tight text-[16px] mb-5">{t('Quick Actions')}</h3>
-            <div className="space-y-3">
+          <div className="md:col-span-8 bg-surface-dark border border-border-subtle rounded-xl p-5">
+            <h3 className="text-text-high font-semibold tracking-tight text-sm mb-4 font-display">{t('Quick Actions')}</h3>
+            <div className="space-y-2">
               <ActionListItem
                 icon={Search}
                 title={t('Object Browser')}
@@ -288,15 +288,15 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
           </div>
 
           {/* Internal Metrics - 4 cols */}
-          <div className="md:col-span-4 apple-glass-panel rounded-[32px] p-7 flex flex-col justify-between">
-            <div className="flex items-center gap-3 mb-6">
-              <div className="w-8 h-8 rounded-[10px] bg-white/5 border border-white/10 flex items-center justify-center">
-                <Settings2 className="w-4 h-4 text-white/60" />
+          <div className="md:col-span-4 bg-surface-dark border border-border-subtle rounded-xl p-5 flex flex-col justify-between">
+            <div className="flex items-center gap-2.5 mb-4">
+              <div className="w-7 h-7 rounded-lg bg-surface-stripe border border-border-subtle flex items-center justify-center">
+                <Settings2 className="w-3.5 h-3.5 text-text-low" />
               </div>
-              <h3 className="text-white/90 font-semibold tracking-tight text-[16px]">{t('Core Offsets')}</h3>
+              <h3 className="text-text-high font-semibold tracking-tight text-sm font-display">{t('Core Offsets')}</h3>
             </div>
 
-            <div className="space-y-4 flex-1 flex flex-col justify-end">
+            <div className="space-y-3 flex-1 flex flex-col justify-end">
               <OffsetRow label={t('GObjects')} value={status?.gobjects_address || '0x0000000'} />
               <OffsetRow label={t('PID')} value={status ? String(status.pid) : '-'} />
               <OffsetRow label={t('UWorld')} value={engineStatus?.addresses?.gworld_ptr ? String(engineStatus.addresses.gworld_ptr) : t('Not Resolving')} dimmed={!engineStatus?.addresses?.gworld_ptr} />
@@ -324,15 +324,15 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
 
 function BentoStatItem({ icon: Icon, label, value, color, bg }: any) {
   return (
-    <div className="apple-glass-panel rounded-[24px] p-6 flex flex-col justify-between group h-full">
+    <div className="bg-surface-dark border border-border-subtle rounded-xl p-4 flex flex-col justify-between group h-full">
       <div className="flex items-center justify-between mb-2">
-        <div className="text-white/50 text-[13px] font-semibold tracking-tight">{label}</div>
-        <div className={`w-9 h-9 rounded-full ${bg} flex items-center justify-center`}>
-          <Icon className={`w-4 h-4 ${color} stroke-[2.5]`} />
+        <div className="text-text-mid text-xs font-semibold tracking-tight font-display">{label}</div>
+        <div className={`w-8 h-8 rounded-full ${bg} flex items-center justify-center`}>
+          <Icon className={`w-3.5 h-3.5 ${color} stroke-[2.5]`} />
         </div>
       </div>
       <div>
-        <div className="text-[28px] font-semibold font-mono tracking-tight text-white/90">{value}</div>
+        <div className="text-xl font-semibold font-mono tracking-tight text-text-high">{value}</div>
       </div>
     </div>
   );
@@ -340,33 +340,33 @@ function BentoStatItem({ icon: Icon, label, value, color, bg }: any) {
 
 function BentoCategoryBox({ icon: Icon, label, value, color, bg, onClick }: any) {
   return (
-    <div onClick={onClick} className="md:col-span-3 apple-glass-panel rounded-[24px] p-6 cursor-pointer hover:bg-white/[0.04] transition-all duration-300">
-      <div className="flex items-start justify-between mb-5">
-        <div className={`w-10 h-10 rounded-[12px] ${bg} flex items-center justify-center`}>
-          <Icon className={`w-5 h-5 ${color} stroke-[2]`} />
+    <div onClick={onClick} className="md:col-span-3 bg-surface-dark border border-border-subtle rounded-xl p-4 cursor-pointer hover:bg-surface-stripe transition-all duration-200">
+      <div className="flex items-start justify-between mb-3">
+        <div className={`w-8 h-8 rounded-lg ${bg} flex items-center justify-center`}>
+          <Icon className={`w-4 h-4 ${color} stroke-[2]`} />
         </div>
-        <ChevronRight className="w-4 h-4 text-white/20" />
+        <ChevronRight className="w-3.5 h-3.5 text-text-low" />
       </div>
-      <div className="text-white/50 text-[12px] font-semibold tracking-tight mb-1">{label}</div>
-      <div className="text-[22px] font-semibold font-mono text-white/90">{value.toLocaleString()}</div>
+      <div className="text-text-mid text-[11px] font-semibold tracking-tight mb-0.5 font-display">{label}</div>
+      <div className="text-lg font-semibold font-mono text-text-high">{value.toLocaleString()}</div>
     </div>
   );
 }
 
 function ActionListItem({ icon: Icon, title, desc, shortcut, onClick }: any) {
   return (
-    <div onClick={onClick} className="flex items-center justify-between p-4 rounded-[16px] apple-glass-panel hover:bg-white/[0.04] cursor-pointer transition-colors group">
-      <div className="flex items-center gap-4">
-        <div className="w-10 h-10 rounded-full bg-white/5 border border-white/10 flex items-center justify-center group-hover:bg-primary group-hover:border-primary transition-colors">
-          <Icon className="w-5 h-5 text-white/60 group-hover:text-white transition-colors" />
+    <div onClick={onClick} className="flex items-center justify-between p-3 rounded-lg bg-surface-stripe/50 border border-border-subtle hover:bg-surface-stripe cursor-pointer transition-colors group">
+      <div className="flex items-center gap-3">
+        <div className="w-8 h-8 rounded-lg bg-surface-dark border border-border-subtle flex items-center justify-center group-hover:bg-primary group-hover:border-primary transition-colors">
+          <Icon className="w-4 h-4 text-text-low group-hover:text-white transition-colors" />
         </div>
         <div>
-          <div className="text-white/90 font-medium text-[14px] tracking-tight">{title}</div>
-          <div className="text-white/40 text-[12px] font-medium mt-0.5">{desc}</div>
+          <div className="text-text-high font-medium text-xs tracking-tight font-display">{title}</div>
+          <div className="text-text-low text-[11px] font-medium mt-0.5">{desc}</div>
         </div>
       </div>
       <div>
-        <kbd className="px-2 py-1 rounded-[6px] bg-black/40 border border-white/10 text-[10px] font-mono font-medium text-white/40 shadow-inner tracking-wide">
+        <kbd className="px-1.5 py-0.5 rounded bg-background-base border border-border-subtle text-[10px] font-mono font-medium text-text-low tracking-wide">
           {shortcut}
         </kbd>
       </div>
@@ -377,8 +377,8 @@ function ActionListItem({ icon: Icon, title, desc, shortcut, onClick }: any) {
 function OffsetRow({ label, value, dimmed }: { label: string, value: string, dimmed?: boolean }) {
   return (
     <div className="flex items-center justify-between">
-      <span className="text-white/50 font-semibold text-[11px] uppercase tracking-widest">{label}</span>
-      <span className={`font-mono text-[12px] font-medium bg-black/40 px-2 py-0.5 rounded-[6px] border border-white/5 ${dimmed ? 'text-white/30' : 'text-white/80'}`}>{value}</span>
+      <span className="text-text-low font-semibold text-[10px] uppercase tracking-widest font-display">{label}</span>
+      <span className={`font-mono text-[11px] font-medium bg-background-base px-1.5 py-0.5 rounded border border-border-subtle ${dimmed ? 'text-text-low' : 'text-text-mid'}`}>{value}</span>
     </div>
   );
 }

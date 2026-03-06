@@ -409,20 +409,20 @@ export default function Memory() {
   };
 
   return (
-    <div className="flex-1 flex flex-col bg-[#0A0A0C] overflow-hidden">
-      <div className="flex-none h-14 bg-white/[0.02] border-b border-white/5 backdrop-blur-3xl px-6 flex items-center justify-between z-20">
+    <div className="flex-1 flex flex-col bg-background-base overflow-hidden">
+      <div className="flex-none h-12 bg-surface-dark border-b border-border-subtle backdrop-blur-3xl px-6 flex items-center justify-between z-20">
         <div className="flex items-center gap-3 w-1/2">
           <div className="flex items-center gap-1.5 mr-2">
-            <button onClick={() => void navigateBack()} className="w-7 h-7 flex items-center justify-center rounded-[8px] hover:bg-white/10 text-white/40 hover:text-white transition-colors">
+            <button onClick={() => void navigateBack()} className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-surface-stripe text-text-low hover:text-text-high transition-colors">
               <ArrowLeft className="w-4 h-4" />
             </button>
-            <button onClick={() => void navigateForward()} className="w-7 h-7 flex items-center justify-center rounded-[8px] hover:bg-white/10 text-white/40 hover:text-white transition-colors">
+            <button onClick={() => void navigateForward()} className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-surface-stripe text-text-low hover:text-text-high transition-colors">
               <ArrowRight className="w-4 h-4" />
             </button>
           </div>
 
           <div className="relative flex-1 group">
-            <Search className="w-4 h-4 text-white/40 absolute left-3 top-2.5" />
+            <Search className="w-3.5 h-3.5 text-text-low absolute left-3 top-2" />
             <input
               type="text"
               value={addressInput}
@@ -430,37 +430,37 @@ export default function Memory() {
               onKeyDown={(e) => {
                 if (e.key === 'Enter') void navigateToInput();
               }}
-              className="w-full bg-black/40 border border-white/10 text-white text-[13px] rounded-lg pl-9 pr-3 py-1.5 outline-none focus:border-primary/50 focus:bg-black/60 transition-all font-mono placeholder:text-white/30"
+              className="w-full bg-background-base border border-border-subtle text-text-high text-xs rounded-lg pl-9 pr-3 py-1 outline-none focus:border-primary focus:bg-background-base transition-all font-mono placeholder:text-text-low/50"
             />
           </div>
 
-          <button onClick={() => void loadMemory(addressInput, true)} className="w-8 h-8 flex items-center justify-center rounded-[8px] bg-white/5 hover:bg-white/10 border border-white/10 text-white transition-colors ml-2">
-            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+          <button onClick={() => void loadMemory(addressInput, true)} className="w-7 h-7 flex items-center justify-center rounded-lg bg-surface-stripe hover:bg-surface-stripe/80 border border-border-subtle text-text-high transition-colors ml-2">
+            <RefreshCw className={`w-3.5 h-3.5 text-text-low ${loading ? 'animate-spin' : ''}`} />
           </button>
         </div>
 
-        <div className="flex items-center gap-4 text-[13px] font-medium text-white/50">
-          <button className="flex items-center gap-2 hover:text-white transition-colors">
-            <Bookmark className="w-4 h-4" />
+        <div className="flex items-center gap-4 text-xs font-medium text-text-low font-display">
+          <button className="flex items-center gap-2 hover:text-text-high transition-colors">
+            <Bookmark className="w-3.5 h-3.5" />
             Bookmarks
           </button>
         </div>
       </div>
 
       <div className="flex-1 flex min-h-0">
-        <div className="flex-1 flex flex-col min-w-0 border-r border-white/5 bg-[#0A0A0C]">
-          <div className="p-2 border-b border-white/5 flex items-center gap-4 bg-black/40 px-6">
-            <span className="text-[11px] font-bold text-white/30 uppercase tracking-widest">Hex Editor</span>
-            <span className="text-[11px] font-mono text-white/50">16 Bytes/Row</span>
-            {readError && <span className="text-[11px] text-red-300">{readError}</span>}
+        <div className="flex-1 flex flex-col min-w-0 border-r border-border-subtle bg-background-base">
+          <div className="h-8 border-b border-border-subtle flex items-center gap-4 bg-surface-dark px-6">
+            <span className="text-[10px] font-bold text-text-low uppercase tracking-widest font-display">Hex Editor</span>
+            <span className="text-[10px] font-mono text-text-low">16 Bytes/Row</span>
+            {readError && <span className="text-[10px] text-accent-red font-medium">{readError}</span>}
           </div>
-          <div className="flex-1 overflow-auto p-6 font-mono text-[13px] leading-relaxed relative">
+          <div className="flex-1 overflow-auto p-4 font-mono text-xs leading-none relative bg-background-base">
             <table className="w-full border-collapse">
-              <tbody className="text-white/60">
+              <tbody className="text-text-mid">
                 {rows.map((row, rowIndex) => (
-                  <tr key={row.addr} className="hover:bg-white/5">
-                    <td className="pr-6 text-white/30 user-select-none border-r border-white/5">{row.addr}</td>
-                    <td className="px-6 tracking-[0.2em] text-[#A3E635]">
+                  <tr key={row.addr} className="hover:bg-surface-stripe/50 group">
+                    <td className="pr-4 py-1 text-text-low user-select-none border-r border-border-subtle whitespace-nowrap">{row.addr}</td>
+                    <td className="px-4 py-1 tracking-[0.25em] text-accent-green font-medium whitespace-nowrap">
                       {row.chunk.map((b, colIndex) => {
                         const global = rowIndex * 16 + colIndex;
                         const selected = global === cursorOffset;
@@ -468,14 +468,14 @@ export default function Memory() {
                           <span
                             key={`${row.addr}-${colIndex}`}
                             onClick={() => setCursorOffset(global)}
-                            className={`cursor-pointer rounded-sm px-0.5 ${selected ? 'bg-primary/40 text-white' : 'hover:text-white hover:bg-white/20'}`}
+                            className={`cursor-pointer rounded-sm px-0.5 transition-colors ${selected ? 'bg-primary text-white' : 'hover:text-text-high hover:bg-surface-stripe'}`}
                           >
                             {b}
                           </span>
                         );
                       })}
                     </td>
-                    <td className="pl-6 text-white/40 tracking-widest break-all">{row.ascii}</td>
+                    <td className="pl-4 py-1 text-text-low tracking-[0.15em] break-all whitespace-nowrap border-l border-border-subtle">{row.ascii}</td>
                   </tr>
                 ))}
               </tbody>
@@ -483,27 +483,27 @@ export default function Memory() {
           </div>
         </div>
 
-        <div className="w-[360px] flex-none bg-black/40 backdrop-blur-md flex flex-col border-r border-white/5">
-          <div className="p-4 border-b border-white/5">
-            <span className="text-[11px] font-bold text-white/30 uppercase tracking-widest flex items-center gap-2">
+        <div className="w-[320px] flex-none bg-surface-dark flex flex-col border-r border-border-subtle">
+          <div className="h-8 border-b border-border-subtle flex items-center px-4 bg-surface-dark">
+            <span className="text-[10px] font-bold text-text-low uppercase tracking-widest flex items-center gap-1.5 font-display">
               <Binary className="w-3.5 h-3.5" /> Data Inspector
             </span>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-5 space-y-6">
-            <div className="space-y-3">
+          <div className="flex-1 overflow-y-auto p-4 space-y-5">
+            <div className="space-y-2.5">
               {Object.entries(typedValues).map(([k, v]) => (
                 <InspectorRow key={k} label={k} value={v} isLink={k === 'pointer'} />
               ))}
             </div>
 
-            <div className="border-t border-white/5 pt-6 space-y-4">
-              <div className="text-[11px] font-bold text-white/30 uppercase tracking-widest">Typed Write</div>
-              <div className="apple-glass-panel rounded-xl p-3 space-y-3">
+            <div className="border-t border-border-subtle pt-5 space-y-3">
+              <div className="text-[10px] font-bold text-text-low uppercase tracking-widest font-display">Typed Write</div>
+              <div className="bg-background-base border border-border-subtle rounded-lg p-3 space-y-2.5 shadow-sm">
                 <select
                   value={writeType}
                   onChange={(e) => setWriteType(e.target.value)}
-                  className="w-full bg-black/40 border border-white/10 text-white text-[11px] rounded p-1"
+                  className="w-full bg-surface-dark border border-border-subtle text-text-high text-xs rounded px-2 py-1 outline-none focus:border-primary font-mono"
                 >
                   <option>byte</option>
                   <option>int32</option>
@@ -514,61 +514,63 @@ export default function Memory() {
                   type="text"
                   value={writeValue}
                   onChange={(e) => setWriteValue(e.target.value)}
-                  className="w-full bg-black/40 border border-white/10 text-white text-[11px] rounded p-1 font-mono"
+                  className="w-full bg-surface-dark border border-border-subtle text-text-high text-xs rounded px-2 py-1 outline-none focus:border-primary font-mono placeholder:text-text-low/50"
                 />
-                <button onClick={() => void writeTypedValue()} className="w-full bg-primary/80 hover:bg-primary text-white text-[11px] py-1 rounded">
+                <button onClick={() => void writeTypedValue()} className="w-full bg-primary hover:bg-primary/90 text-white text-xs py-1.5 rounded transition-colors font-display">
                   Write At Cursor
                 </button>
               </div>
             </div>
 
-            <div className="border-t border-white/5 pt-6 space-y-4">
-              <div className="text-[11px] font-bold text-white/30 uppercase tracking-widest flex items-center justify-between">
+            <div className="border-t border-border-subtle pt-5 space-y-3">
+              <div className="text-[10px] font-bold text-text-low uppercase tracking-widest flex items-center justify-between font-display">
                 <span>Pointer Chain</span>
-                <Layers className="w-3.5 h-3.5" />
+                <Layers className="w-3.5 h-3.5 text-text-mid" />
               </div>
-              <div className="apple-glass-panel rounded-xl p-3 space-y-3">
+              <div className="bg-background-base border border-border-subtle rounded-lg p-3 space-y-2.5 shadow-sm">
                 <input
                   type="text"
                   value={pointerBase}
                   onChange={(e) => setPointerBase(e.target.value)}
-                  className="w-full bg-black/40 border border-white/10 text-white font-mono text-[11px] rounded p-1"
+                  className="w-full bg-surface-dark border border-border-subtle text-text-high font-mono text-xs rounded px-2 py-1 outline-none focus:border-primary placeholder:text-text-low/50"
+                  placeholder="Base Address"
                 />
                 <input
                   type="text"
                   value={pointerOffsets}
                   onChange={(e) => setPointerOffsets(e.target.value)}
-                  className="w-full bg-black/40 border border-white/10 text-white font-mono text-[11px] rounded p-1"
+                  className="w-full bg-surface-dark border border-border-subtle text-text-high font-mono text-xs rounded px-2 py-1 outline-none focus:border-primary placeholder:text-text-low/50"
+                  placeholder="Offsets (e.g. 10, 20)"
                 />
-                <button onClick={() => void resolvePointerChain()} className="w-full bg-white/5 hover:bg-white/10 border border-white/10 text-white text-[11px] py-1 rounded">
+                <button onClick={() => void resolvePointerChain()} className="w-full bg-surface-stripe hover:bg-surface-stripe/80 border border-border-subtle text-text-high text-xs py-1.5 rounded transition-colors font-display">
                   Resolve
                 </button>
-                <pre className="max-h-40 overflow-auto text-[10px] text-white/70 bg-black/30 rounded p-2 whitespace-pre-wrap">{pointerResult || 'No result'}</pre>
+                <pre className="max-h-40 overflow-auto text-[10px] text-text-mid bg-surface-dark border border-border-subtle rounded p-2(whitespace-pre-wrap font-mono">{pointerResult || 'No result'}</pre>
               </div>
             </div>
           </div>
         </div>
 
-        <div className="w-[320px] flex-none bg-black/30 backdrop-blur-md flex flex-col">
-          <div className="p-4 border-b border-white/5 flex items-center justify-between">
-            <span className="text-[11px] font-bold text-white/30 uppercase tracking-widest">Watch Panel</span>
+        <div className="w-[320px] flex-none bg-surface-dark flex flex-col">
+          <div className="h-8 border-b border-border-subtle flex items-center justify-between px-4 bg-surface-dark">
+            <span className="text-[10px] font-bold text-text-low uppercase tracking-widest font-display">Watch Panel</span>
             <button
               onClick={() => void refreshWatches()}
-              className="w-7 h-7 rounded-lg bg-white/10 hover:bg-white/20 flex items-center justify-center"
+              className="w-6 h-6 rounded flex items-center justify-center hover:bg-surface-stripe transition-colors"
             >
-              <RefreshCw className="w-3.5 h-3.5 text-white/70" />
+              <RefreshCw className="w-3.5 h-3.5 text-text-low hover:text-text-high" />
             </button>
           </div>
-          <div className="flex-1 overflow-auto p-3 space-y-2">
+          <div className="flex-1 overflow-auto p-2.5 space-y-2">
             {watches.map((w) => (
-              <div key={w.id} className={`p-2 rounded-lg border ${w.changed ? 'border-green-500/30 bg-green-500/10' : 'border-white/10 bg-black/20'}`}>
-                <div className="text-xs text-white/90 font-mono">#{w.id} obj:{w.object_index}</div>
-                <div className="text-xs text-white/60">{w.property}</div>
-                <div className="text-xs text-blue-300 font-mono break-all">{String(w.value)}</div>
-                <div className="flex justify-end gap-1 mt-1">
+              <div key={w.id} className={`p-2.5 rounded-lg border text-sm ${w.changed ? 'border-accent-green/30 bg-accent-green/10' : 'border-border-subtle bg-background-base'}`}>
+                <div className="text-xs text-text-high font-mono">#{w.id} obj:{w.object_index}</div>
+                <div className="text-xs text-text-low font-display mt-0.5">{w.property}</div>
+                <div className="text-xs text-primary font-mono break-all mt-1">{String(w.value)}</div>
+                <div className="flex justify-end gap-1.5 mt-2 border-t border-border-subtle/50 pt-2">
                   <button
                     onClick={() => void toggleWatchHistory(w.id)}
-                    className="px-2 h-6 rounded bg-white/10 hover:bg-white/20 text-[10px] text-white"
+                    className="px-2 py-1 rounded bg-surface-stripe hover:bg-surface-stripe/80 text-[10px] text-text-high font-display border border-border-subtle transition-colors"
                   >
                     History
                   </button>
@@ -587,21 +589,21 @@ export default function Memory() {
                         await refreshWatches();
                       })();
                     }}
-                    className="w-6 h-6 rounded bg-red-500/20 hover:bg-red-500/30 flex items-center justify-center"
+                    className="w-6 h-6 rounded bg-accent-red/10 hover:bg-accent-red/20 flex items-center justify-center border border-accent-red/20 transition-colors"
                   >
-                    <Trash2 className="w-3 h-3 text-red-200" />
+                    <Trash2 className="w-3 h-3 text-accent-red" />
                   </button>
                 </div>
                 {expandedWatchId === w.id && (
-                  <div className="mt-2 rounded border border-white/10 bg-black/30 p-2 max-h-36 overflow-auto space-y-1">
-                    {watchHistoryLoading[w.id] && <div className="text-[10px] text-white/50">Loading...</div>}
+                  <div className="mt-2 text-xs rounded border border-border-subtle bg-surface-dark p-2 max-h-36 overflow-auto space-y-1">
+                    {watchHistoryLoading[w.id] && <div className="text-[10px] text-text-low">Loading...</div>}
                     {!watchHistoryLoading[w.id] && (watchHistory[w.id] || []).length === 0 && (
-                      <div className="text-[10px] text-white/40">No history</div>
+                      <div className="text-[10px] text-text-low font-display">No history</div>
                     )}
                     {!watchHistoryLoading[w.id] &&
                       (watchHistory[w.id] || []).map((entry, idx) => (
-                        <div key={`${entry.timestamp}-${idx}`} className="text-[10px] text-white/70 border-b border-white/5 pb-1 last:border-b-0">
-                          <div className="text-white/40">{new Date(entry.timestamp).toLocaleString()}</div>
+                        <div key={`${entry.timestamp}-${idx}`} className="text-[10px] text-text-mid border-b border-border-subtle pb-1 last:border-b-0 space-y-0.5">
+                          <div className="text-text-low/60">{new Date(entry.timestamp).toLocaleString()}</div>
                           <div className="font-mono break-all">{JSON.stringify(entry.value)}</div>
                         </div>
                       ))}
@@ -609,41 +611,41 @@ export default function Memory() {
                 )}
               </div>
             ))}
-            {watches.length === 0 && <div className="text-white/40 text-xs">No watches</div>}
+            {watches.length === 0 && <div className="text-text-low text-xs text-center mt-4 font-display">No watches active</div>}
           </div>
-          <div className="p-3 border-t border-white/5">
+          <div className="p-2 border-t border-border-subtle bg-surface-dark">
             <button
               onClick={() => {
                 const base = Number.parseInt(currentAddress.replace(/^0x/i, ''), 16) || 0;
                 const at = `0x${(base + cursorOffset).toString(16).toUpperCase()}`;
                 setAddressInput(at);
               }}
-              className="w-full flex items-center justify-center gap-2 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white text-xs"
+              className="w-full flex items-center justify-center gap-2 py-1.5 rounded-lg bg-surface-stripe hover:bg-surface-stripe/80 text-text-high text-xs font-display border border-border-subtle transition-colors"
             >
-              <Plus className="w-3 h-3" />
+              <Plus className="w-3.5 h-3.5 text-text-low" />
               Use Cursor Address
             </button>
           </div>
         </div>
       </div>
 
-      <div className="h-[250px] flex-none border-t border-white/10 bg-[#000000] flex flex-col">
-        <div className="h-8 border-b border-white/5 flex items-center px-4 bg-white/[0.02]">
-          <span className="text-[10px] font-bold text-white/40 uppercase tracking-widest flex items-center gap-2">
-            <Terminal className="w-3 h-3" /> UExplorer Console
+      <div className="h-[220px] flex-none border-t border-border-subtle bg-background-base flex flex-col">
+        <div className="h-8 border-b border-border-subtle flex items-center px-4 bg-surface-dark">
+          <span className="text-[10px] font-bold text-text-low uppercase tracking-widest flex items-center gap-2 font-display">
+            <Terminal className="w-3.5 h-3.5" /> UExplorer Console
           </span>
-          <span className={`ml-auto text-[10px] font-mono ${wsConsoleConnected ? 'text-green-300' : 'text-yellow-300'}`}>
+          <span className={`ml-auto text-[10px] font-mono font-medium px-2 py-0.5 rounded border ${wsConsoleConnected ? 'text-accent-green border-accent-green/20 bg-accent-green/10' : 'text-accent-yellow border-accent-yellow/20 bg-accent-yellow/10'}`}>
             {wsConsoleConnected ? 'WS:CONNECTED' : 'WS:FALLBACK'}
           </span>
         </div>
-        <div className="flex-1 overflow-auto p-4 font-mono text-[12px] space-y-1">
+        <div className="flex-1 overflow-auto p-4 font-mono text-xs space-y-1">
           {consoleLogs.map((line, idx) => (
-            <div key={`${idx}-${line.slice(0, 12)}`} className="text-white/70 whitespace-pre-wrap">
+            <div key={`${idx}-${line.slice(0, 12)}`} className="text-text-mid whitespace-pre-wrap">
               {line}
             </div>
           ))}
           <div className="flex items-center gap-2 mt-2">
-            <span className="text-primary">{'>'}</span>
+            <span className="text-primary font-bold">{'>'}</span>
             <input
               type="text"
               value={consoleInput}
@@ -653,7 +655,7 @@ export default function Memory() {
                   void runConsoleCommand();
                 }
               }}
-              className="flex-1 bg-transparent text-white outline-none"
+              className="flex-1 bg-transparent text-text-high outline-none font-mono placeholder:text-text-low/50"
               placeholder="Enter command..."
             />
           </div>
@@ -665,9 +667,9 @@ export default function Memory() {
 
 function InspectorRow({ label, value, isLink }: { label: string; value: string; isLink?: boolean }) {
   return (
-    <div className="flex items-center justify-between gap-2">
-      <span className="text-[12px] font-medium text-white/50">{label}</span>
-      <span className={`font-mono text-[11px] bg-black/40 px-2 py-0.5 rounded border border-white/5 break-all ${isLink ? 'text-blue-400' : 'text-white'}`}>
+    <div className="flex items-center justify-between gap-3">
+      <span className="text-[11px] font-medium text-text-low font-display">{label}</span>
+      <span className={`font-mono text-[11px] bg-background-base px-1.5 py-0.5 rounded border border-border-subtle break-all font-medium ${isLink ? 'text-primary hover:underline cursor-pointer' : 'text-text-high'}`}>
         {value}
       </span>
     </div>

@@ -709,9 +709,9 @@ D:\Projects\UExplorer\
 
 - [x] Hook Manager（UFunction Hook + SSE 实时推送）— `/hooks/*`, SSE 推送
 - [x] WebSocket 实时通道（基础可用）— `WS /ws/console`, `WS /ws/events`
-- [ ] Hook Manager 页面 — 前端（部分实现：功能已集成在 Functions 页 Hook Tab，独立页面未拆分）
+- [x] Hook Manager 页面 — 前端（已实现：功能已集成在 Functions 页 Hook Tab，并完成界面重构）
 - [x] Blueprint Decompiler — `/blueprint/:funcpath/bytecode`, `/blueprint/:funcpath/decompile`（并兼容 `?index=`）
-- [ ] Blueprint Decompiler 页面 — 前端（部分实现：功能已集成在 Functions 页 Decompile Tab，独立页面未拆分）
+- [x] Blueprint Decompiler 页面 — 前端（已实现：功能已集成在 Functions 页 Decompile Tab，并完成界面重构）
 - [x] IDA/Ghidra 导入脚本生成 — `/dump/ida-script`
 - [x] Dumpspace JSON 生成 — `/dump/dumpspace`
 
@@ -722,8 +722,8 @@ D:\Projects\UExplorer\
 4. 基础 Console 页面：已实现（Memory 页面底部 Console）。
 5. Function Browser 页面（含调用器）：已实现（独立页）。
 6. Memory Viewer 页面：已实现（独立页）。
-7. Hook Manager 页面：部分实现（Functions 页 Hook Tab，未独立拆页）。
-8. Blueprint Decompiler 页面：部分实现（Functions 页 Decompile Tab，未独立拆页）。
+7. Hook Manager 页面：已实现（集成在 Functions 页 Hook Tab，已完成高密度 Crystal IDE 风格重构）。
+8. Blueprint Decompiler 页面：已实现（集成在 Functions 页 Decompile Tab，已完成高密度 Crystal IDE 风格重构）。
 
 ---
 

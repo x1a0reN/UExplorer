@@ -92,42 +92,41 @@ export default function SettingsView() {
   };
 
   return (
-    <div className="flex-1 flex overflow-hidden bg-[#0A0A0C]">
-      <div className="w-[280px] flex-none border-r border-white/5 bg-white/[0.02] flex flex-col z-10">
+    <div className="flex-1 flex overflow-hidden bg-background-base">
+      <div className="w-[280px] flex-none border-r border-border-subtle bg-surface-dark flex flex-col z-10">
         <div className="h-14 flex items-center px-6 border-b border-transparent" />
         <div className="p-4 space-y-1">
           {tabs.map((tab) => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl transition-all duration-200 cursor-pointer ${
-                activeTab === tab.id ? 'bg-primary text-white shadow-md shadow-primary/20' : 'text-white/60 hover:bg-white/10 hover:text-white'
-              }`}
+              className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl transition-all duration-200 cursor-pointer ${activeTab === tab.id ? 'bg-primary text-white shadow-md shadow-primary/20' : 'text-text-mid hover:bg-surface-stripe hover:text-text-high'
+                }`}
             >
-              <div className={`w-7 h-7 rounded-[8px] flex items-center justify-center ${activeTab === tab.id ? 'bg-white/20' : 'bg-white/5'}`}>
-                <tab.icon className={`w-3.5 h-3.5 stroke-[2] ${activeTab === tab.id ? 'text-white' : 'text-white/50'}`} />
+              <div className={`w-7 h-7 rounded-[8px] flex items-center justify-center ${activeTab === tab.id ? 'bg-white/20' : 'bg-background-base border border-border-subtle'}`}>
+                <tab.icon className={`w-3.5 h-3.5 stroke-[2] ${activeTab === tab.id ? 'text-white' : 'text-text-low'}`} />
               </div>
-              <span className="text-[13px] font-medium tracking-tight">{tab.id}</span>
+              <span className="text-[13px] font-medium tracking-tight font-display">{tab.id}</span>
             </button>
           ))}
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto w-full max-w-4xl px-12 py-8">
+      <div className="flex-1 overflow-y-auto w-full max-w-4xl px-12 py-10">
         <div className="mb-8 flex items-center justify-between">
-          <h1 className="text-[28px] font-semibold text-white tracking-tight">{activeTab}</h1>
+          <h1 className="text-3xl font-semibold text-text-high tracking-tight font-display">{activeTab}</h1>
           <div className="flex items-center gap-2">
             <button
               onClick={() => void testConnection()}
-              className="px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-white text-sm flex items-center gap-2"
+              className="px-3 py-1.5 rounded-lg bg-surface-stripe hover:bg-surface-stripe/80 text-text-high border border-border-subtle text-sm flex items-center gap-2 font-display"
             >
-              <TestTube2 className="w-4 h-4" />
+              <TestTube2 className="w-4 h-4 text-text-low" />
               Test
             </button>
             <button
               onClick={() => void saveAll()}
               disabled={saving}
-              className="px-3 py-2 rounded-lg bg-primary hover:bg-primary-dark text-white text-sm flex items-center gap-2 disabled:opacity-60"
+              className="px-4 py-1.5 rounded-lg bg-primary hover:bg-primary/90 text-white text-sm flex items-center gap-2 disabled:opacity-50 font-display"
             >
               <Save className="w-4 h-4" />
               {saving ? 'Saving...' : 'Save'}
@@ -135,7 +134,7 @@ export default function SettingsView() {
           </div>
         </div>
 
-        {message && <div className="mb-6 text-sm text-blue-200">{message}</div>}
+        {message && <div className="mb-6 text-sm text-primary font-medium">{message}</div>}
 
         <div className="space-y-6">
           {activeTab === 'Connection' && (
@@ -154,7 +153,7 @@ export default function SettingsView() {
                       const clamped = Math.min(65535, Math.max(0, Math.trunc(next)));
                       setSettingsField('port', clamped);
                     }}
-                    className="bg-black/40 border border-white/10 text-white font-mono text-[13px] rounded-lg px-3 py-1.5 w-24 text-center outline-none focus:border-primary/50"
+                    className="bg-background-base border border-border-subtle text-text-high text-xs font-mono placeholder:text-text-low/50 rounded-lg px-3 py-1.5 w-24 text-center outline-none focus:border-primary"
                   />
                 </SettingLine>
                 <SettingLine label="Access Token" desc="Shared secret for API requests.">
@@ -162,7 +161,7 @@ export default function SettingsView() {
                     type="text"
                     value={settings.token}
                     onChange={(e) => setSettingsField('token', e.target.value)}
-                    className="bg-black/40 border border-white/10 text-white font-mono text-[13px] rounded-lg px-3 py-1.5 w-56 outline-none focus:border-primary/50"
+                    className="bg-background-base border border-border-subtle text-text-high text-xs font-mono placeholder:text-text-low/50 rounded-lg px-3 py-1.5 w-56 outline-none focus:border-primary"
                   />
                 </SettingLine>
               </Card>
@@ -182,14 +181,14 @@ export default function SettingsView() {
                   type="text"
                   value={settings.dllPath}
                   onChange={(e) => setSettingsField('dllPath', e.target.value)}
-                  className="bg-black/40 border border-white/10 text-white font-mono text-[12px] rounded-lg px-3 py-1.5 w-[420px] outline-none focus:border-primary/50"
+                  className="bg-background-base border border-border-subtle text-text-high text-xs font-mono placeholder:text-text-low/50 rounded-lg px-3 py-1.5 w-[420px] outline-none focus:border-primary"
                 />
               </SettingLine>
               <SettingLine label="Injection Method" desc="Remote thread or proxy mode.">
                 <select
                   value={settings.injectionMethod}
                   onChange={(e) => setSettingsField('injectionMethod', e.target.value as ApiClientSettings['injectionMethod'])}
-                  className="bg-black/40 border border-white/10 text-white text-[13px] rounded-lg px-3 py-1.5 outline-none focus:border-primary/50"
+                  className="bg-background-base border border-border-subtle text-text-high text-xs rounded-lg px-3 py-1.5 outline-none focus:border-primary"
                 >
                   <option>CreateRemoteThread</option>
                   <option>DLL Proxy (xinput1_3)</option>
@@ -204,7 +203,7 @@ export default function SettingsView() {
                 <select
                   value={settings.defaultDumpFormat}
                   onChange={(e) => setSettingsField('defaultDumpFormat', e.target.value as DumpType)}
-                  className="bg-black/40 border border-white/10 text-white text-[13px] rounded-lg px-3 py-1.5 outline-none focus:border-primary/50"
+                  className="bg-background-base border border-border-subtle text-text-high text-xs rounded-lg px-3 py-1.5 outline-none focus:border-primary"
                 >
                   <option value="sdk">sdk</option>
                   <option value="usmap">usmap</option>
@@ -217,7 +216,7 @@ export default function SettingsView() {
                   type="text"
                   value={settings.outputDir}
                   onChange={(e) => setSettingsField('outputDir', e.target.value)}
-                  className="bg-black/40 border border-white/10 text-white font-mono text-[12px] rounded-lg px-3 py-1.5 w-[420px] outline-none focus:border-primary/50"
+                  className="bg-background-base border border-border-subtle text-text-high text-xs font-mono placeholder:text-text-low/50 rounded-lg px-3 py-1.5 w-[420px] outline-none focus:border-primary"
                 />
               </SettingLine>
             </Card>
@@ -230,7 +229,7 @@ export default function SettingsView() {
                   <select
                     value={display.theme}
                     onChange={(e) => setDisplayField('theme', e.target.value as DisplaySettings['theme'])}
-                    className="bg-black/40 border border-white/10 text-white text-[13px] rounded-lg px-3 py-1.5 outline-none focus:border-primary/50"
+                    className="bg-background-base border border-border-subtle text-text-high text-xs rounded-lg px-3 py-1.5 outline-none focus:border-primary"
                   >
                     <option>Dark</option>
                     <option>Light</option>
@@ -240,7 +239,7 @@ export default function SettingsView() {
                   <select
                     value={display.addressFormat}
                     onChange={(e) => setDisplayField('addressFormat', e.target.value as DisplaySettings['addressFormat'])}
-                    className="bg-black/40 border border-white/10 text-white text-[13px] rounded-lg px-3 py-1.5 outline-none focus:border-primary/50"
+                    className="bg-background-base border border-border-subtle text-text-high text-xs rounded-lg px-3 py-1.5 outline-none focus:border-primary"
                   >
                     <option>0x Prefix</option>
                     <option>No Prefix</option>
@@ -250,7 +249,7 @@ export default function SettingsView() {
                   <select
                     value={display.numberFormat}
                     onChange={(e) => setDisplayField('numberFormat', e.target.value as DisplaySettings['numberFormat'])}
-                    className="bg-black/40 border border-white/10 text-white text-[13px] rounded-lg px-3 py-1.5 outline-none focus:border-primary/50"
+                    className="bg-background-base border border-border-subtle text-text-high text-xs rounded-lg px-3 py-1.5 outline-none focus:border-primary"
                   >
                     <option>Hex</option>
                     <option>Dec</option>
@@ -265,7 +264,7 @@ export default function SettingsView() {
                     type="text"
                     value={display.gobjectsOverride}
                     onChange={(e) => setDisplayField('gobjectsOverride', e.target.value)}
-                    className="bg-black/40 border border-white/10 text-white font-mono text-[12px] rounded-lg px-3 py-1.5 w-52 outline-none focus:border-primary/50"
+                    className="bg-background-base border border-border-subtle text-text-high text-xs font-mono placeholder:text-text-low/50 rounded-lg px-3 py-1.5 w-52 outline-none focus:border-primary"
                   />
                 </SettingLine>
                 <SettingLine label="GNames" desc="Legacy name pool override.">
@@ -273,7 +272,7 @@ export default function SettingsView() {
                     type="text"
                     value={display.gnamesOverride}
                     onChange={(e) => setDisplayField('gnamesOverride', e.target.value)}
-                    className="bg-black/40 border border-white/10 text-white font-mono text-[12px] rounded-lg px-3 py-1.5 w-52 outline-none focus:border-primary/50"
+                    className="bg-background-base border border-border-subtle text-text-high text-xs font-mono placeholder:text-text-low/50 rounded-lg px-3 py-1.5 w-52 outline-none focus:border-primary"
                   />
                 </SettingLine>
                 <SettingLine label="ProcessEvent" desc="ProcessEvent offset override.">
@@ -281,7 +280,7 @@ export default function SettingsView() {
                     type="text"
                     value={display.processEventOverride}
                     onChange={(e) => setDisplayField('processEventOverride', e.target.value)}
-                    className="bg-black/40 border border-white/10 text-white font-mono text-[12px] rounded-lg px-3 py-1.5 w-52 outline-none focus:border-primary/50"
+                    className="bg-background-base border border-border-subtle text-text-high text-xs font-mono placeholder:text-text-low/50 rounded-lg px-3 py-1.5 w-52 outline-none focus:border-primary"
                   />
                 </SettingLine>
               </Card>
@@ -289,13 +288,13 @@ export default function SettingsView() {
           )}
 
           <Card>
-            <div className="p-4 flex items-center gap-3 text-white/70">
-              <Settings className="w-4 h-4" />
-              <span className="text-sm">UExplorer Desktop Configuration</span>
-              <span className="ml-auto text-xs text-white/40 font-mono">v0.1-pre</span>
+            <div className="p-4 flex items-center gap-3 text-text-mid bg-surface-stripe/30">
+              <Settings className="w-4 h-4 text-text-low" />
+              <span className="text-sm font-medium font-display">UExplorer Desktop Configuration</span>
+              <span className="ml-auto text-xs text-text-low font-mono bg-background-base px-2 py-0.5 rounded border border-border-subtle">v0.1-pre</span>
             </div>
-            <div className="px-4 pb-4 text-xs text-white/40 flex items-center gap-2">
-              <Info className="w-3.5 h-3.5" />
+            <div className="px-5 py-4 text-[11px] text-text-low flex items-center gap-2 border-t border-border-subtle bg-surface-dark/50">
+              <Info className="w-3.5 h-3.5 text-primary" />
               API token/port 修改后会立即影响前端到 DLL 的请求。
             </div>
           </Card>
@@ -306,7 +305,7 @@ export default function SettingsView() {
 }
 
 function Card({ children }: { children: ReactNode }) {
-  return <div className="apple-glass-panel rounded-[16px] overflow-hidden">{children}</div>;
+  return <div className="bg-surface-dark border border-border-subtle rounded-xl overflow-hidden shadow-sm mb-6 max-w-2xl">{children}</div>;
 }
 
 function SettingLine({
@@ -319,12 +318,12 @@ function SettingLine({
   children: ReactNode;
 }) {
   return (
-    <div className="p-4 flex items-center justify-between border-b border-white/5 last:border-b-0 bg-white/[0.01] gap-4">
+    <div className="px-5 py-4 flex items-center justify-between border-b border-border-subtle last:border-b-0 bg-transparent gap-6 hover:bg-surface-stripe/30 transition-colors">
       <div>
-        <div className="text-[14px] font-medium text-white/90">{label}</div>
-        <div className="text-[12px] text-white/40">{desc}</div>
+        <div className="text-[13px] font-medium text-text-high mb-0.5 font-display">{label}</div>
+        <div className="text-[11px] text-text-low leading-relaxed max-w-sm">{desc}</div>
       </div>
-      {children}
+      <div className="flex-none">{children}</div>
     </div>
   );
 }
@@ -333,7 +332,7 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
   return (
     <label className="relative inline-flex items-center cursor-pointer">
       <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} className="sr-only peer" />
-      <div className="w-11 h-6 bg-white/10 rounded-full peer peer-checked:bg-[#28C840] transition-colors after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full shadow-inner" />
+      <div className="w-9 h-5 bg-background-base border border-border-subtle rounded-full peer peer-checked:bg-primary peer-checked:border-primary transition-colors after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-text-high after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full shadow-sm" />
     </label>
   );
 }
