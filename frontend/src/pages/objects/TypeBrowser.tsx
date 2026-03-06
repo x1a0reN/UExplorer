@@ -55,26 +55,32 @@ export default function TypeBrowser({ onNavigate: _onNavigate, onSwitchMode }: B
 
     // ─── Data Loading ──────────────────────────────────────────
 
-    const loadList = async () => {
+    const PAGE_SIZE = 500;
+
+    const loadList = async (append = false) => {
         setListLoading(true);
         setListError(null);
+        const offset = append ? items.length : 0;
         try {
             if (subTab === 'Class') {
-                const res = await api.getClasses(0, 100, search);
+                const res = await api.getClasses(offset, PAGE_SIZE, search);
                 if (res.success && res.data) {
-                    setItems(res.data.items.map((c) => ({ index: c.index, name: c.name, size: c.size, super: c.super })));
+                    const mapped = res.data.items.map((c) => ({ index: c.index, name: c.name, size: c.size, super: c.super }));
+                    setItems(append ? [...items, ...mapped] : mapped);
                     setTotal(res.data.total);
                 }
             } else if (subTab === 'Struct') {
-                const res = await api.getStructs(0, 100, search);
+                const res = await api.getStructs(offset, PAGE_SIZE, search);
                 if (res.success && res.data) {
-                    setItems(res.data.items.map((s) => ({ index: s.index, name: s.name, size: s.size, super: s.super })));
+                    const mapped = res.data.items.map((s) => ({ index: s.index, name: s.name, size: s.size, super: s.super }));
+                    setItems(append ? [...items, ...mapped] : mapped);
                     setTotal(res.data.total);
                 }
             } else if (subTab === 'Enum') {
-                const res = await api.getEnums(0, 100, search);
+                const res = await api.getEnums(offset, PAGE_SIZE, search);
                 if (res.success && res.data) {
-                    setItems(res.data.items.map((e) => ({ index: e.index, name: e.name })));
+                    const mapped = res.data.items.map((e) => ({ index: e.index, name: e.name }));
+                    setItems(append ? [...items, ...mapped] : mapped);
                     setTotal(res.data.total);
                 }
             }
@@ -218,6 +224,11 @@ export default function TypeBrowser({ onNavigate: _onNavigate, onSwitchMode }: B
                         </div>
                     ))}
                     <div className="text-white/30 text-[11px] p-3">{t('Showing')} {items.length} / {total}</div>
+                    {items.length < total && !listLoading && (
+                        <button onClick={() => void loadList(true)} className="w-full py-2 text-xs text-blue-300 hover:text-blue-200 hover:bg-white/5 rounded-lg transition-colors">
+                            {t('Load More')} ({total - items.length} {t('remaining')})
+                        </button>
+                    )}
                 </div>
             </div>
 

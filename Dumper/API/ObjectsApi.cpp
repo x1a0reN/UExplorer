@@ -711,7 +711,7 @@ void RegisterObjectsRoutes(HttpServer& server)
 		int limit = 50;
 		if (params.count("offset")) offset = std::stoi(params["offset"]);
 		if (params.count("limit")) limit = std::stoi(params["limit"]);
-		if (limit > 500) limit = 500;
+		if (limit > 5000) limit = 5000;
 		if (offset < 0) offset = 0;
 
 		std::string filter = params.count("q") ? params["q"] : "";
@@ -769,7 +769,7 @@ void RegisterObjectsRoutes(HttpServer& server)
 			int limit = 50;
 			if (params.count("offset")) offset = std::stoi(params["offset"]);
 			if (params.count("limit")) limit = std::stoi(params["limit"]);
-			if (limit > 500) limit = 500;
+			if (limit > 5000) limit = 5000;
 			if (offset < 0) offset = 0;
 
 			json items = json::array();
@@ -1098,7 +1098,7 @@ void RegisterObjectsRoutes(HttpServer& server)
 		auto params = ParseQuery(req.Query);
 		int offset = params.count("offset") ? std::stoi(params["offset"]) : 0;
 		int limit = params.count("limit") ? std::stoi(params["limit"]) : 50;
-		if (limit > 500) limit = 500;
+		if (limit > 5000) limit = 5000;
 		if (offset < 0) offset = 0;
 		std::string filter = params.count("q") ? params["q"] : "";
 

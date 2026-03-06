@@ -45,13 +45,17 @@ export default function InstanceBrowser({ onNavigate, onSwitchMode, navContext }
 
     // ─── Data Loading ──────────────────────────────────────────
 
-    const loadList = async () => {
+    const PAGE_SIZE = 500;
+
+    const loadList = async (append = false) => {
         setListLoading(true);
         setListError(null);
+        const offset = append ? items.length : 0;
         try {
-            const res = await api.searchObjects(search, { class: classFilter || undefined, offset: 0, limit: 100 });
+            const res = await api.searchObjects(search, { class: classFilter || undefined, offset, limit: PAGE_SIZE });
             if (res.success && res.data) {
-                setItems(res.data.items.map((o) => ({ index: o.index, name: o.name, className: o.class, address: o.address })));
+                const mapped = res.data.items.map((o) => ({ index: o.index, name: o.name, className: o.class, address: o.address }));
+                setItems(append ? [...items, ...mapped] : mapped);
                 setTotal(res.data.matched);
             }
         } catch (error) {
@@ -149,6 +153,11 @@ export default function InstanceBrowser({ onNavigate, onSwitchMode, navContext }
                         </div>
                     ))}
                     <div className="text-white/30 text-[11px] p-3">{t('Showing')} {items.length} / {total}</div>
+                    {items.length < total && !listLoading && (
+                        <button onClick={() => void loadList(true)} className="w-full py-2 text-xs text-blue-300 hover:text-blue-200 hover:bg-white/5 rounded-lg transition-colors">
+                            {t('Load More')} ({total - items.length} {t('remaining')})
+                        </button>
+                    )}
                 </div>
             </div>
 

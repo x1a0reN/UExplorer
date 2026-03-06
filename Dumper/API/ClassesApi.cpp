@@ -39,7 +39,7 @@ void RegisterClassesRoutes(HttpServer& server)
 		auto params = ParseQuery(req.Query);
 		int offset = params.count("offset") ? std::stoi(params["offset"]) : 0;
 		int limit = params.count("limit") ? std::stoi(params["limit"]) : 50;
-		if (limit > 500) limit = 500;
+		if (limit > 5000) limit = 5000;
 		std::string filter = params.count("q") ? params["q"] : "";
 
 		json items = json::array();
@@ -215,7 +215,7 @@ void RegisterClassesRoutes(HttpServer& server)
 		auto params = ParseQuery(req.Query);
 		int offset = params.count("offset") ? std::stoi(params["offset"]) : 0;
 		int limit = params.count("limit") ? std::stoi(params["limit"]) : 50;
-		if (limit > 500) limit = 500;
+		if (limit > 5000) limit = 5000;
 		std::string filter = params.count("q") ? params["q"] : "";
 
 		json items = json::array();
@@ -290,7 +290,7 @@ void RegisterClassesRoutes(HttpServer& server)
 		auto params = ParseQuery(req.Query);
 		int offset = params.count("offset") ? std::stoi(params["offset"]) : 0;
 		int limit = params.count("limit") ? std::stoi(params["limit"]) : 50;
-		if (limit > 500) limit = 500;
+		if (limit > 5000) limit = 5000;
 
 		UEClass cls = ObjectArray::FindClassFast(name);
 		if (!cls)
