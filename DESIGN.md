@@ -715,6 +715,24 @@ D:\Projects\UExplorer\
 - [x] IDA/Ghidra 导入脚本生成 — `/dump/ida-script`
 - [x] Dumpspace JSON 生成 — `/dump/dumpspace`
 
+### Phase 6: 代码审计与 i18n（当前阶段）
+
+**目标：** 全面审计 C++ 后端安全问题，前端全量国际化
+
+- [x] C++ 后端审计（39 个问题：7 Critical, 12 High, 11 Medium, 9 Low）
+- [x] MemoryApi SEH 保护（所有内存读写加 IsBadReadPtr + __try/__except）
+- [x] Main.cpp WINAPI 调用约定修复 + double fclose 修复 + Kismet null check
+- [x] GameThreadQueue 竞态条件修复（锁内拷贝字段 + 等待槽位释放）
+- [x] HookApi 性能优化（shared_mutex 替代 mutex，读路径无阻塞）
+- [x] EventsApi 悬挂指针修复（mutex 保护 g_Server + SetServer(nullptr) in shutdown）
+- [x] WatchApi SEH 保护 + 父类属性搜索
+- [x] ApiCommon 安全解析助手（SafeParseInt/SafeParseUInt64）
+- [x] 翻译系统全面扩展（300+ 翻译键，覆盖所有页面文本）
+- [x] Settings 页面语言切换功能（中文/英文）
+- [x] 清除所有 .tsx 中的硬编码中文字符串
+- [ ] 前端其他页面 i18n 完善（SDKDump/Memory 的英文硬编码用 t() 包裹）
+- [ ] 前端功能对接（全局搜索、继承树、CDO 对比等）
+
 ### 页面实现状态总览（重点 8 项）
 1. SDK Dump Center 页面：已实现（独立页）。
 2. Object Browser 页面：已实现（独立页）。
