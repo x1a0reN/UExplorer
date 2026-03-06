@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Search, Filter, TerminalSquare, Play, Info, List, History, Power, RefreshCw, Cpu } from 'lucide-react';
 import { t } from '../i18n';
 import api, { type ClassFunction, type HookItem, type HookLogEntry, type ObjectDetail, type ObjectItem } from '../api';
@@ -645,13 +645,13 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
               onClick={() => onViewModeChange?.('function')}
               className={`px-3 py-1.5 rounded-md text-xs font-semibold font-display transition-colors ${viewMode === 'function' ? 'bg-surface-dark text-text-high shadow-sm border border-border-subtle' : 'text-text-low hover:text-text-high border border-transparent'}`}
             >
-              函数工作台
+              {t('Function Workbench')}
             </button>
             <button
               onClick={() => onViewModeChange?.('hookManager')}
               className={`px-3 py-1.5 rounded-md text-xs font-semibold font-display transition-colors ${viewMode === 'hookManager' ? 'bg-surface-dark text-text-high shadow-sm border border-border-subtle' : 'text-text-low hover:text-text-high border border-transparent'}`}
             >
-              Hook 管理
+              {t('Hook Management')}
             </button>
           </div>
           {viewMode === 'function' && (
@@ -721,14 +721,14 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
                     disabled={hookBusy || filteredHooks.length === 0}
                     className="px-4 py-2 rounded-lg bg-accent-green/10 hover:bg-accent-green/20 text-accent-green text-xs font-display border border-accent-green/20 transition-colors disabled:opacity-50"
                   >
-                    批量启用
+                    {t('Batch Enable')}
                   </button>
                   <button
                     onClick={() => void bulkSetHooksEnabled(false)}
                     disabled={hookBusy || filteredHooks.length === 0}
                     className="px-4 py-2 rounded-lg bg-accent-yellow/10 hover:bg-accent-yellow/20 text-accent-yellow text-xs font-display border border-accent-yellow/20 transition-colors disabled:opacity-50"
                   >
-                    批量停用
+                    {t('Batch Disable')}
                   </button>
                   <button
                     onClick={() => {
@@ -737,7 +737,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
                     }}
                     className="px-4 py-2 rounded-lg bg-surface-stripe hover:bg-surface-stripe/80 text-text-high text-xs font-display border border-border-subtle transition-colors"
                   >
-                    刷新
+                    {t('Refresh')}
                   </button>
                 </div>
 
@@ -762,26 +762,26 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
                         <div className="font-mono">{hook.hit_count}</div>
                       </button>
                     ))}
-                    {pagedHooks.length === 0 && <div className="p-6 text-text-low text-xs font-display text-center">没有匹配的 Hook</div>}
+                    {pagedHooks.length === 0 && <div className="p-6 text-text-low text-xs font-display text-center">{t('No matching hooks')}</div>}
                   </div>
                 </div>
 
                 <div className="flex items-center justify-between text-xs text-text-low font-display">
-                  <div>第 {hookPage} / {hookTotalPages} 页（每页 {hookPageSize} 条）</div>
+                  <div>{t('Page')} {hookPage} {t('of')} {hookTotalPages} ({hookPageSize} {t('per page')})</div>
                   <div className="flex gap-2">
                     <button
                       onClick={() => setHookPage((p) => Math.max(1, p - 1))}
                       disabled={hookPage <= 1}
                       className="px-3 py-1.5 rounded-lg bg-surface-stripe hover:bg-surface-stripe/80 border border-border-subtle transition-colors disabled:opacity-40"
                     >
-                      上一页
+                      {t('Prev Page')}
                     </button>
                     <button
                       onClick={() => setHookPage((p) => Math.min(hookTotalPages, p + 1))}
                       disabled={hookPage >= hookTotalPages}
                       className="px-3 py-1.5 rounded-lg bg-surface-stripe hover:bg-surface-stripe/80 border border-border-subtle transition-colors disabled:opacity-40"
                     >
-                      下一页
+                      {t('Next Page')}
                     </button>
                   </div>
                 </div>
@@ -805,21 +805,21 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
                   {pagedHookLogs.length === 0 && <div className="text-text-low text-xs font-display text-center py-4">No hook logs</div>}
                 </div>
                 <div className="flex items-center justify-between text-xs text-text-low font-display">
-                  <div>第 {hookLogPage} / {hookLogTotalPages} 页（每页 {hookLogPageSize} 条）</div>
+                  <div>{t('Page')} {hookLogPage} {t('of')} {hookLogTotalPages} ({hookLogPageSize} {t('per page')})</div>
                   <div className="flex gap-2">
                     <button
                       onClick={() => setHookLogPage((p) => Math.max(1, p - 1))}
                       disabled={hookLogPage <= 1}
                       className="px-3 py-1.5 rounded-lg bg-surface-stripe hover:bg-surface-stripe/80 border border-border-subtle transition-colors disabled:opacity-40"
                     >
-                      上一页
+                      {t('Prev Page')}
                     </button>
                     <button
                       onClick={() => setHookLogPage((p) => Math.min(hookLogTotalPages, p + 1))}
                       disabled={hookLogPage >= hookLogTotalPages}
                       className="px-3 py-1.5 rounded-lg bg-surface-stripe hover:bg-surface-stripe/80 border border-border-subtle transition-colors disabled:opacity-40"
                     >
-                      下一页
+                      {t('Next Page')}
                     </button>
                   </div>
                 </div>
@@ -940,7 +940,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
                                   type="text"
                                   value={staticClassName}
                                   onChange={(e) => setStaticClassName(e.target.value)}
-                                  placeholder="例如 BP_ItemGridWDT_C"
+                                  placeholder={t('e.g. BP_ItemGridWDT_C')}
                                   className="w-full bg-background-base border border-border-subtle text-text-high font-mono text-[13px] rounded-lg px-3 py-2 outline-none focus:border-primary transition-colors placeholder:text-text-low/50"
                                 />
                               </div>
@@ -982,7 +982,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
                               ))}
 
                             <div className="text-[11px] text-text-low font-display">
-                              参数支持 JSON/数字/布尔值；枚举可使用 <span className="font-mono text-text-mid bg-surface-stripe px-1 py-0.5 rounded">EnumName::ValueName</span>
+                              {t('Params support JSON/number/boolean; enums can use EnumName::ValueName')}
                             </div>
 
                             <button
@@ -1068,12 +1068,12 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
                   {activeTab === 'Decompile' && (
                     <div className="bg-surface-dark border border-border-subtle rounded-xl p-6 space-y-4 shadow-sm">
                       <div className="space-y-1.5">
-                        <div className="text-text-low text-[11px] font-bold uppercase tracking-widest font-display">Function Path（优先走 /blueprint/:funcpath/*）</div>
+                        <div className="text-text-low text-[11px] font-bold uppercase tracking-widest font-display">{t('Function Path (e.g. Class.Function)')}</div>
                         <input
                           type="text"
                           value={blueprintPath}
                           onChange={(e) => setBlueprintPath(e.target.value)}
-                          placeholder="例如 BP_ItemGridWDT_C.ExecuteUbergraph_BP_ItemGridWDT"
+                          placeholder={t('e.g. BP_ItemGridWDT_C.ExecuteUbergraph_BP_ItemGridWDT')}
                           className="w-full bg-background-base border border-border-subtle text-text-high text-[13px] font-mono rounded-lg px-3 py-2 outline-none focus:border-primary transition-colors placeholder:text-text-low/50"
                         />
                       </div>

@@ -404,7 +404,7 @@ export default function TypeBrowser({ onNavigate: _onNavigate, onSwitchMode }: B
                                             </div>
                                             {fn.params.length > 0 && (
                                                 <div className="mt-2.5 ml-7 text-xs text-slate-400 font-mono leading-relaxed p-2 bg-black/20 rounded-md border border-white/[0.02]">
-                                                    <span className="text-slate-500">参数：</span> ({fn.params.map((p) => `${p.name}: `).map((_, idx) => <span key={idx}><span className="text-slate-300">{fn.params[idx].name}</span><span className="text-emerald-400/70">: {fn.params[idx].type}</span>{idx < fn.params.length - 1 ? ', ' : ''}</span>)})
+                                                    <span className="text-slate-500">{t('Params')}:</span> ({fn.params.map((p) => `${p.name}: `).map((_, idx) => <span key={idx}><span className="text-slate-300">{fn.params[idx].name}</span><span className="text-emerald-400/70">: {fn.params[idx].type}</span>{idx < fn.params.length - 1 ? ', ' : ''}</span>)})
                                                 </div>
                                             )}
                                         </div>

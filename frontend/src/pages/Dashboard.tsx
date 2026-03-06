@@ -144,7 +144,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
               className="px-3 py-1.5 rounded-lg bg-accent-yellow/10 hover:bg-accent-yellow/20 border border-accent-yellow/20 text-xs font-medium text-accent-yellow transition-all flex items-center gap-1.5 cursor-pointer active:scale-95 font-display"
             >
               <Zap className="w-3.5 h-3.5" />
-              {t('重连引擎')}
+              {t('Reconnect Engine')}
             </button>
             <button
               onClick={() => onNavigate('sdkdump')}
