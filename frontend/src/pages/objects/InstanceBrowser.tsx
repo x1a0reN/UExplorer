@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { t } from '../../i18n';
 import { Search, Box, RefreshCw, Save, ExternalLink } from 'lucide-react';
 import api, {
@@ -113,6 +114,27 @@ export default function InstanceBrowser({ onNavigate, onSwitchMode, navContext }
 
     useEffect(() => { void loadList(); }, [search, classFilter]);
 
+    // ─── Virtualization ─────────────────────────────────────────
+
+    const parentRef = useRef<HTMLDivElement>(null);
+
+    const rowVirtualizer = useVirtualizer({
+        count: items.length + (items.length < total && !listLoading ? 1 : 0),
+        getScrollElement: () => parentRef.current,
+        estimateSize: () => 64, // Approx height of each instance item
+        overscan: 10,
+    });
+
+    const virtualItems = rowVirtualizer.getVirtualItems();
+    useEffect(() => {
+        const lastItem = virtualItems[virtualItems.length - 1];
+        if (!lastItem) return;
+
+        if (lastItem.index >= items.length && !listLoading && items.length < total) {
+            void loadList(true);
+        }
+    }, [virtualItems, items.length, listLoading, total]);
+
     // ─── Render ────────────────────────────────────────────────
 
     return (
@@ -133,31 +155,78 @@ export default function InstanceBrowser({ onNavigate, onSwitchMode, navContext }
                 </div>
 
                 {/* List */}
-                <div className="flex-1 overflow-auto px-2 pt-1">
-                    {listLoading && <div className="text-white/40 text-xs p-3">{t('Loading...')}</div>}
+                <div ref={parentRef} className="flex-1 overflow-auto relative px-1 scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent">
                     {listError && <div className="text-red-300 text-xs p-3">{listError}</div>}
-                    {items.map((item) => (
-                        <div key={item.index}
-                            onClick={() => { setSelected(item); void loadDetail(item); }}
-                            className={`p-2.5 rounded-lg cursor-pointer mb-0.5 transition-all ${selected?.index === item.index ? 'bg-white/10 border border-white/10' : 'hover:bg-white/5 border border-transparent'
-                                }`}>
-                            <div className="flex items-center gap-2">
-                                <div className="w-2 h-2 rounded-full bg-green-400 flex-none" />
-                                <span className="text-[13px] text-white/90 font-mono truncate flex-1">{item.name}</span>
-                            </div>
-                            <div className="flex gap-3 text-[11px] text-white/40 mt-0.5 ml-4">
-                                <span className="text-blue-400/60">{item.className}</span>
-                                <span>#{item.index}</span>
-                                <span>{item.address}</span>
-                            </div>
-                        </div>
-                    ))}
-                    <div className="text-white/30 text-[11px] p-3">{t('Showing')} {items.length} / {total}</div>
-                    {items.length < total && !listLoading && (
-                        <button onClick={() => void loadList(true)} className="w-full py-2 text-xs text-blue-300 hover:text-blue-200 hover:bg-white/5 rounded-lg transition-colors">
-                            {t('Load More')} ({total - items.length} {t('remaining')})
-                        </button>
-                    )}
+
+                    <div
+                        style={{
+                            height: `${rowVirtualizer.getTotalSize()}px`,
+                            width: '100%',
+                            position: 'relative',
+                        }}
+                    >
+                        {virtualItems.map((virtualRow) => {
+                            if (virtualRow.index >= items.length) {
+                                return (
+                                    <div
+                                        key="loader"
+                                        style={{
+                                            position: 'absolute',
+                                            top: 0,
+                                            left: 0,
+                                            width: '100%',
+                                            height: `${virtualRow.size}px`,
+                                            transform: `translateY(${virtualRow.start}px)`,
+                                        }}
+                                        className="flex items-center justify-center text-white/40 text-xs"
+                                    >
+                                        {t('Loading...')}
+                                    </div>
+                                );
+                            }
+
+                            const item = items[virtualRow.index];
+                            return (
+                                <div
+                                    key={virtualRow.key}
+                                    style={{
+                                        position: 'absolute',
+                                        top: 0,
+                                        left: 0,
+                                        width: '100%',
+                                        height: `${virtualRow.size}px`,
+                                        transform: `translateY(${virtualRow.start}px)`,
+                                        paddingRight: '6px',
+                                        paddingLeft: '6px',
+                                        paddingTop: '4px'
+                                    }}
+                                >
+                                    <div
+                                        onClick={() => { setSelected(item); void loadDetail(item); }}
+                                        className={`px-3 py-2 rounded-lg cursor-pointer outline-none transition-all duration-200 group flex flex-col gap-1 ${selected?.index === item.index
+                                            ? 'bg-blue-500/[0.08] border-l-[3px] border-l-blue-400 border-y border-r border-transparent'
+                                            : 'bg-transparent border-l-[3px] border-l-transparent border-y border-r border-transparent hover:bg-white/[0.04]'
+                                            }`}
+                                    >
+                                        <div className="flex items-center gap-2">
+                                            <div className={`w-1.5 h-1.5 rounded-full flex-none transition-colors ${selected?.index === item.index ? 'bg-green-400 shadow-[0_0_6px_rgba(74,222,128,0.6)]' : 'bg-green-500/40 group-hover:bg-green-400/80'}`} />
+                                            <span className={`text-[13px] font-mono truncate flex-1 transition-colors ${selected?.index === item.index ? 'text-blue-200 font-semibold' : 'text-slate-300 group-hover:text-slate-100'}`}>
+                                                {item.name}
+                                            </span>
+                                        </div>
+                                        <div className="flex gap-3 text-[11px] mt-0.5 ml-3.5 justify-between">
+                                            <span className="text-emerald-400/60 truncate max-w-[120px]" title={item.className}>{item.className}</span>
+                                            <span className="text-slate-500 font-mono flex-none">#{item.index}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+                {/* Status Footer */}
+                <div className="p-2 border-t border-white/5 shrink-0 bg-black/40 text-center text-white/30 text-[10px]">
+                    {t('Showing')} {items.length} / {total}
                 </div>
             </div>
 
@@ -174,16 +243,16 @@ export default function InstanceBrowser({ onNavigate, onSwitchMode, navContext }
                             iconColor="text-green-400"
                             glow="bg-green-500/20"
                             badges={<>
-                                <span className="px-2.5 py-1 rounded-[6px] bg-blue-500/10 border border-blue-500/20 text-[11px] font-mono text-blue-400 cursor-pointer hover:bg-blue-500/20"
+                                <span className="px-3 py-1.5 rounded-md bg-blue-500/10 border border-blue-500/20 text-[11px] font-mono text-blue-300 cursor-pointer hover:bg-blue-500/20 transition-colors shadow-sm backdrop-blur-md flex items-center gap-1.5"
                                     onClick={() => onSwitchMode?.('types', { className: selected.className })}>
-                                    {t('Class')}: {selected.className}
+                                    <span className="text-blue-500/50">Class:</span> {selected.className}
                                 </span>
-                                <span className="px-2.5 py-1 rounded-[6px] bg-white/5 border border-white/10 text-[11px] font-mono text-white/70">
-                                    #{selected.index}
+                                <span className="px-3 py-1.5 rounded-md bg-white/[0.03] border border-white/10 text-[11px] font-mono text-slate-300 shadow-sm backdrop-blur-md">
+                                    <span className="text-white/30">#</span>{selected.index}
                                 </span>
-                                <span className="px-2.5 py-1 rounded-[6px] bg-purple-500/10 border border-purple-500/20 text-[11px] font-mono text-purple-400 cursor-pointer hover:bg-purple-500/20"
+                                <span className="px-3 py-1.5 rounded-md bg-purple-500/10 border border-purple-500/20 text-[11px] font-mono text-purple-300 cursor-pointer hover:bg-purple-500/20 transition-colors shadow-sm backdrop-blur-md flex items-center gap-1.5"
                                     onClick={() => onNavigate?.('memory')}>
-                                    <ExternalLink className="w-3 h-3 inline mr-1" />{selected.address}
+                                    <ExternalLink className="w-3.5 h-3.5 opacity-70" /> {selected.address}
                                 </span>
                             </>}
                         />

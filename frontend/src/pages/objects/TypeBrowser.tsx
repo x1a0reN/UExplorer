@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { t } from '../../i18n';
 import { Search, Box, Database, Layers, Hash, ExternalLink } from 'lucide-react';
 import api, {
@@ -160,6 +161,28 @@ export default function TypeBrowser({ onNavigate: _onNavigate, onSwitchMode }: B
 
     useEffect(() => { void loadList(); }, [subTab, search, packageFilter]);
 
+    // ─── Virtualization ─────────────────────────────────────────
+
+    const parentRef = useRef<HTMLDivElement>(null);
+
+    const rowVirtualizer = useVirtualizer({
+        count: items.length + (items.length < total && !listLoading ? 1 : 0),
+        getScrollElement: () => parentRef.current,
+        estimateSize: () => 54, // Approx height of each item
+        overscan: 10,
+    });
+
+    // Handle Infinite Scroll
+    const virtualItems = rowVirtualizer.getVirtualItems();
+    useEffect(() => {
+        const lastItem = virtualItems[virtualItems.length - 1];
+        if (!lastItem) return;
+
+        if (lastItem.index >= items.length && !listLoading && items.length < total) {
+            void loadList(true);
+        }
+    }, [virtualItems, items.length, listLoading, total]);
+
     // ─── Render ────────────────────────────────────────────────
 
     const SUB_TABS: { id: TypeSubTab; icon: typeof Layers; label: string }[] = [
@@ -198,37 +221,82 @@ export default function TypeBrowser({ onNavigate: _onNavigate, onSwitchMode }: B
                             value={search}
                             onChange={(e) => setSearch(e.target.value)}
                             placeholder={t(`Search ${subTab}...`)}
-                            className="w-full h-8 bg-white/5 border border-white/10 rounded-lg text-xs text-white px-3 pl-9 focus:outline-none focus:border-white/20"
+                            className="w-full h-8 bg-black/40 border border-white/10 rounded-lg text-xs text-white px-3 pl-9 focus:outline-none focus:border-white/20 transition-all focus:bg-black/60 shadow-inner"
                         />
                     </div>
                 </div>
 
                 {/* List */}
-                <div className="flex-1 overflow-auto px-2">
-                    {listLoading && <div className="text-white/40 text-xs p-3">{t('Loading...')}</div>}
+                <div ref={parentRef} className="flex-1 overflow-auto relative px-1 scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent">
                     {listError && <div className="text-red-300 text-xs p-3">{listError}</div>}
-                    {items.map((item) => (
-                        <div
-                            key={item.index}
-                            onClick={() => { setSelected(item); void loadDetail(item); }}
-                            className={`p-2.5 rounded-lg cursor-pointer mb-0.5 transition-all ${selected?.index === item.index
-                                ? 'bg-white/10 border border-white/10'
-                                : 'hover:bg-white/5 border border-transparent'
-                                }`}
-                        >
-                            <div className="text-[13px] text-white/90 font-mono truncate">{item.name}</div>
-                            <div className="flex gap-3 text-[11px] text-white/40 mt-0.5">
-                                {item.size !== undefined && <span>0x{item.size.toString(16).toUpperCase()}</span>}
-                                {item.super && <span className="text-blue-400/50">{item.super}</span>}
-                            </div>
-                        </div>
-                    ))}
-                    <div className="text-white/30 text-[11px] p-3">{t('Showing')} {items.length} / {total}</div>
-                    {items.length < total && !listLoading && (
-                        <button onClick={() => void loadList(true)} className="w-full py-2 text-xs text-blue-300 hover:text-blue-200 hover:bg-white/5 rounded-lg transition-colors">
-                            {t('Load More')} ({total - items.length} {t('remaining')})
-                        </button>
-                    )}
+
+                    <div
+                        style={{
+                            height: `${rowVirtualizer.getTotalSize()}px`,
+                            width: '100%',
+                            position: 'relative',
+                        }}
+                    >
+                        {virtualItems.map((virtualRow) => {
+                            if (virtualRow.index >= items.length) {
+                                return (
+                                    <div
+                                        key="loader"
+                                        style={{
+                                            position: 'absolute',
+                                            top: 0,
+                                            left: 0,
+                                            width: '100%',
+                                            height: `${virtualRow.size}px`,
+                                            transform: `translateY(${virtualRow.start}px)`,
+                                        }}
+                                        className="flex items-center justify-center text-white/40 text-xs"
+                                    >
+                                        {t('Loading...')}
+                                    </div>
+                                );
+                            }
+
+                            const item = items[virtualRow.index];
+                            return (
+                                <div
+                                    key={virtualRow.key}
+                                    style={{
+                                        position: 'absolute',
+                                        top: 0,
+                                        left: 0,
+                                        width: '100%',
+                                        height: `${virtualRow.size}px`,
+                                        transform: `translateY(${virtualRow.start}px)`,
+                                        paddingRight: '6px',
+                                        paddingLeft: '6px',
+                                        paddingTop: '4px'
+                                    }}
+                                >
+                                    <div
+                                        onClick={() => { setSelected(item); void loadDetail(item); }}
+                                        className={`px-3 py-2 rounded-lg cursor-pointer outline-none transition-all duration-200 group flex flex-col gap-0.5 ${selected?.index === item.index
+                                            ? 'bg-blue-500/[0.08] border-l-[3px] border-l-blue-400 border-y border-r border-transparent'
+                                            : 'bg-transparent border-l-[3px] border-l-transparent border-y border-r border-transparent hover:bg-white/[0.04]'
+                                            }`}
+                                    >
+                                        <div className="flex items-center justify-between gap-3">
+                                            <span className={`text-[13px] font-mono truncate transition-colors ${selected?.index === item.index ? 'text-blue-200 font-semibold' : 'text-slate-300 group-hover:text-slate-100'}`}>
+                                                {item.name}
+                                            </span>
+                                            {item.size !== undefined && <span className="text-[10px] text-slate-500 font-mono flex-none">0x{item.size.toString(16).toUpperCase()}</span>}
+                                        </div>
+                                        {item.super && <div className="text-[11px] text-slate-400 truncate" title={item.super}>↳ {item.super}</div>}
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+
+                {/* Status Footer */}
+                <div className="p-2 border-t border-white/5 shrink-0 bg-black/40 text-center text-white/30 text-[10px]">
+                    {t('Showing')} {items.length} / {total}
                 </div>
             </div>
 
@@ -247,18 +315,23 @@ export default function TypeBrowser({ onNavigate: _onNavigate, onSwitchMode }: B
                             glow={subTab === 'Class' ? 'bg-blue-500/20' : subTab === 'Struct' ? 'bg-orange-500/20' : 'bg-yellow-500/20'}
                             badges={<>
                                 {selected.size !== undefined && (
-                                    <span className="px-2.5 py-1 rounded-[6px] bg-white/5 border border-white/10 text-[11px] font-mono text-white/70">
-                                        Size: 0x{selected.size.toString(16).toUpperCase()} ({selected.size} B)
+                                    <span className="px-3 py-1.5 rounded-md bg-white/[0.03] border border-white/10 text-[11px] font-mono text-slate-300 shadow-sm backdrop-blur-md">
+                                        Size: <span className="text-white/70">0x{selected.size.toString(16).toUpperCase()}</span> <span className="text-slate-500">({selected.size} B)</span>
                                     </span>
                                 )}
                                 {superChain.length > 0 && (
-                                    <span className="px-2.5 py-1 rounded-[6px] bg-blue-500/10 border border-blue-500/20 text-[11px] font-mono text-blue-400">
-                                        {superChain.join(' → ')}
+                                    <span className="px-3 py-1.5 rounded-md bg-blue-500/10 border border-blue-500/20 text-[11px] font-mono text-blue-300 shadow-sm backdrop-blur-md flex flex-wrap gap-1.5 items-center">
+                                        {superChain.map((sc, i) => (
+                                            <span key={i} className="flex items-center gap-1.5">
+                                                {i > 0 && <span className="text-blue-500/40">→</span>}
+                                                <span>{sc}</span>
+                                            </span>
+                                        ))}
                                     </span>
                                 )}
                                 {alignment > 0 && (
-                                    <span className="px-2.5 py-1 rounded-[6px] bg-green-500/10 border border-green-500/20 text-[11px] font-mono text-green-400">
-                                        Align: {alignment}
+                                    <span className="px-3 py-1.5 rounded-md bg-emerald-500/10 border border-emerald-500/20 text-[11px] font-mono text-emerald-300 shadow-sm backdrop-blur-md">
+                                        Align: <span className="text-emerald-100">{alignment}</span>
                                     </span>
                                 )}
                             </>}
@@ -387,6 +460,6 @@ export default function TypeBrowser({ onNavigate: _onNavigate, onSwitchMode }: B
                     </div>
                 )}
             </div>
-        </div>
+        </div >
     );
 }

@@ -1,22 +1,22 @@
 @import "tailwindcss";
 
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
 @theme {
   --color-primary: #0A84FF;
   --color-primary-dark: #0060DF;
-  
+
   --color-bg-base: #000000;
   --color-bg-elevated: #1C1C1E;
-  
+
   --color-glass-surface: rgba(255, 255, 255, 0.05);
   --color-glass-surface-hover: rgba(255, 255, 255, 0.1);
   --color-glass-border: rgba(255, 255, 255, 0.1);
-  
+
   --color-text-primary: #FFFFFF;
   --color-text-secondary: #98989D;
   --color-text-tertiary: #636366;
 }
-
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
 :root {
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
@@ -34,7 +34,8 @@ body {
   min-height: 100vh;
   background-color: #000000;
   color: #ffffff;
-  overflow: hidden; /* App handles its own scrolling */
+  overflow: hidden;
+  /* App handles its own scrolling */
 }
 
 /* Custom scrollbar for deep dark mode */
@@ -42,15 +43,18 @@ body {
   width: 12px;
   height: 12px;
 }
+
 ::-webkit-scrollbar-track {
   background: transparent;
 }
+
 ::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.15);
   border: 3px solid transparent;
   background-clip: padding-box;
   border-radius: 9999px;
 }
+
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.25);
   border: 3px solid transparent;
@@ -64,12 +68,14 @@ body {
   -webkit-backdrop-filter: blur(40px);
   border: 1px solid rgba(255, 255, 255, 0.08);
 }
+
 .apple-glass-panel {
   background: rgba(255, 255, 255, 0.03);
   backdrop-filter: blur(40px);
   -webkit-backdrop-filter: blur(40px);
   border: 1px solid rgba(255, 255, 255, 0.05);
 }
+
 .apple-glass-panel:hover {
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid rgba(255, 255, 255, 0.08);
