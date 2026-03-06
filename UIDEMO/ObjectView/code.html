@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Crystal IDE - Live Memory View</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;family=Inter:wght@400;500;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script>
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "primary": "#0A84FF", // macOS System Blue
+                        "primary-dim": "rgba(10, 132, 255, 0.15)",
+                        "background-base": "#1E1E1E",
+                        "background-glass": "rgba(30, 30, 30, 0.65)",
+                        "border-subtle": "#3A3A3C",
+                        "surface-dark": "#161616",
+                        "surface-stripe": "#252525",
+                        "text-high": "#FFFFFF",
+                        "text-mid": "#98989D",
+                        "text-low": "#555555",
+                        "accent-red": "#FF453A",
+                        "accent-green": "#32D74B",
+                        "accent-yellow": "#FFD60A",
+                    },
+                    fontFamily: {
+                        "display": ["Space Grotesk", "sans-serif"],
+                        "ui": ["Inter", "-apple-system", "sans-serif"],
+                        "mono": ["JetBrains Mono", "monospace"],
+                    },
+                    fontSize: {
+                        "2xs": "0.65rem",
+                        "xs": "0.75rem",
+                        "sm": "0.8125rem",
+                        "base": "0.875rem",
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        /* Custom Scrollbar for "Hardened Glass" feel */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #1E1E1E; 
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #3A3A3C; 
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #555555; 
+        }
+        
+        /* Glassmorphism utilities */
+        .glass-panel {
+            background-color: rgba(30, 30, 30, 0.65);
+            backdrop-filter: blur(20px) saturate(180%);
+            -webkit-backdrop-filter: blur(20px) saturate(180%);
+        }
+
+        /* Hide number input spinners */
+        input[type=number]::-webkit-inner-spin-button, 
+        input[type=number]::-webkit-outer-spin-button { 
+            -webkit-appearance: none; 
+            margin: 0; 
+        }
+
+        /* Resizer handle visual */
+        .resizer-handle {
+            transition: background-color 0.2s;
+        }
+        .resizer-handle:hover {
+            background-color: #0A84FF;
+        }
+    </style>
+</head>
+<body class="bg-background-base text-text-mid font-ui h-screen flex flex-col overflow-hidden antialiased selection:bg-primary selection:text-white">
+<!-- Top Toolbar: Glass Effect -->
+<header class="h-[42px] glass-panel border-b border-border-subtle flex items-center justify-between px-3 z-50 shrink-0">
+<!-- Left: Logo & Process -->
+<div class="flex items-center gap-4">
+<div class="flex items-center gap-2 text-text-high">
+<span class="material-symbols-outlined text-primary" style="font-size: 20px;">diamond</span>
+<span class="font-display font-bold text-sm tracking-wide">CRYSTAL IDE</span>
+</div>
+<div class="h-4 w-[1px] bg-border-subtle"></div>
+<!-- Process Selector -->
+<button class="flex items-center gap-2 px-2 py-1 rounded hover:bg-white/5 transition-colors group">
+<span class="material-symbols-outlined text-accent-green" style="font-size: 14px;">terminal</span>
+<span class="text-xs font-mono text-text-high">ShooterGame-Win64-Shipping.exe</span>
+<span class="text-xs font-mono text-text-low group-hover:text-text-mid">(PID: 4022)</span>
+<span class="material-symbols-outlined text-text-low" style="font-size: 16px;">arrow_drop_down</span>
+</button>
+</div>
+<!-- Center: Search -->
+<div class="flex-1 max-w-lg mx-4">
+<div class="relative group">
+<div class="absolute inset-y-0 left-0 pl-2.5 flex items-center pointer-events-none">
+<span class="material-symbols-outlined text-text-low group-focus-within:text-primary transition-colors" style="font-size: 16px;">search</span>
+</div>
+<input class="block w-full bg-[#121212] border border-border-subtle text-text-high text-xs rounded pl-8 pr-3 py-1.5 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary placeholder-text-low font-mono transition-all" placeholder="Find Class (Ctrl+Shift+F)..." type="text"/>
+<div class="absolute inset-y-0 right-0 pr-2 flex items-center pointer-events-none">
+<span class="text-[10px] text-text-low border border-border-subtle rounded px-1">/</span>
+</div>
+</div>
+</div>
+<!-- Right: Actions -->
+<div class="flex items-center gap-1">
+<button class="p-1.5 rounded hover:bg-white/5 text-text-mid hover:text-text-high transition-colors" title="Refresh Memory">
+<span class="material-symbols-outlined" style="font-size: 18px;">refresh</span>
+</button>
+<button class="p-1.5 rounded hover:bg-white/5 text-text-mid hover:text-text-high transition-colors" title="Settings">
+<span class="material-symbols-outlined" style="font-size: 18px;">settings</span>
+</button>
+<div class="h-4 w-[1px] bg-border-subtle mx-1"></div>
+<button class="flex items-center gap-1.5 px-3 py-1 bg-primary hover:bg-blue-600 text-white rounded text-xs font-medium transition-colors shadow-lg shadow-blue-500/20">
+<span class="material-symbols-outlined" style="font-size: 14px;">bug_report</span>
+<span>Attach</span>
+</button>
+</div>
+</header>
+<!-- Main Workspace: Split Panes -->
+<main class="flex-1 flex overflow-hidden">
+<!-- Pane 1: Class Hierarchy Tree -->
+<aside class="w-[280px] flex flex-col border-r border-border-subtle bg-surface-dark/50 backdrop-blur-sm shrink-0">
+<div class="h-8 flex items-center px-3 border-b border-border-subtle bg-background-base">
+<span class="text-xs font-bold text-text-mid uppercase tracking-wider font-display">Hierarchy</span>
+<span class="ml-auto text-2xs text-text-low font-mono">14,200 Loaded</span>
+</div>
+<div class="flex-1 overflow-y-auto p-1">
+<!-- Tree Item: Root -->
+<div class="group flex items-center gap-1 px-1 py-0.5 rounded cursor-pointer hover:bg-white/5">
+<span class="material-symbols-outlined text-text-low group-hover:text-text-mid" style="font-size: 16px;">keyboard_arrow_down</span>
+<span class="material-symbols-outlined text-accent-yellow" style="font-size: 14px;">folder</span>
+<span class="text-xs font-mono text-text-high ml-1">UObject</span>
+<span class="ml-auto text-2xs font-mono text-text-low">14,200</span>
+</div>
+<!-- Tree Children -->
+<div class="pl-4 border-l border-border-subtle ml-2.5 mt-0.5">
+<!-- Child 1 -->
+<div class="group flex items-center gap-1 px-1 py-0.5 rounded cursor-pointer hover:bg-white/5">
+<span class="material-symbols-outlined text-text-low group-hover:text-text-mid" style="font-size: 16px;">keyboard_arrow_right</span>
+<span class="material-symbols-outlined text-purple-400" style="font-size: 14px;">deployed_code</span>
+<span class="text-xs font-mono text-text-mid ml-1">UField</span>
+<span class="ml-auto text-2xs font-mono text-text-low">2,400</span>
+</div>
+<!-- Child 2 (Open) -->
+<div class="group flex items-center gap-1 px-1 py-0.5 rounded cursor-pointer hover:bg-white/5">
+<span class="material-symbols-outlined text-text-low group-hover:text-text-mid" style="font-size: 16px;">keyboard_arrow_down</span>
+<span class="material-symbols-outlined text-purple-400" style="font-size: 14px;">deployed_code</span>
+<span class="text-xs font-mono text-text-mid ml-1">AActor</span>
+<span class="ml-auto text-2xs font-mono text-text-low">420</span>
+</div>
+<!-- Grandchildren of AActor -->
+<div class="pl-4 border-l border-border-subtle ml-2.5 mt-0.5">
+<div class="group flex items-center gap-1 px-1 py-0.5 rounded cursor-pointer hover:bg-white/5">
+<span class="material-symbols-outlined text-text-low group-hover:text-text-mid" style="font-size: 16px;">keyboard_arrow_right</span>
+<span class="material-symbols-outlined text-blue-400" style="font-size: 14px;">deployed_code</span>
+<span class="text-xs font-mono text-text-mid ml-1">APawn</span>
+<span class="ml-auto text-2xs font-mono text-text-low">12</span>
+</div>
+<!-- Selected Item -->
+<div class="group flex items-center gap-1 px-1 py-0.5 rounded cursor-pointer bg-primary">
+<span class="material-symbols-outlined text-white" style="font-size: 16px;">keyboard_arrow_right</span>
+<span class="material-symbols-outlined text-white" style="font-size: 14px;">deployed_code</span>
+<span class="text-xs font-mono text-white font-medium ml-1">APlayerController</span>
+<span class="ml-auto text-2xs font-mono text-white opacity-80">4</span>
+</div>
+<div class="group flex items-center gap-1 px-1 py-0.5 rounded cursor-pointer hover:bg-white/5">
+<span class="material-symbols-outlined text-text-low group-hover:text-text-mid" style="font-size: 16px;">keyboard_arrow_right</span>
+<span class="material-symbols-outlined text-blue-400" style="font-size: 14px;">deployed_code</span>
+<span class="text-xs font-mono text-text-mid ml-1">ACharacter</span>
+<span class="ml-auto text-2xs font-mono text-text-low">8</span>
+</div>
+</div>
+</div>
+</div>
+</aside>
+<!-- Resizer -->
+<div class="w-[1px] bg-border-subtle cursor-col-resize hover:bg-primary resizer-handle shrink-0 z-10"></div>
+<!-- Pane 2: Instance List -->
+<section class="flex-1 flex flex-col min-w-[300px] bg-background-base shrink-0">
+<div class="h-8 flex items-center px-0 border-b border-border-subtle bg-surface-dark">
+<!-- Table Headers -->
+<div class="grid grid-cols-12 w-full px-2 gap-2">
+<div class="col-span-3 text-2xs font-bold text-text-mid uppercase tracking-wider font-display flex items-center gap-1 cursor-pointer hover:text-text-high">
+                        Address
+                        <span class="material-symbols-outlined" style="font-size: 12px;">arrow_downward</span>
+</div>
+<div class="col-span-5 text-2xs font-bold text-text-mid uppercase tracking-wider font-display border-l border-border-subtle pl-2">Name</div>
+<div class="col-span-4 text-2xs font-bold text-text-mid uppercase tracking-wider font-display border-l border-border-subtle pl-2">Outer</div>
+</div>
+</div>
+<div class="flex-1 overflow-y-auto font-mono text-xs">
+<!-- Row 1 -->
+<div class="grid grid-cols-12 w-full px-2 py-1 gap-2 border-b border-[#2a2a2c] hover:bg-white/5 cursor-pointer items-center group">
+<div class="col-span-3 text-accent-green">0x7FF450A0</div>
+<div class="col-span-5 text-text-high truncate">BP_PlayerController_C_0</div>
+<div class="col-span-4 text-text-mid truncate">PersistentLevel</div>
+</div>
+<!-- Row 2 (Stripe) -->
+<div class="grid grid-cols-12 w-full px-2 py-1 gap-2 border-b border-[#2a2a2c] bg-surface-stripe hover:bg-white/5 cursor-pointer items-center group">
+<div class="col-span-3 text-text-low">0x7FF450B0</div>
+<div class="col-span-5 text-text-mid truncate">BP_PlayerController_C_1</div>
+<div class="col-span-4 text-text-low truncate">PersistentLevel</div>
+</div>
+<!-- Row 3 (Selected) -->
+<div class="grid grid-cols-12 w-full px-2 py-1 gap-2 border-b border-[#2a2a2c] bg-primary-dim border-l-2 border-l-primary hover:bg-primary-dim/80 cursor-pointer items-center group">
+<div class="col-span-3 text-primary font-bold">0x7FF450C0</div>
+<div class="col-span-5 text-white truncate">BP_PlayerController_C_Local</div>
+<div class="col-span-4 text-text-high truncate">PersistentLevel</div>
+</div>
+<!-- Row 4 (Stripe) -->
+<div class="grid grid-cols-12 w-full px-2 py-1 gap-2 border-b border-[#2a2a2c] bg-surface-stripe hover:bg-white/5 cursor-pointer items-center group">
+<div class="col-span-3 text-text-low">0x7FF450D0</div>
+<div class="col-span-5 text-text-mid truncate">Default__BP_PlayerController_C</div>
+<div class="col-span-4 text-text-low truncate">Package</div>
+</div>
+<!-- Filler rows for aesthetic -->
+<div class="grid grid-cols-12 w-full px-2 py-1 gap-2 border-b border-[#2a2a2c] hover:bg-white/5 cursor-pointer items-center group opacity-50">
+<div class="col-span-3 text-text-low">0x7FF450E0</div>
+<div class="col-span-5 text-text-mid truncate">BP_PlayerController_C_2</div>
+<div class="col-span-4 text-text-low truncate">PersistentLevel</div>
+</div>
+</div>
+<!-- Status Footer for List -->
+<div class="h-6 border-t border-border-subtle bg-surface-dark flex items-center px-2">
+<span class="text-2xs font-mono text-text-low">Selected: 0x7FF450C0 (Index: 2)</span>
+</div>
+</section>
+<!-- Resizer -->
+<div class="w-[1px] bg-border-subtle cursor-col-resize hover:bg-primary resizer-handle shrink-0 z-10"></div>
+<!-- Pane 3: Property Inspector -->
+<aside class="w-[400px] flex flex-col bg-surface-dark/30 backdrop-blur-sm shrink-0 border-l border-border-subtle">
+<!-- Header -->
+<div class="p-4 border-b border-border-subtle bg-surface-dark/50">
+<div class="flex items-start justify-between">
+<div>
+<h2 class="text-sm font-bold text-white font-display">BP_PlayerController_C_Local</h2>
+<div class="flex items-center gap-2 mt-1">
+<span class="px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 text-2xs font-mono border border-blue-500/20">APlayerController</span>
+<span class="text-2xs text-text-low font-mono">0x7FF450C0</span>
+</div>
+</div>
+<button class="text-text-low hover:text-white transition-colors">
+<span class="material-symbols-outlined" style="font-size: 18px;">more_horiz</span>
+</button>
+</div>
+<!-- Tabs -->
+<div class="flex bg-background-base rounded p-1 mt-4 border border-border-subtle">
+<button class="flex-1 py-1 px-2 text-xs font-medium text-white bg-primary rounded shadow-sm text-center font-display">Properties</button>
+<button class="flex-1 py-1 px-2 text-xs font-medium text-text-mid hover:text-text-high rounded text-center font-display transition-colors">Functions</button>
+<button class="flex-1 py-1 px-2 text-xs font-medium text-text-mid hover:text-text-high rounded text-center font-display transition-colors">SuperStruct</button>
+</div>
+</div>
+<!-- Property Grid -->
+<div class="flex-1 overflow-y-auto">
+<!-- Section: Member Variables -->
+<div class="group">
+<div class="px-3 py-1.5 bg-surface-stripe border-y border-border-subtle flex items-center gap-2 sticky top-0 z-10">
+<span class="material-symbols-outlined text-text-low" style="font-size: 14px;">expand_more</span>
+<span class="text-xs font-bold text-text-mid uppercase tracking-wide font-display">Member Variables</span>
+</div>
+<!-- Prop: Health (Float) -->
+<div class="flex items-center border-b border-border-subtle px-3 py-2 hover:bg-white/5 group/row relative">
+<div class="w-1/2 pr-2 flex items-center gap-2">
+<span class="w-1 h-1 rounded-full bg-transparent group-hover/row:bg-text-low"></span>
+<span class="text-xs text-text-mid font-mono truncate" title="Health">Health</span>
+<span class="text-2xs text-text-low px-1 border border-border-subtle rounded font-mono">float</span>
+</div>
+<div class="w-1/2 relative">
+<div class="absolute right-full mr-2 top-1/2 -translate-y-1/2 hidden group-hover/row:flex items-center gap-1">
+<button class="text-text-low hover:text-accent-blue" title="Watch Value">
+<span class="material-symbols-outlined" style="font-size: 14px;">visibility</span>
+</button>
+</div>
+<input class="w-full bg-[#0a0a0a] border border-border-subtle rounded px-2 py-1 text-xs text-accent-green font-mono focus:border-primary focus:ring-0" type="text" value="100.000"/>
+</div>
+</div>
+<!-- Prop: bIsCrouched (Bool) -->
+<div class="flex items-center border-b border-border-subtle px-3 py-2 hover:bg-white/5 group/row">
+<div class="w-1/2 pr-2 flex items-center gap-2">
+<span class="w-1 h-1 rounded-full bg-transparent group-hover/row:bg-text-low"></span>
+<span class="text-xs text-text-mid font-mono truncate">bIsCrouched</span>
+<span class="text-2xs text-text-low px-1 border border-border-subtle rounded font-mono">bool</span>
+</div>
+<div class="w-1/2 flex items-center">
+<label class="inline-flex items-center cursor-pointer">
+<input class="form-checkbox h-4 w-4 text-primary bg-[#0a0a0a] border-border-subtle rounded focus:ring-0 focus:ring-offset-0" type="checkbox"/>
+<span class="ml-2 text-xs text-text-low font-mono">False</span>
+</label>
+</div>
+</div>
+<!-- Prop: AmmoCount (Int) [WATCHED] -->
+<div class="flex items-center border-b border-border-subtle px-3 py-2 bg-blue-500/5 hover:bg-blue-500/10 group/row relative">
+<div class="absolute left-0 top-0 bottom-0 w-[2px] bg-primary"></div>
+<div class="w-1/2 pr-2 flex items-center gap-2">
+<span class="material-symbols-outlined text-primary" style="font-size: 12px;">visibility</span>
+<span class="text-xs text-text-high font-mono truncate">AmmoCount</span>
+<span class="text-2xs text-text-low px-1 border border-border-subtle rounded font-mono">int32</span>
+</div>
+<div class="w-1/2">
+<input class="w-full bg-[#0a0a0a] border border-primary/50 rounded px-2 py-1 text-xs text-white font-mono focus:border-primary focus:ring-0 shadow-[0_0_10px_rgba(10,132,255,0.1)]" type="text" value="30"/>
+</div>
+</div>
+<!-- Prop: PlayerName (String) -->
+<div class="flex items-center border-b border-border-subtle px-3 py-2 hover:bg-white/5 group/row">
+<div class="w-1/2 pr-2 flex items-center gap-2">
+<span class="w-1 h-1 rounded-full bg-transparent group-hover/row:bg-text-low"></span>
+<span class="text-xs text-text-mid font-mono truncate">PlayerName</span>
+<span class="text-2xs text-text-low px-1 border border-border-subtle rounded font-mono">FString</span>
+</div>
+<div class="w-1/2">
+<input class="w-full bg-[#0a0a0a] border border-border-subtle rounded px-2 py-1 text-xs text-orange-300 font-mono focus:border-primary focus:ring-0" type="text" value="DevTester_01"/>
+</div>
+</div>
+<!-- Prop: Location (Vector) -->
+<div class="flex flex-col border-b border-border-subtle px-3 py-2 hover:bg-white/5 group/row">
+<div class="flex items-center justify-between mb-2">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-text-low text-[14px]">expand_more</span>
+<span class="text-xs text-text-mid font-mono truncate">Location</span>
+<span class="text-2xs text-text-low px-1 border border-border-subtle rounded font-mono">FVector</span>
+</div>
+<button class="text-text-low hover:text-primary">
+<span class="material-symbols-outlined" style="font-size: 14px;">edit</span>
+</button>
+</div>
+<div class="grid grid-cols-3 gap-2 pl-6">
+<div class="relative">
+<span class="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] text-accent-red font-bold font-mono">X</span>
+<input class="w-full bg-[#0a0a0a] border border-border-subtle rounded pl-5 pr-1 py-1 text-xs text-white font-mono focus:border-primary focus:ring-0 text-right" type="text" value="1204.5"/>
+</div>
+<div class="relative">
+<span class="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] text-accent-green font-bold font-mono">Y</span>
+<input class="w-full bg-[#0a0a0a] border border-border-subtle rounded pl-5 pr-1 py-1 text-xs text-white font-mono focus:border-primary focus:ring-0 text-right" type="text" value="-400.2"/>
+</div>
+<div class="relative">
+<span class="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] text-primary font-bold font-mono">Z</span>
+<input class="w-full bg-[#0a0a0a] border border-border-subtle rounded pl-5 pr-1 py-1 text-xs text-white font-mono focus:border-primary focus:ring-0 text-right" type="text" value="98.0"/>
+</div>
+</div>
+</div>
+<!-- Prop: Controller (Pointer) -->
+<div class="flex items-center border-b border-border-subtle px-3 py-2 hover:bg-white/5 group/row">
+<div class="w-1/2 pr-2 flex items-center gap-2">
+<span class="w-1 h-1 rounded-full bg-transparent group-hover/row:bg-text-low"></span>
+<span class="text-xs text-text-mid font-mono truncate">CurrentWeapon</span>
+<span class="text-2xs text-text-low px-1 border border-border-subtle rounded font-mono">AWeapon*</span>
+</div>
+<div class="w-1/2 flex items-center gap-2">
+<span class="w-2 h-2 rounded-full bg-accent-red" title="Detached/Null"></span>
+<span class="text-xs text-text-low font-mono italic">nullptr</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Quick Actions Footer -->
+<div class="p-3 border-t border-border-subtle bg-surface-dark flex gap-2">
+<button class="flex-1 py-1.5 bg-surface-stripe hover:bg-white/10 border border-border-subtle rounded text-xs text-text-mid font-medium transition-colors">
+                    Find References
+                </button>
+<button class="flex-1 py-1.5 bg-surface-stripe hover:bg-white/10 border border-border-subtle rounded text-xs text-text-mid font-medium transition-colors">
+                    Hex Editor
+                </button>
+</div>
+</aside>
+</main>
+<!-- Global Status Bar (Bottom) - Optional but adds to IDE feel -->
+<footer class="h-6 bg-primary text-white flex items-center px-3 justify-between shrink-0 text-2xs font-mono">
+<div class="flex items-center gap-4">
+<span class="flex items-center gap-1">
+<span class="w-1.5 h-1.5 bg-white rounded-full animate-pulse"></span>
+                 Connected
+             </span>
+<span class="opacity-80">Mem: 142MB</span>
+<span class="opacity-80">Hooks: 3 Active</span>
+</div>
+<div class="opacity-80">Crystal IDE v1.4.2</div>
+</footer>
+<!-- Background Pattern Image (Abstract grid) -->
+<div class="fixed inset-0 pointer-events-none -z-10 opacity-5" data-alt="Subtle dot grid pattern background" style="background-image: radial-gradient(#444 1px, transparent 1px); background-size: 24px 24px;">
+</div>
+</body></html>

@@ -1,61 +1,88 @@
 ﻿import { useState } from 'react';
-import { Layers, Box, Globe } from 'lucide-react';
+import { Diamond, Settings, Terminal } from 'lucide-react';
 import { t } from '../i18n';
-import type { Page } from '../types';
-import type { BrowseMode, ModeNavContext } from './objects/shared';
-import TypeBrowser from './objects/TypeBrowser';
-import InstanceBrowser from './objects/InstanceBrowser';
-import WorldBrowser from './objects/WorldBrowser';
+import HierarchyPane from './objects/HierarchyPane';
+import InstancePane from './objects/InstancePane';
+import InspectorPane from './objects/InspectorPane';
 
-interface ObjectsProps {
-  onNavigate?: (page: Page) => void;
-}
+export default function Objects() {
+  const [selectedClass, setSelectedClass] = useState<string | null>(null);
+  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
 
-const MODES: { id: BrowseMode; icon: typeof Layers; label: string; desc: string }[] = [
-  { id: 'types', icon: Layers, label: 'Types', desc: 'Class / Struct / Enum' },
-  { id: 'instances', icon: Box, label: 'Instances', desc: 'Live Objects' },
-  { id: 'world', icon: Globe, label: 'World', desc: 'Actors & Levels' },
-];
+  const handleSelectClass = (cls: string) => {
+    setSelectedClass(cls);
+    setSelectedIndex(null); // Reset instance selection when switching class
+  };
 
-export default function Objects({ onNavigate }: ObjectsProps) {
-  const [mode, setMode] = useState<BrowseMode>('types');
-  const [navContext, setNavContext] = useState<ModeNavContext | undefined>();
-
-  const handleSwitchMode = (newMode: BrowseMode, context?: ModeNavContext) => {
-    setMode(newMode);
-    setNavContext(context);
+  const handleSelectInstance = (idx: number) => {
+    setSelectedIndex(idx);
   };
 
   return (
-    <div className="flex flex-col h-full bg-[#0A0A0C]">
-      {/* ── Mode Selector Bar ── */}
-      <div className="h-14 border-b border-white/5 bg-white/[0.02] backdrop-blur-3xl flex items-center px-6 gap-2 z-30 flex-none">
-        {MODES.map((m) => {
-          const Icon = m.icon;
-          const active = mode === m.id;
-          return (
-            <button
-              key={m.id}
-              onClick={() => handleSwitchMode(m.id)}
-              className={`relative h-10 px-4 flex items-center gap-2.5 rounded-lg text-[13px] font-semibold tracking-tight transition-all ${active
-                  ? 'bg-white/10 text-white shadow-sm border border-white/10'
-                  : 'text-white/40 hover:text-white/70 hover:bg-white/5 border border-transparent'
-                }`}
-            >
-              <Icon className="w-4 h-4" />
-              <span>{t(m.label)}</span>
-              <span className={`text-[10px] ${active ? 'text-white/50' : 'text-white/25'}`}>{m.desc}</span>
-            </button>
-          );
-        })}
-      </div>
+    <div className="h-full flex flex-col bg-background-base text-text-mid font-ui overflow-hidden antialiased selection:bg-primary selection:text-white">
+      {/* ── Top Toolbar: Glass Effect ── */}
+      <header className="h-[42px] apple-glass-panel border-b border-border-subtle flex items-center justify-between px-3 z-50 shrink-0">
+        {/* Left: Logo & Process */}
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 text-text-high">
+            <Diamond className="w-5 h-5 text-primary fill-primary/20" />
+            <span className="font-display font-bold text-sm tracking-wide">CRYSTAL IDE</span>
+          </div>
+          <div className="h-4 w-[1px] bg-border-subtle"></div>
+          {/* Process Selector (Static for now) */}
+          <button className="flex items-center gap-2 px-2 py-1 rounded hover:bg-white/5 transition-colors group">
+            <Terminal className="w-4 h-4 text-accent-green" />
+            <span className="text-xs font-mono text-text-high">UExplorer Process</span>
+          </button>
+        </div>
 
-      {/* ── Mode Content ── */}
-      <div className="flex-1 min-h-0">
-        {mode === 'types' && <TypeBrowser onNavigate={onNavigate} onSwitchMode={handleSwitchMode} />}
-        {mode === 'instances' && <InstanceBrowser onNavigate={onNavigate} onSwitchMode={handleSwitchMode} navContext={navContext} />}
-        {mode === 'world' && <WorldBrowser onNavigate={onNavigate} onSwitchMode={handleSwitchMode} />}
-      </div>
+        {/* Center: Search / Commands */}
+        <div className="flex-1 max-w-lg mx-4">
+          <div className="relative group flex items-center">
+            <input
+              className="block w-full bg-[#121212] border border-border-subtle text-text-high text-xs rounded pl-3 pr-3 py-1.5 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary placeholder-text-low font-mono transition-all"
+              placeholder={t('Find Command or Item...')}
+              type="text"
+            />
+          </div>
+        </div>
+
+        {/* Right: Actions */}
+        <div className="flex items-center gap-1">
+          <button className="p-1.5 rounded hover:bg-white/5 text-text-mid hover:text-text-high transition-colors" title={t('Settings')}>
+            <Settings className="w-4.5 h-4.5" />
+          </button>
+        </div>
+      </header>
+
+      {/* ── Main Workspace: Split Panes ── */}
+      <main className="flex-1 flex overflow-hidden">
+        {/* Pane 1: Class Hierarchy Tree */}
+        <HierarchyPane onSelectClass={handleSelectClass} />
+
+        {/* Resizer */}
+        <div className="w-[1px] bg-border-subtle cursor-col-resize hover:bg-primary resizer-handle shrink-0 z-10"></div>
+
+        {/* Pane 2: Instance List */}
+        <InstancePane selectedClass={selectedClass} onSelectInstance={handleSelectInstance} />
+
+        {/* Resizer */}
+        <div className="w-[1px] bg-border-subtle cursor-col-resize hover:bg-primary resizer-handle shrink-0 z-10"></div>
+
+        {/* Pane 3: Property Inspector */}
+        <InspectorPane selectedClass={selectedClass} selectedIndex={selectedIndex} />
+      </main>
+
+      {/* ── Global Status Bar (Bottom) ── */}
+      <footer className="h-6 bg-primary text-white flex items-center px-3 justify-between shrink-0 text-2xs font-mono">
+        <div className="flex items-center gap-4">
+          <span className="flex items-center gap-1">
+            <span className="w-1.5 h-1.5 bg-white rounded-full animate-pulse"></span>
+            Connected
+          </span>
+        </div>
+        <div className="opacity-80">Crystal IDE layout for UExplorer</div>
+      </footer>
     </div>
   );
 }

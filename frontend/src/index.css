@@ -1,25 +1,34 @@
 @import "tailwindcss";
 
 @theme {
-  --color-primary: #0A84FF;
-  --color-primary-dark: #0060DF;
+  --font-display: "Space Grotesk", sans-serif;
+  --font-ui: "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", Consolas, monospace;
 
+  /* macOS System Colors */
+  --color-primary: #0A84FF;
+  --color-primary-dim: rgba(10, 132, 255, 0.15);
+  --color-background-base: #1E1E1E;
+  --color-background-glass: rgba(30, 30, 30, 0.65);
+  --color-border-subtle: #3A3A3C;
+  --color-surface-dark: #161616;
+  --color-surface-stripe: #252525;
+  --color-text-high: #FFFFFF;
+  --color-text-mid: #98989D;
+  --color-text-low: #555555;
+  --color-accent-red: #FF453A;
+  --color-accent-green: #32D74B;
+  --color-accent-yellow: #FFD60A;
+
+  /* Legacy aliases to avoid breaking existing components right away */
   --color-bg-base: #1e1e1e;
   --color-bg-elevated: #1C1C1E;
-
-  --color-glass-surface: rgba(255, 255, 255, 0.05);
-  --color-glass-surface-hover: rgba(255, 255, 255, 0.1);
-  --color-glass-border: rgba(255, 255, 255, 0.1);
-
-  --color-text-primary: #FFFFFF;
-  --color-text-secondary: #98989D;
-  --color-text-tertiary: #636366;
 }
 
 :root {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
-  color: var(--color-text-primary);
-  background: var(--color-bg-base);
+  font-family: var(--font-ui);
+  color: var(--color-text-high);
+  background: var(--color-background-base);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -38,25 +47,37 @@ body {
 
 /* Custom scrollbar for deep dark mode */
 ::-webkit-scrollbar {
-  width: 12px;
-  height: 12px;
+  width: 8px;
+  height: 8px;
 }
 
 ::-webkit-scrollbar-track {
-  background: transparent;
+  background: var(--color-background-base);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.15);
-  border: 3px solid transparent;
-  background-clip: padding-box;
-  border-radius: 9999px;
+  background: var(--color-border-subtle);
+  border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.25);
-  border: 3px solid transparent;
-  background-clip: padding-box;
+  background: var(--color-text-low);
+}
+
+/* Hide number input spinners */
+input[type=number]::-webkit-inner-spin-button,
+input[type=number]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* Resizer handle visual */
+.resizer-handle {
+  transition: background-color 0.2s;
+}
+
+.resizer-handle:hover {
+  background-color: var(--color-primary);
 }
 
 /* Apple-style layout & effects */

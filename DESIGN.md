@@ -208,38 +208,26 @@
 
 ---
 
-### Page 2: Objects（对象浏览器）— 三模式架构
+### Page 2: Objects（对象浏览器）— Crystal IDE 三面板架构
 
-**定位：** 所有对象/类/结构体/枚举/Actor 的查看和编辑
+**定位：** 所有对象/类/结构体/枚举/Actor 的查看和运行编辑
 
-**覆盖 DLL API：** Objects API、Classes API、Enums API、World API、Memory API（写属性）
+**覆盖 DLL API：** Objects API、Classes API、Enums API、Memory API（读写属性）
 
-**架构：** 拆分为三个独立浏览模式（顶部 Tab 切换），各模式有专用的列表+详情布局
+**架构：** 借鉴现代 IDE 的三面板流式布局，移除了旧版的 Tab 切换，实现统一的探索体验：
 
 **文件结构：**
-- `Objects.tsx` — 模式切换器容器（~65 行）
-- `objects/shared.tsx` — 共享组件（Panel/InfoRow/HeaderCard/工具函数）
-- `objects/TypeBrowser.tsx` — 模式 1: 类型浏览器
-- `objects/InstanceBrowser.tsx` — 模式 2: 实例浏览器
-- `objects/WorldBrowser.tsx` — 模式 3: 世界浏览器
+- `Objects.tsx` — 整体容器层与 Flexbox 骨架（~90 行）
+- `objects/HierarchyPane.tsx` — 面板 1: 类/结构体/枚举继承树与虚拟列表搜索
+- `objects/InstancePane.tsx` — 面板 2: 选中类的实时实例网格（Grid）列表
+- `objects/InspectorPane.tsx` — 面板 3: 实时属性观察器、字段遍历、函数查看与内存数值编辑
 
-**模式 1: Types（类型浏览器）** — Class / Struct / Enum 定义
-- 左侧：子 Tab（Class/Struct/Enum）+ 搜索，列表显示名称+大小+父类
-- 右侧：HeaderCard + 动态 Tab（Fields/Functions/Instances/Values）
-- Class → Fields + Functions + Instances
-- Struct → Fields
-- Enum → Values（名称+值+底层类型）
-- 支持继承链展示
-
-**模式 2: Instances（实例浏览器）** — 运行时对象属性编辑
-- 左侧：搜索 + Class 过滤器，列表显示名称+类名+地址
-- 右侧：Properties Tab（内联编辑/保存/刷新）+ Info Tab（OuterChain）
-- 支持从 Types 模式跳转（自动填入 Class 过滤）
-
-**模式 3: World（世界浏览器）** — Actor 和 Level
-- 左侧：Level 树（可展开/折叠）+ Actor 搜索 + Class 过滤
-- 右侧：Transform 编辑器（Location/Rotation/Scale + Apply/Reset）+ Components 列表
-- 支持跳转到 Types/Instances 模式
+**功能交互流：**
+- **层级发现 (Pane 1):** 用户在左侧面板按分类过滤并搜寻目标 `Class`。选用 `@tanstack/react-virtual` 呈现超大列表。
+- **实例追踪 (Pane 2):** 选中 `Class` 后，中间面板实时加载对应类的生还（Live）实例，展示它们的在内存中的 Address。
+- **属性探查 (Pane 3):**
+  - 未选定实例、仅选定类时，展示该类的内存蓝图结构（父类继承、C++ 字段定义、函数暴露情况）。
+  - 选择具体实例后，化身内存修改器，罗列其全部 `FProperty` 的当前数值。提供 Crystal UI 风格的表单支持用户在线反写数值。
 
 
 ---

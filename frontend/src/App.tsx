@@ -46,7 +46,7 @@ function App() {
           setCurrentPage(page);
         }} />;
       case 'objects':
-        return <Objects onNavigate={setCurrentPage} />;
+        return <Objects />;
       case 'functions':
         return <Functions viewMode={functionsViewMode} onViewModeChange={setFunctionsViewMode} />;
       case 'memory':
@@ -95,17 +95,15 @@ function App() {
                     setFunctionsViewMode(item.mode);
                   }
                 }}
-                className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl transition-all duration-200 cursor-pointer ${
-                  currentPage === item.id && (item.id !== 'functions' || functionsViewMode === item.mode)
+                className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl transition-all duration-200 cursor-pointer ${currentPage === item.id && (item.id !== 'functions' || functionsViewMode === item.mode)
                     ? 'bg-primary text-white shadow-md shadow-primary/20'
                     : 'text-white/60 hover:bg-white/10 hover:text-white'
                   }`}
               >
-                <item.icon className={`w-[18px] h-[18px] stroke-[2] ${
-                  currentPage === item.id && (item.id !== 'functions' || functionsViewMode === item.mode)
+                <item.icon className={`w-[18px] h-[18px] stroke-[2] ${currentPage === item.id && (item.id !== 'functions' || functionsViewMode === item.mode)
                     ? 'text-white'
                     : 'text-white/50'
-                }`} />
+                  }`} />
                 <span className="text-[13px] font-medium tracking-tight">{item.label}</span>
               </button>
             ))}
@@ -120,8 +118,8 @@ function App() {
                 key={item.key}
                 onClick={() => setCurrentPage(item.id)}
                 className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl transition-all duration-200 cursor-pointer ${currentPage === item.id
-                    ? 'bg-primary text-white shadow-md shadow-primary/20'
-                    : 'text-white/60 hover:bg-white/10 hover:text-white'
+                  ? 'bg-primary text-white shadow-md shadow-primary/20'
+                  : 'text-white/60 hover:bg-white/10 hover:text-white'
                   }`}
               >
                 <item.icon className={`w-[18px] h-[18px] stroke-[2] ${currentPage === item.id ? 'text-white' : 'text-white/50'}`} />
