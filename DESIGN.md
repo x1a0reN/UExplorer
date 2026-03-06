@@ -730,7 +730,9 @@ D:\Projects\UExplorer\
 - [x] 翻译系统全面扩展（300+ 翻译键，覆盖所有页面文本）
 - [x] Settings 页面语言切换功能（中文/英文）
 - [x] 清除所有 .tsx 中的硬编码中文字符串
-- [ ] 前端其他页面 i18n 完善（SDKDump/Memory 的英文硬编码用 t() 包裹）
+- [x] 前端全页面 i18n 完善 — Functions/Memory/SDKDump/Objects/InspectorPane/InstancePane/HierarchyPane 所有可见文本用 t() 包裹
+- [x] Memory.tsx CSS 拼写修复（`p-2(` → `p-2 `）
+- [x] TypeScript 编译零错误验证通过
 - [ ] 前端功能对接（全局搜索、继承树、CDO 对比等）
 
 ### 页面实现状态总览（重点 8 项）
