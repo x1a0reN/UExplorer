@@ -21,6 +21,7 @@ struct RuntimeProbes
 	bool ObjectIdentitySourceEnabled = false;
 	bool ObjectHandleValidationEnabled = false;
 	bool FunctionHandleValidationEnabled = false;
+	bool ObjectSnapshotPublished = false;
 	bool FunctionCallServiceEnabled = false;
 	bool NamedPipeListening = false;
 	bool LegacyHttpListening = false;
@@ -117,9 +118,9 @@ inline std::shared_ptr<const CapabilitySnapshot> BuildCoreCapabilities(
 	builder.Define("memory.raw_write", true, {}, {}, {"memory.safe"});
 	builder.Define(
 		"objects.snapshot",
-		false,
-		"OBJECT_SNAPSHOT_NOT_IMPLEMENTED",
-		"Immutable generation snapshots are not implemented",
+		probes.ObjectSnapshotPublished,
+		"OBJECT_SNAPSHOT_UNAVAILABLE",
+		"No complete immutable object snapshot has been published",
 		{"objects.handles"});
 	builder.Define(
 		"call.invoke",

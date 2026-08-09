@@ -14,10 +14,10 @@ class ObjectArrayIdentitySource final : public IHandleIdentitySource
 public:
 	explicit ObjectArrayIdentitySource(std::shared_ptr<const EngineContext> context);
 
-	std::uint64_t ContextGeneration() const noexcept { return m_Offsets.ContextGeneration; }
+	std::uint64_t ContextGeneration() const noexcept override { return m_Offsets.ContextGeneration; }
 	bool CanIssueObjectHandles() const noexcept;
 	bool CanIssueFunctionHandles() const noexcept;
-	bool IsCurrentExecutionThreadValid() const noexcept;
+	bool IsCurrentExecutionThreadValid() const noexcept override;
 	bool TryReadObject(std::int32_t index, ObjectIdentity& identity) override;
 	bool TryReadFunction(std::int32_t index, FunctionIdentity& identity) override;
 

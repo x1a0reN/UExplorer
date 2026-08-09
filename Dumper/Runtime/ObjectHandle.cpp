@@ -62,6 +62,7 @@ const char* ToString(const HandleError error) noexcept
 	case HandleError::ContextGenerationMismatch: return "HANDLE_CONTEXT_GENERATION_MISMATCH";
 	case HandleError::IdentityUnavailable: return "HANDLE_IDENTITY_UNAVAILABLE";
 	case HandleError::IdentitySourceInconsistent: return "HANDLE_IDENTITY_SOURCE_INCONSISTENT";
+	case HandleError::ExecutionThreadInvalid: return "HANDLE_EXECUTION_THREAD_INVALID";
 	case HandleError::SerialUnavailable: return "HANDLE_SERIAL_UNAVAILABLE";
 	case HandleError::SerialMismatch: return "HANDLE_SERIAL_MISMATCH";
 	case HandleError::AddressMismatch: return "HANDLE_ADDRESS_MISMATCH";
@@ -87,7 +88,8 @@ bool ObjectHandleService::IsConfigured() const noexcept
 {
 	return !m_SessionId.empty()
 		&& m_SessionId.size() <= kMaxSessionIdLength
-		&& m_ContextGeneration != 0;
+		&& m_ContextGeneration != 0
+		&& m_Source.ContextGeneration() == m_ContextGeneration;
 }
 
 HandleError ObjectHandleService::ValidateIdentity(
@@ -179,6 +181,8 @@ ObjectHandleResult ObjectHandleService::IssueObject(const std::int32_t index)
 {
 	if (!IsConfigured())
 		return {.Error = HandleError::InvalidService};
+	if (!m_Source.IsCurrentExecutionThreadValid())
+		return {.Error = HandleError::ExecutionThreadInvalid};
 	ObjectIdentity identity;
 	if (!TryReadObjectIdentity(index, identity))
 		return {.Error = HandleError::IdentityUnavailable};
@@ -193,6 +197,8 @@ ObjectValidationResult ObjectHandleService::ValidateObject(const ObjectHandle& h
 	const HandleError envelopeError = ValidateEnvelope(handle);
 	if (envelopeError != HandleError::None)
 		return {.Error = envelopeError};
+	if (!m_Source.IsCurrentExecutionThreadValid())
+		return {.Error = HandleError::ExecutionThreadInvalid};
 	ObjectIdentity current;
 	if (!TryReadObjectIdentity(handle.Index, current))
 		return {.Error = HandleError::IdentityUnavailable};
@@ -203,6 +209,8 @@ FunctionHandleResult ObjectHandleService::IssueFunction(const std::int32_t index
 {
 	if (!IsConfigured())
 		return {.Error = HandleError::InvalidService};
+	if (!m_Source.IsCurrentExecutionThreadValid())
+		return {.Error = HandleError::ExecutionThreadInvalid};
 	FunctionIdentity identity;
 	if (!TryReadFunctionIdentity(index, identity))
 		return {.Error = HandleError::IdentityUnavailable};
@@ -240,6 +248,8 @@ FunctionValidationResult ObjectHandleService::ValidateFunction(const FunctionHan
 	{
 		return {.Error = HandleError::InvalidHandle};
 	}
+	if (!m_Source.IsCurrentExecutionThreadValid())
+		return {.Error = HandleError::ExecutionThreadInvalid};
 
 	FunctionIdentity current;
 	if (!TryReadFunctionIdentity(handle.Function.Index, current))

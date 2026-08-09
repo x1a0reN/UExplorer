@@ -29,6 +29,9 @@ $handleImplementation = Read-ProjectFile 'Dumper\Runtime\ObjectHandle.cpp'
 $identityLayout = Read-ProjectFile 'Dumper\Runtime\FUObjectItemLayout.cpp'
 $identityContext = Read-ProjectFile 'Dumper\Runtime\ObjectIdentityContext.h'
 $identitySource = Read-ProjectFile 'Dumper\Runtime\ObjectArrayIdentitySource.cpp'
+$engineFacade = Read-ProjectFile 'Dumper\Runtime\EngineFacade.h'
+$engineSnapshotHeader = Read-ProjectFile 'Dumper\Runtime\EngineSnapshot.h'
+$engineSnapshot = Read-ProjectFile 'Dumper\Runtime\EngineSnapshot.cpp'
 $objectArray = Read-ProjectFile 'Dumper\Engine\Private\Unreal\ObjectArray.cpp'
 $callbackBarrier = Read-ProjectFile 'Dumper\Runtime\CallbackBarrier.h'
 $safeMemoryHeader = Read-ProjectFile 'Dumper\Runtime\SafeMemory.h'
@@ -97,11 +100,14 @@ foreach ($token in @('CheckedAddressRange', 'ReadMemory', 'WriteMemory', 'Compar
 }
 
 foreach ($token in @('SessionId', 'ContextGeneration', 'SerialNumber', 'Address',
-        'ClassFingerprint', 'FunctionHandle', 'IHandleIdentitySource', 'ValidateObject', 'ValidateFunction')) {
+        'ClassFingerprint', 'FunctionHandle', 'IHandleIdentitySource',
+		'ContextGeneration() const noexcept', 'IsCurrentExecutionThreadValid() const noexcept',
+		'ValidateObject', 'ValidateFunction')) {
     Assert-Contains $handleHeader $token 'Stable object/function handle contract regressed.'
 }
 foreach ($token in @('HANDLE_SESSION_MISMATCH', 'HANDLE_CONTEXT_GENERATION_MISMATCH',
         'HANDLE_SERIAL_MISMATCH', 'FUNCTION_HANDLE_OWNER_MISMATCH',
+		'HANDLE_EXECUTION_THREAD_INVALID', 'm_Source.ContextGeneration() == m_ContextGeneration',
         'IsCanonicalFunctionIdentityPath', 'CompareIdentity(handle.Function',
         'CompareIdentity(handle.Owner')) {
     Assert-Contains $handleImplementation $token 'Execution-point handle validation regressed.'
@@ -128,6 +134,18 @@ foreach ($token in @('IsCurrentExecutionThreadValid', 'executor.IsCurrentPumpThr
     Assert-Contains $identitySource $token 'Production object/function identity source regressed.'
 }
 Assert-NotContains $identitySource 'Off::' 'Production identity validation must use its immutable context, not mutable offset globals.'
+foreach ($token in @('ObjectHandleService', 'EngineSnapshotStore', 'IssueObjectHandle',
+		'ValidateFunctionHandle', 'std::shared_ptr<const EngineContext>')) {
+	Assert-Contains $engineFacade $token 'EngineFacade ownership boundary regressed.'
+}
+foreach ($token in @('EngineSnapshotObject', 'SessionId', 'ContextGeneration', 'Generation',
+		'SourceObjectCount', 'SkippedSlots', 'std::atomic<std::shared_ptr<const EngineSnapshot>>')) {
+	Assert-Contains $engineSnapshotHeader $token 'Immutable EngineSnapshot contract regressed.'
+}
+foreach ($token in @('SNAPSHOT_GENERATION_NOT_MONOTONIC', 'SNAPSHOT_RECORDS_NOT_ORDERED',
+		'IsValidHandleEnvelope', 'IsValidMetadata', 'm_Current.store', 'm_Current.load')) {
+	Assert-Contains $engineSnapshot $token 'Atomic EngineSnapshot publication regressed.'
+}
 foreach ($token in @('CALL_HANDLE_REQUIRED', 'SESSION_SERIAL_OBJECT_AND_FUNCTION_HANDLES_REQUIRED',
         'server.Post("/api/v1/call/function"',
         'server.Post("/api/v1/call/static"',
@@ -163,7 +181,7 @@ foreach ($token in @('CaptureEngineContext', 'RefreshRuntimeCapabilities', 'Shut
 }
 
 foreach ($token in @('liveness', 'readiness', 'offset_reports', 'capabilities', 'context_generation',
-        'last_tick_monotonic_us', 'queue_depth')) {
+        'last_tick_monotonic_us', 'queue_depth', 'object_snapshot')) {
     Assert-Contains $commandService $token 'Core status command does not expose truthful runtime state.'
 }
 Assert-NotContains $statusApi 'Off::' 'Status handlers must read the immutable EngineContext, not raw offset globals.'
@@ -176,6 +194,8 @@ Assert-NotContains $statusApi 'CoreRuntimeSnapshot' 'Status HTTP adapter must no
 
 foreach ($token in @('TestEngineContextAndCapabilities', 'TestCoreRuntimeStateAndShutdown',
         'TestCoreSessionIdentity',
+		'TestEngineFacadeAndImmutableSnapshots', 'Snapshot reader observed a torn generation',
+		'Incomplete snapshot metadata was published as usable data',
         'TestCoreDomainCommandsAndHandleExecution', 'Handle command accepted transport-supplied identity fields',
 		'Missing function metadata did not disable only function handles',
 		'Function handle command ignored its dedicated capability',

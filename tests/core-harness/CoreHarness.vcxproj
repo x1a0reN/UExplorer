@@ -53,6 +53,8 @@
   <ItemGroup>
     <ClCompile Include="main.cpp" />
 	<ClCompile Include="..\..\Dumper\Runtime\CoreSession.cpp" />
+	<ClCompile Include="..\..\Dumper\Runtime\EngineFacade.cpp" />
+	<ClCompile Include="..\..\Dumper\Runtime\EngineSnapshot.cpp" />
 	<ClCompile Include="..\..\Dumper\Runtime\FUObjectItemLayout.cpp" />
 	<ClCompile Include="..\..\Dumper\Runtime\GameThreadExecutor.cpp" />
     <ClCompile Include="..\..\Dumper\Runtime\ObjectHandle.cpp" />
@@ -70,6 +72,8 @@
 	<ClInclude Include="..\..\Dumper\Runtime\CoreSession.h" />
     <ClInclude Include="..\..\Dumper\Runtime\CallbackBarrier.h" />
     <ClInclude Include="..\..\Dumper\Runtime\EngineContext.h" />
+	<ClInclude Include="..\..\Dumper\Runtime\EngineFacade.h" />
+	<ClInclude Include="..\..\Dumper\Runtime\EngineSnapshot.h" />
 	<ClInclude Include="..\..\Dumper\Runtime\FUObjectItemLayout.h" />
 	<ClInclude Include="..\..\Dumper\Runtime\GameThreadExecutor.h" />
     <ClInclude Include="..\..\Dumper\Runtime\ObjectHandle.h" />

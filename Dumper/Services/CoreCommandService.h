@@ -2,8 +2,8 @@
 
 #include "CoreStatusDiagnostics.h"
 #include "Runtime/CoreRuntime.h"
+#include "Runtime/EngineFacade.h"
 #include "Runtime/GameThreadExecutor.h"
-#include "Runtime/ObjectHandle.h"
 #include "Utils/Json/json.hpp"
 
 #include <cstdint>
@@ -56,7 +56,7 @@ public:
 	CoreCommandService(
 		Runtime::CoreRuntime& runtime,
 		Runtime::GameThreadExecutor& gameThread,
-		Runtime::IHandleIdentitySource& identitySource,
+		Runtime::EngineFacade& engine,
 		ICoreStatusDiagnosticsSource& statusDiagnostics);
 
 	CoreCommandService(const CoreCommandService&) = delete;
@@ -87,7 +87,7 @@ private:
 
 	Runtime::CoreRuntime& m_Runtime;
 	Runtime::GameThreadExecutor& m_GameThread;
-	Runtime::IHandleIdentitySource& m_IdentitySource;
+	Runtime::EngineFacade& m_Engine;
 	ICoreStatusDiagnosticsSource& m_StatusDiagnostics;
 	std::string m_SessionId;
 	std::uint64_t m_ContextGeneration = 0;

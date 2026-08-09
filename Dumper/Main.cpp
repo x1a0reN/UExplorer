@@ -22,6 +22,7 @@
 #include "Runtime/CoreRuntimeAccess.h"
 #include "Runtime/CoreSession.h"
 #include "Runtime/EngineContextCapture.h"
+#include "Runtime/EngineFacade.h"
 #include "Runtime/GameThreadExecutor.h"
 #include "Runtime/ObjectArrayIdentitySource.h"
 #include "Runtime/ShutdownCoordinator.h"
@@ -36,6 +37,7 @@ static std::unique_ptr<UExplorer::HttpServer> g_Server;
 static UExplorer::Runtime::CoreRuntime g_Runtime;
 static UExplorer::Services::EngineCoreStatusDiagnosticsSource g_StatusDiagnostics;
 static std::unique_ptr<UExplorer::Runtime::ObjectArrayIdentitySource> g_IdentitySource;
+static std::unique_ptr<UExplorer::Runtime::EngineFacade> g_EngineFacade;
 static std::unique_ptr<UExplorer::Services::CoreCommandService> g_CommandService;
 static HMODULE g_Module = nullptr;
 
@@ -190,9 +192,11 @@ namespace
 		probes.ObjectIdentitySourceEnabled =
 			g_IdentitySource && g_IdentitySource->CanIssueObjectHandles();
 		probes.ObjectHandleValidationEnabled =
-			g_CommandService && g_CommandService->IsConfigured();
+			g_EngineFacade && g_EngineFacade->IsConfigured();
 		probes.FunctionHandleValidationEnabled =
 			g_IdentitySource && g_IdentitySource->CanIssueFunctionHandles();
+		probes.ObjectSnapshotPublished = g_EngineFacade
+			&& g_EngineFacade->Snapshots().CurrentGeneration() != 0;
 		probes.FunctionCallServiceEnabled = false;
 		probes.LegacyHttpListening = legacyHttpListening;
 		const auto capabilities = UExplorer::Runtime::BuildCoreCapabilities(*snapshot.Context, probes);
@@ -207,6 +211,7 @@ namespace
 	{
 		UExplorer::Services::SetCoreCommandService(nullptr);
 		g_CommandService.reset();
+		g_EngineFacade.reset();
 		g_IdentitySource.reset();
 		g_Runtime.MarkFailed(code, message);
 		g_Runtime.BeginStopping();
@@ -377,10 +382,16 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 			throw std::runtime_error("Immutable EngineContext is unavailable");
 		g_IdentitySource = std::make_unique<UExplorer::Runtime::ObjectArrayIdentitySource>(
 			runtimeSnapshot.Context);
+		g_EngineFacade = std::make_unique<UExplorer::Runtime::EngineFacade>(
+			runtimeSnapshot.Context,
+			runtimeSnapshot.SessionId,
+			*g_IdentitySource);
+		if (!g_EngineFacade->IsConfigured())
+			throw std::runtime_error("EngineFacade rejected the runtime session/context");
 		g_CommandService = std::make_unique<UExplorer::Services::CoreCommandService>(
 			g_Runtime,
 			UExplorer::Runtime::GetGameThreadExecutor(),
-			*g_IdentitySource,
+			*g_EngineFacade,
 			g_StatusDiagnostics);
 		if (!g_CommandService->IsConfigured())
 			throw std::runtime_error("Core command service rejected the runtime session/context");
@@ -474,6 +485,11 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 		hooksStopped = UExplorer::API::ShutdownHooks();
 		return hooksStopped;
 	});
+	shutdown.AddStage("engine_facade", [&] {
+		if (g_EngineFacade)
+			g_EngineFacade->Stop();
+		return true;
+	});
 	shutdown.AddStage("runtime_requests", [&] {
 		return g_Runtime.WaitForRequests(std::chrono::milliseconds(5000));
 	});
@@ -500,6 +516,7 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 		return 1;
 	}
 	g_CommandService.reset();
+	g_EngineFacade.reset();
 	g_IdentitySource.reset();
 	if (!g_Runtime.MarkStopped())
 	{

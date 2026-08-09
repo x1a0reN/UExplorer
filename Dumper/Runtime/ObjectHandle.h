@@ -15,6 +15,7 @@ enum class HandleError : std::uint8_t
 	ContextGenerationMismatch,
 	IdentityUnavailable,
 	IdentitySourceInconsistent,
+	ExecutionThreadInvalid,
 	SerialUnavailable,
 	SerialMismatch,
 	AddressMismatch,
@@ -47,6 +48,8 @@ class IHandleIdentitySource
 {
 public:
 	virtual ~IHandleIdentitySource() = default;
+	virtual std::uint64_t ContextGeneration() const noexcept = 0;
+	virtual bool IsCurrentExecutionThreadValid() const noexcept = 0;
 	virtual bool TryReadObject(std::int32_t index, ObjectIdentity& identity) = 0;
 	virtual bool TryReadFunction(std::int32_t index, FunctionIdentity& identity) = 0;
 };

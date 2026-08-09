@@ -40,6 +40,14 @@
       "status": "verified",
       "verification": ["2026-08-09: root and frontend README replaced with current architecture and validation commands"]
     },
+	"ENG-004": {
+	  "status": "in_progress",
+	  "verification": [
+		"2026-08-09: DESIGN uses evidence-driven R0-R7 status and explicitly lists disabled/unverified capabilities",
+		"2026-08-09: PROJECT_MAP now leads with the target React -> Rust Host -> Named Pipe -> Core boundary and labels in-DLL HTTP/API code as legacy",
+		"Remaining historical sections still require R4/R7 reconciliation against the final runtime"
+	  ]
+	},
     "ENG-005": {
       "status": "in_progress",
       "verification": [
@@ -56,6 +64,7 @@
         "2026-08-09: ObjectArrayIdentitySource establishes a production SafeMemory/game-thread identity boundary for the explicit Epic 64-bit FUObjectItem profile",
         "2026-08-09: transport-neutral CoreCommandService now owns status and handle-issue business logic; StatusApi is only a legacy HTTP adapter",
         "2026-08-09: production handle validation captures its offsets from one immutable EngineContext and no longer reads mutable Off globals or a reconfigurable identity singleton",
+		"2026-08-09: EngineFacade now binds one session/context/identity generation and owns the immutable EngineSnapshotStore used by future domain services",
         "Remaining legacy domain/API monoliths and direct Off/Settings consumers still require migration"
       ]
     },
@@ -246,6 +255,14 @@
         "Last-subscription automatic uninstall remains pending"
       ]
     },
+	"OBJ-001": {
+	  "status": "in_progress",
+	  "verification": [
+		"2026-08-09: EngineSnapshotStore atomically publishes shared_ptr<const EngineSnapshot> generations and never exposes a mutable or partially built view",
+		"Core harness concurrently reads 32 published generations and rejects stale generation, wrong session, incomplete metadata, and unordered records",
+		"Production budgeted game-thread capture and GC-churn target fixtures remain pending"
+	  ]
+	},
     "OBJ-003": {
       "status": "in_progress",
       "verification": [
@@ -259,11 +276,26 @@
         "2026-08-09: ObjectHandleService issues and revalidates session, EngineContext generation, index, serial, address, and class fingerprint",
         "Core harness proves stale sessions, generation changes, slot recycling, address changes, and class changes are rejected",
         "2026-08-09: production ObjectArrayIdentitySource accepts only the explicit Epic x64 FUObjectItem 0x18/0x20 profile after stable slot/InternalIndex, cluster, and positive-serial witness checks; it rejects non-PostRender threads",
+		"2026-08-09: every identity source must report its immutable context generation and execution-thread validity; ObjectHandleService rejects either mismatch before reading",
         "2026-08-09: objects.handle.issue accepts only an index and creates the complete handle through owned work at the verified PostRender execution point",
         "2026-08-09: the production source is constructed from one immutable context generation and verifies its captured serial offset still matches the live validated layout",
         "Real UE target profile fixtures remain pending"
       ]
     },
+	"OBJ-004": {
+	  "status": "in_progress",
+	  "verification": [
+		"2026-08-09: immutable snapshot publication rejects empty name/full-path/class-path/package-path metadata instead of publishing placeholders as usable records",
+		"Property codec result states and production metadata capture remain pending"
+	  ]
+	},
+	"OBJ-006": {
+	  "status": "in_progress",
+	  "verification": [
+		"2026-08-09: snapshot envelopes enforce an 8,000,000 source-slot ceiling, complete skipped-slot accounting, strict index ordering, and bounded metadata lengths",
+		"Container/property traversal bounds and cycle guards remain pending"
+	  ]
+	},
     "OBJ-012": {
       "status": "verified",
       "verification": [
@@ -278,6 +310,13 @@
         "Unified command-schema validation, pagination bounds, and matched/total semantics remain pending"
       ]
     },
+	"OBJ-009": {
+	  "status": "in_progress",
+	  "verification": [
+		"2026-08-09: EngineSnapshotStore publishes strictly monotonic immutable generations suitable for stable Host indexing",
+		"Host SnapshotCache, cursor protocol, and indexed query commands remain pending"
+	  ]
+	},
     "CALL-001": {
       "status": "verified",
       "verification": [

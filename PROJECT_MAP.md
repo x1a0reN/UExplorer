@@ -4,27 +4,32 @@
 
 UExplorer 是一个面向 Unreal Engine 的 **SDK Dump + 实时游戏内省工具**，核心理念是将 Dumper-7 的离线 dump 能力升级为在线实时探索体验。
 
-**技术架构：三层分离**
+**目标架构：四层单向边界**
 
 ```
 ┌──────────────────────────────────────────────┐
-│  Frontend (Tauri 2 + React + TypeScript)     │  ← 桌面 GUI
-│  6 页面 / 16 个前端文件 / ~1150 行 API 封装     │
+│  React UI                                    │  ← 只使用 Tauri command/event
 └───────────────┬──────────────────────────────┘
-                │ HTTP REST + SSE + WebSocket
+                │ Tauri invoke/event
 ┌───────────────┴──────────────────────────────┐
-│  Core DLL (C++, 注入游戏进程)                   │  ← 引擎内核
-│  95+ 源文件 / 13 个 API 模块 / 4 种 SDK 生成器    │
+│  Rust Host                                   │  ← Session/注入/领域服务/EventHub
 └───────────────┬──────────────────────────────┘
-                │ 内存直接访问
+                │ Windows Named Pipe RPC v1
+┌───────────────┴──────────────────────────────┐
+│  Core DLL (C++, 注入游戏进程)                   │  ← 最小 UE 引擎内核
+│  CoreRuntime / EngineFacade / GameThread      │
+└───────────────┬──────────────────────────────┘
+                │ 经验证的内存访问与 UE 调用
 ┌───────────────┴──────────────────────────────┐
 │  Target UE Game Process (UE 4.11 ~ 5.x)     │
 └──────────────────────────────────────────────┘
 ```
 
+当前分支处于 R2：`CoreRuntime`、不可变 `EngineContext`、`EngineFacade`、稳定 Handle、原子 `EngineSnapshotStore`、有界游戏线程执行器和安全关闭边界已建立；Named Pipe 与 Rust Session Host 尚属 R3。`Dumper/Server` 和 `Dumper/API` 是 R4 前的 legacy HTTP 兼容层，不是目标架构，且不会与 IPC 形成长期双栈。功能真实性与未完成项以 `DESIGN.md` 和 `docs/issue-status.json` 为准。
+
 ---
 
-## 二、文件树（95 个 C++ 源文件 + 16 个前端文件）
+## 二、核心文件树
 
 ```
 UExplorer/
@@ -39,11 +44,26 @@ UExplorer/
 │   ├── Settings.h / .cpp             # 全局配置管理
 │   ├── TmpUtils.h                    # 工具函数（Align, StrToLower, MakeValidFileName）
 │   │
-│   ├── Server/                        ★ HTTP 服务器层
+│   ├── Runtime/                       ★ Core 生命周期与安全边界
+│   │   ├── CoreRuntime.h             #   状态机、request lease、readiness
+│   │   ├── EngineContext*.h/.cpp     #   一次性发布的引擎 profile/offset report
+│   │   ├── EngineFacade.h/.cpp       #   session/context/identity 的单一领域入口
+│   │   ├── EngineSnapshot.h/.cpp     #   严格校验并原子发布的不可变快照 store
+│   │   ├── GameThreadExecutor.h/.cpp #   有界 owned work、deadline、cancel、drain
+│   │   ├── ObjectHandle*.h/.cpp      #   serial-backed Object/FunctionHandle
+│   │   ├── SafeMemory.h/.cpp         #   范围、SEH、保护恢复与代码写策略
+│   │   └── VTableHook.h/.cpp         #   RAII patch owner
+│   ├── Services/                      ★ transport-neutral Core 领域服务
+│   │   ├── CoreCommandService.h/.cpp #   status/handle command 与稳定错误 envelope
+│   │   └── CoreStatusDiagnostics.*   #   只读诊断源
+│   ├── IPC/                           ★ Named Pipe RPC 契约基础（R3 接入 listener）
+│   │   └── Protocol.h                #   24-byte framing/decoder/limits
+│   │
+│   ├── Server/                        ★ legacy HTTP 服务器层（R4 移除可达路径）
 │   │   ├── HttpServer.h              #   PIMPL 接口（HttpRequest/HttpResponse/RouteHandler/SSE/WS）
 │   │   └── HttpServer.cpp            #   WinSock2 实现（路由匹配/Token/CORS/SSE/WebSocket）
 │   │
-│   ├── API/                           ★ REST API 层（13 模块）
+│   ├── API/                           ★ legacy REST 适配层（13 模块，R4 退役）
 │   │   ├── ApiCommon.h               #   JSON 响应信封 (MakeResponse/MakeError/ParseQuery)
 │   │   ├── Router.h / .cpp           #   路由注册中心 (RegisterAllRoutes)
 │   │   ├── GameThreadQueue.h         #   游戏线程调度队列 (Submit/ProcessQueue)

@@ -11,6 +11,8 @@
 #include "Runtime/CoreCapabilities.h"
 #include "Runtime/CoreRuntime.h"
 #include "Runtime/CoreSession.h"
+#include "Runtime/EngineFacade.h"
+#include "Runtime/EngineSnapshot.h"
 #include "Runtime/FUObjectItemLayout.h"
 #include "Runtime/GameThreadExecutor.h"
 #include "Runtime/ObjectHandle.h"
@@ -344,11 +346,14 @@ namespace
 		const auto withoutCallService = BuildCoreCapabilities(*context, probes);
 		Require(
 			withoutCallService->IsAvailable("objects.handles")
+				&& !withoutCallService->IsAvailable("objects.snapshot")
 				&& !withoutCallService->IsAvailable("call.invoke"),
 			"Handle capability falsely enabled an unregistered function-call command");
+		probes.ObjectSnapshotPublished = true;
 		probes.FunctionCallServiceEnabled = true;
 		const auto withoutPipe = BuildCoreCapabilities(*context, probes);
 		Require(!withoutPipe->IsAvailable("transport.named_pipe"), "Missing pipe listener was advertised");
+		Require(withoutPipe->IsAvailable("objects.snapshot"), "Published immutable snapshot was unavailable");
 		Require(withoutPipe->IsAvailable("call.invoke"), "Validated call dependencies were rejected");
 		RuntimeProbes missingFunctionHandles = probes;
 		missingFunctionHandles.FunctionHandleValidationEnabled = false;
@@ -481,8 +486,16 @@ namespace
 	public:
 		bool Available = true;
 		bool ThrowOnRead = false;
+		bool ExecutionThreadValid = true;
+		std::uint64_t Generation = 42;
 		std::unordered_map<std::int32_t, UExplorer::Runtime::ObjectIdentity> Objects;
 		std::unordered_map<std::int32_t, UExplorer::Runtime::FunctionIdentity> Functions;
+
+		std::uint64_t ContextGeneration() const noexcept override { return Generation; }
+		bool IsCurrentExecutionThreadValid() const noexcept override
+		{
+			return ExecutionThreadValid;
+		}
 
 		bool TryReadObject(
 			const std::int32_t index,
@@ -542,6 +555,14 @@ namespace
 		const ObjectHandleResult issued = service.IssueObject(7);
 		Require(issued.Ok(), "Stable object handle was not issued from a complete identity");
 		Require(service.ValidateObject(issued.Value).Ok(), "Fresh object handle did not validate");
+		source.ExecutionThreadValid = false;
+		Require(
+			service.ValidateObject(issued.Value).Error == HandleError::ExecutionThreadInvalid,
+			"Object handle validation ignored the execution-thread boundary");
+		source.ExecutionThreadValid = true;
+		source.Generation = 41;
+		Require(!service.IsConfigured(), "Handle service ignored an identity-source generation change");
+		source.Generation = 42;
 
 		ObjectHandle staleSession = issued.Value;
 		staleSession.SessionId = "old-session";
@@ -639,6 +660,141 @@ namespace
 			"Stable handle error code changed");
 	}
 
+	void TestEngineFacadeAndImmutableSnapshots()
+	{
+		using namespace UExplorer::Runtime;
+
+		auto makeRecord = [](const std::string& sessionId,
+			const std::uint64_t contextGeneration,
+			const std::int32_t index,
+			const EngineObjectKind kind) {
+			return EngineSnapshotObject{
+				.Handle = {
+					.SessionId = sessionId,
+					.ContextGeneration = contextGeneration,
+					.Index = index,
+					.SerialNumber = 100 + index,
+					.Address = static_cast<std::uintptr_t>(0x1000 + index * 0x100),
+					.ClassFingerprint = static_cast<std::uint64_t>(0xA000 + index)
+				},
+				.Name = "Object" + std::to_string(index),
+				.FullPath = "/Script/Fixture.Object" + std::to_string(index),
+				.ClassPath = "/Script/CoreUObject.Object",
+				.PackagePath = "/Script/Fixture",
+				.Kind = kind
+			};
+		};
+		auto makeSnapshot = [&](const std::uint64_t generation) {
+			EngineSnapshot snapshot{
+				.SessionId = "fixture-snapshot-session",
+				.ContextGeneration = 42,
+				.Generation = generation,
+				.CapturedAtMonotonicUs = 1'000 + generation,
+				.CaptureDurationUs = 50,
+				.SourceObjectCount = 5,
+				.SkippedSlots = 3
+			};
+			snapshot.Objects.push_back(makeRecord(
+				snapshot.SessionId,
+				snapshot.ContextGeneration,
+				1,
+				EngineObjectKind::Class));
+			snapshot.Objects.push_back(makeRecord(
+				snapshot.SessionId,
+				snapshot.ContextGeneration,
+				4,
+				EngineObjectKind::Function));
+			return snapshot;
+		};
+
+		EngineSnapshotStore store("fixture-snapshot-session", 42);
+		const SnapshotPublishResult first = store.Publish(makeSnapshot(1));
+		Require(first.Ok(), "A complete immutable engine snapshot was not published");
+		Require(
+			first.Snapshot && first.Snapshot->Generation == 1
+				&& first.Snapshot->Objects.size() == 2
+				&& store.Current() == first.Snapshot,
+			"Snapshot publication was not atomic or immutable");
+
+		EngineSnapshot wrongSession = makeSnapshot(2);
+		wrongSession.SessionId = "stale-session";
+		Require(
+			store.Publish(std::move(wrongSession)).Error == SnapshotPublishError::EnvelopeInvalid,
+			"Snapshot crossed a Core session boundary");
+		EngineSnapshot incomplete = makeSnapshot(2);
+		incomplete.Objects[0].ClassPath.clear();
+		Require(
+			store.Publish(std::move(incomplete)).Error == SnapshotPublishError::RecordInvalid,
+			"Incomplete snapshot metadata was published as usable data");
+		EngineSnapshot unordered = makeSnapshot(2);
+		std::swap(unordered.Objects[0], unordered.Objects[1]);
+		Require(
+			store.Publish(std::move(unordered)).Error == SnapshotPublishError::RecordsNotOrdered,
+			"Unordered snapshot records were published");
+		Require(
+			store.Publish(makeSnapshot(1)).Error == SnapshotPublishError::GenerationNotMonotonic,
+			"A stale snapshot generation replaced the current view");
+		Require(store.CurrentGeneration() == 1, "Rejected snapshots changed the published generation");
+
+		std::atomic<bool> keepReading{true};
+		std::atomic<bool> tornRead{false};
+		auto reader = std::async(std::launch::async, [&] {
+			while (keepReading.load(std::memory_order_acquire))
+			{
+				const std::shared_ptr<const EngineSnapshot> current = store.Current();
+				if (!current
+					|| current->SessionId != "fixture-snapshot-session"
+					|| current->ContextGeneration != 42
+					|| current->Objects.size() + current->SkippedSlots
+						!= static_cast<std::size_t>(current->SourceObjectCount))
+				{
+					tornRead.store(true, std::memory_order_release);
+					break;
+				}
+				for (const EngineSnapshotObject& object : current->Objects)
+				{
+					if (object.Handle.SessionId != current->SessionId
+						|| object.Handle.ContextGeneration != current->ContextGeneration)
+					{
+						tornRead.store(true, std::memory_order_release);
+						break;
+					}
+				}
+			}
+		});
+		for (std::uint64_t generation = 2; generation <= 32; ++generation)
+			Require(store.Publish(makeSnapshot(generation)).Ok(), "A newer snapshot generation was rejected");
+		keepReading.store(false, std::memory_order_release);
+		reader.get();
+		Require(!tornRead.load(std::memory_order_acquire), "Snapshot reader observed a torn generation");
+
+		FakeHandleIdentitySource source;
+		source.Objects.emplace(7, ObjectIdentity{
+			.Index = 7,
+			.SerialNumber = 101,
+			.Address = 0x1000,
+			.ClassFingerprint = 0xA001
+		});
+		const auto context = MakeEngineContext(42);
+		EngineFacade facade(context, "fixture-snapshot-session", source);
+		Require(facade.IsConfigured(), "EngineFacade rejected a matching immutable generation");
+		Require(facade.IssueObjectHandle(7).Ok(), "EngineFacade bypassed or lost handle issuance");
+		Require(
+			facade.Snapshots().Publish(makeSnapshot(1)).Ok()
+				&& facade.Snapshots().CurrentGeneration() == 1,
+			"EngineFacade did not own its snapshot store");
+		facade.Stop();
+		Require(
+			!facade.IsConfigured()
+				&& facade.Snapshots().Publish(makeSnapshot(2)).Error == SnapshotPublishError::StoreStopped,
+			"Stopped EngineFacade accepted a new snapshot");
+
+		store.Stop();
+		Require(
+			store.Publish(makeSnapshot(33)).Error == SnapshotPublishError::StoreStopped,
+			"Stopped snapshot store accepted a publisher");
+	}
+
 	void TestCoreDomainCommandsAndHandleExecution()
 	{
 		using namespace UExplorer::Runtime;
@@ -666,6 +822,7 @@ namespace
 		GameThreadExecutor executor;
 		Require(executor.Enable(&FakeProcessEvent), "Command executor did not enable");
 		FakeHandleIdentitySource source;
+		source.Generation = 77;
 		source.Objects.emplace(7, ObjectIdentity{
 			.Index = 7,
 			.SerialNumber = 101,
@@ -689,7 +846,8 @@ namespace
 			.SignatureFingerprint = 0x5151
 		});
 		FakeCoreStatusDiagnostics diagnostics;
-		CoreCommandService service(runtime, executor, source, diagnostics);
+		EngineFacade engine(context, "fixture-command-session", source);
+		CoreCommandService service(runtime, executor, engine, diagnostics);
 		Require(service.IsConfigured(), "Core domain command service was not configured");
 
 		const CoreCommandResponse status = service.Execute({
@@ -702,7 +860,8 @@ namespace
 		Require(
 			status.Ok
 				&& status.Data.at("runtime").at("session_id") == "fixture-command-session"
-				&& status.Data.at("architecture") == "x64-fixture",
+				&& status.Data.at("architecture") == "x64-fixture"
+				&& !status.Data.at("object_snapshot").at("published").get<bool>(),
 			"Status domain command did not serialize the immutable runtime");
 
 		CoreCommandRequest objectRequest{
@@ -1361,6 +1520,7 @@ int main(const int argc, char** argv)
 		TestEngineContextAndCapabilities();
 		TestCoreRuntimeStateAndShutdown();
 		TestStableObjectAndFunctionHandles();
+		TestEngineFacadeAndImmutableSnapshots();
 		TestCoreDomainCommandsAndHandleExecution();
 		TestFUObjectItemIdentityLayout();
 		TestHookOwnershipAndCallbackDrain();
@@ -1371,7 +1531,7 @@ int main(const int argc, char** argv)
 		TestGenericGameThreadWorkAndCancellation();
 		TestGameThreadMpscCapacity();
 		TestHttpServerLifecycle();
-		std::cout << "Core harness passed: framing, secure sessions, runtime/capabilities, domain commands, stable handles/FUObjectItem layout, Hook RAII/drain, SafeMemory, USMAP consumer, bounded queues, cancellable owned game-thread work, SEH, HTTP lifecycle, and shutdown.\n";
+		std::cout << "Core harness passed: framing, secure sessions, runtime/capabilities, EngineFacade/immutable snapshots, domain commands, stable handles/FUObjectItem layout, Hook RAII/drain, SafeMemory, USMAP consumer, bounded queues, cancellable owned game-thread work, SEH, HTTP lifecycle, and shutdown.\n";
 		return 0;
 	}
 	catch (const std::exception& error)

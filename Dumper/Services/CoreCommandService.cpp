@@ -81,6 +81,30 @@ json SerializeGameThreadDiagnostics(const Runtime::GameThreadExecutor& executor)
 	};
 }
 
+json SerializeSnapshotDiagnostics(const Runtime::EngineSnapshotStore& store)
+{
+	const std::shared_ptr<const Runtime::EngineSnapshot> snapshot = store.Current();
+	if (!snapshot)
+	{
+		return {
+			{"published", false},
+			{"generation", nullptr},
+			{"stopped", store.IsStopped()}
+		};
+	}
+	return {
+		{"published", true},
+		{"generation", snapshot->Generation},
+		{"context_generation", snapshot->ContextGeneration},
+		{"captured_at_monotonic_us", snapshot->CapturedAtMonotonicUs},
+		{"capture_duration_us", snapshot->CaptureDurationUs},
+		{"source_object_count", snapshot->SourceObjectCount},
+		{"object_count", snapshot->Objects.size()},
+		{"skipped_slots", snapshot->SkippedSlots},
+		{"stopped", store.IsStopped()}
+	};
+}
+
 json SerializeScriptOffsetDiagnostics(const ScriptOffsetDiagnostics& diagnostics)
 {
 	return {
@@ -191,12 +215,10 @@ class IssueObjectHandleWork final : public Runtime::IGameThreadWork
 public:
 	IssueObjectHandleWork(
 		Runtime::CoreRuntime::RequestLease lease,
-		std::string sessionId,
-		Runtime::IHandleIdentitySource& source,
+		Runtime::EngineFacade& engine,
 		const std::int32_t index)
 		: m_Lease(std::move(lease)),
-		  m_SessionId(std::move(sessionId)),
-		  m_Source(source),
+		  m_Engine(engine),
 		  m_Index(index)
 	{
 	}
@@ -205,11 +227,9 @@ public:
 	{
 		if (!m_Lease.Context())
 			return false;
-		Runtime::ObjectHandleService service(
-			m_SessionId,
-			m_Lease.Context()->Generation(),
-			m_Source);
-		m_Result = service.IssueObject(m_Index);
+		if (m_Engine.ContextGeneration() != m_Lease.Context()->Generation())
+			return false;
+		m_Result = m_Engine.IssueObjectHandle(m_Index);
 		return true;
 	}
 
@@ -217,8 +237,7 @@ public:
 
 private:
 	Runtime::CoreRuntime::RequestLease m_Lease;
-	std::string m_SessionId;
-	Runtime::IHandleIdentitySource& m_Source;
+	Runtime::EngineFacade& m_Engine;
 	std::int32_t m_Index;
 	Runtime::ObjectHandleResult m_Result;
 };
@@ -228,12 +247,10 @@ class IssueFunctionHandleWork final : public Runtime::IGameThreadWork
 public:
 	IssueFunctionHandleWork(
 		Runtime::CoreRuntime::RequestLease lease,
-		std::string sessionId,
-		Runtime::IHandleIdentitySource& source,
+		Runtime::EngineFacade& engine,
 		const std::int32_t index)
 		: m_Lease(std::move(lease)),
-		  m_SessionId(std::move(sessionId)),
-		  m_Source(source),
+		  m_Engine(engine),
 		  m_Index(index)
 	{
 	}
@@ -242,11 +259,9 @@ public:
 	{
 		if (!m_Lease.Context())
 			return false;
-		Runtime::ObjectHandleService service(
-			m_SessionId,
-			m_Lease.Context()->Generation(),
-			m_Source);
-		m_Result = service.IssueFunction(m_Index);
+		if (m_Engine.ContextGeneration() != m_Lease.Context()->Generation())
+			return false;
+		m_Result = m_Engine.IssueFunctionHandle(m_Index);
 		return true;
 	}
 
@@ -254,8 +269,7 @@ public:
 
 private:
 	Runtime::CoreRuntime::RequestLease m_Lease;
-	std::string m_SessionId;
-	Runtime::IHandleIdentitySource& m_Source;
+	Runtime::EngineFacade& m_Engine;
 	std::int32_t m_Index;
 	Runtime::FunctionHandleResult m_Result;
 };
@@ -270,11 +284,11 @@ CoreCommandTiming ToCommandTiming(const Runtime::GameThreadTaskTiming& timing) n
 CoreCommandService::CoreCommandService(
 	Runtime::CoreRuntime& runtime,
 	Runtime::GameThreadExecutor& gameThread,
-	Runtime::IHandleIdentitySource& identitySource,
+	Runtime::EngineFacade& engine,
 	ICoreStatusDiagnosticsSource& statusDiagnostics)
 	: m_Runtime(runtime),
 	  m_GameThread(gameThread),
-	  m_IdentitySource(identitySource),
+	  m_Engine(engine),
 	  m_StatusDiagnostics(statusDiagnostics)
 {
 	const Runtime::CoreRuntimeSnapshot snapshot = m_Runtime.Snapshot();
@@ -286,7 +300,10 @@ bool CoreCommandService::IsConfigured() const noexcept
 {
 	return !m_SessionId.empty()
 		&& m_SessionId.size() <= 128
-		&& m_ContextGeneration != 0;
+		&& m_ContextGeneration != 0
+		&& m_Engine.IsConfigured()
+		&& m_Engine.SessionId() == m_SessionId
+		&& m_Engine.ContextGeneration() == m_ContextGeneration;
 }
 
 CoreCommandResponse CoreCommandService::Execute(
@@ -382,6 +399,7 @@ CoreCommandResponse CoreCommandService::ExecuteStatus(const CoreCommandRequest& 
 		json data = SerializeRuntime(snapshot);
 		data["alive"] = snapshot.IsLive();
 		data["game_thread"] = SerializeGameThreadDiagnostics(m_GameThread);
+		data["object_snapshot"] = SerializeSnapshotDiagnostics(m_Engine.Snapshots());
 		return Success(request, std::move(data), {.ExecuteUs = ElapsedMicroseconds(started)});
 	}
 	if (!snapshot.Context)
@@ -403,6 +421,7 @@ CoreCommandResponse CoreCommandService::ExecuteStatus(const CoreCommandRequest& 
 		data["runtime"] = SerializeRuntime(snapshot);
 		data["capabilities"] = SerializeCapabilities(snapshot);
 		data["game_thread"] = SerializeGameThreadDiagnostics(m_GameThread);
+		data["object_snapshot"] = SerializeSnapshotDiagnostics(m_Engine.Snapshots());
 		return Success(request, std::move(data), {.ExecuteUs = ElapsedMicroseconds(started)});
 	}
 
@@ -446,6 +465,7 @@ CoreCommandResponse CoreCommandService::ExecuteStatus(const CoreCommandRequest& 
 	data["runtime"] = SerializeRuntime(snapshot);
 	data["capabilities"] = SerializeCapabilities(snapshot);
 	data["game_thread"] = SerializeGameThreadDiagnostics(m_GameThread);
+	data["object_snapshot"] = SerializeSnapshotDiagnostics(m_Engine.Snapshots());
 	return Success(request, std::move(data), {.ExecuteUs = ElapsedMicroseconds(started)});
 }
 
@@ -496,8 +516,7 @@ CoreCommandResponse CoreCommandService::ExecuteHandleIssue(
 	{
 		functionWork = std::make_shared<IssueFunctionHandleWork>(
 			std::move(*lease),
-			m_SessionId,
-			m_IdentitySource,
+			m_Engine,
 			index);
 		work = functionWork;
 	}
@@ -505,8 +524,7 @@ CoreCommandResponse CoreCommandService::ExecuteHandleIssue(
 	{
 		objectWork = std::make_shared<IssueObjectHandleWork>(
 			std::move(*lease),
-			m_SessionId,
-			m_IdentitySource,
+			m_Engine,
 			index);
 		work = objectWork;
 	}
