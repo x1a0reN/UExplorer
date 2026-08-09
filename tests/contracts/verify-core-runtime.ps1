@@ -39,7 +39,8 @@ $identitySourceHeader = Read-ProjectFile 'Dumper\Runtime\ObjectArrayIdentitySour
 $identitySourceImplementation = Read-ProjectFile 'Dumper\Runtime\ObjectArrayIdentitySource.cpp'
 $identitySource = $identitySourceHeader + $identitySourceImplementation
 $snapshotIdentitySource = Read-ProjectFile 'Dumper\Runtime\ObjectSnapshotIdentitySource.h'
-$engineFacade = Read-ProjectFile 'Dumper\Runtime\EngineFacade.h'
+$engineFacade = (Read-ProjectFile 'Dumper\Runtime\EngineFacade.h') +
+	(Read-ProjectFile 'Dumper\Runtime\EngineFacade.cpp')
 $engineSnapshotHeader = Read-ProjectFile 'Dumper\Runtime\EngineSnapshot.h'
 $engineSnapshot = Read-ProjectFile 'Dumper\Runtime\EngineSnapshot.cpp'
 $snapshotCaptureHeader = Read-ProjectFile 'Dumper\Runtime\EngineSnapshotCapture.h'
@@ -51,6 +52,8 @@ $objectSnapshotSourceHeader = Read-ProjectFile 'Dumper\Runtime\ObjectArraySnapsh
 $objectSnapshotSource = Read-ProjectFile 'Dumper\Runtime\ObjectArraySnapshotSource.cpp'
 $propertyCodecHeader = Read-ProjectFile 'Dumper\Runtime\PropertyCodec.h'
 $propertyCodec = Read-ProjectFile 'Dumper\Runtime\PropertyCodec.cpp'
+$reflectionLayoutHeader = Read-ProjectFile 'Dumper\Runtime\ReflectionLayout.h'
+$reflectionLayout = Read-ProjectFile 'Dumper\Runtime\ReflectionLayout.cpp'
 $callbackBarrier = Read-ProjectFile 'Dumper\Runtime\CallbackBarrier.h'
 $safeMemoryHeader = Read-ProjectFile 'Dumper\Runtime\SafeMemory.h'
 $safeMemory = Read-ProjectFile 'Dumper\Runtime\SafeMemory.cpp'
@@ -126,7 +129,7 @@ foreach ($token in @('Off::', 'Settings::', 'NameArray::', 'FName::', ' FName(')
 
 foreach ($token in @('transport.named_pipe', 'PIPE_LISTENER_NOT_READY', 'objects.identity_source',
 		'engine.names', 'NAME_STORAGE_LAYOUT_NOT_VALIDATED',
-		'engine.reflection', 'REFLECTION_LAYOUT_NOT_VALIDATED',
+		'engine.reflection', 'REFLECTION_RUNTIME_NOT_PUBLISHED',
 		'engine.property_codec', 'PROPERTY_CODEC_NOT_CONFIGURED',
 		'functions.handles', 'FUNCTION_HANDLE_VALIDATION_NOT_READY',
         'GAME_THREAD_PUMP_NOT_OBSERVED', 'GAME_THREAD_PUMP_STALLED', 'RequiredReadyCapabilities')) {
@@ -216,14 +219,15 @@ foreach ($token in @('Off::', 'Settings::', 'NameArray::', 'ObjectArray::', 'UEO
 }
 foreach ($token in @('ObjectHandleService', 'EngineNameCodec', 'Names() const noexcept',
 		'EngineSnapshotStore', 'EngineSnapshotCapture',
-		'PropertyCodec', 'ConfigurePropertyCodec', 'Properties() const noexcept',
-		'std::atomic<std::shared_ptr<const PropertyCodec>>', 'm_PropertyMutex',
+		'PropertyCodec', 'ConfigureReflection', 'Reflection() const noexcept',
+		'Properties() const noexcept', 'ReflectionRuntimeSnapshot',
+		'std::atomic<std::shared_ptr<const ReflectionRuntimeSnapshot>>', 'm_ReflectionMutex',
 		'ConfigureSnapshotCapture', 'IssueObjectHandle', 'ValidateFunctionHandle',
 		'std::shared_ptr<const EngineContext>')) {
 	Assert-Contains $engineFacade $token 'EngineFacade ownership boundary regressed.'
 }
 foreach ($token in @('PropertyValueState', 'Ok', 'Empty', 'Unsupported', 'Unavailable', 'Error',
-		'PropertyCodecProfile', 'IPropertyReferenceResolver', 'PropertyDecodeLimits',
+		'PropertyCodecProfile', 'ReflectionLayoutFingerprint', 'IPropertyReferenceResolver', 'PropertyDecodeLimits',
 		'SessionId() const noexcept', 'ContextGeneration() const noexcept',
 		'MaxContainerElements', 'MaxTotalNodes', 'MaxReadableContainerBytes',
 		'PropertyDescriptor', 'PropertyObjectReference')) {
@@ -242,6 +246,29 @@ foreach ($token in @('ReadMemory', 'ReadValue', 'ValidateReadableMemory',
 foreach ($token in @('Off::', 'Settings::', 'ObjectArray::', '#include "Unreal/',
 		'Platform::IsBadReadPtr', 'reinterpret_cast<const TArray')) {
 	Assert-NotContains $propertyCodec $token 'Property codec bypassed its immutable descriptor/SafeMemory boundary.'
+}
+foreach ($token in @('ReflectionPropertySystem', 'ReflectionFieldCandidate',
+		'ReflectionFieldWitness', 'ReflectionLayoutValidationResult',
+		'ValidateReflectionLayout', 'IsReflectionLayoutValid',
+		'ReflectionRuntimeSnapshot', 'ValidatedOnThreadId',
+		'ReflectionLayoutFingerprint', 'WitnessIds', 'FieldOverlap')) {
+	Assert-Contains ($reflectionLayoutHeader + $reflectionLayout) $token 'Reflection layout witness boundary regressed.'
+}
+foreach ($token in @('ReadMemory', 'ReadValue', 'ValidateReadableMemory',
+		'DecodeFName', 'GetCurrentThreadId', 'LayoutFingerprint')) {
+	Assert-Contains $reflectionLayout $token 'Reflection semantic validation regressed.'
+}
+foreach ($token in @('Off::', 'Settings::', 'ObjectArray::', '#include "Unreal/',
+		'Platform::IsBadReadPtr')) {
+	Assert-NotContains $reflectionLayout $token 'Reflection layout validation bypassed SafeMemory or immutable profiles.'
+}
+foreach ($token in @('std::shared_ptr<const ReflectionRuntimeSnapshot> Reflection',
+		'probes.Reflection->IsConfigured(context.Generation())',
+		'REFLECTION_RUNTIME_NOT_PUBLISHED', 'REFLECTION_RUNTIME_INVALID')) {
+	Assert-Contains $capabilities $token 'Reflection capability no longer derives from the immutable runtime bundle.'
+}
+foreach ($token in @('ReflectionLayoutValidated', 'PropertyCodecEnabled')) {
+	Assert-NotContains $capabilities $token 'A forgeable reflection boolean probe reopened the capability path.'
 }
 foreach ($token in @('EngineSnapshotObject', 'SessionId', 'ContextGeneration', 'Generation',
 		'SourceObjectCount', 'SkippedSlots', 'std::atomic<std::shared_ptr<const EngineSnapshot>>')) {
@@ -319,6 +346,9 @@ foreach ($token in @('TestEngineContextAndCapabilities', 'TestCoreRuntimeStateAn
         'TestCoreSessionIdentity',
 		'TestEngineNameCodec', 'Invalid UTF-8 FName entry was accepted',
 		'TestPropertyCodec', 'Property value states are not explicit and stable',
+		'TestReflectionLayout', 'A partial reflection field set was accepted',
+		'A property codec with a mismatched reflection fingerprint was published',
+		'Reflection validation was published from a different execution thread',
 		'FString was not copied and converted through the bounded UTF-16 codec',
 		'Validated FText layout returned an unresolved placeholder',
 		'Object property returned a raw address instead of a stable handle',

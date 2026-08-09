@@ -67,11 +67,9 @@ namespace
 			g_IdentitySource && g_IdentitySource->CanIssueFunctionHandles();
 		probes.ObjectSnapshotPublished = g_EngineFacade
 			&& g_EngineFacade->Snapshots().CurrentGeneration() != 0;
-		probes.ReflectionLayoutValidated = false;
-		const auto propertyCodec = g_EngineFacade
-			? g_EngineFacade->Properties()
+		probes.Reflection = g_EngineFacade
+			? g_EngineFacade->Reflection()
 			: nullptr;
-		probes.PropertyCodecEnabled = propertyCodec && propertyCodec->IsConfigured();
 		probes.FunctionCallServiceEnabled = false;
 		probes.NamedPipeListening = g_PipeServer && g_PipeServer->IsListening();
 		const auto capabilities = UExplorer::Runtime::BuildCoreCapabilities(*snapshot.Context, probes);

@@ -47,14 +47,17 @@ not yet implemented return a stable capability error instead of reaching legacy 
 Baseline Core initialization is also separated from optional reflection/generator
 activation: unknown property, FText, GWorld, or generator layouts cannot make the pipe
 runtime pretend to be unsupported or execute ProcessEvent from the startup worker.
-The `engine.reflection` capability remains unavailable until an immutable layout passes
-semantic witnesses; range-valid legacy offsets alone are insufficient.
+The `engine.reflection` capability remains unavailable until a complete immutable
+`ReflectionLayout` passes per-field semantic witnesses and is atomically paired with a
+fingerprint-bound property codec. Range-valid legacy offsets or boolean probe claims are
+insufficient.
 The Core now also contains a transport-neutral, SafeMemory-only `PropertyCodec` with
 explicit `ok/empty/unsupported/unavailable/error` states, stable-handle references,
 recursive budgets, coherent FString/array/sparse-container reads, and atomic immutable
-publication. Resolver success is rejected unless its handle is complete and matches the
+publication as one `ReflectionRuntimeSnapshot`. Resolver success is rejected unless its handle is complete and matches the
 resolver session/context and observed reference. The codec is deliberately
-not exposed until a real reflection/profile witness configures `engine.property_codec`.
+not exposed until a real target reflection/profile witness configures
+`engine.property_codec`; the current synthetic witness suite is boundary evidence only.
 Object/type/package/instance collections now use exact full-path filters and
 generation/query-bound cursor pages capped at 128 records; the Host reuses its snapshot
 indexes instead of rescanning the snapshot or accepting legacy offset pagination.

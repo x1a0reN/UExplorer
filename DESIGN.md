@@ -23,7 +23,7 @@ React -> Tauri invoke/event -> Rust Host -> Windows Named Pipe RPC -> Core DLL -
 | R2 CoreRuntime/能力模型 | 实现阶段完成；R5/R7 验证待办 | CoreRuntime 状态机、加密随机 session 与 request lease；一次性发布的 immutable EngineContext/identity/name-layout context；带 candidate/confidence 的 offset validation report；依赖式 CapabilityRegistry；Runtime-owned GameThreadExecutor/PostRender backend；ShutdownCoordinator；SafeMemory；稳定 Handle；`EngineFacade`、immutable Snapshot store、生产 snapshot source；transport-neutral CoreCommandService；Rust Host SnapshotCache/索引；VTable Hook RAII owner 与 callback quiet drain | 其余领域 command 属于 R5；真实 identity/name/snapshot/global-pointer、GC churn、LDR/版本与目标规模证据属于 R7 |
 | R3 Named Pipe/Rust Host | 实现阶段完成；R7 验证待办 | 共享严格 RPC 契约；安全且可 join 的 overlapped Named Pipe server/client；PID 核验、deadline/cancel、背压、断线、显式重连和精确 Shutdown；C++/Rust framing fuzz；真实跨语言 Core/Host 进程 fixture；EventHub、multi-PID SessionManager、PID-scoped 操作协调器与 Tauri Channel bridge；真实 x64/x86 注入矩阵 | UE 目标进程连接、Hook/GC/卸载环境矩阵属于 R7 |
 | R4 通信原子切换 | 已完成 | React 领域调用只经 Tauri `domain_request`，事件只经 Tauri Channel；Rust `DomainService` 使用显式 operation registry、PID/session 绑定和稳定错误；Core release project 不编译 `Server/`/`API/` 且不链接 `ws2_32`；二进制契约确认无网络 import/legacy marker；跨语言 fixture 覆盖 DomainService -> SessionManager -> C++ Core | 无；未实现领域按 capability 明确失败，功能实现进入 R5 |
-| R5 领域正确性 | 进行中（R5.1 查询切片完成） | Object/Type 查询已复用 Host SnapshotIndex，使用 generation + query fingerprint cursor、full path 身份与 1..128 有界分页；真实 C++ Core/Rust Host 两页 fixture 已通过 | Property codec、继承/CDO 语义、GC/目标规模，以及 Memory/Call/World/Watch/Hook/Blueprint/Dump 逐项验证 |
+| R5 领域正确性 | 进行中（R5.1 查询、Codec 与反射验证基础完成） | Object/Type 查询已复用 Host SnapshotIndex；PropertyCodec 具备有界值模型；ReflectionLayout 以完整字段集、逐字段语义 witness、context generation 和 fingerprint 发布不可变运行快照；合成 C++ fixture 已通过 | 生产 UE reflection candidate/witness source、descriptor、继承/CDO 语义、GC/目标规模，以及 Memory/Call/World/Watch/Hook/Blueprint/Dump 逐项验证 |
 | R6 前端状态重构 | 未开始 | UI lint 已清零，基础 Vitest 已建立 | session store、查询取消、BigInt 地址、真实能力 UI |
 | R7 发布硬化 | 未开始 | 无 | 性能、压力、目标 fixture、文档和发布门全部通过 |
 
@@ -120,7 +120,7 @@ R3 的协议、Core/Host transport、SessionManager、EventHub、真实跨语言
 - Core 启动不再调用 `Generator::InitInternal()`，因此不会在 Named Pipe/状态/对象快照尚未建立前创建全局 Package/Struct/Enum/Member 索引。旧 Generator 索引仍保留给后续受控的 Dump job，但不是基础运行依赖。
 - `Generator::InitEngineCore()` 现在只调用 `Off::InitRuntime()`：发现 UObject identity/name、UClass cast flags/CDO、UFunction flags、ProcessEvent 与 PostRender 所需字段。GWorld、GEngine、FText、PropertySizes 和整套反射字段不再在启动 worker 上探测，也不会通过 `InitTextOffsets()` 提前调用 ProcessEvent。
 - `Off::InitReflection()` 是显式、fail-closed 的可选领域入口；当前没有命令激活它。`UStruct` 和 `Property` offset 在 `EngineContext` 中不再是全局 required，而 `UClass::CastFlags` 仍是 PostRender/对象快照基础要求。这样“某版本属性布局未知”只会关闭反射领域，不会伪装成 transport/Core 初始化失败。
-- 能力图新增 `engine.reflection`。只有显式语义 witness 和完整 immutable offset set 同时成立才可能可用；当前 production probe 保持 false，`objects.properties` 与 `types.inspect` 继续明确 unavailable，不能因若干范围合法的 offset 或旧硬编码默认值被误开放。
+- 能力图新增 `engine.reflection`。只有显式语义 witness 和完整 immutable layout/codec bundle 同时成立才可能可用；当前 production 不发布该 bundle，`objects.properties` 与 `types.inspect` 继续明确 unavailable，不能因若干范围合法的 offset、可伪造布尔探针或旧硬编码默认值被误开放。
 
 本切片已通过 Core release build、`verify-core-runtime.ps1` 和 capability harness 覆盖；PropertyCodec 基础见下一节，真实 UE 反射 witness、类型 snapshot 与目标版本 fixture 仍是 R5.1 后续工作。
 
@@ -129,9 +129,17 @@ R3 的协议、Core/Host transport、SessionManager、EventHub、真实跨语言
 - 新增 transport-neutral `Runtime/PropertyCodec`，统一输出 `ok/empty/unsupported/unavailable/error`，值树与稳定错误码分离。FText 不再使用 unresolved 字符串，Map/Set/Delegate 也不会以 note 占位后返回成功；Delegate 当前明确 `unsupported`。
 - Codec 只接受 immutable `PropertyDescriptor` 与经过 witness 标记的 `PropertyCodecProfile`，profile 的字段范围必须有界、完整且不重叠，任一子布局不合法都会让整个 codec unavailable。所有读取只经过 `SafeMemory`。实现覆盖严格宽度的 bool/整数/浮点、FName、FString、FText、Object/Weak/Soft reference、Enum、Struct、Array、Map 和 Set；Object/Weak 只有 resolver 返回完整、属于 resolver 当前 session/context 且与原始 address 或 index/serial 一致的 `ObjectHandle` 才是 `ok`，不会信任裸地址、裸 index 或伪造成功结果。
 - FString 会对 header 和完整 UTF-16 内容做前后双重一致性校验；Array 会校验 Data/Num/Max、完整逻辑元素范围和逐项稳定读取；稀疏 Map/Set 同时验证 Data range、allocation bitset、active slot 与前后快照。所有递归类型统一使用深度/node budget 和 descriptor+address cycle guard，Struct 另验证字段边界与唯一名称。容器响应带精确 `TotalCount` 与显式 `Truncated`，不会静默把超限内容当完整值。
-- `EngineFacade` 以原子 `shared_ptr<const PropertyCodec>` 单次发布经过完整 profile 验证且自包含 name codec 的不可变快照，并以互斥锁串行化发布与 Stop；已有读者可安全完成，新的读者在 Stop 后得到空快照。能力图增加 `engine.property_codec`，依赖 `engine.reflection`。当前生产环境没有反射 witness，二者继续 unavailable，因此本切片只建立安全解码基础，不宣称任一 UE 版本属性读取已开放。
+- `EngineFacade` 不再单独发布 PropertyCodec，而是以原子 `shared_ptr<const ReflectionRuntimeSnapshot>` 单次发布 layout + codec；两者必须匹配同一 context generation 与非零 layout fingerprint，且验证与发布发生在同一条已确认执行线程。互斥锁串行化发布与 Stop；已有读者可安全完成，新的读者在 Stop 后得到空快照。能力图中的 `engine.reflection` 和 `engine.property_codec` 都只从这份 bundle 推导，不再接受可伪造布尔探针。当前生产环境没有反射 witness，二者继续 unavailable，因此本切片只建立安全解码基础，不宣称任一 UE 版本属性读取已开放。
 
 CoreHarness 已覆盖各已实现类型、缺失/重叠布局、无 resolver、无效/跨 context/错配 resolver 成功结果、stale weak identity、SoftObject 明确路径布局、Struct/Array 递归 cycle、数组非法 header/preview/node 上限、稀疏 Map/Set allocation bits 与合成节点预算、Delegate unsupported，以及 Facade 原子发布/停止后的安全读者生命周期。真实 UE 4.26/4.27/5.x layout profile、反射 descriptor 构建与属性领域命令仍待后续切片。
+
+### 0.9 R5.1 ReflectionLayout 语义验证边界
+
+- 新增 `Runtime/ReflectionLayout`，明确区分 `UProperty`、`FProperty` 与 `Unavailable`，不再用 `UsesFProperty=false` 同时表示 UProperty 和未知状态。每种 property system 定义精确的 required field set；候选字段必须具有非负 offset、有界且一致的 record size、精确 width、非空来源，并按继承共享关系检查重叠。
+- 每个 required field 至少需要一个有界、唯一的 witness。标量通过 `SafeMemory` 双读并校验语义范围；指针还必须指向可读内存；FName 在解码前后比较完整原始字节，并由同 generation 的 immutable `EngineNameCodec` 精确匹配预期名称。任一缺字段、跨 property-system 字段、重复、重叠、record-size 冲突、不可读、值不符、语义无效或 name 不符都会拒绝整份 layout，不发布部分结果；失败结果在对应字段报告中保留稳定 reason code。
+- 成功结果冻结 context generation、property system、验证线程 ID、逐字段检查/证据和由字段布局计算的 fingerprint。`PropertyCodecProfile` 必须携带该非零 fingerprint；`EngineFacade::ConfigureReflection` 还要求调用线程属于 identity source 的已验证执行点，并与 layout 的验证线程一致，然后原子发布 `ReflectionRuntimeSnapshot`。Stop 原子撤销新读者可见性，已持有的 immutable bundle 仍可安全完成。
+- `RuntimeProbes` 删除 `ReflectionLayoutValidated` 与 `PropertyCodecEnabled` 两个布尔值。能力注册表只接受 `ReflectionRuntimeSnapshot::IsConfigured(context.Generation())`，所以空 bundle、generation 漂移、layout/codec fingerprint 错配都不能开放 `engine.reflection` 或 `engine.property_codec`。
+- CoreHarness 使用完整合成 FProperty 字段与真实内存 witness 覆盖成功、稳定 fingerprint、generation 错配、缺字段、重叠、record-size 冲突、坏标量、错误 FName、未知 property system、跨线程发布拒绝、fingerprint 错配、单次原子发布及 Stop 后 retained reader。该 fixture 只证明验证器边界，不是任何 UE 版本支持证据；production candidate/witness source 尚未实现，因此生产 capability 仍明确 unavailable。
 
 ## Context
 

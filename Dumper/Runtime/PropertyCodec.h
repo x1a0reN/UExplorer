@@ -142,6 +142,7 @@ struct SparseContainerLayout
 struct PropertyCodecProfile
 {
 	bool Validated = false;
+	std::uint64_t ReflectionLayoutFingerprint = 0;
 	std::string Source;
 	std::string ReasonCode;
 	std::string Reason;

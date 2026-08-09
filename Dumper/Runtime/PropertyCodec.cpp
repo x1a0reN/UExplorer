@@ -1606,6 +1606,7 @@ bool IsPropertyCodecProfileValid(
 	const EngineNameProfile& nameProfile) noexcept
 {
 	return profile.Validated
+		&& profile.ReflectionLayoutFingerprint != 0
 		&& !profile.Source.empty()
 		&& profile.Source.size() <= 1024
 		&& nameProfile.Validated

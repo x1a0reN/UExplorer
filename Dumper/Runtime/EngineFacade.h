@@ -6,6 +6,7 @@
 #include "EngineSnapshotCapture.h"
 #include "ObjectHandle.h"
 #include "PropertyCodec.h"
+#include "ReflectionLayout.h"
 
 #include <atomic>
 #include <memory>
@@ -38,10 +39,17 @@ public:
 	FunctionHandleResult IssueFunctionHandle(std::int32_t index);
 	FunctionValidationResult ValidateFunctionHandle(const FunctionHandle& handle);
 	const EngineNameCodec& Names() const noexcept { return m_Names; }
-	bool ConfigurePropertyCodec(PropertyCodecProfile profile) noexcept;
+	bool ConfigureReflection(
+		std::shared_ptr<const ReflectionLayout> layout,
+		PropertyCodecProfile profile) noexcept;
+	std::shared_ptr<const ReflectionRuntimeSnapshot> Reflection() const noexcept
+	{
+		return m_Reflection.load(std::memory_order_acquire);
+	}
 	std::shared_ptr<const PropertyCodec> Properties() const noexcept
 	{
-		return m_Properties.load(std::memory_order_acquire);
+		const auto reflection = Reflection();
+		return reflection ? reflection->Properties : nullptr;
 	}
 
 	EngineSnapshotStore& Snapshots() noexcept { return m_Snapshots; }
@@ -56,8 +64,8 @@ private:
 	std::string m_SessionId;
 	IHandleIdentitySource& m_IdentitySource;
 	EngineNameCodec m_Names;
-	std::atomic<std::shared_ptr<const PropertyCodec>> m_Properties;
-	mutable std::mutex m_PropertyMutex;
+	std::atomic<std::shared_ptr<const ReflectionRuntimeSnapshot>> m_Reflection;
+	mutable std::mutex m_ReflectionMutex;
 	ObjectHandleService m_Handles;
 	EngineSnapshotStore m_Snapshots;
 	std::unique_ptr<EngineSnapshotCapture> m_SnapshotCapture;

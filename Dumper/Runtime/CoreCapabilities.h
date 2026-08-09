@@ -3,6 +3,7 @@
 #include "CapabilityRegistry.h"
 #include "EngineContext.h"
 #include "EngineNameCodec.h"
+#include "ReflectionLayout.h"
 
 #include <memory>
 #include <string>
@@ -23,8 +24,7 @@ struct RuntimeProbes
 	bool ObjectHandleValidationEnabled = false;
 	bool FunctionHandleValidationEnabled = false;
 	bool ObjectSnapshotPublished = false;
-	bool ReflectionLayoutValidated = false;
-	bool PropertyCodecEnabled = false;
+	std::shared_ptr<const ReflectionRuntimeSnapshot> Reflection;
 	bool FunctionCallServiceEnabled = false;
 	bool NamedPipeListening = false;
 };
@@ -97,28 +97,22 @@ inline std::shared_ptr<const CapabilitySnapshot> BuildCoreCapabilities(
 		"SAFE_MEMORY_NOT_READY",
 		"Centralized checked memory access is not active",
 		{"engine.core"});
-	const bool reflectionOffsetsPresent = context.HasValidatedOffset("ustruct.super_struct")
-		&& context.HasValidatedOffset("ustruct.size")
-		&& context.HasValidatedOffset("property.array_dim")
-		&& context.HasValidatedOffset("property.element_size")
-		&& context.HasValidatedOffset("property.flags")
-		&& context.HasValidatedOffset("property.offset_internal")
-		&& (context.Profile().UsesFProperty
-			? context.HasValidatedOffset("ustruct.child_properties")
-			: context.HasValidatedOffset("ustruct.children"));
+	const bool reflectionPublished = static_cast<bool>(probes.Reflection);
+	const bool reflectionReady = reflectionPublished
+		&& probes.Reflection->IsConfigured(context.Generation());
 	builder.Define(
 		"engine.reflection",
-		probes.ReflectionLayoutValidated && reflectionOffsetsPresent,
-		probes.ReflectionLayoutValidated
-			? "REFLECTION_LAYOUT_INCOMPLETE"
-			: "REFLECTION_LAYOUT_NOT_VALIDATED",
-		probes.ReflectionLayoutValidated
-			? "The reflection witness passed but the immutable offset set is incomplete"
-			: "No immutable reflection layout has passed semantic witnesses",
+		reflectionReady,
+		reflectionPublished
+			? "REFLECTION_RUNTIME_INVALID"
+			: "REFLECTION_RUNTIME_NOT_PUBLISHED",
+		reflectionPublished
+			? "The reflection snapshot does not match this context generation or layout fingerprint"
+			: "No immutable reflection layout and property codec bundle has passed semantic witnesses",
 		{"engine.names", "memory.safe"});
 	builder.Define(
 		"engine.property_codec",
-		probes.PropertyCodecEnabled,
+		reflectionReady,
 		"PROPERTY_CODEC_NOT_CONFIGURED",
 		"No complete immutable property codec profile has passed its layout witnesses",
 		{"engine.reflection"});

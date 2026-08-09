@@ -1,5 +1,7 @@
 #include "EngineFacade.h"
 
+#include <Windows.h>
+
 #include <utility>
 
 namespace UExplorer::Runtime
@@ -63,19 +65,38 @@ FunctionValidationResult EngineFacade::ValidateFunctionHandle(const FunctionHand
 	return m_Handles.ValidateFunction(handle);
 }
 
-bool EngineFacade::ConfigurePropertyCodec(PropertyCodecProfile profile) noexcept
+bool EngineFacade::ConfigureReflection(
+	std::shared_ptr<const ReflectionLayout> layout,
+	PropertyCodecProfile profile) noexcept
 {
-	if (!IsConfigured())
+	if (!layout
+		|| !IsCurrentExecutionThreadValid()
+		|| layout->ValidatedOnThreadId() != GetCurrentThreadId()
+		|| !IsReflectionLayoutValid(*layout, ContextGeneration())
+		|| profile.ReflectionLayoutFingerprint != layout->Fingerprint())
+	{
 		return false;
+	}
 	try
 	{
 		auto codec = std::make_shared<const PropertyCodec>(m_Names, std::move(profile));
 		if (!codec->IsConfigured())
 			return false;
-		std::lock_guard lock(m_PropertyMutex);
-		if (!IsConfigured() || Properties())
+		auto reflection = std::make_shared<const ReflectionRuntimeSnapshot>(
+			ReflectionRuntimeSnapshot{
+				.Layout = std::move(layout),
+				.Properties = std::move(codec)
+			});
+		if (!reflection->IsConfigured(ContextGeneration()))
 			return false;
-		m_Properties.store(std::move(codec), std::memory_order_release);
+		std::lock_guard lock(m_ReflectionMutex);
+		if (!IsCurrentExecutionThreadValid()
+			|| reflection->Layout->ValidatedOnThreadId() != GetCurrentThreadId()
+			|| Reflection())
+		{
+			return false;
+		}
+		m_Reflection.store(std::move(reflection), std::memory_order_release);
 		return true;
 	}
 	catch (...)
@@ -112,11 +133,11 @@ bool EngineFacade::ConfigureSnapshotCapture(IEngineSnapshotSource& source) noexc
 
 bool EngineFacade::Stop(const std::chrono::milliseconds timeout)
 {
-	std::lock_guard lock(m_PropertyMutex);
+	std::lock_guard lock(m_ReflectionMutex);
 	if (m_SnapshotCapture && !m_SnapshotCapture->StopAndDrain(timeout))
 		return false;
 	m_SnapshotCapture.reset();
-	m_Properties.store({}, std::memory_order_release);
+	m_Reflection.store({}, std::memory_order_release);
 	m_Snapshots.Stop();
 	return true;
 }

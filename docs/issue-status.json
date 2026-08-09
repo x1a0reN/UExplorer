@@ -294,6 +294,7 @@
 	  "verification": [
 		"2026-08-09: the four original OverwriteIfInvalidOffset property-offset substitutions were removed and required property offsets now fail initialization instead of inheriting PropertySize",
 		"2026-08-09: FFieldClass::CastFlags no longer returns guessed 0x10 and DataTable::RowMap no longer derives a layout from UObject::Outer when reflection evidence is absent",
+		"2026-08-10: ReflectionLayout now rejects partial, overlapping, record-size-inconsistent, unreadable, semantically invalid, or wrong-name UProperty/FProperty field sets and publishes no partial layout",
 		"Remaining hard-coded FField/FName/property-size layouts must still be replaced or semantically validated before this issue can be verified"
 	  ]
 	},
@@ -308,6 +309,7 @@
 		"2026-08-09: offset reports now expose confidence and candidate offsets; GWorld/GEngine reports preserve every observed module-relative candidate and the full validation checklist",
 		"2026-08-09: ProcessEvent discovery now reads the first-object VTable and manual slot through SafeMemory, bounds the VTable index, and rejects module offsets that do not fit the published int32 contract",
 		"2026-08-09: Off::InitRuntime is now separate from explicit Off::InitReflection; optional UStruct/property offsets no longer block EngineContext publication, and engine.reflection remains unavailable without a semantic witness plus a complete immutable offset set",
+		"2026-08-10: every required ReflectionLayout field carries source, structural checks, semantic witness IDs and a stable failure; successful layouts freeze context generation, validation thread and fingerprint, while production remains unavailable without a target candidate source",
         "Required offset validation blocks context publication; candidate lists and deeper semantic validation remain incomplete"
       ]
     },
@@ -412,6 +414,7 @@
 		"2026-08-09: EngineNameCodec replaces raw/catch-based FName entry reads with checked range arithmetic, SafeMemory, strict encoding, and bounded redirects",
 		"2026-08-09: production snapshot metadata revalidates every referenced live object through a typed serial-backed slot and performs all field reads through SafeMemory without legacy UE wrappers",
 		"2026-08-09: the new PropertyCodec consumes only immutable descriptors/profiles and SafeMemory; its contract forbids Off, Settings, ObjectArray, legacy UE wrappers, and IsBadReadPtr; FString content/header and recursive container reads have explicit coherence/cycle guards",
+		"2026-08-10: reflection metadata validation uses only immutable EngineNameCodec plus SafeMemory stable reads; scalar, pointer, and FName witnesses are required before a layout can be frozen",
         "Legacy object/world route reads still contain direct live-memory traversal and require snapshot/codec migration"
       ]
     },
@@ -517,6 +520,7 @@
 	  "status": "in_progress",
 	  "verification": [
 		"2026-08-09: PropertyCodec now provides bounded FString/FName/FText/Object/Weak/Soft/Struct/Array/Map/Set/Enum decode primitives and stable ObjectHandle references",
+		"2026-08-10: PropertyCodec profiles now carry a non-zero ReflectionLayout fingerprint; EngineFacade atomically publishes one generation-bound layout/codec bundle and capabilities no longer accept forgeable reflection/codec booleans",
 		"ParamFrame construction/destruction, input encoding, and function round-trip fixtures remain pending"
 	  ]
 	},

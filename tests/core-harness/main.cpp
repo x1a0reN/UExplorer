@@ -26,6 +26,7 @@
 #include "Runtime/ObjectIdentityContext.h"
 #include "Runtime/ObjectArraySnapshotSource.h"
 #include "Runtime/PropertyCodec.h"
+#include "Runtime/ReflectionLayout.h"
 #include "Runtime/SafeMemory.h"
 #include "Runtime/ShutdownCoordinator.h"
 #include "Runtime/VTableHook.h"
@@ -662,14 +663,14 @@ namespace
 		Require(
 			reflection
 				&& !reflection->Available
-				&& reflection->ReasonCode == "REFLECTION_LAYOUT_NOT_VALIDATED"
+				&& reflection->ReasonCode == "REFLECTION_RUNTIME_NOT_PUBLISHED"
 				&& !withoutPipe->IsAvailable("engine.property_codec")
 				&& !withoutPipe->IsAvailable("objects.properties")
 				&& !withoutPipe->IsAvailable("types.inspect"),
 			"Unvalidated optional reflection metadata leaked into a domain capability");
 		RuntimeProbes falselyClaimedReflection = probes;
-		falselyClaimedReflection.ReflectionLayoutValidated = true;
-		falselyClaimedReflection.PropertyCodecEnabled = true;
+		falselyClaimedReflection.Reflection =
+			std::make_shared<const ReflectionRuntimeSnapshot>();
 		const auto withoutCompleteReflection = BuildCoreCapabilities(
 			*context,
 			falselyClaimedReflection);
@@ -678,9 +679,9 @@ namespace
 		Require(
 			incompleteReflection
 				&& !incompleteReflection->Available
-				&& incompleteReflection->ReasonCode == "REFLECTION_LAYOUT_INCOMPLETE"
+				&& incompleteReflection->ReasonCode == "REFLECTION_RUNTIME_INVALID"
 				&& !withoutCompleteReflection->IsAvailable("engine.property_codec"),
-			"A probe claim bypassed the complete immutable reflection-offset requirement");
+			"An incomplete reflection snapshot bypassed the immutable bundle requirement");
 		RuntimeProbes missingFunctionHandles = probes;
 		missingFunctionHandles.FunctionHandleValidationEnabled = false;
 		const auto withoutFunctionHandles = BuildCoreCapabilities(*context, missingFunctionHandles);
@@ -936,6 +937,7 @@ namespace
 
 		PropertyCodecProfile profile{
 			.Validated = true,
+			.ReflectionLayoutFingerprint = 0x51515151,
 			.Source = "ue-x64-property-fixture",
 			.DynamicArray = {
 				.Validated = true,
@@ -1431,6 +1433,235 @@ namespace
 					*intDescriptor).ErrorCode == "PROPERTY_CODEC_NOT_CONFIGURED",
 			"Overlapping layout fields configured a partially usable property codec");
 
+	}
+
+	void TestReflectionLayout()
+	{
+		using namespace UExplorer::Runtime;
+
+		const auto writeBytes = [](auto& buffer, const std::size_t offset, const auto& value) {
+			Require(
+				offset <= buffer.size() && sizeof(value) <= buffer.size() - offset,
+				"Reflection layout fixture write exceeded its buffer");
+			std::memcpy(buffer.data() + offset, &value, sizeof(value));
+		};
+		const auto writeSpan = [](auto& buffer, const std::size_t offset, const void* value, const std::size_t size) {
+			Require(
+				offset <= buffer.size() && size <= buffer.size() - offset,
+				"Reflection name fixture write exceeded its buffer");
+			std::memcpy(buffer.data() + offset, value, size);
+		};
+
+		std::array<std::byte, 64> pool{};
+		std::array<std::byte, 96> block{};
+		writeBytes(pool, 0, std::int32_t{0});
+		writeBytes(pool, 4, std::int32_t{64});
+		writeBytes(pool, 16, reinterpret_cast<std::uintptr_t>(block.data()));
+		writeBytes(block, 0, static_cast<std::uint16_t>(4u << 6));
+		constexpr char noneText[] = "None";
+		writeSpan(block, 2, noneText, 4);
+		writeBytes(block, 6, static_cast<std::uint16_t>(5u << 6));
+		constexpr char actorText[] = "Actor";
+		writeSpan(block, 8, actorText, 5);
+
+		EngineNameProfile nameProfile{
+			.Storage = EngineNameStorageKind::NamePool,
+			.StorageAddress = reinterpret_cast<std::uintptr_t>(pool.data()),
+			.FNameSize = 8,
+			.ComparisonIndexOffset = 0,
+			.NumberOffset = 4,
+			.BlockOffsetBits = 14,
+			.EntryStride = 2,
+			.ChunksStart = 16,
+			.MaxChunkIndexOffset = 0,
+			.ByteCursorOffset = 4,
+			.EntryStringOffset = 2,
+			.EntryHeaderOffset = 0,
+			.EntryLengthShift = 6,
+			.Validated = true,
+			.Source = "reflection-layout-name-fixture"
+		};
+		EngineNameCodec names(nameProfile);
+		Require(names.IsConfigured(), "Reflection layout name codec fixture was rejected");
+
+		ReflectionLayoutCandidate candidate{
+			.ContextGeneration = 51,
+			.PropertySystem = ReflectionPropertySystem::FProperty,
+			.Source = "synthetic-fproperty-semantic-witness",
+			.Fields = {
+				{ReflectionField::StructSuper, 0, 64, "synthetic"},
+				{ReflectionField::StructChildProperties, 8, 64, "synthetic"},
+				{ReflectionField::FFieldClass, 0, 64, "synthetic"},
+				{ReflectionField::FFieldNext, 8, 64, "synthetic"},
+				{ReflectionField::FFieldName, 16, 64, "synthetic"},
+				{ReflectionField::FFieldClassCastFlags, 0, 16, "synthetic"},
+				{ReflectionField::PropertyArrayDim, 24, 64, "synthetic"},
+				{ReflectionField::PropertyElementSize, 28, 64, "synthetic"},
+				{ReflectionField::PropertyFlags, 32, 64, "synthetic"},
+				{ReflectionField::PropertyOffset, 40, 64, "synthetic"},
+				{ReflectionField::BoolFieldSize, 44, 64, "synthetic"},
+				{ReflectionField::BoolByteOffset, 45, 64, "synthetic"},
+				{ReflectionField::BoolByteMask, 46, 64, "synthetic"},
+				{ReflectionField::BoolFieldMask, 47, 64, "synthetic"},
+				{ReflectionField::BytePropertyEnum, 48, 64, "synthetic"},
+				{ReflectionField::ObjectPropertyClass, 48, 64, "synthetic"},
+				{ReflectionField::StructPropertyStruct, 48, 64, "synthetic"},
+				{ReflectionField::ArrayPropertyInner, 48, 64, "synthetic"},
+				{ReflectionField::MapPropertyKey, 48, 72, "synthetic"},
+				{ReflectionField::MapPropertyValue, 56, 72, "synthetic"},
+				{ReflectionField::SetPropertyElement, 48, 64, "synthetic"},
+				{ReflectionField::EnumPropertyUnderlying, 48, 72, "synthetic"},
+				{ReflectionField::EnumPropertyEnum, 56, 72, "synthetic"}
+			}
+		};
+		std::vector<std::array<std::byte, 80>> witnessStorage(candidate.Fields.size());
+		std::byte readableTarget{};
+		const std::uintptr_t readableTargetAddress =
+			reinterpret_cast<std::uintptr_t>(&readableTarget);
+		for (std::size_t index = 0; index < candidate.Fields.size(); ++index)
+		{
+			const ReflectionFieldCandidate& field = candidate.Fields[index];
+			ReflectionFieldWitness witness{
+				.Id = std::string("witness-") + ToString(field.Field),
+				.Field = field.Field,
+				.BaseAddress = reinterpret_cast<std::uintptr_t>(witnessStorage[index].data())
+			};
+			switch (ValueKindFor(field.Field))
+			{
+			case ReflectionFieldValueKind::Pointer:
+				writeBytes(witnessStorage[index], field.Offset, readableTargetAddress);
+				witness.Expected = static_cast<std::uint64_t>(readableTargetAddress);
+				break;
+			case ReflectionFieldValueKind::UInt8:
+			{
+				const std::uint8_t value = field.Field == ReflectionField::BoolByteOffset ? 0 : 1;
+				writeBytes(witnessStorage[index], field.Offset, value);
+				witness.Expected = static_cast<std::uint64_t>(value);
+				break;
+			}
+			case ReflectionFieldValueKind::Int32:
+			{
+				std::int32_t value = 16;
+				if (field.Field == ReflectionField::PropertyArrayDim)
+					value = 1;
+				else if (field.Field == ReflectionField::PropertyElementSize)
+					value = 8;
+				writeBytes(witnessStorage[index], field.Offset, value);
+				witness.Expected = static_cast<std::uint64_t>(value);
+				break;
+			}
+			case ReflectionFieldValueKind::UInt64:
+				writeBytes(witnessStorage[index], field.Offset, std::uint64_t{1});
+				witness.Expected = std::uint64_t{1};
+				break;
+			case ReflectionFieldValueKind::FName:
+			{
+				const std::array<std::uint32_t, 2> actorName{3, 0};
+				writeBytes(witnessStorage[index], field.Offset, actorName);
+				witness.Expected = std::string("Actor");
+				break;
+			}
+			}
+			candidate.Witnesses.push_back(std::move(witness));
+		}
+
+		const ReflectionLayoutValidationResult validated =
+			ValidateReflectionLayout(candidate, names);
+		Require(
+			validated.Ok()
+				&& validated.Layout->Fingerprint() != 0
+				&& validated.Layout->ContextGeneration() == 51
+				&& validated.Layout->PropertySystem() == ReflectionPropertySystem::FProperty
+				&& validated.Layout->Fields().size() == candidate.Fields.size(),
+			"Complete FProperty layout witnesses did not publish an immutable layout");
+		const ReflectionLayoutValidationResult repeated =
+			ValidateReflectionLayout(candidate, names);
+		Require(
+			repeated.Ok()
+				&& repeated.Layout->Fingerprint() == validated.Layout->Fingerprint(),
+			"Identical reflection layouts produced different fingerprints");
+		Require(
+			IsReflectionLayoutValid(*validated.Layout, 51)
+				&& !IsReflectionLayoutValid(*validated.Layout, 52),
+			"Reflection layout generation binding was not exact");
+
+		ReflectionLayoutCandidate missingField = candidate;
+		missingField.Fields.pop_back();
+		Require(
+			ValidateReflectionLayout(missingField, names).Error
+				== ReflectionValidationError::MissingRequiredField,
+			"A partial reflection field set was accepted");
+		ReflectionLayoutCandidate unexpectedField = candidate;
+		unexpectedField.Fields.front().Field = ReflectionField::StructChildren;
+		Require(
+			ValidateReflectionLayout(unexpectedField, names).Error
+				== ReflectionValidationError::UnexpectedField,
+			"A field from the other property-system contract was accepted");
+		ReflectionLayoutCandidate duplicateField = candidate;
+		duplicateField.Fields[1].Field = ReflectionField::StructSuper;
+		Require(
+			ValidateReflectionLayout(duplicateField, names).Error
+				== ReflectionValidationError::DuplicateField,
+			"A duplicate reflection field was accepted");
+		ReflectionLayoutCandidate overlapping = candidate;
+		for (ReflectionFieldCandidate& field : overlapping.Fields)
+		{
+			if (field.Field == ReflectionField::PropertyElementSize)
+				field.Offset = 24;
+		}
+		Require(
+			ValidateReflectionLayout(overlapping, names).Error
+				== ReflectionValidationError::FieldOverlap,
+			"Overlapping reflection fields were accepted");
+		ReflectionLayoutCandidate inconsistentRecord = candidate;
+		for (ReflectionFieldCandidate& field : inconsistentRecord.Fields)
+		{
+			if (field.Field == ReflectionField::PropertyElementSize)
+				field.ContainerSize = 72;
+		}
+		Require(
+			ValidateReflectionLayout(inconsistentRecord, names).Error
+				== ReflectionValidationError::FieldLayoutInvalid,
+			"One record kind accepted conflicting container sizes");
+		ReflectionLayoutCandidate corruptWitness = candidate;
+		corruptWitness.Witnesses.front().Expected = std::uint64_t{0};
+		const ReflectionLayoutValidationResult corruptResult =
+			ValidateReflectionLayout(corruptWitness, names);
+		Require(
+			corruptResult.Error == ReflectionValidationError::WitnessValueMismatch
+				&& !corruptResult.FieldReports.empty()
+				&& corruptResult.FieldReports.front().ReasonCode
+					== ToString(ReflectionValidationError::WitnessValueMismatch),
+			"A reflection witness with mismatched bytes was accepted");
+		ReflectionLayoutCandidate wrongName = candidate;
+		for (ReflectionFieldWitness& witness : wrongName.Witnesses)
+		{
+			if (witness.Field == ReflectionField::FFieldName)
+				witness.Expected = std::string("Pawn");
+		}
+		Require(
+			ValidateReflectionLayout(wrongName, names).Error
+				== ReflectionValidationError::NameWitnessMismatch,
+			"A reflection FName witness with the wrong semantic name was accepted");
+		ReflectionLayoutCandidate unavailable = candidate;
+		unavailable.PropertySystem = ReflectionPropertySystem::Unavailable;
+		Require(
+			ValidateReflectionLayout(unavailable, names).Error
+				== ReflectionValidationError::PropertySystemUnavailable,
+			"An unknown reflection property system was guessed");
+
+		const auto makePropertyProfile = [](const std::uint64_t fingerprint) {
+			return PropertyCodecProfile{
+				.Validated = true,
+				.ReflectionLayoutFingerprint = fingerprint,
+				.Source = "reflection-bound-property-fixture",
+				.DynamicArray = {true, 0, 8, 12, 16},
+				.Text = {true, 0, 0, 8},
+				.WeakObject = {true, 0, 4, 8},
+				.SoftObject = {true, {0, 8}, 2, 16, 32},
+				.SparseContainer = {true, 0, 8, 12, 16, 32, 40, 44, 56, 4}
+			};
+		};
 		class FacadeIdentitySource final : public IHandleIdentitySource
 		{
 		public:
@@ -1442,25 +1673,66 @@ namespace
 		EngineContextBuilder contextBuilder(51);
 		contextBuilder.SetIdentity(0x140000000, 0x140100000, 4242, 0, "Fixture", "5.4");
 		contextBuilder.SetNameProfile(nameProfile);
-		EngineFacade facade(
-			contextBuilder.Build(),
-			"property-codec-facade",
-			facadeIdentity);
-		Require(facade.ConfigurePropertyCodec(profile),
-			"EngineFacade rejected its first immutable property codec");
+		const std::shared_ptr<const EngineContext> context = contextBuilder.Build();
+
+		EngineFacade wrongThreadFacade(context, "reflection-wrong-thread", facadeIdentity);
+		const bool wrongThreadConfigured = std::async(
+			std::launch::async,
+			[&]() {
+				return wrongThreadFacade.ConfigureReflection(
+					validated.Layout,
+					makePropertyProfile(validated.Layout->Fingerprint()));
+			}).get();
+		Require(
+			!wrongThreadConfigured
+				&& !wrongThreadFacade.Reflection()
+				&& wrongThreadFacade.Stop(),
+			"Reflection validation was published from a different execution thread");
+
+		EngineFacade facade(context, "reflection-facade", facadeIdentity);
+		PropertyCodecProfile profile = makePropertyProfile(validated.Layout->Fingerprint());
+		PropertyCodecProfile mismatchedProfile = profile;
+		mismatchedProfile.ReflectionLayoutFingerprint ^= 1;
+		Require(
+			!facade.ConfigureReflection(validated.Layout, mismatchedProfile)
+				&& !facade.Reflection(),
+			"A property codec with a mismatched reflection fingerprint was published");
+		Require(
+			facade.ConfigureReflection(validated.Layout, profile),
+			"EngineFacade rejected a complete reflection runtime snapshot");
+		const std::shared_ptr<const ReflectionRuntimeSnapshot> retained = facade.Reflection();
 		const std::shared_ptr<const PropertyCodec> retainedCodec = facade.Properties();
 		Require(
-			retainedCodec
-				&& retainedCodec->IsConfigured()
-				&& !facade.ConfigurePropertyCodec(profile),
-			"EngineFacade did not enforce single ownership of the immutable property codec");
+			retained
+				&& retained->IsConfigured(51)
+				&& retainedCodec == retained->Properties
+				&& !facade.ConfigureReflection(validated.Layout, profile),
+			"EngineFacade did not atomically own one immutable reflection runtime snapshot");
+
+		RuntimeProbes probes;
+		probes.SafeMemoryEnabled = true;
+		probes.Reflection = retained;
+		const auto capabilities = BuildCoreCapabilities(*context, probes);
+		Require(
+			capabilities->IsAvailable("engine.reflection")
+				&& capabilities->IsAvailable("engine.property_codec"),
+			"A validated reflection runtime snapshot did not open its exact capabilities");
+
+		std::int32_t integer = 42;
+		PropertyDescriptor integerDescriptor{
+			.Kind = PropertyKind::Int32,
+			.TypeName = "int32",
+			.Size = sizeof(integer)
+		};
 		Require(
 			facade.Stop()
+				&& !facade.Reflection()
 				&& !facade.Properties()
+				&& retained->IsConfigured(51)
 				&& retainedCodec->Decode(
 					reinterpret_cast<std::uintptr_t>(&integer),
-					*intDescriptor).Ok(),
-			"EngineFacade did not atomically unpublish a self-contained property codec at stop");
+					integerDescriptor).Ok(),
+			"EngineFacade did not atomically unpublish a self-contained reflection snapshot");
 	}
 
 	void TestCoreRuntimeStateAndShutdown()
@@ -3994,6 +4266,7 @@ int main(const int argc, char** argv)
 		TestEngineContextAndCapabilities();
 		TestEngineNameCodec();
 		TestPropertyCodec();
+		TestReflectionLayout();
 		TestCoreRuntimeStateAndShutdown();
 		TestStableObjectAndFunctionHandles();
 		TestProductionSnapshotMetadataSource();
@@ -4014,7 +4287,7 @@ int main(const int argc, char** argv)
 		TestPostRenderFrameClientOwnershipAndDrain();
 		TestGameThreadMpscCapacity();
 		TestHttpServerLifecycle();
-		std::cout << "Core harness passed: deterministic bounded frame fuzz/disconnect matrix, secure sessions, real current-user Windows Named Pipe RPC/event lifecycle, runtime/capabilities, EngineFacade/immutable budgeted snapshots, domain commands, stable handles/FUObjectItem layout, bounded property codecs, bounded PE/version/global-pointer probing, pattern scanning, Hook RAII/drain, SafeMemory, USMAP consumer, bounded queues, cancellable owned game-thread/frame-client work, SEH, HTTP lifecycle, and shutdown.\n";
+		std::cout << "Core harness passed: deterministic bounded frame fuzz/disconnect matrix, secure sessions, real current-user Windows Named Pipe RPC/event lifecycle, runtime/capabilities, EngineFacade/immutable budgeted snapshots, domain commands, stable handles/FUObjectItem layout, witnessed reflection layouts, bounded property codecs, bounded PE/version/global-pointer probing, pattern scanning, Hook RAII/drain, SafeMemory, USMAP consumer, bounded queues, cancellable owned game-thread/frame-client work, SEH, HTTP lifecycle, and shutdown.\n";
 		return 0;
 	}
 	catch (const std::exception& error)
