@@ -11,6 +11,9 @@ struct GameThreadTaskControl
 	std::shared_ptr<IGameThreadWork> Work;
 	GameThreadTaskState State = GameThreadTaskState::Queued;
 	std::chrono::steady_clock::time_point Deadline;
+	std::chrono::steady_clock::time_point EnqueuedAt;
+	std::chrono::steady_clock::time_point StartedAt;
+	std::chrono::steady_clock::time_point FinishedAt;
 };
 
 namespace
@@ -95,12 +98,18 @@ bool GameThreadExecutor::Enable(const ProcessEventFn processEvent)
 
 bool GameThreadExecutor::DisableAndDrain(const int timeoutMs)
 {
+	std::vector<std::shared_ptr<IGameThreadWork>> releasedWork;
 	std::unique_lock<std::mutex> lock(m_Mutex);
 	m_Enabled.store(false, std::memory_order_release);
+	releasedWork.reserve(m_Queue.size());
 	for (const auto& task : m_Queue)
 	{
 		if (task->State == GameThreadTaskState::Queued)
+		{
 			task->State = GameThreadTaskState::Cancelled;
+			task->FinishedAt = std::chrono::steady_clock::now();
+			releasedWork.push_back(std::move(task->Work));
+		}
 	}
 	m_Queue.clear();
 	m_Condition.notify_all();
@@ -139,6 +148,7 @@ GameThreadQueueResult GameThreadExecutor::Enqueue(
 	auto control = std::make_shared<GameThreadTaskControl>();
 	control->Work = std::move(work);
 	control->Deadline = deadline;
+	control->EnqueuedAt = now;
 	m_Queue.push_back(control);
 	ticket = GameThreadTicket(control);
 	m_Condition.notify_all();
@@ -172,9 +182,12 @@ GameThreadSubmitResult GameThreadExecutor::Wait(const GameThreadTicket& ticket)
 	if (task->State == GameThreadTaskState::Queued)
 	{
 		task->State = GameThreadTaskState::Expired;
+		task->FinishedAt = std::chrono::steady_clock::now();
+		std::shared_ptr<IGameThreadWork> releasedWork = std::move(task->Work);
 		RemoveQueuedLocked(task);
 		lock.unlock();
 		m_Condition.notify_all();
+		releasedWork.reset();
 		return GameThreadSubmitResult::TimedOutBeforeStart;
 	}
 	if (task->State == GameThreadTaskState::Running)
@@ -192,14 +205,48 @@ GameThreadCancelResult GameThreadExecutor::Cancel(const GameThreadTicket& ticket
 	if (task->State == GameThreadTaskState::Queued)
 	{
 		task->State = GameThreadTaskState::Cancelled;
+		task->FinishedAt = std::chrono::steady_clock::now();
+		std::shared_ptr<IGameThreadWork> releasedWork = std::move(task->Work);
 		RemoveQueuedLocked(task);
 		lock.unlock();
 		m_Condition.notify_all();
+		releasedWork.reset();
 		return GameThreadCancelResult::Cancelled;
 	}
 	if (task->State == GameThreadTaskState::Running)
 		return GameThreadCancelResult::Running;
 	return GameThreadCancelResult::Terminal;
+}
+
+bool GameThreadExecutor::TryGetTiming(
+	const GameThreadTicket& ticket,
+	GameThreadTaskTiming& timing) const
+{
+	timing = {};
+	if (!ticket.m_Control)
+		return false;
+
+	std::lock_guard<std::mutex> lock(m_Mutex);
+	const GameThreadTaskControl& task = *ticket.m_Control;
+	if (task.EnqueuedAt.time_since_epoch().count() == 0)
+		return false;
+	const auto now = std::chrono::steady_clock::now();
+	const auto queueEnd = task.StartedAt.time_since_epoch().count() != 0
+		? task.StartedAt
+		: (task.FinishedAt.time_since_epoch().count() != 0 ? task.FinishedAt : now);
+	const auto executionEnd = task.FinishedAt.time_since_epoch().count() != 0
+		? task.FinishedAt
+		: now;
+	timing.QueuedUs = queueEnd >= task.EnqueuedAt
+		? static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+			queueEnd - task.EnqueuedAt).count())
+		: 0;
+	timing.ExecuteUs = task.StartedAt.time_since_epoch().count() != 0
+		&& executionEnd >= task.StartedAt
+		? static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+			executionEnd - task.StartedAt).count())
+		: 0;
+	return true;
 }
 
 GameThreadSubmitResult GameThreadExecutor::SubmitOwned(
@@ -241,6 +288,7 @@ GameThreadSubmitResult GameThreadExecutor::SubmitProcessEvent(
 		auto control = std::make_shared<GameThreadTaskControl>();
 		control->Work = work;
 		control->Deadline = deadline;
+		control->EnqueuedAt = std::chrono::steady_clock::now();
 		m_Queue.push_back(control);
 		ticket = GameThreadTicket(control);
 	}
@@ -304,6 +352,7 @@ void GameThreadExecutor::Pump() noexcept
 		return;
 
 	std::shared_ptr<GameThreadTaskControl> task;
+	std::vector<std::shared_ptr<IGameThreadWork>> discardedWork;
 	{
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		while (!m_Queue.empty())
@@ -318,6 +367,8 @@ void GameThreadExecutor::Pump() noexcept
 			if (std::chrono::steady_clock::now() >= task->Deadline)
 			{
 				task->State = GameThreadTaskState::Expired;
+				task->FinishedAt = std::chrono::steady_clock::now();
+				discardedWork.push_back(std::move(task->Work));
 				task.reset();
 				m_Condition.notify_all();
 				continue;
@@ -325,11 +376,14 @@ void GameThreadExecutor::Pump() noexcept
 			if (!m_Enabled.load(std::memory_order_acquire))
 			{
 				task->State = GameThreadTaskState::Cancelled;
+				task->FinishedAt = std::chrono::steady_clock::now();
+				discardedWork.push_back(std::move(task->Work));
 				task.reset();
 				m_Condition.notify_all();
 				continue;
 			}
 			task->State = GameThreadTaskState::Running;
+			task->StartedAt = std::chrono::steady_clock::now();
 			break;
 		}
 	}
@@ -348,14 +402,18 @@ void GameThreadExecutor::Pump() noexcept
 		finishedUs >= startedUs ? finishedUs - startedUs : 0,
 		std::memory_order_release);
 
+	std::shared_ptr<IGameThreadWork> releasedWork;
 	{
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		task->State = succeeded
 			? GameThreadTaskState::Completed
 			: GameThreadTaskState::Failed;
+		task->FinishedAt = std::chrono::steady_clock::now();
+		releasedWork = std::move(task->Work);
 		m_Processing.store(false, std::memory_order_release);
 	}
 	m_Condition.notify_all();
+	releasedWork.reset();
 }
 
 bool GameThreadExecutor::IsEnabled() const noexcept

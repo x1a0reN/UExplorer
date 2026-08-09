@@ -1,0 +1,18 @@
+{
+  "ok": true,
+  "request_id": 42,
+  "session_id": "fixture-session-4242",
+  "error": null,
+  "data": {
+    "session_id": "fixture-session-4242",
+    "context_generation": 42,
+    "index": 7,
+    "serial": 101,
+    "address": "0x0000000140100000",
+    "class_fingerprint": "A1B2C3D4E5F60708"
+  },
+  "timing": {
+    "queued_us": 12,
+    "execute_us": 34
+  }
+}

@@ -77,6 +77,12 @@ struct GameThreadDiagnostics
 	std::size_t Capacity = 0;
 };
 
+struct GameThreadTaskTiming
+{
+	std::uint64_t QueuedUs = 0;
+	std::uint64_t ExecuteUs = 0;
+};
+
 struct GameThreadTaskControl;
 
 class GameThreadTicket final
@@ -114,6 +120,7 @@ public:
 		GameThreadTicket& ticket);
 	GameThreadSubmitResult Wait(const GameThreadTicket& ticket);
 	GameThreadCancelResult Cancel(const GameThreadTicket& ticket);
+	bool TryGetTiming(const GameThreadTicket& ticket, GameThreadTaskTiming& timing) const;
 
 	GameThreadSubmitResult SubmitOwned(
 		std::shared_ptr<IGameThreadWork> work,

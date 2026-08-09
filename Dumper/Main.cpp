@@ -20,16 +20,22 @@
 #include "API/DumpApi.h"
 #include "Runtime/CoreCapabilities.h"
 #include "Runtime/CoreRuntimeAccess.h"
+#include "Runtime/CoreSession.h"
 #include "Runtime/EngineContextCapture.h"
 #include "Runtime/GameThreadExecutor.h"
 #include "Runtime/ObjectArrayIdentitySource.h"
 #include "Runtime/ShutdownCoordinator.h"
+#include "Services/CoreCommandService.h"
+#include "Services/CoreCommandServiceAccess.h"
+#include "Services/CoreStatusDiagnostics.h"
 #include "Settings.h"
 #include "OffsetFinder/Offsets.h"
 
 static std::atomic<bool> g_Running{ true };
 static std::unique_ptr<UExplorer::HttpServer> g_Server;
 static UExplorer::Runtime::CoreRuntime g_Runtime;
+static UExplorer::Services::EngineCoreStatusDiagnosticsSource g_StatusDiagnostics;
+static std::unique_ptr<UExplorer::Services::CoreCommandService> g_CommandService;
 static HMODULE g_Module = nullptr;
 
 namespace
@@ -182,6 +188,9 @@ namespace
 		probes.SafeMemoryEnabled = true;
 		probes.ObjectIdentitySourceEnabled =
 			UExplorer::Runtime::GetObjectArrayIdentitySource().IsLayoutAvailable();
+		probes.ObjectHandleValidationEnabled =
+			g_CommandService && g_CommandService->IsConfigured();
+		probes.FunctionCallServiceEnabled = false;
 		probes.LegacyHttpListening = legacyHttpListening;
 		const auto capabilities = UExplorer::Runtime::BuildCoreCapabilities(*snapshot.Context, probes);
 		if (!g_Runtime.PublishCapabilities(capabilities))
@@ -193,6 +202,8 @@ namespace
 
 	void StopFailedInitialization(HMODULE module, FILE* consoleFile, const char* code, const std::string& message)
 	{
+		UExplorer::Services::SetCoreCommandService(nullptr);
+		g_CommandService.reset();
 		g_Runtime.MarkFailed(code, message);
 		g_Runtime.BeginStopping();
 		g_Runtime.MarkStopped();
@@ -298,7 +309,18 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 
 	std::cerr << "[UExplorer] Initializing...\n";
 	UExplorer::Runtime::SetCoreRuntime(&g_Runtime);
-	if (!g_Runtime.BeginInitialize())
+	std::string coreSessionId;
+	if (!UExplorer::Runtime::TryGenerateCoreSessionId(coreSessionId))
+	{
+		std::cerr << "[UExplorer] FATAL: secure Core session generation failed.\n";
+		StopFailedInitialization(
+			Module,
+			Dummy,
+			"CORE_SESSION_GENERATION_FAILED",
+			"BCryptGenRandom could not create the Core session identity");
+		return 1;
+	}
+	if (!g_Runtime.BeginInitialize(coreSessionId))
 	{
 		std::cerr << "[UExplorer] FATAL: CoreRuntime rejected initialization transition.\n";
 		UExplorer::Runtime::SetCoreRuntime(nullptr);
@@ -344,6 +366,23 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 	}
 
 	std::cerr << "[UExplorer] Engine core initialized.\n";
+	try
+	{
+		g_CommandService = std::make_unique<UExplorer::Services::CoreCommandService>(
+			g_Runtime,
+			UExplorer::Runtime::GetGameThreadExecutor(),
+			UExplorer::Runtime::GetObjectArrayIdentitySource(),
+			g_StatusDiagnostics);
+		if (!g_CommandService->IsConfigured())
+			throw std::runtime_error("Core command service rejected the runtime session/context");
+		UExplorer::Services::SetCoreCommandService(g_CommandService.get());
+	}
+	catch (const std::exception& e)
+	{
+		std::cerr << "[UExplorer] FATAL: command service init failed: " << e.what() << "\n";
+		StopFailedInitialization(Module, Dummy, "COMMAND_SERVICE_INITIALIZATION_FAILED", e.what());
+		return 1;
+	}
 
 	// Startup runs on an owned worker thread. Do not call ProcessEvent here;
 	// unresolved metadata remains unavailable until a verified game-thread command exists.
@@ -408,6 +447,7 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 	std::cerr << "[UExplorer] Shutting down...\n";
 
 	g_Runtime.BeginStopping();
+	UExplorer::Services::SetCoreCommandService(nullptr);
 	UExplorer::API::SetServer(nullptr);
 	bool serverStopped = true;
 	bool dumpStopped = true;
@@ -417,9 +457,6 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 		serverStopped = !g_Server || g_Server->Stop();
 		return serverStopped;
 	});
-	shutdown.AddStage("runtime_requests", [&] {
-		return g_Runtime.WaitForRequests(std::chrono::milliseconds(5000));
-	});
 	shutdown.AddStage("dump_jobs", [&] {
 		dumpStopped = UExplorer::API::ShutdownDumpJobs();
 		return dumpStopped;
@@ -427,6 +464,9 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 	shutdown.AddStage("hooks", [&] {
 		hooksStopped = UExplorer::API::ShutdownHooks();
 		return hooksStopped;
+	});
+	shutdown.AddStage("runtime_requests", [&] {
+		return g_Runtime.WaitForRequests(std::chrono::milliseconds(5000));
 	});
 	const UExplorer::Runtime::ShutdownReport shutdownReport = shutdown.Run();
 	unloadSafe = unloadSafe && shutdownReport.SafeToUnload;
@@ -450,6 +490,7 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 		FreeConsole();
 		return 1;
 	}
+	g_CommandService.reset();
 	if (!g_Runtime.MarkStopped())
 	{
 		g_Runtime.RecordShutdownFailure(

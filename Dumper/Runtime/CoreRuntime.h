@@ -49,6 +49,7 @@ inline const char* ToString(const CoreState state)
 struct CoreRuntimeSnapshot
 {
 	CoreState State = CoreState::Created;
+	std::string SessionId;
 	std::shared_ptr<const EngineContext> Context;
 	std::shared_ptr<const CapabilitySnapshot> Capabilities;
 	std::vector<std::string> ReadinessBlockers;
@@ -122,11 +123,24 @@ public:
 		std::shared_ptr<const CapabilitySnapshot> m_Capabilities;
 	};
 
-	bool BeginInitialize()
+	bool BeginInitialize(std::string sessionId)
 	{
+		if (sessionId.empty() || sessionId.size() > 128)
+			return false;
+		for (const char value : sessionId)
+		{
+			const bool valid = (value >= '0' && value <= '9')
+				|| (value >= 'A' && value <= 'Z')
+				|| (value >= 'a' && value <= 'z')
+				|| value == '-'
+				|| value == '_';
+			if (!valid)
+				return false;
+		}
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		if (m_State != CoreState::Created)
 			return false;
+		m_SessionId = std::move(sessionId);
 		m_State = CoreState::Initializing;
 		m_ReadinessBlockers.clear();
 		return true;
@@ -250,6 +264,7 @@ public:
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		return {
 			.State = m_State,
+			.SessionId = m_SessionId,
 			.Context = m_Context,
 			.Capabilities = m_Capabilities,
 			.ReadinessBlockers = m_ReadinessBlockers,
@@ -291,6 +306,7 @@ private:
 	mutable std::mutex m_Mutex;
 	std::condition_variable m_Condition;
 	CoreState m_State = CoreState::Created;
+	std::string m_SessionId;
 	std::shared_ptr<const EngineContext> m_Context;
 	std::shared_ptr<const CapabilitySnapshot> m_Capabilities;
 	std::vector<std::string> m_RequiredCapabilities;

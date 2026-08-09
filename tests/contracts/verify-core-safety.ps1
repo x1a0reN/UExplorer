@@ -22,6 +22,7 @@ $gameThreadHeader = Read-ProjectFile 'Dumper\Runtime\GameThreadExecutor.h'
 $gameThreadImplementation = Read-ProjectFile 'Dumper\Runtime\GameThreadExecutor.cpp'
 $gameThreadAdapter = Read-ProjectFile 'Dumper\API\GameThreadQueue.h'
 $gameThread = $gameThreadHeader + $gameThreadImplementation
+$commandService = Read-ProjectFile 'Dumper\Services\CoreCommandService.cpp'
 $callApi = Read-ProjectFile 'Dumper\API\CallApi.cpp'
 $hookApi = Read-ProjectFile 'Dumper\API\HookApi.cpp'
 $callbackBarrier = Read-ProjectFile 'Dumper\Runtime\CallbackBarrier.h'
@@ -95,7 +96,9 @@ foreach ($token in @('kCompressionNone = 0', 'WriteU32LittleEndian(header + 8, p
     Assert-Contains $usmapContainer $token 'USMAP payload/header invariant is missing.'
 }
 
-Assert-Contains $statusApi 'RECONNECT_DISABLED' 'Unsafe global reconnect must remain disabled.'
+Assert-Contains $statusApi 'status.reconnect' 'Status adapter must route reconnect through the command boundary.'
+Assert-Contains $commandService 'RECONNECT_DISABLED' 'Unsafe global reconnect must remain disabled.'
+Assert-NotContains $commandService 'ProcessEvent(' 'Domain command handlers must not call naked ProcessEvent.'
 Assert-Contains $worldApi 'ACTOR_TRANSFORM_WRITE_DISABLED' 'Raw actor transform writes must remain disabled.'
 Assert-NotContains $memoryPage "connectWebSocket('/ws/console'" 'The fake WebSocket console must not be reachable from the UI.'
 Assert-NotContains $memoryPage "subscribeEventStream('/events/watches'" 'Polling-driven watches must not claim SSE real-time behavior.'

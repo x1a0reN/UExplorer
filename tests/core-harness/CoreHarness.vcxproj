@@ -46,14 +46,19 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <AdditionalIncludeDirectories>$(ProjectDir)..\..\Dumper;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
+    <Link>
+      <AdditionalDependencies>bcrypt.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp" />
+	<ClCompile Include="..\..\Dumper\Runtime\CoreSession.cpp" />
 	<ClCompile Include="..\..\Dumper\Runtime\FUObjectItemLayout.cpp" />
 	<ClCompile Include="..\..\Dumper\Runtime\GameThreadExecutor.cpp" />
     <ClCompile Include="..\..\Dumper\Runtime\ObjectHandle.cpp" />
     <ClCompile Include="..\..\Dumper\Runtime\SafeMemory.cpp" />
     <ClCompile Include="..\..\Dumper\Runtime\VTableHook.cpp" />
+	<ClCompile Include="..\..\Dumper\Services\CoreCommandService.cpp" />
     <ClCompile Include="..\..\Dumper\Server\HttpServer.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -62,6 +67,7 @@
     <ClInclude Include="..\..\Dumper\Runtime\CapabilityRegistry.h" />
     <ClInclude Include="..\..\Dumper\Runtime\CoreCapabilities.h" />
     <ClInclude Include="..\..\Dumper\Runtime\CoreRuntime.h" />
+	<ClInclude Include="..\..\Dumper\Runtime\CoreSession.h" />
     <ClInclude Include="..\..\Dumper\Runtime\CallbackBarrier.h" />
     <ClInclude Include="..\..\Dumper\Runtime\EngineContext.h" />
 	<ClInclude Include="..\..\Dumper\Runtime\FUObjectItemLayout.h" />
@@ -70,6 +76,8 @@
     <ClInclude Include="..\..\Dumper\Runtime\SafeMemory.h" />
     <ClInclude Include="..\..\Dumper\Runtime\ShutdownCoordinator.h" />
     <ClInclude Include="..\..\Dumper\Runtime\VTableHook.h" />
+	<ClInclude Include="..\..\Dumper\Services\CoreCommandService.h" />
+	<ClInclude Include="..\..\Dumper\Services\CoreStatusDiagnostics.h" />
     <ClInclude Include="..\..\Dumper\API\GameThreadQueue.h" />
     <ClInclude Include="..\..\Dumper\Generator\Public\Generators\UsmapContainer.h" />
     <ClInclude Include="..\..\Dumper\Server\HttpServer.h" />

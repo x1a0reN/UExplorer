@@ -19,6 +19,7 @@ function Assert-NotContains([string]$text, [string]$token, [string]$message) {
 }
 
 $runtime = Read-ProjectFile 'Dumper\Runtime\CoreRuntime.h'
+$coreSession = Read-ProjectFile 'Dumper\Runtime\CoreSession.cpp'
 $context = Read-ProjectFile 'Dumper\Runtime\EngineContext.h'
 $capture = Read-ProjectFile 'Dumper\Runtime\EngineContextCapture.cpp'
 $capabilities = Read-ProjectFile 'Dumper\Runtime\CoreCapabilities.h'
@@ -35,6 +36,9 @@ $vtableHook = Read-ProjectFile 'Dumper\Runtime\VTableHook.cpp'
 $gameThreadHeader = Read-ProjectFile 'Dumper\Runtime\GameThreadExecutor.h'
 $gameThreadImplementation = Read-ProjectFile 'Dumper\Runtime\GameThreadExecutor.cpp'
 $gameThread = $gameThreadHeader + $gameThreadImplementation
+$commandHeader = Read-ProjectFile 'Dumper\Services\CoreCommandService.h'
+$commandImplementation = Read-ProjectFile 'Dumper\Services\CoreCommandService.cpp'
+$commandService = $commandHeader + $commandImplementation
 $memoryApi = Read-ProjectFile 'Dumper\API\MemoryApi.cpp'
 $objectsApi = Read-ProjectFile 'Dumper\API\ObjectsApi.cpp'
 $hookApi = Read-ProjectFile 'Dumper\API\HookApi.cpp'
@@ -45,8 +49,12 @@ $harness = Read-ProjectFile 'tests\core-harness\main.cpp'
 
 foreach ($token in @('Created', 'Initializing', 'Ready', 'Failed', 'Stopping', 'Stopped',
         'RequestLease', 'CORE_STOPPING', 'WaitForRequests', 'ReadinessSatisfied',
+        'SessionId', 'BeginInitialize(std::string sessionId)',
         'std::shared_ptr<const EngineContext>')) {
     Assert-Contains $runtime $token 'CoreRuntime state/ownership contract regressed.'
+}
+foreach ($token in @('BCryptGenRandom', 'BCRYPT_USE_SYSTEM_PREFERRED_RNG', 'core-')) {
+    Assert-Contains $coreSession $token 'Secure Core session generation regressed.'
 }
 
 foreach ($token in @('Generation()', 'OffsetReport', 'Required engine offsets are not validated',
@@ -67,6 +75,19 @@ foreach ($token in @('transport.named_pipe', 'PIPE_LISTENER_NOT_READY', 'objects
 Assert-Contains $shutdown 'SafeToUnload' 'ShutdownCoordinator must report unload safety.'
 Assert-Contains $gameThread 'PumpThreadStable' 'Game-thread pump identity diagnostics are missing.'
 Assert-Contains $gameThread 'LastPumpTickMonotonicUs' 'Game-thread liveness diagnostics are missing.'
+foreach ($token in @('GameThreadTaskTiming', 'TryGetTiming', 'PumpThreadWaitDenied',
+        'releasedWork = std::move(task->Work)')) {
+    Assert-Contains $gameThread $token 'Game-thread command timing/terminal ownership regressed.'
+}
+
+foreach ($token in @('status.inspect', 'status.engine', 'status.health',
+        'objects.handle.issue', 'functions.handle.issue', 'SESSION_MISMATCH',
+        'TryAcquireRequest', 'std::move(*lease)', 'm_GameThread.Enqueue',
+        'onGameThreadQueued(ticket)', 'SerializeObjectHandle', 'SerializeFunctionHandle')) {
+    Assert-Contains $commandService $token 'Transport-neutral Core command boundary regressed.'
+}
+Assert-NotContains $commandService 'HttpResponse' 'Core domain commands must not construct HTTP responses.'
+Assert-NotContains $commandService 'HttpServer' 'Core domain commands must not depend on the legacy HTTP server.'
 
 foreach ($token in @('CheckedAddressRange', 'ReadMemory', 'WriteMemory', 'CompareExchangePointer',
         'AllowExecutableWrite', 'FlushInstructionCache')) {
@@ -134,13 +155,20 @@ foreach ($token in @('CaptureEngineContext', 'RefreshRuntimeCapabilities', 'Shut
 
 foreach ($token in @('liveness', 'readiness', 'offset_reports', 'capabilities', 'context_generation',
         'last_tick_monotonic_us', 'queue_depth')) {
-    Assert-Contains $statusApi $token 'Status API does not expose truthful runtime state.'
+    Assert-Contains $commandService $token 'Core status command does not expose truthful runtime state.'
 }
 Assert-NotContains $statusApi 'Off::' 'Status handlers must read the immutable EngineContext, not raw offset globals.'
 Assert-NotContains $statusApi 'Settings::' 'Status handlers must read the immutable EngineContext, not mutable settings globals.'
 Assert-NotContains $statusApi 'ObjectArray::' 'Status handlers must not query the live object array from HTTP workers.'
+foreach ($token in @('service->Execute', 'status.inspect', 'status.engine', 'status.health')) {
+    Assert-Contains $statusApi $token 'Legacy status adapter bypassed the Core command service.'
+}
+Assert-NotContains $statusApi 'CoreRuntimeSnapshot' 'Status HTTP adapter must not duplicate runtime business logic.'
 
 foreach ($token in @('TestEngineContextAndCapabilities', 'TestCoreRuntimeStateAndShutdown',
+        'TestCoreSessionIdentity',
+        'TestCoreDomainCommandsAndHandleExecution', 'Handle command accepted transport-supplied identity fields',
+        'Domain command ticket did not cancel queued work',
         'TestStableObjectAndFunctionHandles', 'Object handle crossed a session boundary',
         'Recycled object slot retained a valid handle', 'Function handle ignored owner recycling',
         'Non-canonical display path became a function execution identity',
@@ -158,7 +186,10 @@ foreach ($token in @('TestEngineContextAndCapabilities', 'TestCoreRuntimeStateAn
 $payloadSchema = Get-Content -LiteralPath (Join-Path $root 'protocol\v1\schema\payload.schema.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 $objectHandleFixture = Get-Content -LiteralPath (Join-Path $root 'protocol\v1\fixtures\object-handle.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 $functionHandleFixture = Get-Content -LiteralPath (Join-Path $root 'protocol\v1\fixtures\function-handle.json') -Raw -Encoding UTF8 | ConvertFrom-Json
-if ($null -eq $payloadSchema.'$defs'.objectHandle -or $null -eq $payloadSchema.'$defs'.functionHandle) {
+$objectHandleRequestFixture = Get-Content -LiteralPath (Join-Path $root 'protocol\v1\fixtures\object-handle-request.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+$objectHandleResponseFixture = Get-Content -LiteralPath (Join-Path $root 'protocol\v1\fixtures\object-handle-response.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+if ($null -eq $payloadSchema.'$defs'.objectHandle -or $null -eq $payloadSchema.'$defs'.functionHandle -or
+        $null -eq $payloadSchema.'$defs'.handleIssueData -or $null -eq $payloadSchema.'$defs'.emptyCommandData) {
     throw 'IPC payload schema does not define stable object/function handles.'
 }
 if ($objectHandleFixture.serial -le 0 -or $objectHandleFixture.context_generation -le 0) {
@@ -170,6 +201,12 @@ if ($functionHandleFixture.function.session_id -ne $functionHandleFixture.owner.
 }
 if ($functionHandleFixture.full_path -notmatch '^Function fname:[0-9a-f]+:[0-9]+(?:\.fname:[0-9a-f]+:[0-9]+)+$') {
     throw 'Function handle fixture does not use the canonical raw-FName identity path.'
+}
+if ($objectHandleRequestFixture.operation -ne 'objects.handle.issue' -or
+        $objectHandleRequestFixture.data.PSObject.Properties.Name.Count -ne 1 -or
+        $objectHandleRequestFixture.data.index -ne $objectHandleResponseFixture.data.index -or
+        $objectHandleRequestFixture.session_id -ne $objectHandleResponseFixture.session_id) {
+    throw 'Object handle command fixtures do not preserve strict discovery input/session identity.'
 }
 
 Write-Host 'Core runtime contract verified: immutable context, stable handles, capability readiness, SafeMemory, request drain, and coordinated shutdown.'

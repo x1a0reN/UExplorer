@@ -58,5 +58,23 @@ not a wall-clock timestamp shared between processes.
 - Domain failures use a Response payload with `ok=false`; framing failures terminate
   the connection.
 
+## Registered Core commands
+
+The v1 command registry is explicit. Unknown operations return
+`OPERATION_NOT_SUPPORTED`; they are never forwarded to a legacy route.
+
+| Operation | Data | Execution |
+|---|---|---|
+| `status.inspect` | `{}` | Worker-safe immutable runtime snapshot |
+| `status.engine` | `{}` | Worker-safe immutable engine/offset report |
+| `status.health` | `{}` | Worker-safe liveness/readiness snapshot |
+| `status.reconnect` | `{}` | Always `RECONNECT_DISABLED` until an exclusive generation transition exists |
+| `objects.handle.issue` | `{"index": int32}` | PostRender game-thread identity re-read |
+| `functions.handle.issue` | `{"index": int32}` | PostRender game-thread function/owner/path re-read |
+
+Handle issue commands accept only an index as discovery input. Caller-supplied
+addresses, serials, classes, owners, paths, or fingerprints are rejected rather than
+trusted. The response contains the complete handle produced at the execution point.
+
 See `protocol.json`, `schema/payload.schema.json`, and `fixtures/` for the
 machine-readable contract and golden data.

@@ -10,12 +10,14 @@
 #include "Runtime/CallbackBarrier.h"
 #include "Runtime/CoreCapabilities.h"
 #include "Runtime/CoreRuntime.h"
+#include "Runtime/CoreSession.h"
 #include "Runtime/FUObjectItemLayout.h"
 #include "Runtime/GameThreadExecutor.h"
 #include "Runtime/ObjectHandle.h"
 #include "Runtime/SafeMemory.h"
 #include "Runtime/ShutdownCoordinator.h"
 #include "Runtime/VTableHook.h"
+#include "Services/CoreCommandService.h"
 #include "API/GameThreadQueue.h"
 #include "Generator/Public/Generators/UsmapContainer.h"
 #include "Server/HttpServer.h"
@@ -252,6 +254,30 @@ namespace
 		return builder.Build();
 	}
 
+	void TestCoreSessionIdentity()
+	{
+		using namespace UExplorer::Runtime;
+
+		std::string first;
+		std::string second;
+		Require(TryGenerateCoreSessionId(first), "Secure Core session generation failed");
+		Require(TryGenerateCoreSessionId(second), "Second secure Core session generation failed");
+		Require(first.size() == 37 && first.starts_with("core-"), "Core session format changed");
+		Require(first != second, "Core session generator repeated a fixture identity");
+		for (const char value : first.substr(5))
+		{
+			Require(
+				(value >= '0' && value <= '9') || (value >= 'A' && value <= 'F'),
+				"Core session contains a non-hex random byte");
+		}
+
+		CoreRuntime invalidRuntime;
+		Require(!invalidRuntime.BeginInitialize(""), "CoreRuntime accepted an empty session identity");
+		Require(
+			!invalidRuntime.BeginInitialize("invalid session"),
+			"CoreRuntime accepted a session identity outside the protocol alphabet");
+	}
+
 	void TestEngineContextAndCapabilities()
 	{
 		using namespace UExplorer::Runtime;
@@ -288,6 +314,12 @@ namespace
 		probes.SafeMemoryEnabled = true;
 		probes.ObjectIdentitySourceEnabled = true;
 		probes.ObjectHandleValidationEnabled = true;
+		const auto withoutCallService = BuildCoreCapabilities(*context, probes);
+		Require(
+			withoutCallService->IsAvailable("objects.handles")
+				&& !withoutCallService->IsAvailable("call.invoke"),
+			"Handle capability falsely enabled an unregistered function-call command");
+		probes.FunctionCallServiceEnabled = true;
 		const auto withoutPipe = BuildCoreCapabilities(*context, probes);
 		Require(!withoutPipe->IsAvailable("transport.named_pipe"), "Missing pipe listener was advertised");
 		Require(withoutPipe->IsAvailable("call.invoke"), "Validated call dependencies were rejected");
@@ -331,7 +363,12 @@ namespace
 		using namespace UExplorer::Runtime;
 
 		CoreRuntime runtime;
-		Require(runtime.BeginInitialize(), "CoreRuntime rejected Created -> Initializing");
+		Require(
+			runtime.BeginInitialize("fixture-core-session"),
+			"CoreRuntime rejected Created -> Initializing");
+		Require(
+			runtime.Snapshot().SessionId == "fixture-core-session",
+			"CoreRuntime did not own its session identity");
 		const auto context = MakeEngineContext();
 		Require(runtime.PublishContext(context), "CoreRuntime rejected its first immutable context");
 
@@ -435,6 +472,22 @@ namespace
 				return false;
 			identity = found->second;
 			return true;
+		}
+	};
+
+	class FakeCoreStatusDiagnostics final : public UExplorer::Services::ICoreStatusDiagnosticsSource
+	{
+	public:
+		std::string ProcessArchitecture() const override { return "x64-fixture"; }
+
+		UExplorer::Services::ScriptOffsetDiagnostics CaptureScriptOffsetDiagnostics() const override
+		{
+			return {
+				.SelectedOffset = 0x60,
+				.SelectedScore = 100,
+				.Confidence = "fixture",
+				.AnomalyTags = "none"
+			};
 		}
 	};
 
@@ -548,6 +601,171 @@ namespace
 		Require(
 			std::string(ToString(HandleError::SerialMismatch)) == "HANDLE_SERIAL_MISMATCH",
 			"Stable handle error code changed");
+	}
+
+	void TestCoreDomainCommandsAndHandleExecution()
+	{
+		using namespace UExplorer::Runtime;
+		using namespace UExplorer::Services;
+
+		CoreRuntime runtime;
+		Require(runtime.BeginInitialize("fixture-command-session"), "Command runtime did not initialize");
+		const auto context = MakeEngineContext(77);
+		Require(runtime.PublishContext(context), "Command runtime rejected its EngineContext");
+		RuntimeProbes probes;
+		probes.GameThreadExecutorEnabled = true;
+		probes.GameThreadPumpObserved = true;
+		probes.GameThreadPumpThreadStable = true;
+		probes.GameThreadPumpActive = true;
+		probes.SafeMemoryEnabled = true;
+		probes.ObjectIdentitySourceEnabled = true;
+		probes.ObjectHandleValidationEnabled = true;
+		probes.NamedPipeListening = true;
+		Require(
+			runtime.PublishCapabilities(BuildCoreCapabilities(*context, probes))
+				&& runtime.TryMarkReady(RequiredReadyCapabilities()),
+			"Command runtime did not become ready");
+
+		GameThreadExecutor executor;
+		Require(executor.Enable(&FakeProcessEvent), "Command executor did not enable");
+		FakeHandleIdentitySource source;
+		source.Objects.emplace(7, ObjectIdentity{
+			.Index = 7,
+			.SerialNumber = 101,
+			.Address = 0x1000,
+			.ClassFingerprint = 0xA001
+		});
+		source.Functions.emplace(100, FunctionIdentity{
+			.Function = {
+				.Index = 100,
+				.SerialNumber = 301,
+				.Address = 0x5000,
+				.ClassFingerprint = 0xF001
+			},
+			.Owner = {
+				.Index = 200,
+				.SerialNumber = 401,
+				.Address = 0x6000,
+				.ClassFingerprint = 0xC001
+			},
+			.FullPath = "Function fname:10:0.fname:20:0",
+			.SignatureFingerprint = 0x5151
+		});
+		FakeCoreStatusDiagnostics diagnostics;
+		CoreCommandService service(runtime, executor, source, diagnostics);
+		Require(service.IsConfigured(), "Core domain command service was not configured");
+
+		const CoreCommandResponse status = service.Execute({
+			.RequestId = 1,
+			.Operation = "status.inspect",
+			.SessionId = service.SessionId(),
+			.TimeoutMs = 5000,
+			.Data = json::object()
+		});
+		Require(
+			status.Ok
+				&& status.Data.at("runtime").at("session_id") == "fixture-command-session"
+				&& status.Data.at("architecture") == "x64-fixture",
+			"Status domain command did not serialize the immutable runtime");
+
+		CoreCommandRequest objectRequest{
+			.RequestId = 2,
+			.Operation = "objects.handle.issue",
+			.SessionId = service.SessionId(),
+			.TimeoutMs = 1000,
+			.Data = {{"index", 7}}
+		};
+		auto objectFuture = std::async(std::launch::async, [&service, objectRequest] {
+			return service.Execute(objectRequest);
+		});
+		WaitUntil([&executor] { return executor.HasPending(); }, "Object handle command was not queued");
+		executor.Pump();
+		const CoreCommandResponse objectResponse = objectFuture.get();
+		Require(
+			objectResponse.Ok
+				&& objectResponse.Data.at("session_id") == "fixture-command-session"
+				&& objectResponse.Data.at("context_generation") == 77
+				&& objectResponse.Data.at("serial") == 101
+				&& objectResponse.Data.at("address") == "0x1000",
+			"Object handle domain command did not return a stable execution identity");
+
+		CoreCommandRequest functionRequest{
+			.RequestId = 3,
+			.Operation = "functions.handle.issue",
+			.SessionId = service.SessionId(),
+			.TimeoutMs = 1000,
+			.Data = {{"index", 100}}
+		};
+		auto functionFuture = std::async(std::launch::async, [&service, functionRequest] {
+			return service.Execute(functionRequest);
+		});
+		WaitUntil([&executor] { return executor.HasPending(); }, "Function handle command was not queued");
+		executor.Pump();
+		const CoreCommandResponse functionResponse = functionFuture.get();
+		Require(
+			functionResponse.Ok
+				&& functionResponse.Data.at("full_path")
+					== "Function fname:10:0.fname:20:0"
+				&& functionResponse.Data.at("owner").at("serial") == 401,
+			"Function handle domain command did not bind its owner/path identity");
+
+		CoreCommandRequest wrongSession = objectRequest;
+		wrongSession.RequestId = 4;
+		wrongSession.SessionId = "stale-session";
+		const CoreCommandResponse rejectedSession = service.Execute(wrongSession);
+		Require(
+			!rejectedSession.Ok && rejectedSession.Error
+				&& rejectedSession.Error->Code == "SESSION_MISMATCH",
+			"Domain command crossed a Core session boundary");
+
+		CoreCommandRequest invalidData = objectRequest;
+		invalidData.RequestId = 5;
+		invalidData.Data = {{"index", 7}, {"address", "0x1000"}};
+		const CoreCommandResponse rejectedData = service.Execute(invalidData);
+		Require(
+			!rejectedData.Ok && rejectedData.Error
+				&& rejectedData.Error->Code == "INVALID_ARGUMENT",
+			"Handle command accepted transport-supplied identity fields");
+		invalidData.RequestId = 6;
+		invalidData.Data = {{"index", (std::numeric_limits<std::uint64_t>::max)()}};
+		const CoreCommandResponse rejectedUnsignedIndex = service.Execute(invalidData);
+		Require(
+			!rejectedUnsignedIndex.Ok && rejectedUnsignedIndex.Error
+				&& rejectedUnsignedIndex.Error->Code == "INVALID_ARGUMENT",
+			"Handle command narrowed an out-of-range unsigned index");
+
+		std::promise<GameThreadTicket> publishedTicket;
+		auto ticketFuture = publishedTicket.get_future();
+		CoreCommandRequest cancelledRequest = objectRequest;
+		cancelledRequest.RequestId = 7;
+		auto cancelledResponseFuture = std::async(
+			std::launch::async,
+			[&service, cancelledRequest, &publishedTicket] {
+				return service.Execute(
+					cancelledRequest,
+					[&publishedTicket](const GameThreadTicket& ticket) {
+						publishedTicket.set_value(ticket);
+					});
+			});
+		Require(
+			ticketFuture.wait_for(std::chrono::seconds(5)) == std::future_status::ready,
+			"Domain command did not publish its cancellation ticket");
+		const GameThreadTicket ticket = ticketFuture.get();
+		Require(
+			executor.Cancel(ticket) == GameThreadCancelResult::Cancelled,
+			"Domain command ticket did not cancel queued work");
+		const CoreCommandResponse cancelledResponse = cancelledResponseFuture.get();
+		Require(
+			!cancelledResponse.Ok && cancelledResponse.Error
+				&& cancelledResponse.Error->Code == "REQUEST_CANCELLED",
+			"Cancelled domain command did not return its explicit terminal error");
+
+		Require(runtime.BeginStopping(), "Command runtime did not begin stopping");
+		Require(executor.DisableAndDrain(), "Command executor did not drain");
+		Require(
+			runtime.WaitForRequests(std::chrono::milliseconds(100)),
+			"Domain command request leases did not drain");
+		Require(runtime.MarkStopped(), "Command runtime did not stop");
 	}
 
 	void TestHookOwnershipAndCallbackDrain()
@@ -1091,9 +1309,11 @@ int main(const int argc, char** argv)
 		TestMultipleFrames();
 		TestTerminalErrors();
 		TestUsmapContainer(fixtureDirectory);
+		TestCoreSessionIdentity();
 		TestEngineContextAndCapabilities();
 		TestCoreRuntimeStateAndShutdown();
 		TestStableObjectAndFunctionHandles();
+		TestCoreDomainCommandsAndHandleExecution();
 		TestFUObjectItemIdentityLayout();
 		TestHookOwnershipAndCallbackDrain();
 		TestSafeMemory();
@@ -1103,7 +1323,7 @@ int main(const int argc, char** argv)
 		TestGenericGameThreadWorkAndCancellation();
 		TestGameThreadMpscCapacity();
 		TestHttpServerLifecycle();
-		std::cout << "Core harness passed: framing, runtime/capabilities, stable handles/FUObjectItem layout, Hook RAII/drain, SafeMemory, USMAP consumer, bounded queues, cancellable owned game-thread work, SEH, HTTP lifecycle, and shutdown.\n";
+		std::cout << "Core harness passed: framing, secure sessions, runtime/capabilities, domain commands, stable handles/FUObjectItem layout, Hook RAII/drain, SafeMemory, USMAP consumer, bounded queues, cancellable owned game-thread work, SEH, HTTP lifecycle, and shutdown.\n";
 		return 0;
 	}
 	catch (const std::exception& error)

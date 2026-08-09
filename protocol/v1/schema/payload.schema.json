@@ -49,6 +49,19 @@
         "signature_fingerprint": { "type": "string", "pattern": "^[0-9A-F]{16}$" }
       }
     },
+    "emptyCommandData": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 0
+    },
+    "handleIssueData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["index"],
+      "properties": {
+        "index": { "type": "integer", "minimum": 0, "maximum": 2147483647 }
+      }
+    },
     "hello": {
       "type": "object",
       "additionalProperties": false,
@@ -82,7 +95,31 @@
         "session_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 120000 },
         "data": {}
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "enum": ["status.inspect", "status.engine", "status.health", "status.reconnect"]
+              }
+            },
+            "required": ["operation"]
+          },
+          "then": { "properties": { "data": { "$ref": "#/$defs/emptyCommandData" } } }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "enum": ["objects.handle.issue", "functions.handle.issue"]
+              }
+            },
+            "required": ["operation"]
+          },
+          "then": { "properties": { "data": { "$ref": "#/$defs/handleIssueData" } } }
+        }
+      ]
     },
     "error": {
       "type": "object",

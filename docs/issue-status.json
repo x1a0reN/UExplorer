@@ -54,7 +54,8 @@
         "2026-08-09: SafeMemory centralizes guarded range validation, SEH copy, protection restoration, executable-write policy, and atomic hook pointer exchange",
         "2026-08-09: VTableHookToken and CallbackBarrier replace manual Hook ownership flags and callback counters; ownership is allocated before CAS and status reads use atomic projections",
         "2026-08-09: ObjectArrayIdentitySource establishes a production SafeMemory/game-thread identity boundary for the explicit Epic 64-bit FUObjectItem profile",
-        "Legacy domain/API monoliths and remaining direct Off/Settings consumers still require migration"
+        "2026-08-09: transport-neutral CoreCommandService now owns status and handle-issue business logic; StatusApi is only a legacy HTTP adapter",
+        "Remaining legacy domain/API monoliths and direct Off/Settings consumers still require migration"
       ]
     },
     "ENG-007": {
@@ -66,7 +67,16 @@
       "verification": [
         "IPC v1 ADR and machine-readable protocol contract added",
         "2026-08-09: payload schema and golden fixtures define session/context/index/serial/address/class object handles plus owner/path/signature function handles",
-        "Operation-specific command payload schemas remain pending"
+        "2026-08-09: status commands require empty data and object/function handle issue commands require exactly one non-negative int32 index; request/response fixtures cover the object-handle flow",
+        "Operation-specific schemas for the remaining domain commands remain pending"
+      ]
+    },
+    "NET-014": {
+      "status": "in_progress",
+      "verification": [
+        "2026-08-09: CoreCommandResponse defines request/session identity, stable structured errors, and queued/execute microsecond timing",
+        "2026-08-09: command validation rejects invalid request IDs, sessions, operations, and deadlines with stable error codes",
+        "Named Pipe serialization plus event/log envelopes and end-to-end duration evidence remain pending"
       ]
     },
     "INJ-001": {
@@ -183,7 +193,8 @@
       "verification": [
         "2026-08-09: DisableAndDrain rejects new work, cancels queued tasks, wakes every waiter, and waits for the running task",
         "2026-08-09: GameThreadTicket adds explicit queued cancellation, reports running/terminal work without pretending to cancel it, and keeps Cancelled distinct from Disabled",
-        "Core harness covers explicit queued cancellation, shutdown cancellation, and running drain"
+        "2026-08-09: every terminal path detaches owned work outside the executor mutex, so a retained ticket cannot retain a command RequestLease",
+        "Core harness covers explicit queued cancellation, shutdown cancellation, retained tickets, request-lease release, and running drain"
       ]
     },
     "GT-004": {
@@ -213,6 +224,7 @@
       "verification": [
         "2026-08-09: monotonic deadline and queued/running/completed/failed/cancelled/expired states implemented",
         "2026-08-09: GameThreadTicket and Cancel provide the execution-layer primitive for queued cancellation",
+        "2026-08-09: CoreCommandService exposes each accepted ticket through a worker-side callback and reports queue/execute timing",
         "IPC request ID mapping and cancellation command remain R3 work"
       ]
     },
@@ -245,7 +257,8 @@
         "2026-08-09: ObjectHandleService issues and revalidates session, EngineContext generation, index, serial, address, and class fingerprint",
         "Core harness proves stale sessions, generation changes, slot recycling, address changes, and class changes are rejected",
         "2026-08-09: production ObjectArrayIdentitySource accepts only the explicit Epic x64 FUObjectItem 0x18/0x20 profile after stable slot/InternalIndex, cluster, and positive-serial witness checks; it rejects non-PostRender threads",
-        "Real UE target profile fixtures and domain-command integration remain pending"
+        "2026-08-09: objects.handle.issue accepts only an index and creates the complete handle through owned work at the verified PostRender execution point",
+        "Real UE target profile fixtures remain pending"
       ]
     },
     "OBJ-012": {
@@ -301,7 +314,8 @@
         "2026-08-09: FunctionHandle binds a serial-backed function object to an owner handle, full path, and signature fingerprint and revalidates all fields",
         "Legacy HTTP function/static/batch routes now return CALL_HANDLE_REQUIRED before registering index/name implementations; frontend execution controls are disabled",
         "2026-08-09: production function identity source binds a bounded raw-FName-token outer path, serial-backed owner, reflected flags/size, and exec pointer with coherent re-reads on the observed PostRender thread",
-        "Named Pipe domain-command integration and real UE fixtures remain pending"
+        "2026-08-09: functions.handle.issue is integrated through the game-thread CoreCommandService and rejects caller-supplied identity fields",
+        "Actual handle-validated call invocation, Named Pipe command wiring, and real UE fixtures remain pending"
       ]
     },
     "MEM-001": {
