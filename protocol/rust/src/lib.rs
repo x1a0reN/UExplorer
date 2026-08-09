@@ -1,4 +1,6 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::BTreeMap;
 use std::fmt;
 
 pub const MAGIC: [u8; 4] = *b"UEXP";
@@ -68,6 +70,113 @@ pub struct SnapshotPage {
     pub next_cursor: Option<SnapshotCursor>,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProtocolVersion {
+    pub major: u16,
+    pub minor: u16,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct HelloPayload {
+    pub host_version: String,
+    pub protocol: ProtocolVersion,
+    pub target_pid: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProtocolLimits {
+    pub max_payload_bytes: u32,
+    pub pending_rpc_per_session: u32,
+    pub game_thread_tasks: u32,
+    pub hook_event_ring: u32,
+    pub subscriber_events: u32,
+    pub dump_running: u32,
+    pub max_timeout_ms: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WelcomePayload {
+    pub core_version: String,
+    pub protocol: ProtocolVersion,
+    pub session_id: String,
+    pub target_pid: u32,
+    pub engine_profile: Option<String>,
+    pub capabilities: BTreeMap<String, bool>,
+    pub limits: ProtocolLimits,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RequestPayload {
+    pub operation: String,
+    pub session_id: String,
+    pub timeout_ms: u32,
+    pub data: Value,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RpcErrorPayload {
+    pub code: String,
+    pub message: String,
+    pub details: Value,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RpcTiming {
+    pub queued_us: u64,
+    pub execute_us: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResponsePayload {
+    pub ok: bool,
+    pub request_id: u64,
+    pub session_id: String,
+    pub error: Option<RpcErrorPayload>,
+    pub data: Value,
+    pub timing: RpcTiming,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EventPayload {
+    pub seq: u64,
+    pub kind: String,
+    pub timestamp_us: u64,
+    pub session_id: String,
+    pub dropped_before: u64,
+    pub data: Value,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CancelPayload {
+    pub session_id: String,
+    pub reason: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct HeartbeatPayload {
+    pub session_id: String,
+    pub nonce: u64,
+    pub sent_at_monotonic_us: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShutdownPayload {
+    pub session_id: String,
+    pub reason: String,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u16)]
 pub enum FrameKind {
@@ -109,6 +218,7 @@ pub enum ProtocolError {
     UnknownKind(u16),
     UnsupportedFlags(u16),
     PayloadTooLarge(u32),
+    InvalidPayloadLimit(u32),
     DecoderFailed,
 }
 
@@ -126,6 +236,12 @@ impl fmt::Display for ProtocolError {
             }
             Self::PayloadTooLarge(value) => {
                 write!(formatter, "payload length {value} exceeds the v1 limit")
+            }
+            Self::InvalidPayloadLimit(value) => {
+                write!(
+                    formatter,
+                    "decoder payload limit {value} is outside v1 bounds"
+                )
             }
             Self::DecoderFailed => write!(formatter, "decoder is in a terminal failed state"),
         }
@@ -209,24 +325,65 @@ pub fn encode_frame(
     Ok(output)
 }
 
-#[derive(Default)]
 pub struct FrameDecoder {
     buffer: Vec<u8>,
     failed: bool,
+    max_payload_size: u32,
+}
+
+impl Default for FrameDecoder {
+    fn default() -> Self {
+        Self {
+            buffer: Vec::new(),
+            failed: false,
+            max_payload_size: MAX_PAYLOAD_SIZE,
+        }
+    }
 }
 
 impl FrameDecoder {
+    pub fn set_payload_limit(&mut self, limit: u32) -> Result<(), ProtocolError> {
+        if self.failed {
+            return Err(ProtocolError::DecoderFailed);
+        }
+        if limit == 0 || limit > MAX_PAYLOAD_SIZE {
+            return Err(ProtocolError::InvalidPayloadLimit(limit));
+        }
+        self.max_payload_size = limit;
+        if self.buffer.len() >= HEADER_SIZE {
+            let header = decode_header(&self.buffer[..HEADER_SIZE])?;
+            if header.payload_len > limit {
+                self.failed = true;
+                self.buffer.clear();
+                return Err(ProtocolError::PayloadTooLarge(header.payload_len));
+            }
+        }
+        Ok(())
+    }
+
     pub fn push(&mut self, bytes: &[u8]) -> Result<Vec<Frame>, ProtocolError> {
         if self.failed {
             return Err(ProtocolError::DecoderFailed);
         }
 
-        self.buffer.extend_from_slice(bytes);
+        let mut remaining = bytes;
         let mut frames = Vec::new();
-        let mut consumed = 0usize;
 
-        while self.buffer.len() - consumed >= HEADER_SIZE {
-            let header = match decode_header(&self.buffer[consumed..consumed + HEADER_SIZE]) {
+        // Consume at most one frame into the internal buffer at a time. A peer can
+        // coalesce arbitrary frames in one pipe read without making the decoder
+        // duplicate the entire read or reserve from an untrusted payload length.
+        while !remaining.is_empty() {
+            if self.buffer.len() < HEADER_SIZE {
+                let needed = HEADER_SIZE - self.buffer.len();
+                let take = needed.min(remaining.len());
+                self.buffer.extend_from_slice(&remaining[..take]);
+                remaining = &remaining[take..];
+                if self.buffer.len() < HEADER_SIZE {
+                    break;
+                }
+            }
+
+            let header = match decode_header(&self.buffer[..HEADER_SIZE]) {
                 Ok(header) => header,
                 Err(error) => {
                     self.failed = true;
@@ -234,22 +391,25 @@ impl FrameDecoder {
                     return Err(error);
                 }
             };
+            if header.payload_len > self.max_payload_size {
+                self.failed = true;
+                self.buffer.clear();
+                return Err(ProtocolError::PayloadTooLarge(header.payload_len));
+            }
             let frame_size = HEADER_SIZE + header.payload_len as usize;
-            if self.buffer.len() - consumed < frame_size {
+            let needed = frame_size - self.buffer.len();
+            let take = needed.min(remaining.len());
+            self.buffer.extend_from_slice(&remaining[..take]);
+            remaining = &remaining[take..];
+            if self.buffer.len() < frame_size {
                 break;
             }
 
-            let payload_start = consumed + HEADER_SIZE;
-            let payload_end = consumed + frame_size;
             frames.push(Frame {
                 header,
-                payload: self.buffer[payload_start..payload_end].to_vec(),
+                payload: self.buffer[HEADER_SIZE..frame_size].to_vec(),
             });
-            consumed += frame_size;
-        }
-
-        if consumed > 0 {
-            self.buffer.drain(..consumed);
+            self.buffer.clear();
         }
         Ok(frames)
     }
@@ -323,10 +483,41 @@ mod tests {
     fn oversized_payload_is_rejected_before_allocation() {
         let mut frame = encode_frame(FrameKind::Request, 1, &[]).unwrap();
         frame[12..16].copy_from_slice(&(MAX_PAYLOAD_SIZE + 1).to_le_bytes());
+        let mut decoder = FrameDecoder::default();
         assert_eq!(
-            FrameDecoder::default().push(&frame),
+            decoder.push(&frame),
             Err(ProtocolError::PayloadTooLarge(MAX_PAYLOAD_SIZE + 1))
         );
+        assert_eq!(decoder.buffered_bytes(), 0);
+        assert!(decoder.is_failed());
+    }
+
+    #[test]
+    fn large_coalesced_input_keeps_only_one_partial_frame_buffered() {
+        let frame = encode_frame(FrameKind::Ping, 7, b"{}").unwrap();
+        let mut stream = Vec::with_capacity(frame.len() * 10_000 + HEADER_SIZE);
+        for _ in 0..10_000 {
+            stream.extend_from_slice(&frame);
+        }
+        stream.extend_from_slice(&encode_frame(FrameKind::Pong, 8, b"partial").unwrap()[..10]);
+
+        let mut decoder = FrameDecoder::default();
+        let frames = decoder.push(&stream).unwrap();
+        assert_eq!(frames.len(), 10_000);
+        assert_eq!(decoder.buffered_bytes(), 10);
+    }
+
+    #[test]
+    fn negotiated_decoder_limit_rejects_the_header_before_buffering_its_body() {
+        let mut decoder = FrameDecoder::default();
+        decoder.set_payload_limit(64).unwrap();
+        let oversized = encode_frame(FrameKind::Event, 0, &[0; 65]).unwrap();
+        assert_eq!(
+            decoder.push(&oversized),
+            Err(ProtocolError::PayloadTooLarge(65))
+        );
+        assert_eq!(decoder.buffered_bytes(), 0);
+        assert!(decoder.is_failed());
     }
 
     #[test]
@@ -372,5 +563,51 @@ mod tests {
             "generation":9,"after_index":1,"unexpected":true
         }"#;
         assert!(serde_json::from_str::<SnapshotCursor>(unknown_field).is_err());
+    }
+
+    #[test]
+    fn rpc_golden_payloads_use_the_shared_strict_types() {
+        let hello: HelloPayload =
+            serde_json::from_str(include_str!("../../v1/fixtures/hello.json")).unwrap();
+        assert_eq!(hello.protocol, ProtocolVersion { major: 1, minor: 0 });
+
+        let welcome: WelcomePayload =
+            serde_json::from_str(include_str!("../../v1/fixtures/welcome.json")).unwrap();
+        assert_eq!(welcome.target_pid, 4242);
+        assert_eq!(welcome.limits.pending_rpc_per_session, 256);
+        assert!(welcome.capabilities["transport.named_pipe"]);
+
+        let request: RequestPayload = serde_json::from_str(include_str!(
+            "../../v1/fixtures/object-snapshot-page-request.json"
+        ))
+        .unwrap();
+        assert_eq!(request.operation, "objects.snapshot.page");
+
+        let response: ResponsePayload = serde_json::from_str(include_str!(
+            "../../v1/fixtures/object-handle-response.json"
+        ))
+        .unwrap();
+        assert!(response.ok);
+        assert_eq!(response.request_id, 42);
+
+        let heartbeat: HeartbeatPayload =
+            serde_json::from_str(include_str!("../../v1/fixtures/heartbeat.json")).unwrap();
+        assert_eq!(heartbeat.nonce, 7);
+
+        let shutdown: ShutdownPayload =
+            serde_json::from_str(include_str!("../../v1/fixtures/shutdown.json")).unwrap();
+        assert_eq!(shutdown.reason, "host_exit");
+
+        let unknown_welcome = serde_json::json!({
+            "core_version": welcome.core_version,
+            "protocol": welcome.protocol,
+            "session_id": welcome.session_id,
+            "target_pid": welcome.target_pid,
+            "engine_profile": welcome.engine_profile,
+            "capabilities": welcome.capabilities,
+            "limits": welcome.limits,
+            "legacy_token": "forbidden"
+        });
+        assert!(serde_json::from_value::<WelcomePayload>(unknown_welcome).is_err());
     }
 }

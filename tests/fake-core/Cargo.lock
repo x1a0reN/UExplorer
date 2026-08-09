@@ -90,7 +90,6 @@ dependencies = [
 name = "uexplorer-fake-core"
 version = "0.1.0"
 dependencies = [
- "serde",
  "serde_json",
  "uexplorer-protocol",
 ]
@@ -100,6 +99,7 @@ name = "uexplorer-protocol"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
 ]
 
 [[package]]

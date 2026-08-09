@@ -85,6 +85,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-log",
+ "uexplorer-fake-core",
  "uexplorer-protocol",
  "windows 0.58.0",
 ]
@@ -3991,10 +3992,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "562d481066bde0658276a35467c4af00bdc6ee726305698a55b86e61d7ad82bb"
 
 [[package]]
+name = "uexplorer-fake-core"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "uexplorer-protocol",
+]
+
+[[package]]
 name = "uexplorer-protocol"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
 ]
 
 [[package]]

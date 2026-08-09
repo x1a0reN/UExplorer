@@ -5,11 +5,19 @@
   "target_pid": 4242,
   "engine_profile": null,
   "capabilities": {
-    "status": true,
-    "function_call": false
+    "engine.core": true,
+    "status.inspect": true,
+    "objects.snapshot": true,
+    "call.invoke": false,
+    "transport.named_pipe": true
   },
   "limits": {
     "max_payload_bytes": 8388608,
-    "pending_rpc": 256
+    "pending_rpc_per_session": 256,
+    "game_thread_tasks": 128,
+    "hook_event_ring": 8192,
+    "subscriber_events": 1024,
+    "dump_running": 1,
+    "max_timeout_ms": 120000
   }
 }

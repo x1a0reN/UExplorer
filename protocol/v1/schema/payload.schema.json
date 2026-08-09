@@ -8,7 +8,9 @@
     { "$ref": "#/$defs/request" },
     { "$ref": "#/$defs/response" },
     { "$ref": "#/$defs/event" },
-    { "$ref": "#/$defs/cancel" }
+    { "$ref": "#/$defs/cancel" },
+    { "$ref": "#/$defs/heartbeat" },
+    { "$ref": "#/$defs/shutdown" }
   ],
   "$defs": {
     "protocolVersion": {
@@ -145,6 +147,28 @@
         "target_pid": { "type": "integer", "minimum": 1, "maximum": 4294967295 }
       }
     },
+    "protocolLimits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_payload_bytes",
+        "pending_rpc_per_session",
+        "game_thread_tasks",
+        "hook_event_ring",
+        "subscriber_events",
+        "dump_running",
+        "max_timeout_ms"
+      ],
+      "properties": {
+        "max_payload_bytes": { "type": "integer", "minimum": 1, "maximum": 8388608 },
+        "pending_rpc_per_session": { "type": "integer", "minimum": 1, "maximum": 256 },
+        "game_thread_tasks": { "type": "integer", "minimum": 1, "maximum": 128 },
+        "hook_event_ring": { "type": "integer", "minimum": 1, "maximum": 8192 },
+        "subscriber_events": { "type": "integer", "minimum": 1, "maximum": 1024 },
+        "dump_running": { "type": "integer", "const": 1 },
+        "max_timeout_ms": { "type": "integer", "minimum": 1, "maximum": 120000 }
+      }
+    },
     "welcome": {
       "type": "object",
       "additionalProperties": false,
@@ -155,8 +179,12 @@
         "session_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "target_pid": { "type": "integer", "minimum": 1, "maximum": 4294967295 },
         "engine_profile": { "type": ["string", "null"], "maxLength": 128 },
-        "capabilities": { "type": "object", "additionalProperties": { "type": "boolean" } },
-        "limits": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } }
+        "capabilities": {
+          "type": "object",
+          "propertyNames": { "pattern": "^[a-z][a-z0-9_.-]{0,127}$" },
+          "additionalProperties": { "type": "boolean" }
+        },
+        "limits": { "$ref": "#/$defs/protocolLimits" }
       }
     },
     "request": {
@@ -209,7 +237,7 @@
       "required": ["code", "message", "details"],
       "properties": {
         "code": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,63}$" },
-        "message": { "type": "string", "maxLength": 1024 },
+        "message": { "type": "string", "minLength": 1, "maxLength": 1024 },
         "details": { "type": "object" }
       }
     },
@@ -219,7 +247,7 @@
       "required": ["ok", "request_id", "session_id", "error", "data", "timing"],
       "properties": {
         "ok": { "type": "boolean" },
-        "request_id": { "type": "integer", "minimum": 1 },
+        "request_id": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
         "session_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "error": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/error" }] },
         "data": {},
@@ -232,7 +260,22 @@
             "execute_us": { "type": "integer", "minimum": 0 }
           }
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "ok": { "const": true } }, "required": ["ok"] },
+          "then": { "properties": { "error": { "type": "null" } } }
+        },
+        {
+          "if": { "properties": { "ok": { "const": false } }, "required": ["ok"] },
+          "then": {
+            "properties": {
+              "error": { "$ref": "#/$defs/error" },
+              "data": { "type": "null" }
+            }
+          }
+        }
+      ]
     },
     "event": {
       "type": "object",
@@ -253,7 +296,26 @@
       "required": ["session_id", "reason"],
       "properties": {
         "session_id": { "type": "string", "minLength": 1, "maxLength": 128 },
-        "reason": { "type": "string", "maxLength": 256 }
+        "reason": { "type": "string", "minLength": 1, "maxLength": 256 }
+      }
+    },
+    "heartbeat": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["session_id", "nonce", "sent_at_monotonic_us"],
+      "properties": {
+        "session_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "nonce": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "sent_at_monotonic_us": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "shutdown": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["session_id", "reason"],
+      "properties": {
+        "session_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 256 }
       }
     }
   }

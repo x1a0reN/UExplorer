@@ -39,6 +39,46 @@ Requests are rejected before the handshake completes. Request `timeout_ms` is a
 relative duration measured by Core from frame receipt using a monotonic clock; it is
 not a wall-clock timestamp shared between processes.
 
+`Welcome.limits` is a closed object. v1 requires all of these negotiated bounds:
+`max_payload_bytes`, `pending_rpc_per_session`, `game_thread_tasks`,
+`hook_event_ring`, `subscriber_events`, `dump_running`, and `max_timeout_ms`.
+Missing, renamed, unknown, zero, or above-contract values reject the handshake; the
+Host does not infer defaults.
+
+## Host RPC lifecycle
+
+The transport-independent Rust Host state machine is implemented in
+`frontend/src-tauri/src/ipc/rpc_session.rs`:
+
+```text
+Created -> HelloSent -> Ready -> Closing -> Closed
+                    \-> Failed (terminal protocol/envelope failure)
+```
+
+- The `Welcome` request ID must exactly match `Hello`; PID, selected version,
+  session ID, required capabilities, and every negotiated limit are validated before
+  `Ready` is observable.
+- Every request has one monotonically allocated request ID, a monotonic deadline,
+  and one pending-map entry. The negotiated pending and timeout limits are enforced
+  before a frame is emitted.
+- Explicit cancellation and deadline expiry retire the pending entry into a bounded
+  late-response tombstone set. A correlated late terminal frame is consumed as late;
+  an unknown correlation fails the session instead of being attached to another call.
+- Ping/Pong validates request ID, session, nonce, and timestamp. Events require frame
+  request ID zero, strictly increasing `seq`, and a nondecreasing `dropped_before`.
+- Host-initiated Shutdown enters `Closing`; the acknowledgement must repeat its
+  request ID, session ID, and reason before the session becomes `Closed`.
+- Incoming payloads are checked against the negotiated limit. The streaming decoder
+  applies that limit before buffering a body and buffers at most one incomplete frame
+  even when one read contains many frames. The Host transport adapter must split
+  reads into chunks no larger than 64 KiB.
+
+`tests/fake-core` consumes the same strict Rust payload types. The Host/FakeCore test
+executes Hello/Welcome, Request/Response, Ping/Pong, Cancel/late Response, and
+Shutdown acknowledgement without a private fixture-only envelope. The real Windows
+Named Pipe reader/writer, peer ACL validation, and multi-PID SessionManager are still
+R3 work; this state machine is not evidence that a live Pipe is connected.
+
 ## Identity and errors
 
 - Request, Response, Hello, Welcome, Cancel, Ping, Pong, and Shutdown use nonzero

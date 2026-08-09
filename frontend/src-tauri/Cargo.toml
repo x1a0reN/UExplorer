@@ -35,6 +35,9 @@ windows = { version = "0.58", features = [
 ] }
 uexplorer-protocol = { path = "../../protocol/rust" }
 
+[dev-dependencies]
+uexplorer-fake-core = { path = "../../tests/fake-core" }
+
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
