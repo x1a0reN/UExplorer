@@ -167,37 +167,39 @@
     "GT-001": {
       "status": "verified",
       "verification": [
-        "2026-08-09: CallTask owns its parameter vector until a deterministic terminal state",
+        "2026-08-09: Runtime GameThreadTaskControl owns an IGameThreadWork; ProcessEventWork owns its parameter vector until a deterministic terminal state",
         "Core harness verifies output copyback and that a running task retains parameters after caller timeout"
       ]
     },
     "GT-002": {
       "status": "verified",
       "verification": [
-        "2026-08-09: bounded 64-entry MPSC queue replaces the single slot",
-        "Core harness fills the queue concurrently and verifies deadline backpressure"
+        "2026-08-09: bounded 128-entry Runtime MPSC queue replaces the single slot and matches the published IPC limit",
+        "Core harness fills the queue concurrently, verifies strict BUSY backpressure, and rejects synchronous waits from the observed pump thread"
       ]
     },
     "GT-003": {
       "status": "verified",
       "verification": [
         "2026-08-09: DisableAndDrain rejects new work, cancels queued tasks, wakes every waiter, and waits for the running task",
-        "Core harness covers queued cancellation and running drain"
+        "2026-08-09: GameThreadTicket adds explicit queued cancellation, reports running/terminal work without pretending to cancel it, and keeps Cancelled distinct from Disabled",
+        "Core harness covers explicit queued cancellation, shutdown cancellation, and running drain"
       ]
     },
     "GT-004": {
       "status": "verified",
       "verification": [
-        "2026-08-09: MSVC SEH wrapper converts a ProcessEvent access violation into ExecutionFailed and always clears processing state",
-        "Core harness raises EXCEPTION_ACCESS_VIOLATION and verifies subsequent drain"
+        "2026-08-09: guarded Runtime work execution converts C++ exceptions and MSVC SEH into ExecutionFailed and always clears processing state",
+        "Core harness covers a throwing generic command and ProcessEvent EXCEPTION_ACCESS_VIOLATION before verifying drain"
       ]
     },
     "GT-005": {
       "status": "in_progress",
       "verification": [
         "2026-08-09: PostRender pump records OS thread ID, monotonic last tick, tick count, queue depth, and cross-thread mismatch",
-        "Capability becomes unavailable before the first tick, on thread mismatch, or after a two-second stall",
-        "IGameThreadPump backend abstraction and live minimized/loading fixtures remain pending"
+        "Capability becomes unavailable before the first tick, on thread mismatch, or after a two-second stall; mismatch stops task consumption instead of executing on the wrong thread",
+        "2026-08-09: IGameThreadPump and the explicit PostRenderPumpBackend move pump ownership out of API code",
+        "Live minimized/loading fixtures remain pending"
       ]
     },
     "GT-006": {
@@ -210,7 +212,8 @@
       "status": "in_progress",
       "verification": [
         "2026-08-09: monotonic deadline and queued/running/completed/failed/cancelled/expired states implemented",
-        "IPC request ID and cancellation command remain R3 work"
+        "2026-08-09: GameThreadTicket and Cancel provide the execution-layer primitive for queued cancellation",
+        "IPC request ID mapping and cancellation command remain R3 work"
       ]
     },
     "HOOK-001": {

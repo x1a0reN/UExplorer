@@ -11,6 +11,7 @@
 #include "Runtime/CoreCapabilities.h"
 #include "Runtime/CoreRuntime.h"
 #include "Runtime/FUObjectItemLayout.h"
+#include "Runtime/GameThreadExecutor.h"
 #include "Runtime/ObjectHandle.h"
 #include "Runtime/SafeMemory.h"
 #include "Runtime/ShutdownCoordinator.h"
@@ -74,6 +75,29 @@ namespace
 	{
 		RaiseException(EXCEPTION_ACCESS_VIOLATION, 0, 0, nullptr);
 	}
+
+	class OwnedProbeWork final : public UExplorer::Runtime::IGameThreadWork
+	{
+	public:
+		explicit OwnedProbeWork(const int input, const bool shouldThrow = false)
+			: Input(input), ShouldThrow(shouldThrow)
+		{
+		}
+
+		bool Execute() override
+		{
+			ExecutionThreadId = GetCurrentThreadId();
+			if (ShouldThrow)
+				throw std::runtime_error("generic game-thread work failure");
+			Output = Input * 2;
+			return true;
+		}
+
+		int Input = 0;
+		int Output = 0;
+		bool ShouldThrow = false;
+		std::uint32_t ExecutionThreadId = 0;
+	};
 
 	std::string ReadText(const std::filesystem::path& path)
 	{
@@ -861,7 +885,7 @@ namespace
 		});
 		WaitUntil(HasPending, "Shutdown cancellation task was not queued");
 		Require(DisableAndDrain(), "Disable did not drain a queued task");
-		Require(cancelled.get() == SubmitResult::Disabled, "Disable did not wake the queued submitter");
+		Require(cancelled.get() == SubmitResult::Cancelled, "Disable did not cancel the queued submitter");
 
 		Require(Enable(&FaultingProcessEvent), "Game-thread executor did not enable for SEH test");
 		std::vector<std::uint8_t> faultParams{ 1 };
@@ -872,6 +896,86 @@ namespace
 		ProcessQueue();
 		Require(faulted.get() == SubmitResult::ExecutionFailed, "ProcessEvent SEH did not become a terminal failure");
 		Require(DisableAndDrain(), "SEH failure left the game-thread executor processing");
+	}
+
+	void TestGenericGameThreadWorkAndCancellation()
+	{
+		using namespace UExplorer::Runtime;
+
+		GameThreadExecutor& executor = GetGameThreadExecutor();
+		Require(executor.Enable(&FakeProcessEvent), "Generic game-thread executor did not enable");
+		auto work = std::make_shared<OwnedProbeWork>(21);
+		auto submitted = std::async(std::launch::async, [&executor, work] {
+			return executor.SubmitOwned(work, 1000);
+		});
+		WaitUntil([&executor] { return executor.HasPending(); }, "Generic owned work was not queued");
+		GetPostRenderPumpBackend().Tick();
+		Require(
+			submitted.get() == GameThreadSubmitResult::Completed,
+			"Generic owned game-thread work did not complete");
+		Require(work->Output == 42, "Generic work did not retain owned input/result state");
+		Require(
+			work->ExecutionThreadId == GetCurrentThreadId() && executor.IsCurrentPumpThread(),
+			"Generic work did not execute on the observed PostRender pump thread");
+		auto reentrantWork = std::make_shared<OwnedProbeWork>(3);
+		Require(
+			executor.SubmitOwned(reentrantWork, 100)
+				== GameThreadSubmitResult::PumpThreadWaitDenied,
+			"A synchronous submit was allowed to deadlock the PostRender pump thread");
+		Require(!executor.HasPending(), "Rejected pump-thread submit was still queued");
+		GameThreadTicket unboundedTicket;
+		Require(
+			executor.Enqueue(
+				std::make_shared<OwnedProbeWork>(5),
+				std::chrono::steady_clock::now()
+					+ std::chrono::milliseconds(GameThreadExecutor::kMaxTimeoutMs + 1),
+				unboundedTicket) == GameThreadQueueResult::Invalid,
+			"Executor accepted a task beyond the protocol deadline limit");
+
+		GameThreadTicket cancelledTicket;
+		auto cancelledWork = std::make_shared<OwnedProbeWork>(7);
+		Require(
+			executor.Enqueue(
+				cancelledWork,
+				std::chrono::steady_clock::now() + std::chrono::seconds(1),
+				cancelledTicket) == GameThreadQueueResult::Accepted,
+			"Cancellable game-thread work was not accepted");
+		Require(
+			executor.Cancel(cancelledTicket) == GameThreadCancelResult::Cancelled,
+			"Queued game-thread work was not explicitly cancelled");
+		Require(
+			executor.Wait(cancelledTicket) == GameThreadSubmitResult::Cancelled,
+			"Cancelled game-thread work did not reach a terminal state");
+		GetPostRenderPumpBackend().Tick();
+		Require(cancelledWork->Output == 0, "Cancelled generic work executed after cancellation");
+
+		auto throwingWork = std::make_shared<OwnedProbeWork>(1, true);
+		auto throwing = std::async(std::launch::async, [&executor, throwingWork] {
+			return executor.SubmitOwned(throwingWork, 1000);
+		});
+		WaitUntil([&executor] { return executor.HasPending(); }, "Throwing generic work was not queued");
+		GetPostRenderPumpBackend().Tick();
+		Require(
+			throwing.get() == GameThreadSubmitResult::ExecutionFailed,
+			"Generic C++ exception did not become a terminal execution failure");
+
+		auto mismatchWork = std::make_shared<OwnedProbeWork>(9);
+		auto mismatched = std::async(std::launch::async, [&executor, mismatchWork] {
+			return executor.SubmitOwned(mismatchWork, 100);
+		});
+		WaitUntil([&executor] { return executor.HasPending(); }, "Thread-mismatch work was not queued");
+		auto wrongThreadTick = std::async(std::launch::async, [] {
+			GetPostRenderPumpBackend().Tick();
+		});
+		wrongThreadTick.get();
+		Require(
+			mismatched.get() == GameThreadSubmitResult::TimedOutBeforeStart,
+			"Cross-thread PostRender executed queued work instead of disabling the pump");
+		Require(mismatchWork->Output == 0, "Cross-thread PostRender executed owned work");
+		Require(
+			!executor.GetDiagnostics().PumpThreadStable,
+			"Cross-thread PostRender did not persist a pump mismatch diagnostic");
+		Require(executor.DisableAndDrain(), "Generic game-thread executor did not drain");
 	}
 
 	void TestGameThreadMpscCapacity()
@@ -910,7 +1014,7 @@ namespace
 		for (auto& submitter : submitters)
 			submitter.join();
 		for (const auto result : results)
-			Require(result == SubmitResult::Disabled, "Shutdown did not cancel an MPSC producer task");
+			Require(result == SubmitResult::Cancelled, "Shutdown did not cancel an MPSC producer task");
 	}
 
 	SOCKET ConnectLoopback(const std::uint16_t port)
@@ -996,9 +1100,10 @@ int main(const int argc, char** argv)
 		TestQueueOwnershipAndBackpressure();
 		TestQueueShutdownWakesWaiters();
 		TestGameThreadTaskOwnershipAndTimeouts();
+		TestGenericGameThreadWorkAndCancellation();
 		TestGameThreadMpscCapacity();
 		TestHttpServerLifecycle();
-		std::cout << "Core harness passed: framing, runtime/capabilities, stable handles/FUObjectItem layout, Hook RAII/drain, SafeMemory, USMAP consumer, bounded queues, owned game-thread tasks, SEH, HTTP lifecycle, and shutdown.\n";
+		std::cout << "Core harness passed: framing, runtime/capabilities, stable handles/FUObjectItem layout, Hook RAII/drain, SafeMemory, USMAP consumer, bounded queues, cancellable owned game-thread work, SEH, HTTP lifecycle, and shutdown.\n";
 		return 0;
 	}
 	catch (const std::exception& error)

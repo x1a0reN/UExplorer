@@ -1,6 +1,5 @@
 #include "HookApi.h"
 #include "ApiCommon.h"
-#include "GameThreadQueue.h"
 #include "EventsApi.h"
 
 #include "Unreal/ObjectArray.h"
@@ -9,6 +8,7 @@
 #include "Unreal/Enums.h"
 #include "OffsetFinder/Offsets.h"
 #include "Runtime/CallbackBarrier.h"
+#include "Runtime/GameThreadExecutor.h"
 #include "Runtime/SafeMemory.h"
 #include "Runtime/VTableHook.h"
 
@@ -493,7 +493,7 @@ static void HookedPostRender(void* InGVCCDO, void* InCanvas)
 	auto callbackLease = g_PostRenderCallbackBarrier.Enter();
 	if (callbackLease.OwnedWorkAllowed()
 		&& !g_HookShutdownRequested.load(std::memory_order_acquire))
-		GameThread::ProcessQueue();
+		Runtime::GetPostRenderPumpBackend().Tick();
 
 	auto orig = reinterpret_cast<PostRenderFn>(g_OrigPostRender.load(std::memory_order_acquire));
 	if (orig)
@@ -626,7 +626,8 @@ static bool InstallPostRenderHook()
 	if (globalPE)
 	{
 		std::cerr << "[HookApi] Global ProcessEvent: " << std::hex << globalPE << std::dec << std::endl;
-		if (!GameThread::Enable(reinterpret_cast<ProcessEventFn>(globalPE)))
+		if (!Runtime::GetGameThreadExecutor().Enable(
+			reinterpret_cast<Runtime::ProcessEventFn>(globalPE)))
 		{
 			if (!DetachPostRenderPatch("executor enable rollback"))
 			{
@@ -660,7 +661,7 @@ static bool UninstallPostRenderHook()
 
 	std::cerr << "[HookApi] Uninstalling PostRender hook..." << std::endl;
 	g_PostRenderCallbackBarrier.BeginStopping();
-	if (!GameThread::DisableAndDrain(5000))
+	if (!Runtime::GetGameThreadExecutor().DisableAndDrain(5000))
 	{
 		std::cerr << "[HookApi] Game-thread executor drain timed out" << std::endl;
 		return false;
@@ -902,7 +903,7 @@ void RegisterHookRoutes(HttpServer& server)
 			data["reason"] = "BOUNDED_COLLECTOR_NOT_ACTIVE";
 			data["postrender_vtable_hook_installed"] = IsPostRenderHookInstalled();
 			data["pe_vtable_hook_installed"] = false;
-			data["game_thread_enabled"] = GameThread::IsEnabled();
+			data["game_thread_enabled"] = Runtime::GetGameThreadExecutor().IsEnabled();
 			return { 200, "application/json", MakeResponse(data) };
 		}
 		json data;
@@ -928,7 +929,7 @@ void RegisterHookRoutes(HttpServer& server)
 		data["vtable_hook_installed"] = IsPEHookInstalled() || IsPostRenderHookInstalled();
 		data["postrender_vtable_hook_installed"] = IsPostRenderHookInstalled();
 		data["pe_vtable_hook_installed"] = IsPEHookInstalled();
-		data["game_thread_enabled"] = GameThread::IsEnabled();
+		data["game_thread_enabled"] = Runtime::GetGameThreadExecutor().IsEnabled();
 
 		return { 200, "application/json", MakeResponse(data) };
 	});

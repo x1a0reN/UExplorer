@@ -229,6 +229,12 @@ static bool ExecuteFunctionCall(
 	case GameThread::SubmitResult::Disabled:
 		outError = "GAME_THREAD_UNAVAILABLE";
 		return false;
+	case GameThread::SubmitResult::Cancelled:
+		outError = "GAME_THREAD_CANCELLED";
+		return false;
+	case GameThread::SubmitResult::PumpThreadWaitDenied:
+		outError = "GAME_THREAD_REENTRANT_WAIT_DENIED";
+		return false;
 	case GameThread::SubmitResult::QueueBusy:
 		outError = "GAME_THREAD_QUEUE_BUSY";
 		return false;

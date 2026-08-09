@@ -18,7 +18,10 @@ function Assert-NotContains([string]$text, [string]$token, [string]$message) {
     }
 }
 
-$gameThread = Read-ProjectFile 'Dumper\API\GameThreadQueue.h'
+$gameThreadHeader = Read-ProjectFile 'Dumper\Runtime\GameThreadExecutor.h'
+$gameThreadImplementation = Read-ProjectFile 'Dumper\Runtime\GameThreadExecutor.cpp'
+$gameThreadAdapter = Read-ProjectFile 'Dumper\API\GameThreadQueue.h'
+$gameThread = $gameThreadHeader + $gameThreadImplementation
 $callApi = Read-ProjectFile 'Dumper\API\CallApi.cpp'
 $hookApi = Read-ProjectFile 'Dumper\API\HookApi.cpp'
 $callbackBarrier = Read-ProjectFile 'Dumper\Runtime\CallbackBarrier.h'
@@ -35,11 +38,15 @@ $memoryPage = Read-ProjectFile 'frontend\src\pages\Memory.tsx'
 $functionsPage = Read-ProjectFile 'frontend\src\pages\Functions.tsx'
 $dumpPage = Read-ProjectFile 'frontend\src\pages\SDKDump.tsx'
 
-foreach ($token in @('std::deque<std::shared_ptr<CallTask>>', 'kQueueCapacity', 'Deadline',
-        'TimedOutBeforeStart', 'TimedOutWhileRunning', '__try', 'DisableAndDrain')) {
+foreach ($token in @('std::deque<std::shared_ptr<GameThreadTaskControl>>', 'kCapacity = 128',
+        'GameThreadTicket', 'GameThreadCancelResult', 'Deadline', 'TimedOutBeforeStart',
+        'TimedOutWhileRunning', 'GameThreadSubmitResult::Cancelled', '__try',
+        'PumpThreadWaitDenied', 'IsCurrentPumpThread()', 'DisableAndDrain', 'IGameThreadPump',
+        'PostRenderPumpBackend')) {
     Assert-Contains $gameThread $token 'Game-thread ownership/state contract regressed.'
 }
 Assert-NotContains $gameThread 'g_Pending' 'The single borrowed task slot must not return.'
+Assert-NotContains $gameThreadAdapter 'std::deque<' 'Legacy API adapter must not own a second executor queue.'
 
 foreach ($token in @('use_game_thread=false is disabled', 'INVALID_PARAM_SIZE', 'Too many object_indices (max 64)')) {
     Assert-Contains $callApi $token 'Function-call safety contract regressed.'

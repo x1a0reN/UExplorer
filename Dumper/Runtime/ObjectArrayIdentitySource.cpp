@@ -1,6 +1,6 @@
 #include "ObjectArrayIdentitySource.h"
 
-#include "API/GameThreadQueue.h"
+#include "GameThreadExecutor.h"
 #include "OffsetFinder/Offsets.h"
 #include "SafeMemory.h"
 #include "Unreal/Enums.h"
@@ -188,12 +188,12 @@ bool ObjectArrayIdentitySource::IsLayoutAvailable() const noexcept
 
 bool ObjectArrayIdentitySource::IsCurrentExecutionThreadValid() const noexcept
 {
-	const GameThread::Diagnostics diagnostics = GameThread::GetDiagnostics();
+	const GameThreadExecutor& executor = GetGameThreadExecutor();
+	const GameThreadDiagnostics diagnostics = executor.GetDiagnostics();
 	return diagnostics.Enabled
 		&& diagnostics.PumpObserved
 		&& diagnostics.PumpThreadStable
-		&& diagnostics.PumpThreadId != 0
-		&& diagnostics.PumpThreadId == GetCurrentThreadId();
+		&& executor.IsCurrentPumpThread();
 }
 
 bool ObjectArrayIdentitySource::TryReadObjectCore(

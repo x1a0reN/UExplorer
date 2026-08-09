@@ -32,7 +32,9 @@ $callbackBarrier = Read-ProjectFile 'Dumper\Runtime\CallbackBarrier.h'
 $safeMemoryHeader = Read-ProjectFile 'Dumper\Runtime\SafeMemory.h'
 $safeMemory = Read-ProjectFile 'Dumper\Runtime\SafeMemory.cpp'
 $vtableHook = Read-ProjectFile 'Dumper\Runtime\VTableHook.cpp'
-$gameThread = Read-ProjectFile 'Dumper\API\GameThreadQueue.h'
+$gameThreadHeader = Read-ProjectFile 'Dumper\Runtime\GameThreadExecutor.h'
+$gameThreadImplementation = Read-ProjectFile 'Dumper\Runtime\GameThreadExecutor.cpp'
+$gameThread = $gameThreadHeader + $gameThreadImplementation
 $memoryApi = Read-ProjectFile 'Dumper\API\MemoryApi.cpp'
 $objectsApi = Read-ProjectFile 'Dumper\API\ObjectsApi.cpp'
 $hookApi = Read-ProjectFile 'Dumper\API\HookApi.cpp'
@@ -91,7 +93,7 @@ foreach ($token in @('TryReadIdentityCandidate', 'objectFirst != objectSecond', 
 		'internalIndexOffset > (std::numeric_limits<uintptr_t>::max)() - objectAddress')) {
     Assert-Contains $objectArray $token 'Production FUObjectItem identity reads regressed.'
 }
-foreach ($token in @('IsCurrentExecutionThreadValid', 'PumpThreadId == GetCurrentThreadId',
+foreach ($token in @('IsCurrentExecutionThreadValid', 'executor.IsCurrentPumpThread()',
         'TryReadObjectCore', 'TryReadCanonicalFNameToken', 'TryBuildCanonicalFunctionPath',
         'finalPath != fullPath', 'SignatureFingerprint')) {
     Assert-Contains $identitySource $token 'Production object/function identity source regressed.'
@@ -145,6 +147,7 @@ foreach ($token in @('TestEngineContextAndCapabilities', 'TestCoreRuntimeStateAn
         'TestFUObjectItemIdentityLayout', 'Custom FUObjectItem object offset was guessed',
         'Zero-only serial candidate was accepted',
         'TestHookOwnershipAndCallbackDrain', 'Failed VTable restore discarded hook ownership',
+        'TestGenericGameThreadWorkAndCancellation', 'explicitly cancelled',
         'Post-stop callback was allowed to run owned work',
         'TestSafeMemory', 'ExecutableWriteDenied', 'InstructionCacheFlushRequired',
         'CoreRuntime became Ready without its pipe listener', 'Required capability loss left readiness true',

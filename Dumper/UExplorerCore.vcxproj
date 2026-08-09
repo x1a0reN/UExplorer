@@ -119,6 +119,7 @@
     <!-- Runtime -->
     <ClCompile Include="Runtime\EngineContextCapture.cpp" />
 	<ClCompile Include="Runtime\FUObjectItemLayout.cpp" />
+	<ClCompile Include="Runtime\GameThreadExecutor.cpp" />
 	<ClCompile Include="Runtime\ObjectArrayIdentitySource.cpp" />
     <ClCompile Include="Runtime\ObjectHandle.cpp" />
     <ClCompile Include="Runtime\SafeMemory.cpp" />
@@ -201,6 +202,7 @@
     <ClInclude Include="Runtime\EngineContext.h" />
     <ClInclude Include="Runtime\EngineContextCapture.h" />
 	<ClInclude Include="Runtime\FUObjectItemLayout.h" />
+	<ClInclude Include="Runtime\GameThreadExecutor.h" />
 	<ClInclude Include="Runtime\ObjectArrayIdentitySource.h" />
     <ClInclude Include="Runtime\ObjectHandle.h" />
     <ClInclude Include="Runtime\SafeMemory.h" />

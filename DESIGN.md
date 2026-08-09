@@ -19,8 +19,8 @@ React -> Tauri invoke/event -> Rust Host -> Windows Named Pipe RPC -> Core DLL -
 | 重构阶段 | 当前状态 | 已有证据 | 未完成门槛 |
 |---|---|---|---|
 | R0 证据与测试地基 | 已完成 | 128 项问题可跟踪；65 条 API v1 路由快照；IPC v1 契约；C++ framing/queue/backpressure/shutdown harness；Rust protocol/Fake Core 测试；前端 lint/test/build 通过；Windows CI 三个 job 通过 | 目标 UE fixture 属于 R7 发布门，不再阻塞测试地基本身 |
-| R1 安全止血 | 进行中 | 注入路径已止血；GameThread 使用拥有参数的 64 项有界 MPSC、单调 deadline、终态与 drain；ProcessEvent SEH 转结构化失败；Hook restore/in-flight/unload refusal；HTTP worker 全部 join、socket timeout、精确 bind、SendAll；危险 reconnect/raw transform/legacy Watch/假 WS Console 已禁用；critical guessed offsets 已移除；USMAP 容器通过 C++/Rust golden consumer | Hook/注入目标进程 fixture；剩余 offset capability 验证、目标生成 USMAP 语义验证与 dump 关闭边界 |
-| R2 CoreRuntime/能力模型 | 进行中 | CoreRuntime 状态机与 request lease；一次性发布的 immutable EngineContext；offset validation report；依赖式 CapabilityRegistry；PostRender thread/tick/stall 诊断；ShutdownCoordinator；集中式 SafeMemory 与可执行页写策略；稳定 Object/FunctionHandle 契约与重验证；显式 FUObjectItem serial profile 与生产 identity source；VTable Hook RAII owner 与 callback quiet drain；危险 UObject 属性写及 index-only 调用入口已关闭 | identity source 目标 fixture、领域 command、剩余 Off/Settings 迁移 |
+| R1 安全止血 | 进行中 | 注入路径已止血；GameThread 使用拥有参数的 128 项有界 MPSC、单调 deadline、终态、显式取消与 drain；ProcessEvent SEH 转结构化失败；Hook restore/in-flight/unload refusal；HTTP worker 全部 join、socket timeout、精确 bind、SendAll；危险 reconnect/raw transform/legacy Watch/假 WS Console 已禁用；critical guessed offsets 已移除；USMAP 容器通过 C++/Rust golden consumer | Hook/注入目标进程 fixture；剩余 offset capability 验证、目标生成 USMAP 语义验证与 dump 关闭边界 |
+| R2 CoreRuntime/能力模型 | 进行中 | CoreRuntime 状态机与 request lease；一次性发布的 immutable EngineContext；offset validation report；依赖式 CapabilityRegistry；Runtime-owned GameThreadExecutor、IGameThreadPump/PostRender backend 与 thread/tick/stall 诊断；ShutdownCoordinator；集中式 SafeMemory 与可执行页写策略；稳定 Object/FunctionHandle 契约与重验证；显式 FUObjectItem serial profile 与生产 identity source；VTable Hook RAII owner 与 callback quiet drain；危险 UObject 属性写及 index-only 调用入口已关闭 | identity source 目标 fixture、领域 command、剩余 Off/Settings 迁移 |
 | R3 Named Pipe/Rust Host | 未开始 | IPC v1 framing 与 Fake Core 地基已建立 | 真实 Pipe、PID/ACL 校验、SessionManager、deadline/cancel |
 | R4 通信原子切换 | 未开始 | ADR 已接受 | React 只走 Tauri，Core 发布构建不含可达网络栈 |
 | R5 领域正确性 | 未开始 | 问题清单与验收矩阵已建立 | Object/Memory/Call/World/Watch/Hook/Blueprint/Dump 逐项验证 |
@@ -42,7 +42,7 @@ React -> Tauri invoke/event -> Rust Host -> Windows Named Pipe RPC -> Core DLL -
 
 ### 0.2 R1 Core 止血状态
 
-- `GameThreadQueue` 不再保存调用方裸缓冲区：任务拥有参数，使用 64 项有界 MPSC 队列和单调 deadline，区分排队超时与运行超时；停止会取消排队任务、唤醒 waiter 并等待执行中的任务。MSVC SEH 会转为 `ExecutionFailed`，不会遗留 processing 状态。
+- `GameThreadExecutor` 已从 API 层移入 Runtime：`IGameThreadWork` 持有命令输入/输出，`GameThreadTicket` 支持只取消 queued work 并明确区分 cancelled/running/terminal；128 项 MPSC 严格拒绝超量请求，单调 deadline 区分排队超时与运行超时。停止会取消排队任务、唤醒 waiter 并等待执行中的任务，未启用与已取消使用不同结果；已识别的 pump thread 同步等待会被 `PumpThreadWaitDenied` 拒绝且不入队，避免自阻塞。C++ exception 与 MSVC SEH 都转为 `ExecutionFailed`，不会遗留 processing 状态。`API/GameThreadQueue.h` 仅是旧 CallApi 的临时兼容适配器，不拥有第二套队列。
 - 所有公开函数调用拒绝 `use_game_thread=false`；参数结构大小和字段范围必须可验证，只开放当前明确支持的标量类型，batch 上限为 64。未找到真实 ProcessEvent 时初始化失败，不存在 no-op 或 Worker 线程 fallback。
 - PostRender/ProcessEvent VTable 修改会校验写保护恢复和最终指针，卸载前停止队列、恢复槽位并等待 callback in-flight 清零；任何恢复或 drain 失败都会阻止 `FreeLibraryAndExitThread`。ProcessEvent 监控改为按首次订阅延迟安装。
 - 临时 HTTP Server 不再创建 detached worker。接纳计数在建线程前原子保留，所有 worker 和 socket 有 owner；`Stop()` 中断慢连接并 join 全部线程后才允许析构，监听端口严格按配置 bind，不尝试替代端口，所有写入统一走 `SendAll`。
@@ -50,7 +50,7 @@ React -> Tauri invoke/event -> Rust Host -> Windows Named Pipe RPC -> Core DLL -
 - USMAP 容器统一由 `UExplorer::Usmap::WriteUncompressed` 写入：`None` 压缩标记、compressed/uncompressed 等长、size/open/write/flush 均受检查。生产 writer 输出与 golden fixture 完全一致，C++ 与 Rust 独立解析器均验证通过，因此确定性的“Zstd 标记 + 未压缩载荷”问题 `DUMP-001` 已关闭；真实目标生成的完整 name/enum/struct 映射仍属于 `DUMP-007` 与 R7 fixture，不能由最小空 payload 测试替代。
 - Dump 启动改为单一显式线程 owner；运行中第二个任务返回 `DUMP_EXECUTOR_BUSY`，关闭等待有 5 秒边界，超时则拒绝 DLL 卸载并继续持有线程。旧 API 对任何非空 option 返回 `DUMP_OPTIONS_UNAVAILABLE`，UI 已移除未生效选项和伪 60% 进度，真实取消/阶段进度留待 R5 DumpService。
 - 旧 Hook monitoring 仍含锁、JSON 和网络热路径，因此当前 capability 被硬关闭，前端无可达入口；只有无监控逻辑的 PostRender game-thread pump 保留。它必须等 R5 的预分配有界 collector、drop 指标和 Host EventHub 完成后才能重新开放。
-- `CoreHarness` 已覆盖 framing、1-byte 分片、USMAP production writer/golden/独立解析、队列背压、GameThread 所有权/超时/取消/SEH、64 生产者容量、1000 次 HTTP connect/disconnect、占用端口无 fallback 和慢客户端 shutdown；Rust protocol 测试从同一 fixture 独立验证 USMAP 容器。`tests/contracts/verify-core-safety.ps1` 固化静态不变量。
+- `CoreHarness` 已覆盖 framing、1-byte 分片、USMAP production writer/golden/独立解析、队列背压、GameThread owned work/ticket/超时/显式取消/C++ exception/SEH、128 生产者容量、1000 次 HTTP connect/disconnect、占用端口无 fallback 和慢客户端 shutdown；Rust protocol 测试从同一 fixture 独立验证 USMAP 容器。`tests/contracts/verify-core-safety.ps1` 固化静态不变量。
 
 本阶段最新本地证据：VS2026 `Release|x64` Core 与 harness 构建通过，Core harness（含稳定 Handle 与 SafeMemory）与 Rust USMAP consumer 测试通过，`npm run lint` 通过。真实 UE 目标的 FUObjectItem serial、Hook 恢复、注入超时、内存保护失败和完整目标生成 USMAP 语义验证仍是明确未执行项，不能用本地 harness 代替。
 
@@ -59,7 +59,7 @@ React -> Tauri invoke/event -> Rust Host -> Windows Named Pipe RPC -> Core DLL -
 - `CoreRuntime` 现在拥有 `Created -> Initializing -> Ready/Failed -> Stopping -> Stopped` 状态、不可复制的 request lease、停止后的新请求拒绝以及 active request drain。当前 Named Pipe 尚未实现，因此即使旧 HTTP 已监听，状态也会保持 `Initializing`，readiness blocker 明确为 `transport.named_pipe:PIPE_LISTENER_NOT_READY`；不会把兼容传输层存活冒充目标架构 Ready。
 - Engine 初始化完成后构建一次 `EngineContext`，并以 `shared_ptr<const EngineContext>` 单次发布；第二次发布被拒绝。Context 固化 generation、进程/模块/对象数组身份、引擎 profile，以及每个 offset 的 value、required、source、checks、validation state 和稳定 reason code。required offset 未验证时 context 构建直接失败。
 - `CapabilityRegistry` 通过显式 dependency graph 推导 capability，缺失依赖不会降级执行，未定义依赖和依赖环会使构建失败。目前对未完成的 Snapshot、Handle、Watch、Hook collector、Blueprint 和完整 Dump fixture 保持 unavailable，而不是沿用旧页面的“已支持”表述。
-- PostRender pump 记录 OS thread ID、单调时钟 last tick、tick count、queue depth 与跨线程 mismatch。`game_thread.executor` 在首次 tick 前、线程不稳定或两秒未更新时都会变为 unavailable；`/status`、`/status/engine` 与 `/status/health` 暴露真实 liveness/readiness、blocker、capability map 和 pump diagnostics。
+- `IGameThreadPump` 将执行器与 Hook 解耦，当前唯一实现 `PostRenderPumpBackend` 由 PostRender callback 驱动；执行器记录 OS thread ID、单调时钟 last tick、tick count、last task duration、queue depth/capacity 与跨线程 mismatch。检测到第二个 pump thread 后立即停止消费 owned work，排队任务只会超时/取消，不会在错误线程执行。`game_thread.executor` 在首次 tick 前、线程不稳定或两秒未更新时都会变为 unavailable；`/status`、`/status/engine` 与 `/status/health` 暴露真实 liveness/readiness、blocker、capability map 和 pump diagnostics。最小化/加载场景仍需真实目标 fixture，当前不会推断 PostRender 可用。
 - 主关闭路径先进入 `Stopping`，再由 `ShutdownCoordinator` 顺序停止旧 HTTP、等待 request lease、等待 Dump、恢复 Hook；任一 stage 不能证明安全停止都会保留 DLL，不执行 FreeLibrary。Harness 覆盖缺少 Pipe 时不能 Ready、Ready 后 admission、Stopping 拒绝新请求、lease drain、stage 顺序/异常/幂等，以及 capability dependency cycle。
 - `SafeMemory` 统一执行地址范围溢出检查、逐区域 `VirtualQuery`/保护状态验证、SEH 隔离读写、可写保护切换与逆序恢复。普通内存写不能触碰可执行页；显式代码写必须同时声明授权并刷新指令缓存。Hook VTable patch/restore 改为带 expected-value 校验的原子指针交换，不再由 API 模块直接调用 `VirtualProtect`。
 - Memory API 采用完整消费的 `from_chars` 十六进制解析，限制单次 4096 字节与 64 级 pointer chain，checked signed offset 拒绝上溢/下溢；链中途失败返回稳定失败 envelope 和已完成 steps。typed read/write 类型现已对称且数值范围严格。未经游戏线程和 UE 语义验证的 UObject 属性写路由与前端编辑控件均已关闭，不提供静默 raw fallback。

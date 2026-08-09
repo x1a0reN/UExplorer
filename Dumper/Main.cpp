@@ -18,10 +18,10 @@
 #include "API/HookApi.h"
 #include "API/EventsApi.h"
 #include "API/DumpApi.h"
-#include "API/GameThreadQueue.h"
 #include "Runtime/CoreCapabilities.h"
 #include "Runtime/CoreRuntimeAccess.h"
 #include "Runtime/EngineContextCapture.h"
+#include "Runtime/GameThreadExecutor.h"
 #include "Runtime/ObjectArrayIdentitySource.h"
 #include "Runtime/ShutdownCoordinator.h"
 #include "Settings.h"
@@ -166,7 +166,8 @@ namespace
 		if (!snapshot.Context)
 			return;
 
-		const UExplorer::GameThread::Diagnostics gameThread = UExplorer::GameThread::GetDiagnostics();
+		const UExplorer::Runtime::GameThreadDiagnostics gameThread =
+			UExplorer::Runtime::GetGameThreadExecutor().GetDiagnostics();
 		const std::uint64_t nowMonotonicUs = static_cast<std::uint64_t>(
 			std::chrono::duration_cast<std::chrono::microseconds>(
 				std::chrono::steady_clock::now().time_since_epoch()).count());

@@ -1,8 +1,8 @@
 #include "StatusApi.h"
 #include "ApiCommon.h"
 
-#include "GameThreadQueue.h"
 #include "Runtime/CoreRuntimeAccess.h"
+#include "Runtime/GameThreadExecutor.h"
 
 #include <windows.h>
 #include <format>
@@ -61,7 +61,8 @@ static json SerializeRuntime(const Runtime::CoreRuntimeSnapshot& snapshot)
 
 static json SerializeGameThreadDiagnostics()
 {
-	const GameThread::Diagnostics diagnostics = GameThread::GetDiagnostics();
+	const Runtime::GameThreadDiagnostics diagnostics =
+		Runtime::GetGameThreadExecutor().GetDiagnostics();
 	return {
 		{"enabled", diagnostics.Enabled},
 		{"processing", diagnostics.Processing},
@@ -70,7 +71,10 @@ static json SerializeGameThreadDiagnostics()
 		{"pump_thread_id", diagnostics.PumpThreadId},
 		{"last_tick_monotonic_us", diagnostics.LastPumpTickMonotonicUs},
 		{"tick_count", diagnostics.PumpTickCount},
-		{"queue_depth", diagnostics.QueueDepth}
+		{"last_task_duration_us", diagnostics.LastTaskDurationUs},
+		{"queue_depth", diagnostics.QueueDepth},
+		{"queue_capacity", diagnostics.Capacity},
+		{"pump_backend", Runtime::GetPostRenderPumpBackend().BackendName()}
 	};
 }
 
