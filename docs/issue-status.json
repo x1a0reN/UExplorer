@@ -48,6 +48,65 @@
       "status": "in_progress",
       "verification": ["IPC v1 ADR and machine-readable protocol contract added"]
     },
+    "INJ-001": {
+      "status": "in_progress",
+      "verification": [
+        "2026-08-09: timeout and failed-wait paths transfer process/thread/allocation ownership to deferred cleanup",
+        "tests/contracts/verify-injection-safety.ps1 enforces the no-early-free invariant",
+        "Live timeout fixture remains pending"
+      ]
+    },
+    "INJ-002": {
+      "status": "in_progress",
+      "verification": [
+        "2026-08-09: success requires WAIT_OBJECT_0, GetExitCodeThread != 0, and canonical module-path verification",
+        "Live LoadLibraryW failure fixture remains pending"
+      ]
+    },
+    "INJ-003": {
+      "status": "in_progress",
+      "verification": [
+        "2026-08-09: canonical path, regular file, AMD64 PE32+, target architecture, PID/start-time/path, and already-loaded checks added",
+        "Four Rust unit tests cover PE validation, path normalization, and candidate evidence",
+        "Live wrong-architecture/PID-reuse/already-loaded fixtures remain pending"
+      ]
+    },
+    "INJ-004": {
+      "status": "in_progress",
+      "verification": [
+        "2026-08-09: documented minimum process rights replace PROCESS_ALL_ACCESS; suspended/resume path removed; stable code and Win32/HRESULT detail returned",
+        "Rust Clippy -D warnings and injection safety contract pass",
+        "Live access-denied and remote-thread failure fixtures remain pending"
+      ]
+    },
+    "INJ-005": {
+      "status": "in_progress",
+      "verification": [
+        "2026-08-09: dll_loaded/already_loaded/failed are explicit; frontend no longer closes, adopts runtime.ini, or reports Core ready after DLL load",
+        "IPC connected and Core ready states require R3 SessionManager"
+      ]
+    },
+    "INJ-006": {
+      "status": "verified",
+      "verification": [
+        "2026-08-09: frontend/src-tauri/src/inject_dll.ps1 now terminates with LEGACY_INJECTOR_DISABLED",
+        "PROJECT_MAP records it as historical evidence and not a fallback"
+      ]
+    },
+    "PROC-001": {
+      "status": "verified",
+      "verification": [
+        "2026-08-09: Host is the sole UE candidate classifier and returns candidate_reasons",
+        "React duplicate isUEProcessCandidate filter removed; Rust candidate evidence test passes"
+      ]
+    },
+    "UI-016": {
+      "status": "verified",
+      "verification": [
+        "2026-08-09: scanUEProcesses no longer converts Tauri errors to an empty list",
+        "ProcessSelector displays the returned error detail"
+      ]
+    },
     "UI-015": {
       "status": "verified",
       "verification": [

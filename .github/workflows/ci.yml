@@ -18,6 +18,7 @@ jobs:
         run: |
           ./tests/contracts/verify-issue-register.ps1
           ./tests/contracts/verify-api-v1.ps1
+          ./tests/contracts/verify-injection-safety.ps1
           Get-Content ./protocol/v1/protocol.json -Raw -Encoding UTF8 | ConvertFrom-Json | Out-Null
           Get-Content ./protocol/v1/schema/payload.schema.json -Raw -Encoding UTF8 | ConvertFrom-Json | Out-Null
 

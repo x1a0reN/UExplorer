@@ -19,6 +19,23 @@ export interface ApiClientSettings {
   outputDir: string;
 }
 
+export interface HostProcessInfo {
+  pid: number;
+  name: string;
+  path: string;
+  start_time_100ns: string;
+  architecture: string;
+  candidate_reasons: string[];
+}
+
+export interface InjectionCommandResult {
+  success: boolean;
+  status: 'dll_loaded' | 'already_loaded' | 'failed';
+  stage: string;
+  code: string;
+  message: string;
+}
+
 export interface StatusData {
   game_name: string;
   game_version: string;
@@ -1116,34 +1133,19 @@ class UExplorerApi {
   }
 
   // Process management (Tauri invoke)
-  async scanUEProcesses(): Promise<{ pid: number; name: string; path: string }[]> {
+  async scanUEProcesses(): Promise<HostProcessInfo[]> {
     const { invoke } = await import('@tauri-apps/api/core');
-    try {
-      return await invoke<{ pid: number; name: string; path: string }[]>('scan_ue_processes');
-    } catch (error) {
-      console.error('Failed to scan UE processes:', error);
-      return [];
-    }
+    return invoke<HostProcessInfo[]>('scan_ue_processes');
   }
 
-  async injectDLL(pid: number, dllPath: string): Promise<{ success: boolean; message: string }> {
+  async injectDLL(process: HostProcessInfo, dllPath: string): Promise<InjectionCommandResult> {
     const { invoke } = await import('@tauri-apps/api/core');
-    try {
-      await this.persistConnectionSettings();
-      const result = await invoke<{ success: boolean; message: string }>('inject_dll', { pid, dllPath });
-      if (result.success) {
-        // Wait for DLL runtime state publication and adopt actual endpoint.
-        for (let i = 0; i < 50; i++) {
-          const adopted = await this.tryAdoptRuntimeEndpoint(pid);
-          if (adopted) break;
-          await new Promise((resolve) => setTimeout(resolve, 100));
-        }
-      }
-      return result;
-    } catch (error) {
-      console.error('Failed to inject DLL:', error);
-      return { success: false, message: String(error) };
-    }
+    return invoke<InjectionCommandResult>('inject_dll', {
+      pid: process.pid,
+      dllPath,
+      expectedStartTime100ns: process.start_time_100ns,
+      expectedProcessPath: process.path,
+    });
   }
 }
 

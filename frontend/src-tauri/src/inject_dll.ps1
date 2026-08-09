@@ -6,6 +6,8 @@ param(
     [string]$DllPath
 )
 
+throw 'LEGACY_INJECTOR_DISABLED: use the typed Tauri inject_dll command; this script is retained only as historical evidence and is not a fallback.'
+
 Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;

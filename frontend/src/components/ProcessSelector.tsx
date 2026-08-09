@@ -1,101 +1,41 @@
 import { useCallback, useEffect, useState } from 'react';
-import api from '../api';
+import api, { type HostProcessInfo, type InjectionCommandResult } from '../api';
 import { t } from '../i18n';
-
-interface ProcessInfo {
-  pid: number;
-  name: string;
-  path: string;
-}
 
 interface ProcessSelectorProps {
   isOpen: boolean;
   onClose: () => void;
-  onInjectSuccess: (pid: number) => void;
+  onDllLoaded: (pid: number) => void;
 }
 
-function isUEProcessCandidate(proc: ProcessInfo): boolean {
-  const name = proc.name.toLowerCase();
-  const path = (proc.path || '').toLowerCase();
-
-  const denyByName = [
-    'steam',
-    'epic',
-    'launcher',
-    'updater',
-    'helper',
-    'service',
-    'renderer',
-    'crashreporter',
-    'uexplorer',
-    'app.exe',
-  ];
-  const denyByPath = [
-    '\\windows\\system32\\',
-    '\\windows\\syswow64\\',
-    '\\microsoft\\edge\\',
-    '\\google\\chrome\\',
-    '\\mozilla firefox\\',
-  ];
-  if (denyByName.some((k) => name.includes(k))) {
-    return false;
-  }
-  if (denyByPath.some((k) => path.includes(k))) {
-    return false;
-  }
-
-  if (
-    name.includes('ue4editor') ||
-    name.includes('ue5editor') ||
-    name.includes('unrealeditor') ||
-    name.includes('ue4') ||
-    name.includes('ue5') ||
-    name.includes('unreal') ||
-    name.includes('-win64-shipping') ||
-    name.includes('-win64-development') ||
-    name.includes('-win64-test')
-  ) {
-    return true;
-  }
-
-  let score = 0;
-  const pathHints = [
-    '\\engine\\binaries\\',
-    '\\binaries\\win64\\',
-    '\\windowsnoeditor\\',
-    '\\saved\\stagedbuilds\\',
-    '\\unrealengine\\',
-  ];
-  pathHints.forEach((hint) => {
-    if (path.includes(hint)) score += 1;
-  });
-  if (name.includes('-win64-')) score += 1;
-  if (name.endsWith('.exe')) score += 1;
-
-  return score >= 2;
-}
-
-export default function ProcessSelector({ isOpen, onClose, onInjectSuccess }: ProcessSelectorProps) {
-  const [processes, setProcesses] = useState<ProcessInfo[]>([]);
+export default function ProcessSelector({ isOpen, onClose, onDllLoaded }: ProcessSelectorProps) {
+  const [processes, setProcesses] = useState<HostProcessInfo[]>([]);
   const [loading, setLoading] = useState(false);
-  const [selectedProcess, setSelectedProcess] = useState<ProcessInfo | null>(null);
+  const [selectedProcess, setSelectedProcess] = useState<HostProcessInfo | null>(null);
   const [dllPath, setDllPath] = useState(api.getSettings().dllPath);
   const [injecting, setInjecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [injectResult, setInjectResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [injectResult, setInjectResult] = useState<InjectionCommandResult | null>(null);
 
   const loadProcesses = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const procs = await api.scanUEProcesses();
-      const filtered = procs.filter(isUEProcessCandidate);
-      setProcesses(filtered);
+      setProcesses(procs);
       setSelectedProcess((current) =>
-        current && !filtered.some((process) => process.pid === current.pid) ? null : current
+        current &&
+        !procs.some(
+          (process) =>
+            process.pid === current.pid &&
+            process.start_time_100ns === current.start_time_100ns
+        )
+          ? null
+          : current
       );
     } catch (err) {
-      setError(t('Failed to scan processes'));
+      const detail = err instanceof Error ? err.message : String(err);
+      setError(`${t('Failed to scan processes')}: ${detail}`);
       console.error(err);
     } finally {
       setLoading(false);
@@ -117,18 +57,16 @@ export default function ProcessSelector({ isOpen, onClose, onInjectSuccess }: Pr
     setError(null);
 
     try {
-      const result = await api.injectDLL(selectedProcess.pid, dllPath);
+      const result = await api.injectDLL(selectedProcess, dllPath);
       setInjectResult(result);
 
-      if (result.success) {
+      if (result.status === 'dll_loaded') {
         api.updateSettings({ dllPath });
-        onInjectSuccess(selectedProcess.pid);
-        setTimeout(() => {
-          onClose();
-        }, 1500);
+        onDllLoaded(selectedProcess.pid);
       }
     } catch (err) {
-      setError(t('Injection failed'));
+      const detail = err instanceof Error ? err.message : String(err);
+      setError(`${t('Injection failed')}: ${detail}`);
       console.error(err);
     } finally {
       setInjecting(false);
@@ -197,7 +135,7 @@ export default function ProcessSelector({ isOpen, onClose, onInjectSuccess }: Pr
               <div className="max-h-[200px] overflow-auto border border-white/5 rounded-lg">
                 {processes.map((proc) => (
                   <div
-                    key={proc.pid}
+                    key={[proc.pid, proc.start_time_100ns].join(':')}
                     onClick={() => setSelectedProcess(proc)}
                     className={`px-3 py-2 cursor-pointer flex items-center justify-between transition-colors ${
                       selectedProcess?.pid === proc.pid
@@ -210,6 +148,9 @@ export default function ProcessSelector({ isOpen, onClose, onInjectSuccess }: Pr
                       <div>
                         <div className="text-white text-sm font-medium">{proc.name}</div>
                         <div className="text-white/40 text-xs">{proc.path}</div>
+                        <div className="text-white/30 text-[10px]">
+                          {proc.architecture} / {proc.candidate_reasons.join(', ')}
+                        </div>
                       </div>
                     </div>
                     <div className="text-white/40 text-xs font-mono">PID: {proc.pid}</div>
@@ -228,11 +169,19 @@ export default function ProcessSelector({ isOpen, onClose, onInjectSuccess }: Pr
 
           {injectResult && (
             <div className={`mb-4 p-3 rounded-lg ${
-              injectResult.success
-                ? 'bg-green-500/10 border border-green-500/20'
+              injectResult.status === 'dll_loaded'
+                ? 'bg-blue-500/10 border border-blue-500/20'
+                : injectResult.status === 'already_loaded'
+                  ? 'bg-amber-500/10 border border-amber-500/20'
                 : 'bg-red-500/10 border border-red-500/20'
             }`}>
-              <div className={injectResult.success ? 'text-green-400' : 'text-red-400'}>
+              <div className={
+                injectResult.status === 'dll_loaded'
+                  ? 'text-blue-300'
+                  : injectResult.status === 'already_loaded'
+                    ? 'text-amber-300'
+                    : 'text-red-400'
+              }>
                 {injectResult.message}
               </div>
             </div>

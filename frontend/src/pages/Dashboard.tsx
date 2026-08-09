@@ -302,9 +302,8 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
       <ProcessSelector
         isOpen={showProcessSelector}
         onClose={() => setShowProcessSelector(false)}
-        onInjectSuccess={(pid) => {
-          console.log('DLL injected successfully, PID:', pid);
-          loadStatus();
+        onDllLoaded={(pid) => {
+          console.log('DLL load confirmed; waiting for IPC/Core readiness, PID:', pid);
         }}
       />
     </div>

@@ -165,8 +165,8 @@ UExplorer/
         ├── capabilities/default.json #   Tauri 权限配置
         └── src/
             ├── main.rs               #   Tauri 主入口
-            ├── lib.rs                #   Tauri 命令 (scan_ue_processes, inject_dll, save_connection_settings)
-            └── inject_dll.ps1        #   PowerShell DLL 注入脚本
+            ├── lib.rs                #   Tauri 命令；进程身份扫描与受校验的 x64 DLL 注入
+            └── inject_dll.ps1        #   已禁用的 legacy 注入脚本，仅保留历史证据，不是 fallback
 ```
 
 ---

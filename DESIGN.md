@@ -19,7 +19,7 @@ React -> Tauri invoke/event -> Rust Host -> Windows Named Pipe RPC -> Core DLL -
 | 重构阶段 | 当前状态 | 已有证据 | 未完成门槛 |
 |---|---|---|---|
 | R0 证据与测试地基 | 进行中 | 128 项问题可跟踪；65 条 API v1 路由快照；IPC v1 契约；C++ framing/queue/backpressure/shutdown harness；Rust protocol/Fake Core 测试；前端 lint/test/build 通过；Windows CI 三个 job 首次通过 | 三类 UE fixture、每个 P0 的回归测试 |
-| R1 安全止血 | 未开始 | P0 静态证据已登记 | 注入、GameThread、Hook、HTTP worker、USMAP、reconnect、critical offset 全部修复并验证 |
+| R1 安全止血 | 进行中 | 注入路径已完成首轮止血：PID/start-time/path 身份、Host/目标/DLL x64、PE32+、canonical path、重复模块、最小权限、remote exit code、模块回查、超时延迟释放；React 不再把 DLL loaded 当 Core ready | 目标进程注入/超时/重复加载 fixture；GameThread、Hook、HTTP worker、USMAP、reconnect、critical offset 修复 |
 | R2 CoreRuntime/能力模型 | 未开始 | 目标状态机已在重构计划定义 | CoreRuntime、EngineContext、CapabilityRegistry 实装 |
 | R3 Named Pipe/Rust Host | 未开始 | IPC v1 framing 与 Fake Core 地基已建立 | 真实 Pipe、PID/ACL 校验、SessionManager、deadline/cancel |
 | R4 通信原子切换 | 未开始 | ADR 已接受 | React 只走 Tauri，Core 发布构建不含可达网络栈 |
@@ -28,6 +28,17 @@ React -> Tauri invoke/event -> Rust Host -> Windows Named Pipe RPC -> Core DLL -
 | R7 发布硬化 | 未开始 | 无 | 性能、压力、目标 fixture、文档和发布门全部通过 |
 
 当前不能宣称“可用”的既有功能包括：假实时 Watch、占位 WebSocket Console、直接 Transform 内存写、带错误 Zstd 标记的 USMAP、未生效 Dump option、猜测 Offset 后继续 Ready，以及未证明可安全卸载的 Hook/HTTP worker。它们在修复或禁用前均视为已知缺陷。
+
+### 0.1 R1 注入止血状态
+
+- Rust Host 现在只接受扫描结果携带的 PID + start_time_100ns + process path 身份，执行前重新查询并拒绝 PID 复用或路径变化。
+- DLL 必须 canonicalize 为普通 .dll 文件，且 PE machine 为 AMD64、optional header 为 PE32+；目标进程也必须是 x64。
+- 注入权限从 PROCESS_ALL_ACCESS 收紧为 CreateThread/QueryInformation/VM Operation/Read/Write；线程直接运行，不再 suspended/resume。
+- LoadLibraryW 地址按本地所属系统模块 RVA 映射到目标模块，不假定跨进程绝对地址相同；成功需要 wait signaled、exit code 非零并在目标模块表回查到同一 canonical path。
+- 超时或异常 wait 不释放仍可能被远程线程读取的参数；后台清理只在线程真正结束后执行。legacy inject_dll.ps1 已明确禁用，不作为 fallback。
+- UI 将 dll_loaded、already_loaded、failed 分开显示，DLL load 后不再自动采用 runtime.ini 或关闭弹窗。IPC handshake 与 Core Ready 要到 R3 才能建立，因此当前不能把 DLL loaded 宣称为连接成功。
+
+当前证据为 Rust 单元测试、Clippy、静态安全契约和前端 lint/test/build；真实目标进程的成功、超时、错误架构、PID 复用与重复加载 fixture 尚未执行，所以对应注入问题仍标记为 in_progress。
 
 ## Context
 
