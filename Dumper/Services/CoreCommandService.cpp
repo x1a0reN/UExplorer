@@ -225,6 +225,78 @@ json SerializeReflectionDiagnostics(
 	return data;
 }
 
+json SerializeTypeSnapshotDiagnostics(const Runtime::EngineFacade& engine)
+{
+	const Runtime::TypeSnapshotStore& store = engine.Types();
+	const std::shared_ptr<const Runtime::TypeSnapshot> snapshot = store.Current();
+	json data;
+	if (snapshot)
+	{
+		data = {
+			{"published", true},
+			{"generation", snapshot->Generation()},
+			{"context_generation", snapshot->ContextGeneration()},
+			{"object_snapshot_generation", snapshot->ObjectSnapshotGeneration()},
+			{"reflection_layout_fingerprint", std::format(
+				"0x{:016X}", snapshot->ReflectionLayoutFingerprint())},
+			{"captured_at_monotonic_us", snapshot->CapturedAtMonotonicUs()},
+			{"capture_duration_us", snapshot->CaptureDurationUs()},
+			{"source", snapshot->Source()},
+			{"type_count", snapshot->Types().size()},
+			{"stopped", store.IsStopped()}
+		};
+	}
+	else
+	{
+		data = {
+			{"published", false},
+			{"generation", nullptr},
+			{"stopped", store.IsStopped()}
+		};
+	}
+
+	const Runtime::TypeSnapshotCapture* capture = engine.TypeCapture();
+	data["capture_configured"] = capture != nullptr;
+	if (capture)
+	{
+		const Runtime::TypeSnapshotCaptureDiagnostics diagnostics =
+			capture->Diagnostics();
+		data["capture"] = {
+			{"state", Runtime::ToString(diagnostics.State)},
+			{"error_code", diagnostics.Error == Runtime::TypeSnapshotCaptureError::None
+				? json(nullptr)
+				: json(Runtime::ToString(diagnostics.Error))},
+			{"source_error_code", diagnostics.SourceError
+					== Runtime::TypeSnapshotSourceError::None
+				? json(nullptr)
+				: json(Runtime::ToString(diagnostics.SourceError))},
+			{"publish_error_code", diagnostics.PublishError
+					== Runtime::TypeSnapshotPublishError::None
+				? json(nullptr)
+				: json(Runtime::ToString(diagnostics.PublishError))},
+			{"requested_generation", diagnostics.RequestedGeneration},
+			{"active_generation", diagnostics.ActiveGeneration},
+			{"object_snapshot_generation", diagnostics.ObjectSnapshotGeneration},
+			{"reflection_layout_fingerprint", diagnostics.ReflectionLayoutFingerprint == 0
+				? json(nullptr)
+				: json(std::format(
+					"0x{:016X}", diagnostics.ReflectionLayoutFingerprint))},
+			{"captured_types", diagnostics.CapturedTypes},
+			{"captured_functions", diagnostics.CapturedFunctions},
+			{"captured_members", diagnostics.CapturedMembers},
+			{"source_steps", diagnostics.SourceSteps},
+			{"validation_steps", diagnostics.ValidationSteps},
+			{"work_in_flight", diagnostics.WorkInFlight},
+			{"retired_candidates", diagnostics.RetiredCandidates}
+		};
+	}
+	else
+	{
+		data["capture"] = nullptr;
+	}
+	return data;
+}
+
 json SerializeScriptOffsetDiagnostics(const ScriptOffsetDiagnostics& diagnostics)
 {
 	return {
@@ -784,6 +856,7 @@ CoreCommandResponse CoreCommandService::ExecuteStatus(const CoreCommandRequest& 
 		data["object_snapshot"] = SerializeSnapshotDiagnostics(m_Engine);
 		data["reflection"] = SerializeReflectionDiagnostics(
 			m_Engine, m_ReflectionSource);
+		data["type_snapshot"] = SerializeTypeSnapshotDiagnostics(m_Engine);
 		return Success(request, std::move(data), {.ExecuteUs = ElapsedMicroseconds(started)});
 	}
 	if (!snapshot.Context)
@@ -809,6 +882,7 @@ CoreCommandResponse CoreCommandService::ExecuteStatus(const CoreCommandRequest& 
 		data["object_snapshot"] = SerializeSnapshotDiagnostics(m_Engine);
 		data["reflection"] = SerializeReflectionDiagnostics(
 			m_Engine, m_ReflectionSource);
+		data["type_snapshot"] = SerializeTypeSnapshotDiagnostics(m_Engine);
 		return Success(request, std::move(data), {.ExecuteUs = ElapsedMicroseconds(started)});
 	}
 
@@ -856,6 +930,7 @@ CoreCommandResponse CoreCommandService::ExecuteStatus(const CoreCommandRequest& 
 	data["object_snapshot"] = SerializeSnapshotDiagnostics(m_Engine);
 	data["reflection"] = SerializeReflectionDiagnostics(
 		m_Engine, m_ReflectionSource);
+	data["type_snapshot"] = SerializeTypeSnapshotDiagnostics(m_Engine);
 	return Success(request, std::move(data), {.ExecuteUs = ElapsedMicroseconds(started)});
 }
 

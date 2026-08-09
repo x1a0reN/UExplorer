@@ -166,6 +166,7 @@ enum class TypeSnapshotPublishError : std::uint8_t
 	FunctionInvalid,
 	EnumInvalid,
 	GenerationNotMonotonic,
+	WorkerThreadRequired,
 	AllocationFailed
 };
 
@@ -294,6 +295,7 @@ TypeFunctionQueryResult QueryTypeFunctions(
 class TypeSnapshotStore final
 {
 public:
+	static constexpr std::size_t kMaxSourceBytes = 1024;
 	static constexpr std::size_t kMaxTypeRecords = 1'000'000;
 	static constexpr std::size_t kMaxTotalMembers = 8'000'000;
 	static constexpr std::size_t kMaxDescriptorNodes = 1'000'000;

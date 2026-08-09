@@ -84,6 +84,7 @@
 		"2026-08-10: production EngineSnapshot publication now uses an unforgeable validated token, segmented records, atomic ownership transfer, and fixed-capacity worker reclamation instead of a final game-thread O(N) scan/allocation/destruction",
 		"2026-08-10: EngineFacade now owns a drainable ReflectionLayoutCapture; capture exclusively owns the mutable candidate, sources return at most one bounded same-field evidence per work unit, and dependency revalidation, same-thread validation, and atomic publication reject partial, mutated, or changed evidence",
 		"2026-08-10: ObjectSnapshotReflectionCandidateSource is the production immutable-snapshot/SafeMemory boundary for complete UProperty/FProperty evidence; Main owns its scheduler attachment, snapshot-refresh exclusion, terminal plan release, diagnostics, and shutdown drain",
+		"2026-08-10: EngineFacade uniquely owns TypeSnapshotCapture; its strict record stream, exact object/reflection shared_ptr sealing, worker-only Store publication, callback drain, and fixed-capacity worker retirement prevent partial publication and frame-thread O(N) validation/destruction",
 		"2026-08-09: Rust DomainService and the split TypeScript Tauri client replace the frontend REST/SSE/WebSocket/configuration monolith at the process boundary",
         "Remaining legacy domain/API monoliths and direct Off/Settings consumers still require migration"
       ]
@@ -370,6 +371,7 @@
 		"2026-08-10: PostRenderPumpBackend now refuses all frame-client dispatch unless IsCurrentPumpThread() remains true; the harness reproduces a second-thread tick and proves zero domain callbacks after mismatch",
 		"2026-08-10: the backend owns one detachable GameThreadFrameScheduler; it round-robins at most eight clients under a shared 32-work-unit/2ms frame bound, detects 0-progress and budget-contract violations, and independently withdraws/quiet-drains every client",
 		"2026-08-10: ReflectionLayoutCapture implements exact work accounting, single-owner requests, concurrent-pump rejection, callback-barrier drain, and separate Begin/field/validate/publish units; Main now attaches the production source to the shared scheduler, excludes object-generation replacement while active, and quiet-detaches on every terminal path",
+		"2026-08-10: generic TypeSnapshotCapture accounts Begin/record/validation/seal work independently, rejects concurrent capture/publication owners, and moves heavy TypeSnapshotStore publication to an explicit worker handoff; production source/Main attachment and live minimized/loading evidence remain pending",
         "Live minimized/loading fixtures remain pending"
       ]
     },
@@ -416,6 +418,7 @@
 		"2026-08-09: production ObjectArraySnapshotSource builds stable name/full/class/package/kind metadata on the verified PostRender thread and atomically publishes only after a full validation sweep and final count check",
 		"2026-08-10: Main attaches the producer through the shared bounded GameThreadFrameScheduler, requests initial/periodic generations, and drains the producer plus scheduler before facade/source teardown on normal and failed initialization paths",
 		"2026-08-10: capture validates each record within the slot budget into std::deque storage; ValidatedEngineSnapshot removes the final O(N) Store scan/reserve, while replaced/rejected/failed generations use fixed 8-slot retirement, explicit backpressure, and Main-worker reclamation",
+		"2026-08-10: generic TypeSnapshotCapture keeps a candidate invisible through budgeted assembly and source revalidation, seals exact object/reflection dependencies, and publishes only the complete generation from a worker; a production UE metadata source is still pending",
 		"2026-08-09: objects.snapshot.page reads only an immutable published generation under a CoreRuntime request lease; it never traverses a live UE container or enters the game-thread queue",
 		"GC-churn, large-object-table, and real target profile fixtures remain pending; the result is a validated complete sweep, not a point-in-engine-time atomic snapshot"
 	  ]
@@ -470,6 +473,7 @@
 		"2026-08-10: TypeSnapshot deep-clones descriptor DAGs with node/depth/field limits, rejects descriptor cycles, checks every property/parameter range against the witnessed owner size, and rejects hierarchy cycles/depth overflow",
 		"2026-08-10: production object snapshot completion no longer performs a contiguous vector allocation or second record scan; old and failed generations are retained under bounded retirement until worker-thread reclamation",
 		"2026-08-10: reflection discovery processes one outer offset per source step and at most eight FField nodes per step with a 512-node owner-chain/cycle bound; the capture hard cap is 4096 steps",
+		"2026-08-10: TypeSnapshotCapture bounds source and validation steps, enforces strict nested type/function records and global type/member/enum limits, and uses four retirement slots plus explicit stalled-candidate backpressure with worker reclamation",
 		"Real reflection descriptors and target-scale container fixtures remain pending"
 	  ]
 	},

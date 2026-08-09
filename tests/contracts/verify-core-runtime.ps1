@@ -60,6 +60,8 @@ $reflectionSourceHeader = Read-ProjectFile 'Dumper\Runtime\ObjectSnapshotReflect
 $reflectionSource = Read-ProjectFile 'Dumper\Runtime\ObjectSnapshotReflectionCandidateSource.cpp'
 $typeSnapshotHeader = Read-ProjectFile 'Dumper\Runtime\TypeSnapshot.h'
 $typeSnapshot = Read-ProjectFile 'Dumper\Runtime\TypeSnapshot.cpp'
+$typeCaptureHeader = Read-ProjectFile 'Dumper\Runtime\TypeSnapshotCapture.h'
+$typeCapture = Read-ProjectFile 'Dumper\Runtime\TypeSnapshotCapture.cpp'
 $callbackBarrier = Read-ProjectFile 'Dumper\Runtime\CallbackBarrier.h'
 $safeMemoryHeader = Read-ProjectFile 'Dumper\Runtime\SafeMemory.h'
 $safeMemory = Read-ProjectFile 'Dumper\Runtime\SafeMemory.cpp'
@@ -318,6 +320,34 @@ foreach ($token in @('Off::', 'Settings::', 'ObjectArray::', '#include "Unreal/'
 		'UEObject ', 'UEStruct ', 'UEProperty ')) {
 	Assert-NotContains $typeSnapshot $token 'Type snapshot validation reached legacy mutable reflection wrappers.'
 }
+foreach ($token in @('ITypeSnapshotSource', 'TypeSnapshotSourceRecord',
+		'TypeSnapshotTypeBegin', 'TypeSnapshotPropertyRecord',
+		'TypeSnapshotFunctionBegin', 'TypeSnapshotParameterRecord',
+		'TypeSnapshotFunctionEnd', 'TypeSnapshotEnumEntryRecord', 'TypeSnapshotTypeEnd',
+		'IGameThreadFrameClient', 'BeginValidation()', 'ValidateNext()',
+		'ValidateDependencies()', 'Ready', 'Publishing', 'PublishReady',
+		'kMaxRetiredCandidates = 4', 'ReclaimRetired', 'StopAndDrain',
+		'CallbackBarrier')) {
+	Assert-Contains ($typeCaptureHeader + $typeCapture) $token 'Budgeted type snapshot capture contract regressed.'
+}
+foreach ($token in @('m_PumpOwned.test_and_set', 'm_PublishOwned.test_and_set',
+		'begun.Reflection != currentReflection',
+		'm_Engine.Snapshots().Current() != m_ObjectDependency',
+		'reflection != m_ReflectionDependency', 'CandidateAssemblyComplete',
+		'm_Engine.PublishTypeSnapshot', 'RetireCandidate',
+		'm_WorkBarrier.WaitForDrain', 'TypeSnapshotSourceError::AllocationFailed',
+		'TypeSnapshotPublishError::WorkerThreadRequired')) {
+	Assert-Contains $typeCapture $token 'Type snapshot capture ownership, dependency, or worker handoff regressed.'
+}
+foreach ($token in @('Off::', 'Settings::', 'ObjectArray::', 'NameArray::',
+		'#include "Unreal/', 'UEObject ', 'UEStruct ', 'UEProperty ')) {
+	Assert-NotContains $typeCapture $token 'Generic type snapshot capture reached mutable legacy reflection state.'
+}
+foreach ($token in @('ConfigureTypeSnapshotCapture',
+		'friend class TypeSnapshotCapture', 'std::unique_ptr<TypeSnapshotCapture>',
+		'm_TypeCapture->StopAndDrain')) {
+	Assert-Contains $engineFacade $token 'EngineFacade no longer uniquely owns and drains type capture.'
+}
 foreach ($token in @('std::shared_ptr<const ReflectionRuntimeSnapshot> Reflection',
 		'probes.Reflection->IsLayoutConfigured(context.Generation())',
 		'probes.Reflection->IsPropertyCodecConfigured(context.Generation())',
@@ -338,6 +368,11 @@ foreach ($token in @('DriveReflectionDiscovery', 'ReflectionCaptureBlocksSnapsho
 foreach ($token in @('SerializeReflectionDiagnostics', 'preparation_error_code',
 		'validation_error_code', 'prepared_snapshot_generation', 'layout_fingerprint')) {
 	Assert-Contains $commandService $token 'Reflection preparation/capture diagnostics are no longer observable.'
+}
+foreach ($token in @('SerializeTypeSnapshotDiagnostics', 'type_snapshot',
+		'publish_error_code', 'captured_types', 'captured_functions',
+		'captured_members', 'validation_steps', 'retired_candidates')) {
+	Assert-Contains $commandService $token 'Type snapshot capture/publication diagnostics are no longer observable.'
 }
 foreach ($token in @('EngineSnapshotObject', 'SessionId', 'ContextGeneration', 'Generation',
 		'SourceObjectCount', 'SkippedSlots', 'std::deque<EngineSnapshotObject>',
@@ -439,6 +474,15 @@ foreach ($token in @('TestEngineContextAndCapabilities', 'TestCoreRuntimeStateAn
 		'Parameter direction disagreed with its reflected flags',
 		'Direct and inherited type-member semantics were not explicit and stable',
 		'A type snapshot survived an object snapshot generation change',
+		'EngineFacade did not uniquely own its type snapshot producer',
+		'Budgeted type capture published partial data or misreported exact work',
+		'Worker publication did not atomically publish the complete type generation',
+		'Type snapshot heavy publication ran on the witnessed game thread',
+		'A changed immutable dependency reached type snapshot publication',
+		'Type validation continued after execution-thread invalidation',
+		'A no-progress type source escaped bounded retirement',
+		'Type capture retirement backpressure lost or frame-thread-destroyed a candidate',
+		'An incomplete type/function record stream reached immutable publication',
 		'Reflection validation was published from a different execution thread',
 		'FString was not copied and converted through the bounded UTF-16 codec',
 		'Validated FText layout returned an unresolved placeholder',

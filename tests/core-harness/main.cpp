@@ -30,6 +30,7 @@
 #include "Runtime/PropertyCodec.h"
 #include "Runtime/ReflectionLayout.h"
 #include "Runtime/ReflectionLayoutCapture.h"
+#include "Runtime/TypeSnapshotCapture.h"
 #include "Runtime/SafeMemory.h"
 #include "Runtime/ShutdownCoordinator.h"
 #include "Runtime/VTableHook.h"
@@ -1724,10 +1725,17 @@ namespace
 		class FacadeIdentitySource final : public IHandleIdentitySource
 		{
 		public:
+			FacadeIdentitySource() noexcept : m_ExecutionThreadId(GetCurrentThreadId()) {}
 			std::uint64_t ContextGeneration() const noexcept override { return 51; }
-			bool IsCurrentExecutionThreadValid() const noexcept override { return true; }
+			bool IsCurrentExecutionThreadValid() const noexcept override
+			{
+				return GetCurrentThreadId() == m_ExecutionThreadId;
+			}
 			bool TryReadObject(std::int32_t, ObjectIdentity&) override { return false; }
 			bool TryReadFunction(std::int32_t, FunctionIdentity&) override { return false; }
+
+		private:
+			DWORD m_ExecutionThreadId = 0;
 		} facadeIdentity;
 		EngineContextBuilder contextBuilder(51);
 		contextBuilder.SetIdentity(0x140000000, 0x140100000, 4242, 0, "Fixture", "5.4");
@@ -2177,29 +2185,405 @@ namespace
 			};
 		};
 
+		class SyntheticTypeSnapshotSource final : public ITypeSnapshotSource
+		{
+		public:
+			SyntheticTypeSnapshotSource(
+				EngineFacade& engine,
+				TypeSnapshotCandidate candidate)
+				: m_Engine(engine),
+				  m_ContextGeneration(candidate.ContextGeneration),
+				  m_Source(std::move(candidate.Source)),
+				  m_ExpectedTypes(candidate.Types.size())
+			{
+				for (ReflectedType& type : candidate.Types)
+				{
+					std::vector<ReflectedProperty> properties;
+					std::vector<ReflectedFunction> functions;
+					std::vector<ReflectedEnumEntry> enumEntries;
+					properties.swap(type.DirectProperties);
+					functions.swap(type.DirectFunctions);
+					enumEntries.swap(type.EnumEntries);
+					m_Records.emplace_back(TypeSnapshotTypeBegin{std::move(type)});
+					for (ReflectedProperty& property : properties)
+					{
+						m_Records.emplace_back(TypeSnapshotPropertyRecord{
+							std::move(property)
+						});
+					}
+					m_ExpectedFunctions += functions.size();
+					for (ReflectedFunction& function : functions)
+					{
+						std::vector<ReflectedParameter> parameters;
+						parameters.swap(function.Parameters);
+						m_Records.emplace_back(TypeSnapshotFunctionBegin{
+							std::move(function)
+						});
+						for (ReflectedParameter& parameter : parameters)
+						{
+							m_Records.emplace_back(TypeSnapshotParameterRecord{
+								std::move(parameter)
+							});
+						}
+						m_Records.emplace_back(TypeSnapshotFunctionEnd{});
+					}
+					for (ReflectedEnumEntry& entry : enumEntries)
+					{
+						m_Records.emplace_back(TypeSnapshotEnumEntryRecord{
+							std::move(entry)
+						});
+					}
+					m_Records.emplace_back(TypeSnapshotTypeEnd{});
+				}
+			}
+
+			std::uint64_t ContextGeneration() const noexcept override
+			{
+				return m_ContextGeneration;
+			}
+
+			bool IsConfigured() const noexcept override
+			{
+				return m_ContextGeneration != 0 && !m_Source.empty();
+			}
+
+			bool IsCurrentExecutionThreadValid() const noexcept override
+			{
+				return m_ThreadValid;
+			}
+
+			TypeSnapshotSourceBeginResult Begin() noexcept override
+			{
+				m_Cursor = 0;
+				m_ValidationCursor = 0;
+				m_ValidationBegun = false;
+				m_Active = true;
+				m_ObjectDependency = m_Engine.Snapshots().Current();
+				m_ReflectionDependency = m_Engine.Reflection();
+				return {
+					.Source = m_Source,
+					.ObjectSnapshot = m_ObjectDependency,
+					.Reflection = m_ReflectionDependency,
+					.ExpectedTypeCount = m_ExpectedTypes,
+					.ExpectedFunctionCount = m_ExpectedFunctions
+				};
+			}
+
+			TypeSnapshotSourceStepResult CaptureNext() noexcept override
+			{
+				if (!m_Active)
+					return {.Error = TypeSnapshotSourceError::ContractViolation};
+				if (m_NoProgress)
+					return {};
+				if (m_Records.empty())
+					return {.Progressed = true, .Complete = true};
+				if (m_Cursor >= m_Records.size())
+					return {.Error = TypeSnapshotSourceError::ContractViolation};
+				const std::size_t cursor = m_Cursor++;
+				return {
+					.Progressed = true,
+					.Complete = m_Cursor == m_Records.size(),
+					.Record = m_Records[cursor]
+				};
+			}
+
+			TypeSnapshotSourceError BeginValidation() noexcept override
+			{
+				if (!m_Active || m_Cursor != m_Records.size())
+					return TypeSnapshotSourceError::ContractViolation;
+				m_ValidationBegun = true;
+				return TypeSnapshotSourceError::None;
+			}
+
+			TypeSnapshotSourceValidationResult ValidateNext() noexcept override
+			{
+				if (!m_Active || !m_ValidationBegun)
+					return {.Error = TypeSnapshotSourceError::ContractViolation};
+				++m_ValidationCursor;
+				return {
+					.Progressed = true,
+					.Complete = m_ValidationCursor >= m_ValidationSteps
+				};
+			}
+
+			bool ValidateDependencies() noexcept override
+			{
+				return m_Active
+					&& m_DependenciesValid
+					&& m_Engine.Snapshots().Current() == m_ObjectDependency
+					&& m_Engine.Reflection() == m_ReflectionDependency;
+			}
+
+			void Cancel() noexcept override
+			{
+				m_Active = false;
+				m_ObjectDependency.reset();
+				m_ReflectionDependency.reset();
+			}
+
+			void SetNoProgress(const bool noProgress) noexcept
+			{
+				m_NoProgress = noProgress;
+			}
+
+			void SetThreadValid(const bool valid) noexcept
+			{
+				m_ThreadValid = valid;
+			}
+
+			void OmitFinalRecord()
+			{
+				Require(!m_Records.empty(), "Type source fixture had no final record");
+				m_Records.pop_back();
+			}
+
+			std::size_t RecordCount() const noexcept { return m_Records.size(); }
+			std::size_t ValidationStepCount() const noexcept
+			{
+				return m_ValidationSteps;
+			}
+
+		private:
+			EngineFacade& m_Engine;
+			std::uint64_t m_ContextGeneration = 0;
+			std::string m_Source;
+			std::vector<TypeSnapshotSourceRecord> m_Records;
+			std::shared_ptr<const EngineSnapshot> m_ObjectDependency;
+			std::shared_ptr<const ReflectionRuntimeSnapshot> m_ReflectionDependency;
+			std::size_t m_ExpectedTypes = 0;
+			std::size_t m_ExpectedFunctions = 0;
+			std::size_t m_Cursor = 0;
+			std::size_t m_ValidationCursor = 0;
+			std::size_t m_ValidationSteps = 2;
+			bool m_Active = false;
+			bool m_ValidationBegun = false;
+			bool m_ThreadValid = true;
+			bool m_DependenciesValid = true;
+			bool m_NoProgress = false;
+		};
+
+		const auto publishTypeCaptureDependencies = [&validated, &objectSnapshot](
+			EngineFacade& targetFacade) {
+			Require(
+				targetFacade.ConfigureReflectionLayout(validated.Layout)
+					&& targetFacade.Snapshots().Publish(*objectSnapshot).Ok(),
+				"Type capture fixture dependencies were not published");
+		};
+		const auto pumpTypeCapture = [](TypeSnapshotCapture& capture) {
+			TypeSnapshotPumpResult result;
+			std::size_t work = 0;
+			for (std::size_t step = 0; step < 256; ++step)
+			{
+				result = capture.Pump(1);
+				work += result.WorkConsumed;
+				if (result.Status == TypeSnapshotPumpStatus::Ready
+					|| result.Status == TypeSnapshotPumpStatus::Failed)
+				{
+					break;
+				}
+			}
+			return std::pair{result, work};
+		};
+
+		EngineFacade typeCaptureFacade(context, "reflection-facade", facadeIdentity);
+		publishTypeCaptureDependencies(typeCaptureFacade);
+		SyntheticTypeSnapshotSource typeCaptureSource(
+			typeCaptureFacade,
+			makeTypeCandidate());
+		Require(
+			typeCaptureFacade.ConfigureTypeSnapshotCapture(typeCaptureSource)
+				&& !typeCaptureFacade.ConfigureTypeSnapshotCapture(typeCaptureSource),
+			"EngineFacade did not uniquely own its type snapshot producer");
+		TypeSnapshotCapture* typeCapture = typeCaptureFacade.TypeCapture();
+		Require(
+			typeCapture
+				&& typeCapture->PublishReady().Error == TypeSnapshotPublishError::StoreInvalid
+				&& typeCapture->Pump(0).Status == TypeSnapshotPumpStatus::InvalidBudget
+				&& typeCapture->RequestCapture() == TypeSnapshotCaptureError::None
+				&& typeCapture->RequestCapture() == TypeSnapshotCaptureError::Busy,
+			"Type snapshot capture admission or budget validation was not fail-closed");
+		const auto [readyPump, captureWork] = pumpTypeCapture(*typeCapture);
+		const TypeSnapshotCaptureDiagnostics readyDiagnostics = typeCapture->Diagnostics();
+		const std::size_t expectedCaptureWork = 1
+			+ typeCaptureSource.RecordCount()
+			+ 1
+			+ typeCaptureSource.ValidationStepCount()
+			+ 1;
+		Require(
+			readyPump.Status == TypeSnapshotPumpStatus::Ready
+				&& captureWork == expectedCaptureWork
+				&& readyDiagnostics.State == TypeSnapshotCaptureState::Ready
+				&& readyDiagnostics.Error == TypeSnapshotCaptureError::None
+				&& readyDiagnostics.CapturedTypes == 4
+				&& readyDiagnostics.CapturedFunctions == 2
+				&& readyDiagnostics.CapturedMembers == 11
+				&& readyDiagnostics.SourceSteps == typeCaptureSource.RecordCount()
+				&& readyDiagnostics.ValidationSteps == typeCaptureSource.ValidationStepCount()
+				&& !typeCaptureFacade.Types().Current(),
+			"Budgeted type capture published partial data or misreported exact work");
+		Require(
+			typeCapture->PublishReady().Error
+					== TypeSnapshotPublishError::WorkerThreadRequired
+				&& typeCapture->Diagnostics().State == TypeSnapshotCaptureState::Ready
+				&& !typeCaptureFacade.Types().Current(),
+			"Type snapshot heavy publication ran on the witnessed game thread");
+		const TypeSnapshotPublishResult capturedTypes = std::async(
+			std::launch::async,
+			[&]() { return typeCapture->PublishReady(); }).get();
+		Require(
+			capturedTypes.Ok()
+				&& capturedTypes.Snapshot == typeCaptureFacade.Types().Current()
+				&& capturedTypes.Snapshot->Types().size() == 4
+				&& typeCapture->Diagnostics().State == TypeSnapshotCaptureState::Completed
+				&& typeCapture->ReclaimRetired() == 0
+				&& typeCaptureFacade.Stop(),
+			"Worker publication did not atomically publish the complete type generation");
+
+		EngineFacade driftFacade(context, "reflection-facade", facadeIdentity);
+		publishTypeCaptureDependencies(driftFacade);
+		SyntheticTypeSnapshotSource driftSource(driftFacade, makeTypeCandidate());
+		Require(
+			driftFacade.ConfigureTypeSnapshotCapture(driftSource)
+				&& driftFacade.TypeCapture()->RequestCapture() == TypeSnapshotCaptureError::None,
+			"Dependency-drift type capture fixture was not admitted");
+		const auto [driftReady, driftWork] = pumpTypeCapture(*driftFacade.TypeCapture());
+		EngineSnapshot newerObjects = *objectSnapshot;
+		newerObjects.Generation = 8;
+		newerObjects.CapturedAtMonotonicUs = 300;
+		Require(
+			driftReady.Status == TypeSnapshotPumpStatus::Ready
+				&& driftWork == expectedCaptureWork
+				&& driftFacade.Snapshots().Publish(std::move(newerObjects)).Ok(),
+			"Type capture dependency-drift fixture did not reach a sealed candidate");
+		const TypeSnapshotPublishResult driftPublication = std::async(
+			std::launch::async,
+			[&]() { return driftFacade.TypeCapture()->PublishReady(); }).get();
+		const TypeSnapshotCaptureDiagnostics driftDiagnostics =
+			driftFacade.TypeCapture()->Diagnostics();
+		Require(
+			driftPublication.Error == TypeSnapshotPublishError::DependencyInvalid
+				&& driftDiagnostics.State == TypeSnapshotCaptureState::Failed
+				&& driftDiagnostics.Error == TypeSnapshotCaptureError::DependencyChanged
+				&& driftDiagnostics.SourceError == TypeSnapshotSourceError::DependencyChanged
+				&& driftDiagnostics.PublishError == TypeSnapshotPublishError::DependencyInvalid
+				&& !driftFacade.Types().Current()
+				&& std::async(
+					std::launch::async,
+					[&]() { return driftFacade.TypeCapture()->ReclaimRetired(); }).get() == 1
+				&& driftFacade.Stop(),
+			"A changed immutable dependency reached type snapshot publication");
+
+		EngineFacade threadFacade(context, "reflection-facade", facadeIdentity);
+		publishTypeCaptureDependencies(threadFacade);
+		SyntheticTypeSnapshotSource threadSource(threadFacade, makeTypeCandidate());
+		Require(
+			threadFacade.ConfigureTypeSnapshotCapture(threadSource)
+				&& threadFacade.TypeCapture()->RequestCapture()
+					== TypeSnapshotCaptureError::None
+				&& threadFacade.TypeCapture()->Pump(1 + threadSource.RecordCount()).Status
+					== TypeSnapshotPumpStatus::Progress
+				&& threadFacade.TypeCapture()->Diagnostics().State
+					== TypeSnapshotCaptureState::Validating,
+			"Type execution-thread fixture did not reach incremental validation");
+		threadSource.SetThreadValid(false);
+		Require(
+			threadFacade.TypeCapture()->Pump(1).Status == TypeSnapshotPumpStatus::Failed
+				&& threadFacade.TypeCapture()->Diagnostics().Error
+					== TypeSnapshotCaptureError::ExecutionThreadInvalid
+				&& !threadFacade.Types().Current()
+				&& threadFacade.TypeCapture()->ReclaimRetired() == 1
+				&& threadFacade.Stop(),
+			"Type validation continued after execution-thread invalidation");
+
+		EngineFacade stalledFacade(context, "reflection-facade", facadeIdentity);
+		publishTypeCaptureDependencies(stalledFacade);
+		SyntheticTypeSnapshotSource stalledSource(stalledFacade, makeTypeCandidate());
+		stalledSource.SetNoProgress(true);
+		Require(
+			stalledFacade.ConfigureTypeSnapshotCapture(stalledSource),
+			"No-progress type source fixture was not configured");
+		for (std::size_t failure = 0;
+			failure < TypeSnapshotCapture::kMaxRetiredCandidates;
+			++failure)
+		{
+			Require(
+				stalledFacade.TypeCapture()->RequestCapture()
+						== TypeSnapshotCaptureError::None
+					&& stalledFacade.TypeCapture()->Pump(2).Status
+						== TypeSnapshotPumpStatus::Failed
+					&& stalledFacade.TypeCapture()->Diagnostics().Error
+						== TypeSnapshotCaptureError::SourceContractViolation
+					&& stalledFacade.TypeCapture()->Diagnostics().RetiredCandidates
+						== failure + 1,
+				"A no-progress type source escaped bounded retirement");
+		}
+		Require(
+			stalledFacade.TypeCapture()->RequestCapture() == TypeSnapshotCaptureError::None
+				&& stalledFacade.TypeCapture()->Pump(2).Status
+					== TypeSnapshotPumpStatus::Failed
+				&& stalledFacade.TypeCapture()->Diagnostics().Error
+					== TypeSnapshotCaptureError::RetirementBackpressure
+				&& stalledFacade.TypeCapture()->RequestCapture()
+					== TypeSnapshotCaptureError::RetirementBackpressure
+				&& std::async(
+					std::launch::async,
+					[&]() { return stalledFacade.TypeCapture()->ReclaimRetired(); }).get()
+					== TypeSnapshotCapture::kMaxRetiredCandidates + 1
+				&& stalledFacade.TypeCapture()->RequestCapture()
+					== TypeSnapshotCaptureError::None
+				&& stalledFacade.Stop(),
+			"Type capture retirement backpressure lost or frame-thread-destroyed a candidate");
+
+		EngineFacade malformedFacade(context, "reflection-facade", facadeIdentity);
+		publishTypeCaptureDependencies(malformedFacade);
+		SyntheticTypeSnapshotSource malformedSource(malformedFacade, makeTypeCandidate());
+		malformedSource.OmitFinalRecord();
+		Require(
+			malformedFacade.ConfigureTypeSnapshotCapture(malformedSource)
+				&& malformedFacade.TypeCapture()->RequestCapture()
+					== TypeSnapshotCaptureError::None
+				&& malformedFacade.TypeCapture()->Pump(TypeSnapshotCapture::kMaxPumpBudget).Status
+					== TypeSnapshotPumpStatus::Failed
+				&& malformedFacade.TypeCapture()->Diagnostics().Error
+					== TypeSnapshotCaptureError::SourceContractViolation
+				&& malformedFacade.TypeCapture()->Diagnostics().SourceError
+					== TypeSnapshotSourceError::ContractViolation
+				&& !malformedFacade.Types().Current()
+				&& malformedFacade.TypeCapture()->ReclaimRetired() == 1
+				&& malformedFacade.Stop(),
+			"An incomplete type/function record stream reached immutable publication");
+
+		TypeSnapshotStore validationStore("reflection-facade", 51);
+		const auto publishTypeCandidate = [&facade, &validationStore](
+			TypeSnapshotCandidate candidate) {
+			return validationStore.Publish(
+				std::move(candidate),
+				facade.Snapshots().Current(),
+				facade.Reflection());
+		};
 		TypeSnapshotCandidate partialTypes = makeTypeCandidate();
 		partialTypes.Types.pop_back();
 		Require(
-			facade.PublishTypeSnapshot(partialTypes).Error
+			publishTypeCandidate(std::move(partialTypes)).Error
 				== TypeSnapshotPublishError::TypeCoverageMismatch,
 			"A partial type snapshot was published");
 		TypeSnapshotCandidate missingFunction = makeTypeCandidate();
 		missingFunction.Types[0].DirectFunctions.clear();
 		Require(
-			facade.PublishTypeSnapshot(missingFunction).Error
+			publishTypeCandidate(std::move(missingFunction)).Error
 				== TypeSnapshotPublishError::FunctionCoverageMismatch,
 			"A type snapshot omitted a live direct function");
 		TypeSnapshotCandidate wrongDefaultObject = makeTypeCandidate();
 		wrongDefaultObject.Types[1].DefaultObject = handles[7];
 		Require(
-			facade.PublishTypeSnapshot(wrongDefaultObject).Error
+			publishTypeCandidate(std::move(wrongDefaultObject)).Error
 				== TypeSnapshotPublishError::RelationshipInvalid,
 			"A class accepted another class's default object");
 		TypeSnapshotCandidate cyclicHierarchy = makeTypeCandidate();
 		cyclicHierarchy.Types[0].PropertiesSize = 32;
 		cyclicHierarchy.Types[0].Super = handles[2];
 		Require(
-			facade.PublishTypeSnapshot(cyclicHierarchy).Error
+			publishTypeCandidate(std::move(cyclicHierarchy)).Error
 				== TypeSnapshotPublishError::HierarchyCycle,
 			"A cyclic class hierarchy was published");
 		TypeSnapshotCandidate recursiveDescriptor = makeTypeCandidate();
@@ -2214,28 +2598,28 @@ namespace
 		recursiveProperty.Size = 8;
 		recursiveProperty.Descriptor = recursive;
 		Require(
-			facade.PublishTypeSnapshot(recursiveDescriptor).Error
+			publishTypeCandidate(std::move(recursiveDescriptor)).Error
 				== TypeSnapshotPublishError::DescriptorCycle,
 			"A cyclic mutable property descriptor was frozen into a type snapshot");
 		TypeSnapshotCandidate invalidMemberState = makeTypeCandidate();
 		invalidMemberState.Types[0].DirectProperties[0].State =
 			static_cast<ReflectedMemberState>(0xFF);
 		Require(
-			facade.PublishTypeSnapshot(invalidMemberState).Error
+			publishTypeCandidate(std::move(invalidMemberState)).Error
 				== TypeSnapshotPublishError::PropertyInvalid,
 			"An unknown reflected member state was published");
 		TypeSnapshotCandidate wrongParameterDirection = makeTypeCandidate();
 		wrongParameterDirection.Types[0].DirectFunctions[0].Parameters[0].Direction =
 			ReflectedParameterDirection::Output;
 		Require(
-			facade.PublishTypeSnapshot(wrongParameterDirection).Error
+			publishTypeCandidate(std::move(wrongParameterDirection)).Error
 				== TypeSnapshotPublishError::FunctionInvalid,
 			"Parameter direction disagreed with its reflected flags");
 
 		TypeSnapshotCandidate validTypes = makeTypeCandidate();
 		auto mutableDescriptor = std::const_pointer_cast<PropertyDescriptor>(
 			validTypes.Types[0].DirectProperties[0].Descriptor);
-		const TypeSnapshotPublishResult typePublished = facade.PublishTypeSnapshot(
+		const TypeSnapshotPublishResult typePublished = publishTypeCandidate(
 			std::move(validTypes));
 		Require(
 			typePublished.Ok()
@@ -2294,7 +2678,7 @@ namespace
 
 		TypeSnapshotCandidate repeatedGeneration = makeTypeCandidate();
 		Require(
-			facade.PublishTypeSnapshot(repeatedGeneration).Error
+			publishTypeCandidate(std::move(repeatedGeneration)).Error
 				== TypeSnapshotPublishError::GenerationNotMonotonic,
 			"A non-increasing type snapshot generation replaced the current snapshot");
 		RuntimeProbes typeProbes;
@@ -2330,7 +2714,8 @@ namespace
 			facade.Stop()
 				&& !facade.Reflection()
 				&& !facade.Properties()
-				&& facade.Types().Current() == typePublished.Snapshot
+				&& !facade.Types().Current()
+				&& validationStore.Current() == typePublished.Snapshot
 				&& typePublished.Snapshot->IsConfigured(51)
 				&& retained->IsConfigured(51)
 				&& retainedCodec->Decode(
@@ -4310,7 +4695,9 @@ namespace
 				&& !status.Data.at("reflection").at("layout_published").get<bool>()
 				&& !status.Data.at("reflection").at("capture_configured").get<bool>()
 				&& status.Data.at("reflection").at("source").at("property_system")
-					== "unavailable",
+					== "unavailable"
+				&& !status.Data.at("type_snapshot").at("published").get<bool>()
+				&& !status.Data.at("type_snapshot").at("capture_configured").get<bool>(),
 			"Status domain command did not serialize the immutable runtime/name profile");
 
 		CoreCommandRequest objectRequest{

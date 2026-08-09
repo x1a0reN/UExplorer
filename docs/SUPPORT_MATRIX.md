@@ -63,12 +63,15 @@ attached to the runtime scheduler and fails closed when its exact fixtures or wi
 do not match, but no engine row can become supported until the same path passes that
 row's target-process fixture.
 
-The generic harness also publishes a synthetic immutable type snapshot only after exact
-Class/Struct/Enum and Function coverage matches one object-snapshot generation. It proves
-deep-frozen descriptor graphs, bounded property/parameter ranges, explicit direct versus
-inherited member order, exact CDO handle/class matching, hierarchy cycle/depth rejection,
-and stale-generation capability closure. It does not provide a production type capture
-source or target-process reflection evidence and therefore does not change any support row.
+The generic harness also feeds a complete, strictly ordered synthetic metadata stream
+through the generic `TypeSnapshotCapture`. It proves per-unit capture/validation, no
+partial visibility, exact object/reflection dependency identity, worker-only publication,
+rejection of publication on the witnessed game thread, fixed-capacity failed-candidate
+retirement/backpressure, deep-frozen descriptor graphs,
+bounded property/parameter ranges, explicit direct versus inherited member order, exact
+CDO handle/class matching, hierarchy cycle/depth rejection, and stale-generation closure.
+It does not provide a production type metadata source, Main attachment, or target-process
+reflection evidence and therefore does not change any support row.
 
 ## Generic boundary evidence (not an engine support claim)
 

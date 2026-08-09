@@ -71,6 +71,7 @@
 	<ClCompile Include="..\..\Dumper\Runtime\ReflectionLayout.cpp" />
 	<ClCompile Include="..\..\Dumper\Runtime\ReflectionLayoutCapture.cpp" />
 	<ClCompile Include="..\..\Dumper\Runtime\TypeSnapshot.cpp" />
+	<ClCompile Include="..\..\Dumper\Runtime\TypeSnapshotCapture.cpp" />
     <ClCompile Include="..\..\Dumper\Runtime\SafeMemory.cpp" />
     <ClCompile Include="..\..\Dumper\Runtime\VTableHook.cpp" />
 	<ClCompile Include="..\..\Dumper\Services\CoreCommandService.cpp" />
@@ -106,6 +107,7 @@
 	<ClInclude Include="..\..\Dumper\Runtime\ReflectionLayout.h" />
 	<ClInclude Include="..\..\Dumper\Runtime\ReflectionLayoutCapture.h" />
 	<ClInclude Include="..\..\Dumper\Runtime\TypeSnapshot.h" />
+	<ClInclude Include="..\..\Dumper\Runtime\TypeSnapshotCapture.h" />
     <ClInclude Include="..\..\Dumper\Runtime\SafeMemory.h" />
     <ClInclude Include="..\..\Dumper\Runtime\ShutdownCoordinator.h" />
     <ClInclude Include="..\..\Dumper\Runtime\VTableHook.h" />

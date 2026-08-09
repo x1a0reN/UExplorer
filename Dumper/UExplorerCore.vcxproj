@@ -139,6 +139,7 @@
 	<ClCompile Include="Runtime\ReflectionLayout.cpp" />
 	<ClCompile Include="Runtime\ReflectionLayoutCapture.cpp" />
 	<ClCompile Include="Runtime\TypeSnapshot.cpp" />
+	<ClCompile Include="Runtime\TypeSnapshotCapture.cpp" />
     <ClCompile Include="Runtime\SafeMemory.cpp" />
     <ClCompile Include="Runtime\VTableHook.cpp" />
 	<!-- Domain services -->
@@ -229,6 +230,7 @@
 	<ClInclude Include="Runtime\ReflectionLayout.h" />
 	<ClInclude Include="Runtime\ReflectionLayoutCapture.h" />
 	<ClInclude Include="Runtime\TypeSnapshot.h" />
+	<ClInclude Include="Runtime\TypeSnapshotCapture.h" />
     <ClInclude Include="Runtime\SafeMemory.h" />
     <ClInclude Include="Runtime\ShutdownCoordinator.h" />
     <ClInclude Include="Runtime\VTableHook.h" />

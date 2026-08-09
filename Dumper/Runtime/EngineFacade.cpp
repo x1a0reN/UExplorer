@@ -184,6 +184,31 @@ TypeSnapshotPublishResult EngineFacade::PublishTypeSnapshot(
 		reflection);
 }
 
+bool EngineFacade::ConfigureTypeSnapshotCapture(ITypeSnapshotSource& source) noexcept
+{
+	if (!IsConfigured()
+		|| m_TypeCapture
+		|| source.ContextGeneration() != ContextGeneration())
+	{
+		return false;
+	}
+	try
+	{
+		auto capture = std::make_unique<TypeSnapshotCapture>(
+			ContextGeneration(),
+			source,
+			*this);
+		if (!capture->IsConfigured())
+			return false;
+		m_TypeCapture = std::move(capture);
+		return true;
+	}
+	catch (...)
+	{
+		return false;
+	}
+}
+
 bool EngineFacade::ConfigureSnapshotCapture(IEngineSnapshotSource& source) noexcept
 {
 	if (!IsConfigured()
@@ -212,11 +237,14 @@ bool EngineFacade::ConfigureSnapshotCapture(IEngineSnapshotSource& source) noexc
 
 bool EngineFacade::Stop(const std::chrono::milliseconds timeout)
 {
+	if (m_TypeCapture && !m_TypeCapture->StopAndDrain(timeout))
+		return false;
 	if (m_ReflectionCapture && !m_ReflectionCapture->StopAndDrain(timeout))
 		return false;
 	if (m_SnapshotCapture && !m_SnapshotCapture->StopAndDrain(timeout))
 		return false;
 	std::lock_guard lock(m_ReflectionMutex);
+	m_TypeCapture.reset();
 	m_ReflectionCapture.reset();
 	m_SnapshotCapture.reset();
 	m_Types.Stop();

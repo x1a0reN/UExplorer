@@ -13,7 +13,6 @@ namespace
 {
 
 constexpr std::size_t kMaxSessionIdBytes = 128;
-constexpr std::size_t kMaxSourceBytes = 1024;
 constexpr std::uint64_t kPropertyFlagParm = 0x0000000000000080ull;
 constexpr std::uint64_t kPropertyFlagOutParm = 0x0000000000000100ull;
 constexpr std::uint64_t kPropertyFlagReturnParm = 0x0000000000000400ull;
@@ -767,6 +766,7 @@ const char* ToString(const TypeSnapshotPublishError error) noexcept
 	case TypeSnapshotPublishError::FunctionInvalid: return "TYPE_SNAPSHOT_FUNCTION_INVALID";
 	case TypeSnapshotPublishError::EnumInvalid: return "TYPE_SNAPSHOT_ENUM_INVALID";
 	case TypeSnapshotPublishError::GenerationNotMonotonic: return "TYPE_SNAPSHOT_GENERATION_NOT_MONOTONIC";
+	case TypeSnapshotPublishError::WorkerThreadRequired: return "TYPE_SNAPSHOT_WORKER_THREAD_REQUIRED";
 	case TypeSnapshotPublishError::AllocationFailed: return "TYPE_SNAPSHOT_ALLOCATION_FAILED";
 	}
 	return "TYPE_SNAPSHOT_UNKNOWN_ERROR";
@@ -907,7 +907,7 @@ TypeSnapshotPublishResult TypeSnapshotStore::Publish(
 		|| candidate.ReflectionLayoutFingerprint != reflection->Layout->Fingerprint()
 		|| candidate.CapturedAtMonotonicUs == 0
 		|| candidate.Source.empty()
-		|| candidate.Source.size() > kMaxSourceBytes)
+		|| candidate.Source.size() > TypeSnapshotStore::kMaxSourceBytes)
 	{
 		return Failure(TypeSnapshotPublishError::EnvelopeInvalid);
 	}

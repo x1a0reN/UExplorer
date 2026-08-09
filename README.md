@@ -76,8 +76,13 @@ game-thread cleanup.
 The Core also owns an immutable `TypeSnapshotStore` bound to one object generation and
 one witnessed reflection layout. It requires complete Class/Struct/Enum and Function
 coverage, freezes property descriptor graphs, stores direct members only, makes inherited
-queries explicit, and validates exact CDO handles and bounded acyclic super chains. No
-production type capture source or type-detail command is registered yet, so
+queries explicit, and validates exact CDO handles and bounded acyclic super chains. A
+generic `TypeSnapshotCapture` now assembles strictly ordered metadata records under the
+shared frame budget, revalidates the exact object/reflection `shared_ptr` dependencies,
+and hands complete candidates to a worker-only `PublishReady` path. The Facade publication
+entry is private to that owner and the handoff rejects the witnessed game thread. Failed candidates use
+fixed-capacity worker reclamation with explicit backpressure. No production type metadata
+source, Main scheduler attachment, or type-detail command is registered yet, so
 `engine.type_snapshot` and `types.inspect` remain unavailable in real sessions.
 PostRender now drives one `GameThreadFrameScheduler` rather than giving the object
 snapshot producer an exclusive callback slot. The scheduler supports at most eight
