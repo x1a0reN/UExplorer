@@ -508,6 +508,9 @@ void GameThreadExecutor::RemoveQueuedLocked(
 void PostRenderPumpBackend::Tick() noexcept
 {
 	m_Executor.Pump();
+	if (!m_Executor.IsCurrentPumpThread())
+		return;
+
 	IGameThreadFrameClient* client = m_FrameClient.load(std::memory_order_acquire);
 	if (!client)
 		return;
@@ -518,7 +521,7 @@ void PostRenderPumpBackend::Tick() noexcept
 	{
 		return;
 	}
-	client->PumpFrame();
+	(void)client->PumpFrame(kFrameWorkBudget);
 }
 
 bool PostRenderPumpBackend::AttachFrameClient(IGameThreadFrameClient& client) noexcept

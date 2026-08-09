@@ -357,6 +357,27 @@ SnapshotPumpResult EngineSnapshotCapture::Pump(const std::size_t workBudget) noe
 	}
 }
 
+IGameThreadFrameClient::PumpResult EngineSnapshotCapture::PumpFrame(
+	const std::size_t workBudget) noexcept
+{
+	const SnapshotPumpResult result = Pump(workBudget);
+	switch (result)
+	{
+	case SnapshotPumpResult::Progress:
+		return {.WorkConsumed = workBudget, .MoreWorkPending = true};
+	case SnapshotPumpResult::Published:
+	case SnapshotPumpResult::Failed:
+		return {.WorkConsumed = workBudget, .MoreWorkPending = false};
+	case SnapshotPumpResult::Busy:
+		return {.MoreWorkPending = true};
+	case SnapshotPumpResult::Idle:
+	case SnapshotPumpResult::Stopping:
+	case SnapshotPumpResult::InvalidBudget:
+		return {};
+	}
+	return {};
+}
+
 void EngineSnapshotCapture::Fail(
 	const SnapshotCaptureError error,
 	const std::int32_t index) noexcept

@@ -173,12 +173,21 @@ class IGameThreadFrameClient
 {
 public:
 	virtual ~IGameThreadFrameClient() = default;
-	virtual void PumpFrame() noexcept = 0;
+
+	struct PumpResult
+	{
+		std::size_t WorkConsumed = 0;
+		bool MoreWorkPending = false;
+	};
+
+	virtual PumpResult PumpFrame(std::size_t workBudget) noexcept = 0;
 };
 
 class PostRenderPumpBackend final : public IGameThreadPump
 {
 public:
+	static constexpr std::size_t kFrameWorkBudget = 32;
+
 	explicit PostRenderPumpBackend(GameThreadExecutor& executor) noexcept
 		: m_Executor(executor)
 	{

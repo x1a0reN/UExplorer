@@ -63,6 +63,9 @@ $vtableHook = Read-ProjectFile 'Dumper\Runtime\VTableHook.cpp'
 $gameThreadHeader = Read-ProjectFile 'Dumper\Runtime\GameThreadExecutor.h'
 $gameThreadImplementation = Read-ProjectFile 'Dumper\Runtime\GameThreadExecutor.cpp'
 $gameThread = $gameThreadHeader + $gameThreadImplementation
+$frameSchedulerHeader = Read-ProjectFile 'Dumper\Runtime\GameThreadFrameScheduler.h'
+$frameSchedulerImplementation = Read-ProjectFile 'Dumper\Runtime\GameThreadFrameScheduler.cpp'
+$frameScheduler = $frameSchedulerHeader + $frameSchedulerImplementation
 $commandHeader = Read-ProjectFile 'Dumper\Services\CoreCommandService.h'
 $commandImplementation = Read-ProjectFile 'Dumper\Services\CoreCommandService.cpp'
 $commandService = $commandHeader + $commandImplementation
@@ -147,8 +150,16 @@ foreach ($token in @('GameThreadTaskTiming', 'TryGetTiming', 'PumpThreadWaitDeni
 }
 foreach ($token in @('IGameThreadFrameClient', 'AttachFrameClient', 'DetachFrameClient',
 		'm_FrameClient.store(nullptr', 'm_FrameClientBarrier.BeginStopping',
-		'm_FrameClientBarrier.WaitForDrain', 'm_DrainingClient')) {
+		'm_FrameClientBarrier.WaitForDrain', 'm_DrainingClient',
+		'if (!m_Executor.IsCurrentPumpThread())', 'kFrameWorkBudget')) {
 	Assert-Contains $gameThread $token 'PostRender frame-client ownership/drain regressed.'
+}
+foreach ($token in @('kMaxClients = 8', 'kMaxFrameWorkBudget', 'kClientQuantum = 4',
+		'kFrameTimeBudgetUs', 'AttachClient', 'DetachClient', 'm_NextSlot',
+		'm_PumpOwned.test_and_set', 'slot.Client.store(nullptr', 'slot.Barrier.BeginStopping',
+		'target->Barrier.WaitForDrain', 'ContractViolationCount', 'ZeroProgressCount',
+		'TimeBudgetExhaustions')) {
+	Assert-Contains $frameScheduler $token 'Bounded multi-client frame scheduler regressed.'
 }
 
 foreach ($token in @('status.inspect', 'status.engine', 'status.health',
@@ -349,8 +360,9 @@ foreach ($apiFile in Get-ChildItem -LiteralPath (Join-Path $root 'Dumper\API') -
 }
 
 foreach ($token in @('CaptureEngineContext', 'RefreshRuntimeCapabilities', 'ShutdownCoordinator',
-		'ObjectArraySnapshotSource', 'ConfigureSnapshotCapture', 'AttachFrameClient',
-		'RequestCapture', 'DetachFrameClient', 'snapshot_pump',
+		'ObjectArraySnapshotSource', 'ConfigureSnapshotCapture', 'GetGameThreadFrameScheduler',
+		'AttachFrameClient', 'AttachClient', 'RequestCapture', 'DetachClient',
+		'DetachFrameClient', 'snapshot_frame_client', 'frame_scheduler',
 		'BeginStopping', 'MarkStopped')) {
     Assert-Contains $main $token 'Main does not use the runtime ownership path.'
 }
@@ -417,6 +429,10 @@ foreach ($token in @('TestEngineContextAndCapabilities', 'TestCoreRuntimeStateAn
 		'A slot mutation between capture and validation was published',
 		'Object-count mutation was published as a complete snapshot',
 		'Object-count mutation during publication replaced the complete snapshot',
+		'TestGameThreadFrameSchedulerBudgetFairnessAndDrain',
+		'Frame scheduler did not distribute the first round fairly',
+		'Frame scheduler detach did not withdraw and retain an in-flight owner',
+		'PostRender dispatched frame work after detecting a pump-thread mismatch',
 		'Concurrent snapshot pumps accessed one mutable working generation',
 		'Snapshot source exception escaped the guarded pump boundary',
 		'Snapshot producer crossed an identity-source context generation',

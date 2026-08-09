@@ -22,6 +22,7 @@
 #include "Runtime/EngineVersionProbe.h"
 #include "Runtime/FUObjectItemLayout.h"
 #include "Runtime/GameThreadExecutor.h"
+#include "Runtime/GameThreadFrameScheduler.h"
 #include "Runtime/ObjectHandle.h"
 #include "Runtime/ObjectIdentityContext.h"
 #include "Runtime/ObjectArraySnapshotSource.h"
@@ -214,17 +215,37 @@ namespace
 	class FrameClientProbe final : public UExplorer::Runtime::IGameThreadFrameClient
 	{
 	public:
-		void PumpFrame() noexcept override
+		PumpResult PumpFrame(const std::size_t workBudget) noexcept override
 		{
 			Calls.fetch_add(1, std::memory_order_acq_rel);
+			LastBudget.store(workBudget, std::memory_order_release);
+			ExecutionThreadId.store(GetCurrentThreadId(), std::memory_order_release);
 			Entered.store(true, std::memory_order_release);
 			while (Block.load(std::memory_order_acquire))
 				std::this_thread::yield();
+			const int sleepMilliseconds = SleepMilliseconds.load(std::memory_order_acquire);
+			if (sleepMilliseconds > 0)
+				std::this_thread::sleep_for(std::chrono::milliseconds(sleepMilliseconds));
+			const std::size_t consumed = OverReport.load(std::memory_order_acquire)
+				? workBudget + 1
+				: (ConsumeBudget.load(std::memory_order_acquire) ? workBudget : 0);
+			WorkConsumed.fetch_add(consumed, std::memory_order_acq_rel);
+			return {
+				.WorkConsumed = consumed,
+				.MoreWorkPending = MoreWorkPending.load(std::memory_order_acquire)
+			};
 		}
 
 		std::atomic<int> Calls{0};
 		std::atomic<bool> Block{false};
 		std::atomic<bool> Entered{false};
+		std::atomic<bool> ConsumeBudget{false};
+		std::atomic<bool> MoreWorkPending{false};
+		std::atomic<bool> OverReport{false};
+		std::atomic<int> SleepMilliseconds{0};
+		std::atomic<std::size_t> LastBudget{0};
+		std::atomic<std::size_t> WorkConsumed{0};
+		std::atomic<std::uint32_t> ExecutionThreadId{0};
 	};
 
 	std::string ReadText(const std::filesystem::path& path)
@@ -4369,45 +4390,226 @@ namespace
 	{
 		using namespace UExplorer::Runtime;
 
-		GameThreadExecutor executor;
-		PostRenderPumpBackend backend(executor);
-		FrameClientProbe first;
-		FrameClientProbe second;
-		Require(backend.AttachFrameClient(first), "PostRender frame client did not attach");
-		Require(!backend.AttachFrameClient(second), "PostRender accepted two frame clients");
-		Require(backend.HasFrameClient(), "Attached PostRender frame client was not published");
-		backend.Tick();
-		Require(first.Calls.load() == 1, "PostRender did not pump the attached frame client");
+		{
+			GameThreadExecutor executor;
+			PostRenderPumpBackend backend(executor);
+			FrameClientProbe first;
+			FrameClientProbe second;
+			Require(executor.Enable(&FakeProcessEvent), "Frame-client executor did not enable");
+			Require(backend.AttachFrameClient(first), "PostRender frame client did not attach");
+			Require(!backend.AttachFrameClient(second), "PostRender accepted two frame clients");
+			Require(backend.HasFrameClient(), "Attached PostRender frame client was not published");
+			backend.Tick();
+			Require(
+				first.Calls.load() == 1
+					&& first.LastBudget.load() == PostRenderPumpBackend::kFrameWorkBudget,
+				"PostRender did not pump the attached frame client with the fixed budget");
+			Require(
+				backend.DetachFrameClient(first, std::chrono::seconds(1)),
+				"PostRender frame client did not detach");
+			const int detachedCalls = first.Calls.load();
+			backend.Tick();
+			Require(
+				first.Calls.load() == detachedCalls,
+				"Post-stop callback was allowed to run owned frame-client work");
+			Require(backend.AttachFrameClient(second), "PostRender frame-client barrier did not reset");
+			backend.Tick();
+			Require(second.Calls.load() == 1, "Replacement frame client was not pumped");
+			Require(
+				backend.DetachFrameClient(second, std::chrono::seconds(1)),
+				"Replacement frame client did not drain");
+			Require(executor.DisableAndDrain(), "Frame-client executor did not drain");
+		}
 
-		first.Block.store(true, std::memory_order_release);
-		first.Entered.store(false, std::memory_order_release);
-		auto inFlightTick = std::async(std::launch::async, [&backend] { backend.Tick(); });
+		{
+			GameThreadExecutor executor;
+			PostRenderPumpBackend backend(executor);
+			FrameClientProbe blocking;
+			Require(executor.Enable(&FakeProcessEvent), "Blocking frame-client executor did not enable");
+			Require(backend.AttachFrameClient(blocking), "Blocking frame client did not attach");
+			blocking.Block.store(true, std::memory_order_release);
+			auto inFlightTick = std::async(std::launch::async, [&backend] { backend.Tick(); });
+			WaitUntil(
+				[&blocking] { return blocking.Entered.load(std::memory_order_acquire); },
+				"Blocking PostRender frame client was not entered");
+			Require(
+				!backend.DetachFrameClient(blocking, std::chrono::milliseconds(20)),
+				"PostRender frame-client detach ignored an in-flight callback");
+			Require(!backend.HasFrameClient(), "Draining frame client remained reachable to new ticks");
+			Require(backend.FrameClientInFlight() == 1, "Frame-client in-flight diagnostic was incorrect");
+			blocking.Block.store(false, std::memory_order_release);
+			inFlightTick.get();
+			Require(
+				backend.DetachFrameClient(blocking, std::chrono::seconds(1)),
+				"PostRender frame-client detach could not be retried after drain");
+			Require(backend.FrameClientInFlight() == 0, "Drained frame client retained a callback lease");
+			Require(executor.DisableAndDrain(), "Blocking frame-client executor did not drain");
+		}
+
+		{
+			GameThreadExecutor executor;
+			PostRenderPumpBackend backend(executor);
+			FrameClientProbe wrongThreadProbe;
+			Require(executor.Enable(&FakeProcessEvent), "Wrong-thread frame executor did not enable");
+			Require(backend.AttachFrameClient(wrongThreadProbe), "Wrong-thread frame probe did not attach");
+			backend.Tick();
+			const int stableCalls = wrongThreadProbe.Calls.load(std::memory_order_acquire);
+			auto wrongThreadTick = std::async(std::launch::async, [&backend] { backend.Tick(); });
+			wrongThreadTick.get();
+			Require(
+				wrongThreadProbe.Calls.load(std::memory_order_acquire) == stableCalls
+					&& !executor.GetDiagnostics().PumpThreadStable,
+				"PostRender dispatched frame work after detecting a pump-thread mismatch");
+			Require(
+				backend.DetachFrameClient(wrongThreadProbe, std::chrono::seconds(1)),
+				"Wrong-thread frame probe did not detach");
+			Require(executor.DisableAndDrain(), "Wrong-thread frame executor did not drain");
+		}
+	}
+
+	void TestGameThreadFrameSchedulerBudgetFairnessAndDrain()
+	{
+		using namespace UExplorer::Runtime;
+
+		GameThreadFrameScheduler scheduler;
+		std::array<FrameClientProbe, GameThreadFrameScheduler::kMaxClients + 1> clients;
+		for (std::size_t index = 0; index < GameThreadFrameScheduler::kMaxClients; ++index)
+		{
+			clients[index].ConsumeBudget.store(true, std::memory_order_release);
+			clients[index].MoreWorkPending.store(true, std::memory_order_release);
+			Require(scheduler.AttachClient(clients[index]), "Frame scheduler client did not attach");
+		}
+		Require(
+			!scheduler.AttachClient(clients[0])
+				&& !scheduler.AttachClient(clients.back()),
+			"Frame scheduler accepted a duplicate or exceeded its client capacity");
+
+		const IGameThreadFrameClient::PumpResult fullFrame = scheduler.PumpFrame(
+			GameThreadFrameScheduler::kMaxFrameWorkBudget);
+		Require(
+			fullFrame.WorkConsumed == GameThreadFrameScheduler::kMaxFrameWorkBudget,
+			"Frame scheduler exceeded or under-consumed its total work budget");
+		for (std::size_t index = 0; index < GameThreadFrameScheduler::kMaxClients; ++index)
+		{
+			Require(
+				clients[index].Calls.load(std::memory_order_acquire) == 1
+					&& clients[index].LastBudget.load(std::memory_order_acquire)
+						== GameThreadFrameScheduler::kClientQuantum,
+				"Frame scheduler did not distribute the first round fairly");
+		}
+		const GameThreadFrameSchedulerDiagnostics fullDiagnostics = scheduler.Diagnostics();
+		Require(
+			fullDiagnostics.AttachedClients == GameThreadFrameScheduler::kMaxClients
+				&& fullDiagnostics.LastFrameWorkConsumed
+					== GameThreadFrameScheduler::kMaxFrameWorkBudget
+				&& fullDiagnostics.LastFrameDispatches == GameThreadFrameScheduler::kMaxClients,
+			"Frame scheduler diagnostics did not report bounded aggregate work");
+		for (std::size_t index = 0; index < GameThreadFrameScheduler::kMaxClients; ++index)
+		{
+			Require(
+				scheduler.DetachClient(clients[index], std::chrono::seconds(1)),
+				"Frame scheduler client did not detach");
+		}
+
+		GameThreadFrameScheduler fairScheduler;
+		FrameClientProbe fairFirst;
+		FrameClientProbe fairSecond;
+		fairFirst.ConsumeBudget.store(true, std::memory_order_release);
+		fairFirst.MoreWorkPending.store(true, std::memory_order_release);
+		fairSecond.ConsumeBudget.store(true, std::memory_order_release);
+		fairSecond.MoreWorkPending.store(true, std::memory_order_release);
+		Require(
+			fairScheduler.AttachClient(fairFirst) && fairScheduler.AttachClient(fairSecond),
+			"Fairness probes did not attach");
+		Require(
+			fairScheduler.PumpFrame(1).WorkConsumed == 1
+				&& fairScheduler.PumpFrame(1).WorkConsumed == 1
+				&& fairFirst.Calls.load(std::memory_order_acquire) == 1
+				&& fairSecond.Calls.load(std::memory_order_acquire) == 1,
+			"Frame scheduler did not rotate a constrained budget between clients");
+		Require(fairScheduler.DetachClient(fairFirst), "First fairness probe did not detach");
+		Require(fairScheduler.DetachClient(fairSecond), "Second fairness probe did not detach");
+
+		GameThreadFrameScheduler guardedScheduler;
+		FrameClientProbe blocking;
+		blocking.Block.store(true, std::memory_order_release);
+		blocking.ConsumeBudget.store(true, std::memory_order_release);
+		blocking.MoreWorkPending.store(true, std::memory_order_release);
+		Require(guardedScheduler.AttachClient(blocking), "Blocking scheduler client did not attach");
+		auto pumping = std::async(std::launch::async, [&guardedScheduler] {
+			return guardedScheduler.PumpFrame(GameThreadFrameScheduler::kClientQuantum);
+		});
 		WaitUntil(
-			[&first] { return first.Entered.load(std::memory_order_acquire); },
-			"Blocking PostRender frame client was not entered");
+			[&blocking] { return blocking.Entered.load(std::memory_order_acquire); },
+			"Blocking scheduler client was not entered");
 		Require(
-			!backend.DetachFrameClient(first, std::chrono::milliseconds(20)),
-			"PostRender frame-client detach ignored an in-flight callback");
-		Require(!backend.HasFrameClient(), "Draining frame client remained reachable to new ticks");
-		Require(backend.FrameClientInFlight() == 1, "Frame-client in-flight diagnostic was incorrect");
-		first.Block.store(false, std::memory_order_release);
-		inFlightTick.get();
+			guardedScheduler.PumpFrame(1).WorkConsumed == 0
+				&& guardedScheduler.Diagnostics().ConcurrentPumpRejectedCount == 1,
+			"Frame scheduler allowed concurrent mutation of its dispatch cursor");
 		Require(
-			backend.DetachFrameClient(first, std::chrono::seconds(1)),
-			"PostRender frame-client detach could not be retried after drain");
-		Require(backend.FrameClientInFlight() == 0, "Drained frame client retained a callback lease");
+			!guardedScheduler.DetachClient(blocking, std::chrono::milliseconds(20))
+				&& !guardedScheduler.HasClient(blocking)
+				&& guardedScheduler.Diagnostics().DrainingClients == 1,
+			"Frame scheduler detach did not withdraw and retain an in-flight owner");
+		blocking.Block.store(false, std::memory_order_release);
+		pumping.get();
+		Require(
+			guardedScheduler.DetachClient(blocking, std::chrono::seconds(1))
+				&& guardedScheduler.Diagnostics().InFlightCallbacks == 0,
+			"Frame scheduler client detach could not be retried after drain");
+		const int detachedCalls = blocking.Calls.load(std::memory_order_acquire);
+		(void)guardedScheduler.PumpFrame(GameThreadFrameScheduler::kClientQuantum);
+		Require(
+			blocking.Calls.load(std::memory_order_acquire) == detachedCalls,
+			"Detached scheduler client remained reachable");
 
-		const int detachedCalls = first.Calls.load();
-		backend.Tick();
+		GameThreadFrameScheduler defensiveScheduler;
+		FrameClientProbe zeroProgress;
+		zeroProgress.MoreWorkPending.store(true, std::memory_order_release);
+		Require(defensiveScheduler.AttachClient(zeroProgress), "Zero-progress probe did not attach");
 		Require(
-			first.Calls.load() == detachedCalls,
-			"Post-stop callback was allowed to run owned frame-client work");
-		Require(backend.AttachFrameClient(second), "PostRender frame-client barrier did not reset");
-		backend.Tick();
-		Require(second.Calls.load() == 1, "Replacement frame client was not pumped");
+			defensiveScheduler.PumpFrame(GameThreadFrameScheduler::kMaxFrameWorkBudget)
+				.WorkConsumed == 0
+				&& zeroProgress.Calls.load(std::memory_order_acquire) == 1
+				&& defensiveScheduler.Diagnostics().ZeroProgressCount == 1,
+			"Frame scheduler spun on a client that reported no progress");
+		Require(defensiveScheduler.DetachClient(zeroProgress), "Zero-progress probe did not detach");
+
+		FrameClientProbe overReporter;
+		overReporter.OverReport.store(true, std::memory_order_release);
+		Require(defensiveScheduler.AttachClient(overReporter), "Contract-violation probe did not attach");
 		Require(
-			backend.DetachFrameClient(second, std::chrono::seconds(1)),
-			"Replacement frame client did not drain");
+			defensiveScheduler.PumpFrame(GameThreadFrameScheduler::kClientQuantum)
+				.WorkConsumed == GameThreadFrameScheduler::kClientQuantum
+				&& defensiveScheduler.Diagnostics().ContractViolationCount == 1,
+			"Frame scheduler did not contain a client budget-contract violation");
+		Require(defensiveScheduler.DetachClient(overReporter), "Contract-violation probe did not detach");
+		Require(
+			defensiveScheduler.PumpFrame(0).WorkConsumed == 0
+				&& defensiveScheduler.PumpFrame(
+					GameThreadFrameScheduler::kMaxFrameWorkBudget + 1).WorkConsumed == 0
+				&& defensiveScheduler.Diagnostics().InvalidBudgetCount == 2,
+			"Frame scheduler accepted an invalid aggregate budget");
+
+		GameThreadFrameScheduler timedScheduler;
+		FrameClientProbe slow;
+		FrameClientProbe afterSlow;
+		slow.ConsumeBudget.store(true, std::memory_order_release);
+		slow.MoreWorkPending.store(true, std::memory_order_release);
+		slow.SleepMilliseconds.store(3, std::memory_order_release);
+		afterSlow.ConsumeBudget.store(true, std::memory_order_release);
+		afterSlow.MoreWorkPending.store(true, std::memory_order_release);
+		Require(
+			timedScheduler.AttachClient(slow) && timedScheduler.AttachClient(afterSlow),
+			"Time-budget probes did not attach");
+		(void)timedScheduler.PumpFrame(GameThreadFrameScheduler::kMaxFrameWorkBudget);
+		Require(
+			slow.Calls.load(std::memory_order_acquire) == 1
+				&& afterSlow.Calls.load(std::memory_order_acquire) == 0
+				&& timedScheduler.Diagnostics().TimeBudgetExhaustions == 1,
+			"Frame scheduler continued dispatch after exhausting its frame-time budget");
+		Require(timedScheduler.DetachClient(slow), "Slow probe did not detach");
+		Require(timedScheduler.DetachClient(afterSlow), "Post-slow probe did not detach");
 	}
 
 	void TestGameThreadMpscCapacity()
@@ -4684,6 +4886,7 @@ int main(const int argc, char** argv)
 		TestGameThreadTaskOwnershipAndTimeouts();
 		TestGenericGameThreadWorkAndCancellation();
 		TestPostRenderFrameClientOwnershipAndDrain();
+		TestGameThreadFrameSchedulerBudgetFairnessAndDrain();
 		TestGameThreadMpscCapacity();
 		TestHttpServerLifecycle();
 		std::cout << "Core harness passed: deterministic bounded frame fuzz/disconnect matrix, secure sessions, real current-user Windows Named Pipe RPC/event lifecycle, runtime/capabilities, EngineFacade/immutable budgeted object/type snapshots, domain commands, stable handles/FUObjectItem layout, witnessed reflection layouts, bounded property codecs, bounded PE/version/global-pointer probing, pattern scanning, Hook RAII/drain, SafeMemory, USMAP consumer, bounded queues, cancellable owned game-thread/frame-client work, SEH, HTTP lifecycle, and shutdown.\n";

@@ -110,7 +110,8 @@ struct SnapshotCaptureDiagnostics
 class EngineSnapshotCapture final : public IGameThreadFrameClient
 {
 public:
-	static constexpr std::size_t kFramePumpBudget = 32;
+	static constexpr std::size_t kFramePumpBudget =
+		PostRenderPumpBackend::kFrameWorkBudget;
 	static constexpr std::size_t kDefaultPumpBudget = 256;
 	static constexpr std::size_t kMaxPumpBudget = 4096;
 
@@ -125,7 +126,7 @@ public:
 	bool IsConfigured() const noexcept;
 	SnapshotCaptureRequestResult RequestCapture() noexcept;
 	SnapshotPumpResult Pump(std::size_t workBudget = kDefaultPumpBudget) noexcept;
-	void PumpFrame() noexcept override { (void)Pump(kFramePumpBudget); }
+	IGameThreadFrameClient::PumpResult PumpFrame(std::size_t workBudget) noexcept override;
 	SnapshotCaptureDiagnostics Diagnostics() const noexcept;
 	bool StopAndDrain(std::chrono::milliseconds timeout = std::chrono::milliseconds(5000));
 

@@ -62,6 +62,7 @@
 	<ClCompile Include="..\..\Dumper\Runtime\EngineSnapshot.cpp" />
 	<ClCompile Include="..\..\Dumper\Runtime\EngineSnapshotCapture.cpp" />
 	<ClCompile Include="..\..\Dumper\Runtime\FUObjectItemLayout.cpp" />
+	<ClCompile Include="..\..\Dumper\Runtime\GameThreadFrameScheduler.cpp" />
 	<ClCompile Include="..\..\Dumper\Runtime\GameThreadExecutor.cpp" />
 	<ClCompile Include="..\..\Dumper\Runtime\ObjectArraySnapshotSource.cpp" />
     <ClCompile Include="..\..\Dumper\Runtime\ObjectHandle.cpp" />
@@ -92,6 +93,7 @@
 	<ClInclude Include="..\..\Dumper\Runtime\EngineSnapshot.h" />
 	<ClInclude Include="..\..\Dumper\Runtime\EngineSnapshotCapture.h" />
 	<ClInclude Include="..\..\Dumper\Runtime\FUObjectItemLayout.h" />
+	<ClInclude Include="..\..\Dumper\Runtime\GameThreadFrameScheduler.h" />
 	<ClInclude Include="..\..\Dumper\Runtime\GameThreadExecutor.h" />
 	<ClInclude Include="..\..\Dumper\Runtime\ObjectArraySnapshotSource.h" />
     <ClInclude Include="..\..\Dumper\Runtime\ObjectHandle.h" />

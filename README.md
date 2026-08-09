@@ -68,6 +68,12 @@ coverage, freezes property descriptor graphs, stores direct members only, makes 
 queries explicit, and validates exact CDO handles and bounded acyclic super chains. No
 production type capture source or type-detail command is registered yet, so
 `engine.type_snapshot` and `types.inspect` remain unavailable in real sessions.
+PostRender now drives one `GameThreadFrameScheduler` rather than giving the object
+snapshot producer an exclusive callback slot. The scheduler supports at most eight
+clients, shares a 32-unit frame budget in four-unit round-robin quanta, stops further
+dispatch after 2 ms, and quiet-drains each client independently. Frame clients are not
+called after a pump-thread mismatch. Production reflection/type/watch collectors must
+join this scheduler rather than add another Hook or unbounded per-frame loop.
 The release DLL has no WinSock/WinHTTP/WinINet import or legacy HTTP marker according
 to the transport cutover contract.
 

@@ -16,6 +16,7 @@
 #include "Runtime/EngineFacade.h"
 #include "Runtime/EngineVersionProbe.h"
 #include "Runtime/GameThreadExecutor.h"
+#include "Runtime/GameThreadFrameScheduler.h"
 #include "Runtime/ObjectArrayIdentitySource.h"
 #include "Runtime/ObjectArraySnapshotSource.h"
 #include "Runtime/PostRenderHook.h"
@@ -35,7 +36,8 @@ static std::unique_ptr<UExplorer::Runtime::EngineFacade> g_EngineFacade;
 static std::unique_ptr<UExplorer::Runtime::ObjectArraySnapshotSource> g_SnapshotSource;
 static std::unique_ptr<UExplorer::Services::CoreCommandService> g_CommandService;
 static std::unique_ptr<UExplorer::Runtime::PostRenderHook> g_PostRenderHook;
-static bool g_SnapshotPumpAttached = false;
+static bool g_FrameSchedulerPumpAttached = false;
+static bool g_SnapshotFrameClientAttached = false;
 
 namespace
 {
@@ -96,6 +98,36 @@ namespace
 		return g_PipeServer->OpenAdmissions();
 	}
 
+	bool DetachFrameScheduling(const std::chrono::milliseconds timeout)
+	{
+		if (g_SnapshotFrameClientAttached)
+		{
+			UExplorer::Runtime::EngineSnapshotCapture* capture =
+				g_EngineFacade ? g_EngineFacade->SnapshotCapture() : nullptr;
+			if (!capture
+				|| !UExplorer::Runtime::GetGameThreadFrameScheduler().DetachClient(
+					*capture,
+					timeout))
+			{
+				return false;
+			}
+			g_SnapshotFrameClientAttached = false;
+		}
+
+		if (g_FrameSchedulerPumpAttached)
+		{
+			auto& scheduler = UExplorer::Runtime::GetGameThreadFrameScheduler();
+			if (!UExplorer::Runtime::GetPostRenderPumpBackend().DetachFrameClient(
+				scheduler,
+				timeout))
+			{
+				return false;
+			}
+			g_FrameSchedulerPumpAttached = false;
+		}
+		return true;
+	}
+
 	void StopFailedInitialization(HMODULE module, FILE* consoleFile, const char* code, const std::string& message)
 	{
 		if (g_PostRenderHook
@@ -111,6 +143,17 @@ namespace
 			ExitThread(1);
 		}
 		g_PostRenderHook.reset();
+		if (!DetachFrameScheduling(std::chrono::milliseconds(5000)))
+		{
+			g_Runtime.RecordShutdownFailure(
+				"FRAME_SCHEDULER_INITIALIZATION_STOP_TIMEOUT",
+				"Frame scheduler or one of its clients did not drain after initialization failed");
+			std::cerr << "[UExplorer] Frame scheduling did not drain; DLL remains loaded.\n";
+			if (consoleFile)
+				fclose(consoleFile);
+			FreeConsole();
+			ExitThread(1);
+		}
 		if (g_PipeServer
 			&& !g_PipeServer->Stop(std::chrono::milliseconds(5000)))
 		{
@@ -126,6 +169,18 @@ namespace
 		g_PipeServer.reset();
 		UExplorer::Services::SetCoreCommandService(nullptr);
 		g_CommandService.reset();
+		if (g_EngineFacade
+			&& !g_EngineFacade->Stop(std::chrono::milliseconds(5000)))
+		{
+			g_Runtime.RecordShutdownFailure(
+				"ENGINE_FACADE_INITIALIZATION_STOP_TIMEOUT",
+				"EngineFacade did not drain after initialization failed");
+			std::cerr << "[UExplorer] EngineFacade did not drain; DLL remains loaded.\n";
+			if (consoleFile)
+				fclose(consoleFile);
+			FreeConsole();
+			ExitThread(1);
+		}
 		g_EngineFacade.reset();
 		g_SnapshotSource.reset();
 		g_IdentitySource.reset();
@@ -313,24 +368,23 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 		{
 			throw std::runtime_error("required PostRender game-thread pump could not be installed");
 		}
+		auto& frameScheduler = UExplorer::Runtime::GetGameThreadFrameScheduler();
+		if (!UExplorer::Runtime::GetPostRenderPumpBackend().AttachFrameClient(frameScheduler))
+			throw std::runtime_error("PostRender frame scheduler attachment failed");
+		g_FrameSchedulerPumpAttached = true;
 		if (UExplorer::Runtime::EngineSnapshotCapture* capture =
 			g_EngineFacade ? g_EngineFacade->SnapshotCapture() : nullptr)
 		{
-			auto& pump = UExplorer::Runtime::GetPostRenderPumpBackend();
-			if (!pump.AttachFrameClient(*capture))
+			if (!frameScheduler.AttachClient(*capture))
+				throw std::runtime_error("object snapshot frame-client attachment failed");
+			g_SnapshotFrameClientAttached = true;
+			const UExplorer::Runtime::SnapshotCaptureRequestResult requested =
+				capture->RequestCapture();
+			if (!requested.Ok())
 			{
-				std::cerr << "[UExplorer] Object snapshot unavailable: PostRender frame client attachment failed.\n";
-			}
-			else
-			{
-				g_SnapshotPumpAttached = true;
-				const UExplorer::Runtime::SnapshotCaptureRequestResult requested =
-					capture->RequestCapture();
-				if (!requested.Ok())
-				{
-					std::cerr << "[UExplorer] Initial object snapshot request failed: "
-						<< UExplorer::Runtime::ToString(requested.Error) << "\n";
-				}
+				throw std::runtime_error(
+					std::string("initial object snapshot request failed: ")
+					+ UExplorer::Runtime::ToString(requested.Error));
 			}
 		}
 		RefreshRuntimeCapabilities();
@@ -361,7 +415,7 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 			break;
 		}
 		const auto now = std::chrono::steady_clock::now();
-		if (g_SnapshotPumpAttached && now >= nextSnapshotRefresh)
+		if (g_SnapshotFrameClientAttached && now >= nextSnapshotRefresh)
 		{
 			if (UExplorer::Runtime::EngineSnapshotCapture* capture =
 				g_EngineFacade ? g_EngineFacade->SnapshotCapture() : nullptr)
@@ -396,7 +450,8 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 	UExplorer::Services::SetCoreCommandService(nullptr);
 	bool pipeStopped = true;
 	bool hooksStopped = true;
-	bool snapshotPumpStopped = true;
+	bool snapshotFrameStopped = true;
+	bool frameSchedulerStopped = true;
 	UExplorer::Runtime::ShutdownCoordinator shutdown;
 	shutdown.AddStage("named_pipe", [&] {
 		pipeStopped = !g_PipeServer
@@ -408,22 +463,33 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 			|| g_PostRenderHook->Stop(std::chrono::milliseconds(5000));
 		return hooksStopped;
 	});
-	shutdown.AddStage("snapshot_pump", [&] {
-		if (!g_SnapshotPumpAttached)
+	shutdown.AddStage("snapshot_frame_client", [&] {
+		if (!g_SnapshotFrameClientAttached)
 			return true;
 		UExplorer::Runtime::EngineSnapshotCapture* capture =
 			g_EngineFacade ? g_EngineFacade->SnapshotCapture() : nullptr;
 		if (!capture)
 			return false;
-		snapshotPumpStopped = UExplorer::Runtime::GetPostRenderPumpBackend().DetachFrameClient(
+		snapshotFrameStopped = UExplorer::Runtime::GetGameThreadFrameScheduler().DetachClient(
 			*capture,
 			std::chrono::milliseconds(5000));
-		if (snapshotPumpStopped)
-			g_SnapshotPumpAttached = false;
-		return snapshotPumpStopped;
+		if (snapshotFrameStopped)
+			g_SnapshotFrameClientAttached = false;
+		return snapshotFrameStopped;
+	});
+	shutdown.AddStage("frame_scheduler", [&] {
+		if (!g_FrameSchedulerPumpAttached)
+			return true;
+		auto& scheduler = UExplorer::Runtime::GetGameThreadFrameScheduler();
+		frameSchedulerStopped = UExplorer::Runtime::GetPostRenderPumpBackend().DetachFrameClient(
+			scheduler,
+			std::chrono::milliseconds(5000));
+		if (frameSchedulerStopped)
+			g_FrameSchedulerPumpAttached = false;
+		return frameSchedulerStopped;
 	});
 	shutdown.AddStage("engine_facade", [&] {
-		return snapshotPumpStopped
+		return snapshotFrameStopped
 			&& (!g_EngineFacade
 				|| g_EngineFacade->Stop(std::chrono::milliseconds(5000)));
 	});

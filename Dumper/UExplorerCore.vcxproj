@@ -128,6 +128,7 @@
 	<ClCompile Include="Runtime\EngineSnapshotCapture.cpp" />
     <ClCompile Include="Runtime\EngineContextCapture.cpp" />
 	<ClCompile Include="Runtime\FUObjectItemLayout.cpp" />
+	<ClCompile Include="Runtime\GameThreadFrameScheduler.cpp" />
 	<ClCompile Include="Runtime\GameThreadExecutor.cpp" />
 	<ClCompile Include="Runtime\ObjectArrayIdentitySource.cpp" />
 	<ClCompile Include="Runtime\ObjectArraySnapshotSource.cpp" />
@@ -213,6 +214,7 @@
 	<ClInclude Include="Runtime\EngineSnapshot.h" />
 	<ClInclude Include="Runtime\EngineSnapshotCapture.h" />
 	<ClInclude Include="Runtime\FUObjectItemLayout.h" />
+	<ClInclude Include="Runtime\GameThreadFrameScheduler.h" />
 	<ClInclude Include="Runtime\GameThreadExecutor.h" />
 	<ClInclude Include="Runtime\ObjectArrayIdentitySource.h" />
 	<ClInclude Include="Runtime\ObjectArraySnapshotSource.h" />
