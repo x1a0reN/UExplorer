@@ -41,8 +41,10 @@ transport/runtime profile.
 The generic Core harness now exercises a synthetic, explicitly validated x64 property
 profile for scalar, FName/FString/FText, object/weak/soft reference, enum, struct,
 array, map, and set decoding. It also supplies the exact FProperty field set with
-per-field stable scalar/pointer/FName witnesses, then verifies generation/fingerprint
-binding and atomic publication as one immutable reflection runtime snapshot. This proves
+per-field stable scalar/pointer/FName witnesses, including exact int32 UStruct property
+size and minimum alignment, then verifies generation/fingerprint binding. Layout publication and
+the fingerprint-matched codec upgrade replace the same immutable reflection runtime
+snapshot atomically, while reflection and property-codec capabilities remain independent. This proves
 validator, codec-boundary, and result-state behavior only; it is not evidence that the
 same offsets/layouts apply to any engine row above. Production remains unavailable until
 a target-specific candidate/witness source passes the same boundary.

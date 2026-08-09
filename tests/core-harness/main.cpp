@@ -681,7 +681,7 @@ namespace
 				&& !incompleteReflection->Available
 				&& incompleteReflection->ReasonCode == "REFLECTION_RUNTIME_INVALID"
 				&& !withoutCompleteReflection->IsAvailable("engine.property_codec"),
-			"An incomplete reflection snapshot bypassed the immutable bundle requirement");
+			"An incomplete reflection snapshot bypassed the immutable layout requirement");
 		RuntimeProbes missingFunctionHandles = probes;
 		missingFunctionHandles.FunctionHandleValidationEnabled = false;
 		const auto withoutFunctionHandles = BuildCoreCapabilities(*context, missingFunctionHandles);
@@ -1491,6 +1491,8 @@ namespace
 			.Fields = {
 				{ReflectionField::StructSuper, 0, 64, "synthetic"},
 				{ReflectionField::StructChildProperties, 8, 64, "synthetic"},
+				{ReflectionField::StructPropertiesSize, 16, 64, "synthetic"},
+				{ReflectionField::StructMinAlignment, 20, 64, "synthetic"},
 				{ReflectionField::FFieldClass, 0, 64, "synthetic"},
 				{ReflectionField::FFieldNext, 8, 64, "synthetic"},
 				{ReflectionField::FFieldName, 16, 64, "synthetic"},
@@ -1545,6 +1547,10 @@ namespace
 				if (field.Field == ReflectionField::PropertyArrayDim)
 					value = 1;
 				else if (field.Field == ReflectionField::PropertyElementSize)
+					value = 8;
+				else if (field.Field == ReflectionField::StructPropertiesSize)
+					value = 256;
+				else if (field.Field == ReflectionField::StructMinAlignment)
 					value = 8;
 				writeBytes(witnessStorage[index], field.Offset, value);
 				witness.Expected = static_cast<std::uint64_t>(value);
@@ -1623,6 +1629,32 @@ namespace
 			ValidateReflectionLayout(inconsistentRecord, names).Error
 				== ReflectionValidationError::FieldLayoutInvalid,
 			"One record kind accepted conflicting container sizes");
+		std::size_t minAlignmentIndex = candidate.Fields.size();
+		for (std::size_t index = 0; index < candidate.Fields.size(); ++index)
+		{
+			if (candidate.Fields[index].Field == ReflectionField::StructMinAlignment)
+				minAlignmentIndex = index;
+		}
+		Require(
+			minAlignmentIndex < candidate.Fields.size(),
+			"Reflection layout fixture omitted the UStruct minimum alignment field");
+		const std::int32_t invalidAlignment = 3;
+		writeBytes(
+			witnessStorage[minAlignmentIndex],
+			candidate.Fields[minAlignmentIndex].Offset,
+			invalidAlignment);
+		ReflectionLayoutCandidate badAlignment = candidate;
+		badAlignment.Witnesses[minAlignmentIndex].Expected =
+			static_cast<std::uint64_t>(invalidAlignment);
+		Require(
+			ValidateReflectionLayout(badAlignment, names).Error
+				== ReflectionValidationError::WitnessSemanticInvalid,
+			"A non-power-of-two UStruct minimum alignment was accepted");
+		const std::int32_t validAlignment = 8;
+		writeBytes(
+			witnessStorage[minAlignmentIndex],
+			candidate.Fields[minAlignmentIndex].Offset,
+			validAlignment);
 		ReflectionLayoutCandidate corruptWitness = candidate;
 		corruptWitness.Witnesses.front().Expected = std::uint64_t{0};
 		const ReflectionLayoutValidationResult corruptResult =
@@ -1679,9 +1711,7 @@ namespace
 		const bool wrongThreadConfigured = std::async(
 			std::launch::async,
 			[&]() {
-				return wrongThreadFacade.ConfigureReflection(
-					validated.Layout,
-					makePropertyProfile(validated.Layout->Fingerprint()));
+				return wrongThreadFacade.ConfigureReflectionLayout(validated.Layout);
 			}).get();
 		Require(
 			!wrongThreadConfigured
@@ -1694,20 +1724,48 @@ namespace
 		PropertyCodecProfile mismatchedProfile = profile;
 		mismatchedProfile.ReflectionLayoutFingerprint ^= 1;
 		Require(
-			!facade.ConfigureReflection(validated.Layout, mismatchedProfile)
+			!facade.ConfigurePropertyCodec(profile)
 				&& !facade.Reflection(),
-			"A property codec with a mismatched reflection fingerprint was published");
+			"A property codec was published before its reflection layout");
 		Require(
-			facade.ConfigureReflection(validated.Layout, profile),
-			"EngineFacade rejected a complete reflection runtime snapshot");
+			facade.ConfigureReflectionLayout(validated.Layout),
+			"EngineFacade rejected a complete reflection layout");
+		const std::shared_ptr<const ReflectionRuntimeSnapshot> layoutOnly = facade.Reflection();
+		Require(
+			layoutOnly
+				&& layoutOnly->IsLayoutConfigured(51)
+				&& !layoutOnly->IsPropertyCodecConfigured(51)
+				&& !layoutOnly->IsConfigured(51)
+				&& !facade.Properties()
+				&& !facade.ConfigurePropertyCodec(mismatchedProfile)
+				&& facade.Reflection() == layoutOnly,
+			"Layout-only reflection publication was not immutable or fingerprint-bound");
+
+		RuntimeProbes layoutOnlyProbes;
+		layoutOnlyProbes.SafeMemoryEnabled = true;
+		layoutOnlyProbes.Reflection = layoutOnly;
+		const auto layoutOnlyCapabilities = BuildCoreCapabilities(*context, layoutOnlyProbes);
+		Require(
+			layoutOnlyCapabilities->IsAvailable("engine.reflection")
+				&& !layoutOnlyCapabilities->IsAvailable("engine.property_codec"),
+			"A validated layout did not open reflection independently from property decoding");
+
+		Require(
+			facade.ConfigurePropertyCodec(profile),
+			"EngineFacade rejected a property codec matching the published layout");
 		const std::shared_ptr<const ReflectionRuntimeSnapshot> retained = facade.Reflection();
 		const std::shared_ptr<const PropertyCodec> retainedCodec = facade.Properties();
 		Require(
 			retained
+				&& retained != layoutOnly
+				&& layoutOnly->IsLayoutConfigured(51)
+				&& !layoutOnly->Properties
 				&& retained->IsConfigured(51)
+				&& retained->IsPropertyCodecConfigured(51)
 				&& retainedCodec == retained->Properties
-				&& !facade.ConfigureReflection(validated.Layout, profile),
-			"EngineFacade did not atomically own one immutable reflection runtime snapshot");
+				&& !facade.ConfigureReflectionLayout(validated.Layout)
+				&& !facade.ConfigurePropertyCodec(profile),
+			"EngineFacade did not atomically upgrade one immutable reflection runtime snapshot");
 
 		RuntimeProbes probes;
 		probes.SafeMemoryEnabled = true;

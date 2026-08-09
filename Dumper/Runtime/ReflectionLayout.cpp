@@ -32,6 +32,8 @@ constexpr std::int32_t kMaximumRecordSize = 4096;
 constexpr std::array kFPropertyFields{
 	ReflectionField::StructSuper,
 	ReflectionField::StructChildProperties,
+	ReflectionField::StructPropertiesSize,
+	ReflectionField::StructMinAlignment,
 	ReflectionField::FFieldClass,
 	ReflectionField::FFieldNext,
 	ReflectionField::FFieldName,
@@ -58,6 +60,8 @@ constexpr std::array kFPropertyFields{
 constexpr std::array kUPropertyFields{
 	ReflectionField::StructSuper,
 	ReflectionField::StructChildren,
+	ReflectionField::StructPropertiesSize,
+	ReflectionField::StructMinAlignment,
 	ReflectionField::UFieldNext,
 	ReflectionField::PropertyArrayDim,
 	ReflectionField::PropertyElementSize,
@@ -215,6 +219,10 @@ bool IsWitnessValueSemantic(
 		return value > 0 && value <= 16 * 1024 * 1024;
 	case ReflectionField::PropertyOffset:
 		return value <= 1024ull * 1024ull * 1024ull;
+	case ReflectionField::StructPropertiesSize:
+		return value <= 1024ull * 1024ull * 1024ull;
+	case ReflectionField::StructMinAlignment:
+		return value > 0 && value <= 4096 && (value & (value - 1)) == 0;
 	case ReflectionField::FFieldClassCastFlags:
 		return value != 0;
 	case ReflectionField::BoolFieldSize:
@@ -361,6 +369,8 @@ const char* ToString(const ReflectionField field) noexcept
 	case ReflectionField::StructSuper: return "ustruct.super";
 	case ReflectionField::StructChildren: return "ustruct.children";
 	case ReflectionField::StructChildProperties: return "ustruct.child_properties";
+	case ReflectionField::StructPropertiesSize: return "ustruct.properties_size";
+	case ReflectionField::StructMinAlignment: return "ustruct.min_alignment";
 	case ReflectionField::UFieldNext: return "ufield.next";
 	case ReflectionField::FFieldClass: return "ffield.class";
 	case ReflectionField::FFieldNext: return "ffield.next";
@@ -393,7 +403,9 @@ ReflectionRecordKind RecordKindFor(const ReflectionField field) noexcept
 	{
 	case ReflectionField::StructSuper:
 	case ReflectionField::StructChildren:
-	case ReflectionField::StructChildProperties: return ReflectionRecordKind::UStruct;
+	case ReflectionField::StructChildProperties:
+	case ReflectionField::StructPropertiesSize:
+	case ReflectionField::StructMinAlignment: return ReflectionRecordKind::UStruct;
 	case ReflectionField::UFieldNext: return ReflectionRecordKind::UField;
 	case ReflectionField::FFieldClass:
 	case ReflectionField::FFieldNext:
@@ -441,6 +453,8 @@ ReflectionFieldValueKind ValueKindFor(const ReflectionField field) noexcept
 	case ReflectionField::BoolByteOffset:
 	case ReflectionField::BoolByteMask:
 	case ReflectionField::BoolFieldMask: return ReflectionFieldValueKind::UInt8;
+	case ReflectionField::StructPropertiesSize:
+	case ReflectionField::StructMinAlignment:
 	case ReflectionField::PropertyArrayDim:
 	case ReflectionField::PropertyElementSize:
 	case ReflectionField::PropertyOffset: return ReflectionFieldValueKind::Int32;
@@ -767,14 +781,26 @@ bool IsReflectionLayoutValid(
 		layout.Fields());
 }
 
-bool ReflectionRuntimeSnapshot::IsConfigured(
+bool ReflectionRuntimeSnapshot::IsLayoutConfigured(
 	const std::uint64_t expectedContextGeneration) const noexcept
 {
 	return Layout
+		&& IsReflectionLayoutValid(*Layout, expectedContextGeneration);
+}
+
+bool ReflectionRuntimeSnapshot::IsPropertyCodecConfigured(
+	const std::uint64_t expectedContextGeneration) const noexcept
+{
+	return IsLayoutConfigured(expectedContextGeneration)
 		&& Properties
-		&& IsReflectionLayoutValid(*Layout, expectedContextGeneration)
 		&& Properties->IsConfigured()
 		&& Properties->Profile().ReflectionLayoutFingerprint == Layout->Fingerprint();
+}
+
+bool ReflectionRuntimeSnapshot::IsConfigured(
+	const std::uint64_t expectedContextGeneration) const noexcept
+{
+	return IsPropertyCodecConfigured(expectedContextGeneration);
 }
 
 } // namespace UExplorer::Runtime

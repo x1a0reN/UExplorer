@@ -219,7 +219,8 @@ foreach ($token in @('Off::', 'Settings::', 'NameArray::', 'ObjectArray::', 'UEO
 }
 foreach ($token in @('ObjectHandleService', 'EngineNameCodec', 'Names() const noexcept',
 		'EngineSnapshotStore', 'EngineSnapshotCapture',
-		'PropertyCodec', 'ConfigureReflection', 'Reflection() const noexcept',
+		'PropertyCodec', 'ConfigureReflectionLayout', 'ConfigurePropertyCodec',
+		'Reflection() const noexcept',
 		'Properties() const noexcept', 'ReflectionRuntimeSnapshot',
 		'std::atomic<std::shared_ptr<const ReflectionRuntimeSnapshot>>', 'm_ReflectionMutex',
 		'ConfigureSnapshotCapture', 'IssueObjectHandle', 'ValidateFunctionHandle',
@@ -250,7 +251,9 @@ foreach ($token in @('Off::', 'Settings::', 'ObjectArray::', '#include "Unreal/'
 foreach ($token in @('ReflectionPropertySystem', 'ReflectionFieldCandidate',
 		'ReflectionFieldWitness', 'ReflectionLayoutValidationResult',
 		'ValidateReflectionLayout', 'IsReflectionLayoutValid',
-		'ReflectionRuntimeSnapshot', 'ValidatedOnThreadId',
+		'ReflectionRuntimeSnapshot', 'IsLayoutConfigured',
+		'IsPropertyCodecConfigured', 'ValidatedOnThreadId',
+		'StructPropertiesSize', 'StructMinAlignment',
 		'ReflectionLayoutFingerprint', 'WitnessIds', 'FieldOverlap')) {
 	Assert-Contains ($reflectionLayoutHeader + $reflectionLayout) $token 'Reflection layout witness boundary regressed.'
 }
@@ -263,7 +266,8 @@ foreach ($token in @('Off::', 'Settings::', 'ObjectArray::', '#include "Unreal/'
 	Assert-NotContains $reflectionLayout $token 'Reflection layout validation bypassed SafeMemory or immutable profiles.'
 }
 foreach ($token in @('std::shared_ptr<const ReflectionRuntimeSnapshot> Reflection',
-		'probes.Reflection->IsConfigured(context.Generation())',
+		'probes.Reflection->IsLayoutConfigured(context.Generation())',
+		'probes.Reflection->IsPropertyCodecConfigured(context.Generation())',
 		'REFLECTION_RUNTIME_NOT_PUBLISHED', 'REFLECTION_RUNTIME_INVALID')) {
 	Assert-Contains $capabilities $token 'Reflection capability no longer derives from the immutable runtime bundle.'
 }
@@ -347,7 +351,9 @@ foreach ($token in @('TestEngineContextAndCapabilities', 'TestCoreRuntimeStateAn
 		'TestEngineNameCodec', 'Invalid UTF-8 FName entry was accepted',
 		'TestPropertyCodec', 'Property value states are not explicit and stable',
 		'TestReflectionLayout', 'A partial reflection field set was accepted',
-		'A property codec with a mismatched reflection fingerprint was published',
+		'A non-power-of-two UStruct minimum alignment was accepted',
+		'Layout-only reflection publication was not immutable or fingerprint-bound',
+		'A validated layout did not open reflection independently from property decoding',
 		'Reflection validation was published from a different execution thread',
 		'FString was not copied and converted through the bounded UTF-16 codec',
 		'Validated FText layout returned an unresolved placeholder',

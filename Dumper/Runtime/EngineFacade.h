@@ -39,9 +39,9 @@ public:
 	FunctionHandleResult IssueFunctionHandle(std::int32_t index);
 	FunctionValidationResult ValidateFunctionHandle(const FunctionHandle& handle);
 	const EngineNameCodec& Names() const noexcept { return m_Names; }
-	bool ConfigureReflection(
-		std::shared_ptr<const ReflectionLayout> layout,
-		PropertyCodecProfile profile) noexcept;
+	bool ConfigureReflectionLayout(
+		std::shared_ptr<const ReflectionLayout> layout) noexcept;
+	bool ConfigurePropertyCodec(PropertyCodecProfile profile) noexcept;
 	std::shared_ptr<const ReflectionRuntimeSnapshot> Reflection() const noexcept
 	{
 		return m_Reflection.load(std::memory_order_acquire);

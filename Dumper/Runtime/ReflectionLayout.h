@@ -47,6 +47,8 @@ enum class ReflectionField : std::uint8_t
 	StructSuper,
 	StructChildren,
 	StructChildProperties,
+	StructPropertiesSize,
+	StructMinAlignment,
 	UFieldNext,
 	FFieldClass,
 	FFieldNext,
@@ -207,6 +209,8 @@ struct ReflectionRuntimeSnapshot
 	std::shared_ptr<const ReflectionLayout> Layout;
 	std::shared_ptr<const PropertyCodec> Properties;
 
+	bool IsLayoutConfigured(std::uint64_t expectedContextGeneration) const noexcept;
+	bool IsPropertyCodecConfigured(std::uint64_t expectedContextGeneration) const noexcept;
 	bool IsConfigured(std::uint64_t expectedContextGeneration) const noexcept;
 };
 

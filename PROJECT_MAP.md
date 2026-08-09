@@ -25,7 +25,7 @@ UExplorer 是一个面向 Unreal Engine 的 **SDK Dump + 实时游戏内省工�
 └──────────────────────────────────────────────┘
 ```
 
-当前分支已完成 R4 原子通信切换并进入 R5.1。`CoreRuntime`、不可变 `EngineContext`/名称布局、`EngineFacade`、稳定 Handle、不可变 Snapshot/Host 索引、安全关闭边界、Named Pipe RPC、Rust `CoreRpcClient`、EventHub、多 PID `SessionManager`、`DomainService` 与 Tauri Channel bridge 已形成唯一桌面主链路。React 不再直接使用 HTTP/SSE/WebSocket；Core release project 不编译 `Dumper/Server` 或 `Dumper/API`，也不链接 WinSock。旧网络/API 源文件按“不删除”约束保留为历史证据，不能从其推断当前行为。当前 Host 实现 status 与 snapshot-backed Object/Type 查询；集合查询复用 Host 索引，使用 full path 和 generation/query-bound cursor，单页上限 128。Core 已新增完整字段集 + 逐字段语义 witness 的 `ReflectionLayout`，并将 layout/codec 作为 generation/fingerprint 绑定的单一不可变快照发布；production 尚无 candidate/witness source，所以反射能力仍关闭。Memory/Call/World/Watch/Hook/Blueprint/Dump 等命令明确返回 capability unavailable，继续进入 R5 领域正确性阶段。UE 版本、GC、PostRender/Hook、目标规模与卸载证据仍属于 R7，不由通用进程 fixture 代替。功能真实性与未完成项以 `DESIGN.md` 和 `docs/issue-status.json` 为准。
+当前分支已完成 R4 原子通信切换并进入 R5.1。`CoreRuntime`、不可变 `EngineContext`/名称布局、`EngineFacade`、稳定 Handle、不可变 Snapshot/Host 索引、安全关闭边界、Named Pipe RPC、Rust `CoreRpcClient`、EventHub、多 PID `SessionManager`、`DomainService` 与 Tauri Channel bridge 已形成唯一桌面主链路。React 不再直接使用 HTTP/SSE/WebSocket；Core release project 不编译 `Dumper/Server` 或 `Dumper/API`，也不链接 WinSock。旧网络/API 源文件按“不删除”约束保留为历史证据，不能从其推断当前行为。当前 Host 实现 status 与 snapshot-backed Object/Type 查询；集合查询复用 Host 索引，使用 full path 和 generation/query-bound cursor，单页上限 128。Core 已新增完整字段集 + 逐字段语义 witness 的 `ReflectionLayout`；`UStruct` 尺寸/对齐也进入验证契约。layout 先以 generation 绑定的不可变快照发布并独立开放 `engine.reflection`，匹配 fingerprint 的 codec 只通过原子替换升级同一快照并独立开放 `engine.property_codec`。production 尚无 candidate/witness source，所以两项能力仍关闭。Memory/Call/World/Watch/Hook/Blueprint/Dump 等命令明确返回 capability unavailable，继续进入 R5 领域正确性阶段。UE 版本、GC、PostRender/Hook、目标规模与卸载证据仍属于 R7，不由通用进程 fixture 代替。功能真实性与未完成项以 `DESIGN.md` 和 `docs/issue-status.json` 为准。
 
 ---
 
@@ -60,7 +60,7 @@ UExplorer/
 │   │   ├── EngineFacade.h/.cpp       #   session/context/identity 的单一领域入口
 │   │   ├── EngineNameCodec.h/.cpp    #   immutable layout + SafeMemory 的严格 FName 解码
 │   │   ├── PropertyCodec.h/.cpp      #   显式状态、完整 profile、稳定句柄与精确值树预算
-│   │   ├── ReflectionLayout.h/.cpp   #   U/FProperty 字段 witness、generation/fingerprint 与原子 bundle
+│   │   ├── ReflectionLayout.h/.cpp   #   U/FProperty 字段 witness、尺寸边界与分阶段原子 snapshot
 │   │   ├── EngineVersionProbe.h/.cpp #   只扫描已验证 PE 可读节的版本标记探测
 │   │   ├── EngineSnapshot.h/.cpp     #   严格校验并原子发布的不可变快照 store
 │   │   ├── EngineSnapshotCapture.*   #   budgeted capture/validate/publish producer

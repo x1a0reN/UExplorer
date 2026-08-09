@@ -99,7 +99,9 @@ inline std::shared_ptr<const CapabilitySnapshot> BuildCoreCapabilities(
 		{"engine.core"});
 	const bool reflectionPublished = static_cast<bool>(probes.Reflection);
 	const bool reflectionReady = reflectionPublished
-		&& probes.Reflection->IsConfigured(context.Generation());
+		&& probes.Reflection->IsLayoutConfigured(context.Generation());
+	const bool propertyCodecReady = reflectionPublished
+		&& probes.Reflection->IsPropertyCodecConfigured(context.Generation());
 	builder.Define(
 		"engine.reflection",
 		reflectionReady,
@@ -108,13 +110,13 @@ inline std::shared_ptr<const CapabilitySnapshot> BuildCoreCapabilities(
 			: "REFLECTION_RUNTIME_NOT_PUBLISHED",
 		reflectionPublished
 			? "The reflection snapshot does not match this context generation or layout fingerprint"
-			: "No immutable reflection layout and property codec bundle has passed semantic witnesses",
+			: "No immutable reflection layout has passed semantic witnesses",
 		{"engine.names", "memory.safe"});
 	builder.Define(
 		"engine.property_codec",
-		reflectionReady,
+		propertyCodecReady,
 		"PROPERTY_CODEC_NOT_CONFIGURED",
-		"No complete immutable property codec profile has passed its layout witnesses",
+		"No complete immutable property codec profile matching the published reflection layout has passed its layout witnesses",
 		{"engine.reflection"});
 	builder.Define(
 		"objects.identity_source",
