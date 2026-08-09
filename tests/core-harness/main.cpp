@@ -7,6 +7,9 @@
 
 #include "IPC/Protocol.h"
 #include "Runtime/BoundedQueue.h"
+#include "Runtime/CoreCapabilities.h"
+#include "Runtime/CoreRuntime.h"
+#include "Runtime/ShutdownCoordinator.h"
 #include "API/GameThreadQueue.h"
 #include "Generator/Public/Generators/UsmapContainer.h"
 #include "Server/HttpServer.h"
@@ -190,6 +193,176 @@ namespace
 		Require(ReadU32LittleEndian(encoded, 24) == 0, "Independent USMAP consumer rejected struct count");
 	}
 
+	UExplorer::Runtime::OffsetReport ValidatedOffset(
+		std::string name,
+		const std::int64_t value,
+		const bool required = false)
+	{
+		return {
+			.Name = std::move(name),
+			.Value = value,
+			.Required = required,
+			.State = UExplorer::Runtime::ValidationState::Validated,
+			.Source = "harness",
+			.Checks = {"fixture"}
+		};
+	}
+
+	std::shared_ptr<const UExplorer::Runtime::EngineContext> MakeEngineContext(
+		const std::uint64_t generation = 1)
+	{
+		UExplorer::Runtime::EngineContextBuilder builder(generation);
+		builder.SetIdentity(0x140000000, 0x140100000, 4242, 100, "FixtureGame", "5.4");
+		builder.SetProfile({.UsesFProperty = true, .UsesLargeWorldCoordinates = true});
+		builder.AddOffset(ValidatedOffset("gobjects", 0x100000, true));
+		builder.AddOffset(ValidatedOffset("gworld", 0x200000));
+		builder.AddOffset(ValidatedOffset("process_event.index", 0x4C, true));
+		builder.AddOffset(ValidatedOffset("process_event.offset", 0x300000, true));
+		return builder.Build();
+	}
+
+	void TestEngineContextAndCapabilities()
+	{
+		using namespace UExplorer::Runtime;
+
+		const auto context = MakeEngineContext();
+		Require(context->Generation() == 1, "Engine context generation changed");
+		Require(context->HasValidatedOffset("gobjects"), "Validated offset was not published");
+		Require(context->Profile().UsesFProperty, "Immutable engine profile was not published");
+
+		bool missingRequiredRejected = false;
+		try
+		{
+			EngineContextBuilder invalid(2);
+			invalid.SetIdentity(0x140000000, 0x140100000, 4242, 1, {}, {});
+			invalid.AddOffset({
+				.Name = "critical",
+				.Value = -1,
+				.Required = true,
+				.State = ValidationState::Missing
+			});
+			(void)invalid.Build();
+		}
+		catch (const std::runtime_error&)
+		{
+			missingRequiredRejected = true;
+		}
+		Require(missingRequiredRejected, "Missing critical offset produced an EngineContext");
+
+		RuntimeProbes probes;
+		probes.GameThreadExecutorEnabled = true;
+		probes.GameThreadPumpObserved = true;
+		probes.GameThreadPumpThreadStable = true;
+		probes.GameThreadPumpActive = true;
+		probes.SafeMemoryEnabled = true;
+		probes.ObjectHandleValidationEnabled = true;
+		const auto withoutPipe = BuildCoreCapabilities(*context, probes);
+		Require(!withoutPipe->IsAvailable("transport.named_pipe"), "Missing pipe listener was advertised");
+		Require(withoutPipe->IsAvailable("call.invoke"), "Validated call dependencies were rejected");
+		RuntimeProbes stalledProbes = probes;
+		stalledProbes.GameThreadPumpActive = false;
+		const auto stalled = BuildCoreCapabilities(*context, stalledProbes);
+		const CapabilityStatus* stalledGameThread = stalled->Find("game_thread.executor");
+		Require(
+			stalledGameThread && stalledGameThread->ReasonCode == "GAME_THREAD_PUMP_STALLED",
+			"Stalled game-thread pump remained available");
+
+		probes.NamedPipeListening = true;
+		const auto withPipe = BuildCoreCapabilities(*context, probes);
+		for (const std::string& required : RequiredReadyCapabilities())
+			Require(withPipe->IsAvailable(required), "A required ready capability is unavailable");
+
+		bool cycleRejected = false;
+		try
+		{
+			CapabilityRegistryBuilder cyclic;
+			cyclic.Define("a", true, {}, {}, {"b"});
+			cyclic.Define("b", true, {}, {}, {"a"});
+			(void)cyclic.Build(1);
+		}
+		catch (const std::invalid_argument&)
+		{
+			cycleRejected = true;
+		}
+		Require(cycleRejected, "Capability dependency cycle was accepted");
+	}
+
+	void TestCoreRuntimeStateAndShutdown()
+	{
+		using namespace UExplorer::Runtime;
+
+		CoreRuntime runtime;
+		Require(runtime.BeginInitialize(), "CoreRuntime rejected Created -> Initializing");
+		const auto context = MakeEngineContext();
+		Require(runtime.PublishContext(context), "CoreRuntime rejected its first immutable context");
+
+		RuntimeProbes probes;
+		probes.GameThreadExecutorEnabled = true;
+		probes.GameThreadPumpObserved = true;
+		probes.GameThreadPumpThreadStable = true;
+		probes.GameThreadPumpActive = true;
+		probes.SafeMemoryEnabled = true;
+		probes.ObjectHandleValidationEnabled = true;
+		Require(
+			runtime.PublishCapabilities(BuildCoreCapabilities(*context, probes)),
+			"CoreRuntime rejected capability publication");
+		std::vector<std::string> blockers;
+		Require(
+			!runtime.TryMarkReady(RequiredReadyCapabilities(), &blockers) && !blockers.empty(),
+			"CoreRuntime became Ready without its pipe listener");
+
+		probes.NamedPipeListening = true;
+		Require(
+			runtime.PublishCapabilities(BuildCoreCapabilities(*context, probes)),
+			"CoreRuntime rejected refreshed capabilities");
+		Require(
+			runtime.TryMarkReady(RequiredReadyCapabilities()),
+			"CoreRuntime did not become Ready with all required capabilities");
+		RuntimeProbes stalledReadyProbes = probes;
+		stalledReadyProbes.GameThreadPumpActive = false;
+		Require(
+			runtime.PublishCapabilities(BuildCoreCapabilities(*context, stalledReadyProbes)),
+			"Ready CoreRuntime rejected capability refresh");
+		Require(!runtime.Snapshot().IsReady(), "Required capability loss left readiness true");
+		std::string admissionError;
+		Require(
+			!runtime.TryAcquireRequest(&admissionError).has_value() && admissionError == "CORE_NOT_READY",
+			"Degraded readiness admitted new work");
+		Require(
+			runtime.PublishCapabilities(BuildCoreCapabilities(*context, probes)),
+			"CoreRuntime rejected capability recovery");
+		Require(runtime.Snapshot().IsReady(), "Recovered required capabilities did not restore readiness");
+
+		auto lease = runtime.TryAcquireRequest(&admissionError);
+		Require(lease.has_value(), "Ready CoreRuntime rejected a request");
+		Require(runtime.BeginStopping(), "CoreRuntime rejected Ready -> Stopping");
+		Require(
+			!runtime.TryAcquireRequest(&admissionError).has_value() && admissionError == "CORE_STOPPING",
+			"Stopping CoreRuntime admitted new work");
+		Require(
+			!runtime.WaitForRequests(std::chrono::milliseconds(1)),
+			"CoreRuntime did not wait for an owned request lease");
+		lease.reset();
+		Require(runtime.WaitForRequests(std::chrono::milliseconds(100)), "Request lease did not drain");
+		Require(runtime.MarkStopped(), "CoreRuntime rejected Stopping -> Stopped");
+		Require(runtime.Snapshot().State == CoreState::Stopped, "CoreRuntime terminal state changed");
+
+		std::vector<std::string> order;
+		ShutdownCoordinator shutdown;
+		shutdown.AddStage("transport", [&] { order.push_back("transport"); return true; });
+		shutdown.AddStage("hooks", [&] { order.push_back("hooks"); return false; });
+		shutdown.AddStage("dump", [&]() -> bool {
+			order.push_back("dump");
+			throw std::runtime_error("fixture failure");
+		});
+		const ShutdownReport first = shutdown.Run();
+		const ShutdownReport second = shutdown.Run();
+		Require(!first.SafeToUnload, "Failed shutdown stage allowed unload");
+		Require(first.Stages.size() == 3, "Shutdown did not report every owned stage");
+		Require(order == std::vector<std::string>({"transport", "hooks", "dump"}), "Shutdown stage order changed");
+		Require(second.Stages.size() == first.Stages.size() && order.size() == 3, "Shutdown coordinator ran twice");
+	}
+
 	void TestQueueOwnershipAndBackpressure()
 	{
 		using UExplorer::Runtime::BoundedQueue;
@@ -256,6 +429,10 @@ namespace
 		ProcessQueue();
 		Require(completed.get() == SubmitResult::Completed, "Owned game-thread task did not complete");
 		Require(params[0] == 42, "Owned parameter output was not copied back");
+		const auto diagnostics = UExplorer::GameThread::GetDiagnostics();
+		Require(diagnostics.PumpObserved, "Game-thread pump tick was not recorded");
+		Require(diagnostics.PumpThreadStable, "Game-thread pump thread identity was unstable");
+		Require(diagnostics.PumpThreadId == GetCurrentThreadId(), "Game-thread pump thread ID is incorrect");
 		Require(DisableAndDrain(), "Completed game-thread executor did not drain");
 
 		Require(Enable(&FakeProcessEvent), "Game-thread executor did not re-enable");
@@ -423,12 +600,14 @@ int main(const int argc, char** argv)
 		TestMultipleFrames();
 		TestTerminalErrors();
 		TestUsmapContainer(fixtureDirectory);
+		TestEngineContextAndCapabilities();
+		TestCoreRuntimeStateAndShutdown();
 		TestQueueOwnershipAndBackpressure();
 		TestQueueShutdownWakesWaiters();
 		TestGameThreadTaskOwnershipAndTimeouts();
 		TestGameThreadMpscCapacity();
 		TestHttpServerLifecycle();
-		std::cout << "Core harness passed: framing, USMAP consumer, bounded queues, owned game-thread tasks, SEH, HTTP lifecycle, and shutdown.\n";
+		std::cout << "Core harness passed: framing, immutable runtime/capabilities, USMAP consumer, bounded queues, owned game-thread tasks, SEH, HTTP lifecycle, and shutdown.\n";
 		return 0;
 	}
 	catch (const std::exception& error)

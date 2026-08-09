@@ -1,5 +1,7 @@
 #pragma once
 
+#include <Windows.h>
+
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -43,6 +45,18 @@ struct CallTask
 	std::chrono::steady_clock::time_point Deadline;
 };
 
+struct Diagnostics
+{
+	bool Enabled = false;
+	bool Processing = false;
+	bool PumpObserved = false;
+	bool PumpThreadStable = false;
+	std::uint32_t PumpThreadId = 0;
+	std::uint64_t LastPumpTickMonotonicUs = 0;
+	std::uint64_t PumpTickCount = 0;
+	std::size_t QueueDepth = 0;
+};
+
 inline constexpr std::size_t kQueueCapacity = 64;
 inline std::mutex g_QueueMutex;
 inline std::condition_variable g_QueueCV;
@@ -50,6 +64,10 @@ inline std::deque<std::shared_ptr<CallTask>> g_Queue;
 inline std::atomic<bool> g_Enabled{ false };
 inline ProcessEventFn g_OrigProcessEvent = nullptr;
 inline std::atomic<bool> g_Processing{false};
+inline std::atomic<std::uint32_t> g_PumpThreadId{0};
+inline std::atomic<bool> g_PumpThreadMismatch{false};
+inline std::atomic<std::uint64_t> g_LastPumpTickMonotonicUs{0};
+inline std::atomic<std::uint64_t> g_PumpTickCount{0};
 
 inline bool InvokeProcessEvent(
 	ProcessEventFn processEvent,
@@ -84,6 +102,25 @@ inline void ProcessQueue()
 {
 	if (!g_Enabled.load(std::memory_order_acquire))
 		return;
+
+	const std::uint32_t currentThreadId = GetCurrentThreadId();
+	std::uint32_t expectedThreadId = 0;
+	if (!g_PumpThreadId.compare_exchange_strong(
+		expectedThreadId,
+		currentThreadId,
+		std::memory_order_acq_rel,
+		std::memory_order_acquire)
+		&& expectedThreadId != currentThreadId)
+	{
+		g_PumpThreadMismatch.store(true, std::memory_order_release);
+	}
+	const auto now = std::chrono::steady_clock::now();
+	g_LastPumpTickMonotonicUs.store(
+		static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+			now.time_since_epoch()).count()),
+		std::memory_order_release);
+	g_PumpTickCount.fetch_add(1, std::memory_order_acq_rel);
+
 	if (g_Processing.exchange(true, std::memory_order_acq_rel))
 		return;
 
@@ -210,6 +247,10 @@ inline bool Enable(ProcessEventFn origPE)
 	if (g_Processing.load(std::memory_order_acquire) || !g_Queue.empty())
 		return false;
 	g_OrigProcessEvent = origPE;
+	g_PumpThreadId.store(0, std::memory_order_release);
+	g_PumpThreadMismatch.store(false, std::memory_order_release);
+	g_LastPumpTickMonotonicUs.store(0, std::memory_order_release);
+	g_PumpTickCount.store(0, std::memory_order_release);
 	g_Enabled.store(true, std::memory_order_release);
 	g_QueueCV.notify_all();
 	return true;
@@ -251,6 +292,23 @@ inline std::size_t QueueDepth()
 {
 	std::lock_guard<std::mutex> lk(g_QueueMutex);
 	return g_Queue.size();
+}
+
+inline Diagnostics GetDiagnostics()
+{
+	std::lock_guard<std::mutex> lk(g_QueueMutex);
+	const std::uint64_t tickCount = g_PumpTickCount.load(std::memory_order_acquire);
+	const bool threadMismatch = g_PumpThreadMismatch.load(std::memory_order_acquire);
+	return {
+		.Enabled = g_Enabled.load(std::memory_order_acquire),
+		.Processing = g_Processing.load(std::memory_order_acquire),
+		.PumpObserved = tickCount > 0,
+		.PumpThreadStable = tickCount > 0 && !threadMismatch,
+		.PumpThreadId = g_PumpThreadId.load(std::memory_order_acquire),
+		.LastPumpTickMonotonicUs = g_LastPumpTickMonotonicUs.load(std::memory_order_acquire),
+		.PumpTickCount = tickCount,
+		.QueueDepth = g_Queue.size()
+	};
 }
 
 } // namespace UExplorer::GameThread

@@ -9,6 +9,8 @@
 #include <cctype>
 #include <cstdlib>
 #include <random>
+#include <stdexcept>
+#include <vector>
 
 #include "Generators/Generator.h"
 #include "Server/HttpServer.h"
@@ -16,11 +18,17 @@
 #include "API/HookApi.h"
 #include "API/EventsApi.h"
 #include "API/DumpApi.h"
+#include "API/GameThreadQueue.h"
+#include "Runtime/CoreCapabilities.h"
+#include "Runtime/CoreRuntimeAccess.h"
+#include "Runtime/EngineContextCapture.h"
+#include "Runtime/ShutdownCoordinator.h"
 #include "Settings.h"
 #include "OffsetFinder/Offsets.h"
 
 static std::atomic<bool> g_Running{ true };
 static std::unique_ptr<UExplorer::HttpServer> g_Server;
+static UExplorer::Runtime::CoreRuntime g_Runtime;
 static HMODULE g_Module = nullptr;
 
 namespace
@@ -150,6 +158,45 @@ namespace
 		WritePrivateProfileStringA("Runtime", "Pid", std::to_string(GetCurrentProcessId()).c_str(), runtimePath.c_str());
 		WritePrivateProfileStringA("Runtime", "Running", running ? "1" : "0", runtimePath.c_str());
 	}
+
+	void RefreshRuntimeCapabilities(const bool legacyHttpListening)
+	{
+		const UExplorer::Runtime::CoreRuntimeSnapshot snapshot = g_Runtime.Snapshot();
+		if (!snapshot.Context)
+			return;
+
+		const UExplorer::GameThread::Diagnostics gameThread = UExplorer::GameThread::GetDiagnostics();
+		const std::uint64_t nowMonotonicUs = static_cast<std::uint64_t>(
+			std::chrono::duration_cast<std::chrono::microseconds>(
+				std::chrono::steady_clock::now().time_since_epoch()).count());
+		const bool pumpActive = gameThread.LastPumpTickMonotonicUs > 0
+			&& nowMonotonicUs >= gameThread.LastPumpTickMonotonicUs
+			&& nowMonotonicUs - gameThread.LastPumpTickMonotonicUs <= 2'000'000;
+		UExplorer::Runtime::RuntimeProbes probes;
+		probes.GameThreadExecutorEnabled = gameThread.Enabled;
+		probes.GameThreadPumpObserved = gameThread.PumpObserved;
+		probes.GameThreadPumpThreadStable = gameThread.PumpThreadStable;
+		probes.GameThreadPumpActive = pumpActive;
+		probes.LegacyHttpListening = legacyHttpListening;
+		const auto capabilities = UExplorer::Runtime::BuildCoreCapabilities(*snapshot.Context, probes);
+		if (!g_Runtime.PublishCapabilities(capabilities))
+			return;
+
+		std::vector<std::string> blockers;
+		g_Runtime.TryMarkReady(UExplorer::Runtime::RequiredReadyCapabilities(), &blockers);
+	}
+
+	void StopFailedInitialization(HMODULE module, FILE* consoleFile, const char* code, const std::string& message)
+	{
+		g_Runtime.MarkFailed(code, message);
+		g_Runtime.BeginStopping();
+		g_Runtime.MarkStopped();
+		UExplorer::Runtime::SetCoreRuntime(nullptr);
+		if (consoleFile)
+			fclose(consoleFile);
+		FreeConsole();
+		FreeLibraryAndExitThread(module, 1);
+	}
 }
 
 static std::string TryProbeEngineVersionFromImage()
@@ -245,6 +292,16 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 	freopen_s(&Dummy, "CONIN$", "r", stdin);
 
 	std::cerr << "[UExplorer] Initializing...\n";
+	UExplorer::Runtime::SetCoreRuntime(&g_Runtime);
+	if (!g_Runtime.BeginInitialize())
+	{
+		std::cerr << "[UExplorer] FATAL: CoreRuntime rejected initialization transition.\n";
+		UExplorer::Runtime::SetCoreRuntime(nullptr);
+		if (Dummy) fclose(Dummy);
+		FreeConsole();
+		FreeLibraryAndExitThread(Module, 1);
+		return 1;
+	}
 
 	Settings::Config::Load(Module);
 
@@ -260,21 +317,24 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 	{
 		Generator::InitEngineCore();
 		Generator::InitInternal();
+		const auto context = UExplorer::Runtime::CaptureEngineContext(1);
+		if (!g_Runtime.PublishContext(context))
+			throw std::runtime_error("CoreRuntime rejected immutable EngineContext publication");
 	}
 	catch (const std::exception& e)
 	{
 		std::cerr << "[UExplorer] FATAL: Engine init failed: " << e.what() << "\n";
-		if (Dummy) fclose(Dummy);
-		FreeConsole();
-		FreeLibraryAndExitThread(Module, 1);
+		StopFailedInitialization(Module, Dummy, "ENGINE_INITIALIZATION_FAILED", e.what());
 		return 1;
 	}
 	catch (...)
 	{
 		std::cerr << "[UExplorer] FATAL: Engine init crashed with unknown exception.\n";
-		if (Dummy) fclose(Dummy);
-		FreeConsole();
-		FreeLibraryAndExitThread(Module, 1);
+		StopFailedInitialization(
+			Module,
+			Dummy,
+			"ENGINE_INITIALIZATION_EXCEPTION",
+			"Engine initialization raised an unknown exception");
 		return 1;
 	}
 
@@ -318,6 +378,7 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 			{
 				const uint16_t actualPort = g_Server->GetPort();
 				WriteRuntimeState(actualPort, token, true);
+				RefreshRuntimeCapabilities(true);
 				startupReady = true;
 			}
 		}
@@ -330,6 +391,7 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 	// Keep alive only after every required startup stage succeeds.
 	while (startupReady && g_Running.load())
 	{
+		RefreshRuntimeCapabilities(true);
 		if (GetAsyncKeyState(VK_F6) & 1)
 		{
 			g_Running.store(false);
@@ -340,19 +402,38 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 
 	std::cerr << "[UExplorer] Shutting down...\n";
 
+	g_Runtime.BeginStopping();
 	UExplorer::API::SetServer(nullptr);
 	bool serverStopped = true;
-	if (g_Server)
-		serverStopped = g_Server->Stop();
-	const bool dumpStopped = UExplorer::API::ShutdownDumpJobs();
-	const bool hooksStopped = UExplorer::API::ShutdownHooks();
-	unloadSafe = unloadSafe && serverStopped && dumpStopped && hooksStopped;
+	bool dumpStopped = true;
+	bool hooksStopped = true;
+	UExplorer::Runtime::ShutdownCoordinator shutdown;
+	shutdown.AddStage("legacy_http", [&] {
+		serverStopped = !g_Server || g_Server->Stop();
+		return serverStopped;
+	});
+	shutdown.AddStage("runtime_requests", [&] {
+		return g_Runtime.WaitForRequests(std::chrono::milliseconds(5000));
+	});
+	shutdown.AddStage("dump_jobs", [&] {
+		dumpStopped = UExplorer::API::ShutdownDumpJobs();
+		return dumpStopped;
+	});
+	shutdown.AddStage("hooks", [&] {
+		hooksStopped = UExplorer::API::ShutdownHooks();
+		return hooksStopped;
+	});
+	const UExplorer::Runtime::ShutdownReport shutdownReport = shutdown.Run();
+	unloadSafe = unloadSafe && shutdownReport.SafeToUnload;
 	if (serverStopped)
 		g_Server.reset();
 	WriteRuntimeState(0, token, false);
 
 	if (!unloadSafe)
 	{
+		g_Runtime.RecordShutdownFailure(
+			"SHUTDOWN_SAFETY_NOT_PROVEN",
+			"At least one owned runtime stage did not stop safely");
 		std::cerr << "[UExplorer] Shutdown could not prove all workers/hooks drained; DLL remains loaded.\n";
 		if (!dumpStopped)
 		{
@@ -364,7 +445,18 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 		FreeConsole();
 		return 1;
 	}
+	if (!g_Runtime.MarkStopped())
+	{
+		g_Runtime.RecordShutdownFailure(
+			"RUNTIME_STOP_TRANSITION_FAILED",
+			"CoreRuntime could not enter Stopped after owned stages drained");
+		std::cerr << "[UExplorer] CoreRuntime stop transition failed; DLL remains loaded.\n";
+		if (Dummy) fclose(Dummy);
+		FreeConsole();
+		return 1;
+	}
 
+	UExplorer::Runtime::SetCoreRuntime(nullptr);
 	if (Dummy) fclose(Dummy);
 	FreeConsole();
 	FreeLibraryAndExitThread(Module, 0);

@@ -40,6 +40,20 @@
       "status": "verified",
       "verification": ["2026-08-09: root and frontend README replaced with current architecture and validation commands"]
     },
+    "ENG-005": {
+      "status": "in_progress",
+      "verification": [
+        "2026-08-09: Core builds now pass /utf-8 explicitly and no longer emit C4819 for UTF-8 source",
+        "Existing mojibake content still requires source-by-source correction"
+      ]
+    },
+    "ENG-006": {
+      "status": "in_progress",
+      "verification": [
+        "2026-08-09: CoreRuntime, immutable EngineContext, CapabilityRegistry, and ShutdownCoordinator establish explicit runtime ownership",
+        "Legacy domain/API monoliths and remaining direct Off/Settings consumers still require migration"
+      ]
+    },
     "ENG-007": {
       "status": "in_progress",
       "verification": ["ESLint excludes src-tauri/target; C++ warning gates remain open"]
@@ -107,6 +121,14 @@
         "Core harness completes 1000 connect/disconnect cycles plus a slow-client Stop and asserts zero retained workers"
       ]
     },
+    "LIFE-002": {
+      "status": "verified",
+      "verification": [
+        "2026-08-09: CoreRuntime enforces Created/Initializing/Ready/Failed/Stopping/Stopped transitions and rejects request leases outside Ready",
+        "Health/status now expose liveness, readiness, blockers, context generation, capabilities, and failures instead of an unconditional alive flag",
+        "Core harness proves missing Named Pipe capability prevents Ready and Stopping rejects new work"
+      ]
+    },
     "LIFE-003": {
       "status": "verified",
       "verification": [
@@ -125,6 +147,13 @@
       "verification": [
         "2026-08-09: direct startup-worker Kismet ProcessEvent calls removed",
         "Game metadata command and target-process fixture remain pending"
+      ]
+    },
+    "OFF-002": {
+      "status": "in_progress",
+      "verification": [
+        "2026-08-09: EngineContext publishes per-offset value, required flag, source, checks, validation state, and stable failure reason",
+        "Required offset validation blocks context publication; candidate lists and deeper semantic validation remain incomplete"
       ]
     },
     "GT-001": {
@@ -153,6 +182,14 @@
       "verification": [
         "2026-08-09: MSVC SEH wrapper converts a ProcessEvent access violation into ExecutionFailed and always clears processing state",
         "Core harness raises EXCEPTION_ACCESS_VIOLATION and verifies subsequent drain"
+      ]
+    },
+    "GT-005": {
+      "status": "in_progress",
+      "verification": [
+        "2026-08-09: PostRender pump records OS thread ID, monotonic last tick, tick count, queue depth, and cross-thread mismatch",
+        "Capability becomes unavailable before the first tick, on thread mismatch, or after a two-second stall",
+        "IGameThreadPump backend abstraction and live minimized/loading fixtures remain pending"
       ]
     },
     "GT-006": {
@@ -265,7 +302,8 @@
     "STATE-001": {
       "status": "verified",
       "verification": [
-        "2026-08-09: unsafe runtime reconnect returns RECONNECT_DISABLED and no longer mutates engine globals"
+        "2026-08-09: unsafe runtime reconnect returns RECONNECT_DISABLED and no longer mutates engine globals",
+        "2026-08-09: initialization publishes one shared_ptr<const EngineContext>; a second context publication is rejected"
       ]
     },
     "WATCH-002": {

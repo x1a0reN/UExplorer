@@ -20,7 +20,7 @@ React -> Tauri invoke/event -> Rust Host -> Windows Named Pipe RPC -> Core DLL -
 |---|---|---|---|
 | R0 证据与测试地基 | 已完成 | 128 项问题可跟踪；65 条 API v1 路由快照；IPC v1 契约；C++ framing/queue/backpressure/shutdown harness；Rust protocol/Fake Core 测试；前端 lint/test/build 通过；Windows CI 三个 job 通过 | 目标 UE fixture 属于 R7 发布门，不再阻塞测试地基本身 |
 | R1 安全止血 | 进行中 | 注入路径已止血；GameThread 使用拥有参数的 64 项有界 MPSC、单调 deadline、终态与 drain；ProcessEvent SEH 转结构化失败；Hook restore/in-flight/unload refusal；HTTP worker 全部 join、socket timeout、精确 bind、SendAll；危险 reconnect/raw transform/legacy Watch/假 WS Console 已禁用；critical guessed offsets 已移除；USMAP 容器通过 C++/Rust golden consumer | Hook/注入目标进程 fixture；剩余 offset capability 验证、目标生成 USMAP 语义验证与 dump 关闭边界 |
-| R2 CoreRuntime/能力模型 | 未开始 | 目标状态机已在重构计划定义 | CoreRuntime、EngineContext、CapabilityRegistry 实装 |
+| R2 CoreRuntime/能力模型 | 进行中 | CoreRuntime 状态机与 request lease；一次性发布的 immutable EngineContext；offset validation report；依赖式 CapabilityRegistry；PostRender thread/tick/stall 诊断；ShutdownCoordinator | SafeMemory、Object/FunctionHandle、Hook RAII、领域 command、剩余 Off/Settings 迁移与目标 fixture |
 | R3 Named Pipe/Rust Host | 未开始 | IPC v1 framing 与 Fake Core 地基已建立 | 真实 Pipe、PID/ACL 校验、SessionManager、deadline/cancel |
 | R4 通信原子切换 | 未开始 | ADR 已接受 | React 只走 Tauri，Core 发布构建不含可达网络栈 |
 | R5 领域正确性 | 未开始 | 问题清单与验收矩阵已建立 | Object/Memory/Call/World/Watch/Hook/Blueprint/Dump 逐项验证 |
@@ -53,6 +53,17 @@ React -> Tauri invoke/event -> Rust Host -> Windows Named Pipe RPC -> Core DLL -
 - `CoreHarness` 已覆盖 framing、1-byte 分片、USMAP production writer/golden/独立解析、队列背压、GameThread 所有权/超时/取消/SEH、64 生产者容量、1000 次 HTTP connect/disconnect、占用端口无 fallback 和慢客户端 shutdown；Rust protocol 测试从同一 fixture 独立验证 USMAP 容器。`tests/contracts/verify-core-safety.ps1` 固化静态不变量。
 
 本阶段最新本地证据：VS2026 `Release|x64` Core 与 harness 构建通过，Core harness 与 Rust USMAP consumer 测试通过，`npm run lint` 通过。真实 UE 目标的 Hook 恢复、注入超时和完整目标生成 USMAP 语义验证仍是明确未执行项，不能用最小 golden harness 代替。
+
+### 0.3 R2 CoreRuntime 与能力模型状态
+
+- `CoreRuntime` 现在拥有 `Created -> Initializing -> Ready/Failed -> Stopping -> Stopped` 状态、不可复制的 request lease、停止后的新请求拒绝以及 active request drain。当前 Named Pipe 尚未实现，因此即使旧 HTTP 已监听，状态也会保持 `Initializing`，readiness blocker 明确为 `transport.named_pipe:PIPE_LISTENER_NOT_READY`；不会把兼容传输层存活冒充目标架构 Ready。
+- Engine 初始化完成后构建一次 `EngineContext`，并以 `shared_ptr<const EngineContext>` 单次发布；第二次发布被拒绝。Context 固化 generation、进程/模块/对象数组身份、引擎 profile，以及每个 offset 的 value、required、source、checks、validation state 和稳定 reason code。required offset 未验证时 context 构建直接失败。
+- `CapabilityRegistry` 通过显式 dependency graph 推导 capability，缺失依赖不会降级执行，未定义依赖和依赖环会使构建失败。目前对未完成的 Snapshot、Handle、Watch、Hook collector、Blueprint 和完整 Dump fixture 保持 unavailable，而不是沿用旧页面的“已支持”表述。
+- PostRender pump 记录 OS thread ID、单调时钟 last tick、tick count、queue depth 与跨线程 mismatch。`game_thread.executor` 在首次 tick 前、线程不稳定或两秒未更新时都会变为 unavailable；`/status`、`/status/engine` 与 `/status/health` 暴露真实 liveness/readiness、blocker、capability map 和 pump diagnostics。
+- 主关闭路径先进入 `Stopping`，再由 `ShutdownCoordinator` 顺序停止旧 HTTP、等待 request lease、等待 Dump、恢复 Hook；任一 stage 不能证明安全停止都会保留 DLL，不执行 FreeLibrary。Harness 覆盖缺少 Pipe 时不能 Ready、Ready 后 admission、Stopping 拒绝新请求、lease drain、stage 顺序/异常/幂等，以及 capability dependency cycle。
+- Core 项目显式使用 `/utf-8`，已消除 UTF-8 源文件的 C4819；现有窄化转换等 warning 已作为 `ENG-007` baseline 保留，不能把“可构建”误写成 warnings clean。
+
+R2 尚未完成：`SafeMemory`、serial-backed `ObjectHandle`/`FunctionHandle`、Hook RAII owner、领域 command 边界和剩余直接读取 `Off::*`/`Settings::*` 的模块仍待迁移；这些完成前不会把 R2 标记为完成。
 
 ## Context
 

@@ -51,6 +51,7 @@
       <LanguageStandard>stdcpplatest</LanguageStandard>
       <LanguageStandard_C>stdc17</LanguageStandard_C>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
       <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)Engine\Public;$(ProjectDir)Generator\Public;$(ProjectDir)Utils;$(ProjectDir)Platform\Public;$(ProjectDir)Server;$(ProjectDir)API;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
@@ -71,6 +72,7 @@
       <LanguageStandard_C>stdc17</LanguageStandard_C>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
       <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)Engine\Public;$(ProjectDir)Generator\Public;$(ProjectDir)Utils;$(ProjectDir)Platform\Public;$(ProjectDir)Server;$(ProjectDir)API;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
@@ -114,6 +116,8 @@
     <ClCompile Include="Platform\Private\PlatformWindows.cpp" />
     <!-- Utils -->
     <ClCompile Include="Settings.cpp" />
+    <!-- Runtime -->
+    <ClCompile Include="Runtime\EngineContextCapture.cpp" />
     <!-- Temporarily exclude zstd.c due to VS2026 STL compatibility issue -->
     <!-- <ClCompile Include="Utils\Compression\zstd.c" /> -->
     <ClCompile Include="Utils\Dumpspace\DSGen.cpp" />
@@ -184,6 +188,13 @@
     <ClInclude Include="Utils\Utils.h" />
     <ClInclude Include="IPC\Protocol.h" />
     <ClInclude Include="Runtime\BoundedQueue.h" />
+    <ClInclude Include="Runtime\CapabilityRegistry.h" />
+    <ClInclude Include="Runtime\CoreCapabilities.h" />
+    <ClInclude Include="Runtime\CoreRuntime.h" />
+    <ClInclude Include="Runtime\CoreRuntimeAccess.h" />
+    <ClInclude Include="Runtime\EngineContext.h" />
+    <ClInclude Include="Runtime\EngineContextCapture.h" />
+    <ClInclude Include="Runtime\ShutdownCoordinator.h" />
     <!-- New: Server Headers -->
     <ClInclude Include="Server\HttpServer.h" />
     <!-- New: API Headers -->
