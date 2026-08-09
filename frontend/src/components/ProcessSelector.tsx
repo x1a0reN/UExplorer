@@ -5,10 +5,10 @@ import { t } from '../i18n';
 interface ProcessSelectorProps {
   isOpen: boolean;
   onClose: () => void;
-  onDllLoaded: (pid: number) => void;
+  onCoreReady: (pid: number) => void;
 }
 
-export default function ProcessSelector({ isOpen, onClose, onDllLoaded }: ProcessSelectorProps) {
+export default function ProcessSelector({ isOpen, onClose, onCoreReady }: ProcessSelectorProps) {
   const [processes, setProcesses] = useState<HostProcessInfo[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedProcess, setSelectedProcess] = useState<HostProcessInfo | null>(null);
@@ -60,9 +60,16 @@ export default function ProcessSelector({ isOpen, onClose, onDllLoaded }: Proces
       const result = await api.injectDLL(selectedProcess, dllPath);
       setInjectResult(result);
 
-      if (result.status === 'dll_loaded') {
+      if (
+        result.success &&
+        result.status === 'ready' &&
+        result.pipe === 'connected' &&
+        result.core === 'ready' &&
+        result.session?.target_pid === selectedProcess.pid &&
+        result.session.phase === 'ready'
+      ) {
         api.updateSettings({ dllPath });
-        onDllLoaded(selectedProcess.pid);
+        onCoreReady(selectedProcess.pid);
       }
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
@@ -169,20 +176,19 @@ export default function ProcessSelector({ isOpen, onClose, onDllLoaded }: Proces
 
           {injectResult && (
             <div className={`mb-4 p-3 rounded-lg ${
-              injectResult.status === 'dll_loaded'
+              injectResult.status === 'ready'
                 ? 'bg-blue-500/10 border border-blue-500/20'
-                : injectResult.status === 'already_loaded'
-                  ? 'bg-amber-500/10 border border-amber-500/20'
                 : 'bg-red-500/10 border border-red-500/20'
             }`}>
               <div className={
-                injectResult.status === 'dll_loaded'
+                injectResult.status === 'ready'
                   ? 'text-blue-300'
-                  : injectResult.status === 'already_loaded'
-                    ? 'text-amber-300'
-                    : 'text-red-400'
+                  : 'text-red-400'
               }>
                 {injectResult.message}
+              </div>
+              <div className="mt-2 text-[11px] font-mono text-white/45">
+                DLL: {injectResult.dll} / Pipe: {injectResult.pipe} / Core: {injectResult.core}
               </div>
             </div>
           )}

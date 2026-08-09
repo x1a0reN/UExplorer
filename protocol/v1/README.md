@@ -120,8 +120,21 @@ active session. Each session owns immutable Welcome identity/capabilities, one
 `CoreRpcClient`, EventHub, SnapshotCache, and joinable event forwarder. Snapshot refresh
 pulls `objects.snapshot.page` using the remaining negotiated deadline, restarts a
 generation-changing page chain at most three times, and atomically publishes only a
-complete generation. The manager is not yet registered as Tauri state, so injection
-readiness and the React product path remain R3 work.
+complete generation. Tauri owns the manager as application state. `inject_and_connect`
+first acquires a PID-scoped RAII admission so concurrent callers cannot race duplicate
+`LoadLibraryW` operations. It publishes success only after DLL load, post-load process
+identity validation, the
+PID-scoped Pipe handshake/Core Ready boundary, and a second process identity validation;
+DLL already-loaded is not itself a Ready result. Target process start time is serialized
+as a decimal string so JavaScript cannot truncate it. A post-connect identity mismatch
+aborts only the existing transport and never sends Shutdown to a potentially reused PID.
+
+Host events reach React through caller-owned `tauri::ipc::Channel<HostEvent>` bridges,
+not global window events. `EventBridgeManager` owns at most 64 joinable workers, preserves
+EventHub replay/filter/drop semantics, records channel delivery failures, and stops every
+bridge for a PID before that session is disconnected. Worker shutdown remains exhaustive
+even when one bridge panics. The frontend does not discover or retry a `runtime.ini`
+endpoint; all remaining direct HTTP/SSE/WS desktop calls are legacy R4 cutover work.
 
 ## Identity and errors
 

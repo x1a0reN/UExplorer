@@ -25,7 +25,7 @@ UExplorer 是一个面向 Unreal Engine 的 **SDK Dump + 实时游戏内省工�
 └──────────────────────────────────────────────┘
 ```
 
-当前分支处于 R2 收尾与 R3 实施阶段：`CoreRuntime`、不可变 `EngineContext`/名称布局、`EngineFacade`、严格名称 codec、稳定 Handle、原子 `EngineSnapshotStore`、生产 object/path snapshot source、PostRender 有界帧泵、generation-bound snapshot page command、Rust Host 原子 SnapshotCache/索引、安全关闭边界，以及有界 x64 PE/pattern/版本探测已经建立。R3 已具备共享严格 payload/limit 类型、transport-independent `CoreRpcSession`、真实 Core `NamedPipeRpcServer` 与真实 Rust `CoreRpcClient`；双方均使用 overlapped I/O、严格 PID/session/correlation/deadline/cancel 边界和可 join 生命周期，Host fixture 已覆盖分片、事件背压、断线与显式重连。Host `EventHub` 已提供有界过滤/replay/drop 诊断，多 PID `SessionManager` 已隔离 Pipe/session/capability/EventHub/SnapshotCache 并负责 snapshot generation 拉取与原子发布。注入 readiness、Tauri command/event 和真实 Core 整体 session fixture 尚未实现。`Dumper/Server` 和 `Dumper/API` 是 R4 前的 legacy HTTP 兼容层，不是目标架构，且不会与 IPC 形成长期双栈。Snapshot 目前是经二次验证后发布的完整 sweep，而非 UE 引擎时钟上的瞬时原子快照；Host cache 已接入 SessionManager，但真实目标规模/GC 行为仍待 fixture，功能真实性与未完成项以 `DESIGN.md` 和 `docs/issue-status.json` 为准。
+当前分支处于 R2 收尾与 R3 实施阶段：`CoreRuntime`、不可变 `EngineContext`/名称布局、`EngineFacade`、严格名称 codec、稳定 Handle、原子 `EngineSnapshotStore`、生产 object/path snapshot source、PostRender 有界帧泵、generation-bound snapshot page command、Rust Host 原子 SnapshotCache/索引、安全关闭边界，以及有界 x64 PE/pattern/版本探测已经建立。R3 已具备共享严格 payload/limit 类型、transport-independent `CoreRpcSession`、真实 Core `NamedPipeRpcServer` 与真实 Rust `CoreRpcClient`；双方均使用 overlapped I/O、严格 PID/session/correlation/deadline/cancel 边界和可 join 生命周期，Host fixture 已覆盖分片、事件背压、断线与显式重连。Host `EventHub` 已提供有界过滤/replay/drop 诊断，多 PID `SessionManager`、PID-scoped `TargetOperationCoordinator` 与 `EventBridgeManager` 已注册为 Tauri managed state；`inject_and_connect` 在 DLL 检查前拒绝同 PID 并发操作，且只有在 DLL、PID-scoped Pipe、严格 Welcome/Core Ready 和两次目标进程身份核验全部成功后才发布 Ready。调用方专属 Tauri `Channel` bridge 提供有界订阅、精确退订、drop/failure 诊断和 joinable 生命周期，前端不再读取 `runtime.ini` 或隐式切换端点。真实 Core 整体 session/注入 fixture 与完整 frame fuzz/断线矩阵尚未实现。`Dumper/Server` 和 `Dumper/API` 是 R4 前的 legacy HTTP 兼容层，不是目标架构，且不会与 IPC 形成长期双栈。Snapshot 目前是经二次验证后发布的完整 sweep，而非 UE 引擎时钟上的瞬时原子快照；Host cache 已接入 SessionManager，但真实目标规模/GC 行为仍待 fixture，功能真实性与未完成项以 `DESIGN.md` 和 `docs/issue-status.json` 为准。
 
 ---
 
@@ -200,11 +200,12 @@ UExplorer/
         ├── capabilities/default.json #   Tauri 权限配置
         └── src/
             ├── main.rs               #   Tauri 主入口
-            ├── lib.rs                #   Tauri 命令；进程身份扫描与受校验的 x64 DLL 注入
+            ├── lib.rs                #   Tauri 命令；注入 -> Pipe -> Ready 门与 managed session/event state
             ├── ipc/
             │   ├── rpc_session.rs   #   严格握手/关联/deadline/cancel/event/shutdown 状态机
             │   └── named_pipe_client.rs # 真实 Win32 overlapped client、PID 核验、bounded queues 与 join
             ├── session/
+            │   ├── event_bridge.rs   #   EventHub -> 调用方 Tauri Channel 的有界 owned bridge
             │   ├── event_hub.rs      #   有界事件过滤、精确 replay、fan-out 与 drop 诊断
             │   ├── session_manager.rs#   多 PID Pipe/session 生命周期与 snapshot 拉取
             │   └── snapshot_cache.rs #   terminal page assembly、原子发布与有界 Host 查询索引

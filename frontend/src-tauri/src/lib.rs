@@ -1,18 +1,33 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
+#[cfg(windows)]
 use std::time::Duration;
 use tauri::command;
-use tauri::Manager;
+use tauri::ipc::Channel;
 
 pub mod ipc;
 pub mod session;
 
 #[cfg(windows)]
+use crate::ipc::named_pipe_client::CoreRpcClientError;
+use crate::session::event_bridge::{EventBridgeDiagnostics, EventBridgeManager, EventSink};
+use crate::session::event_hub::{EventFilter, HostEvent};
+#[cfg(windows)]
+use crate::session::session_manager::{
+    ManagedSessionDiagnostics, SessionManager, SessionManagerDiagnostics, SessionManagerError,
+    SessionPhase, TargetProcessIdentity,
+};
+#[cfg(windows)]
+use std::collections::BTreeSet;
+#[cfg(windows)]
 use std::ffi::c_void;
 #[cfg(windows)]
 use std::os::windows::ffi::OsStrExt;
+#[cfg(windows)]
+use std::sync::{Arc, Mutex};
+#[cfg(windows)]
+use tauri::State;
 #[cfg(windows)]
 use windows::core::{Error as WindowsError, HRESULT, PCSTR, PCWSTR, PWSTR};
 #[cfg(windows)]
@@ -57,29 +72,88 @@ pub struct ProcessInfo {
     pub candidate_reasons: Vec<String>,
 }
 
-// Injection result
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InjectionStatus {
+    Ready,
+    Failed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DllLoadState {
+    NotAttempted,
+    Loaded,
+    AlreadyLoaded,
+    Failed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PipeConnectionState {
+    NotAttempted,
+    Connected,
+    Failed,
+    Rejected,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CoreReadinessState {
+    NotChecked,
+    Ready,
+    Failed,
+}
+
+#[derive(Debug, Serialize)]
 pub struct InjectionResult {
     pub success: bool,
-    pub status: String,
+    pub status: InjectionStatus,
     pub stage: String,
     pub code: String,
     pub message: String,
+    pub dll: DllLoadState,
+    pub pipe: PipeConnectionState,
+    pub core: CoreReadinessState,
+    #[cfg(windows)]
+    pub session: Option<ManagedSessionDiagnostics>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct RuntimeEndpoint {
-    pub pid: u32,
-    pub port: u16,
-    pub token: String,
-    pub running: bool,
+fn injection_failure(
+    stage: impl Into<String>,
+    code: impl Into<String>,
+    detail: impl Into<String>,
+    dll: DllLoadState,
+    pipe: PipeConnectionState,
+    core: CoreReadinessState,
+) -> InjectionResult {
+    let code = code.into();
+    InjectionResult {
+        success: false,
+        status: InjectionStatus::Failed,
+        stage: stage.into(),
+        message: format!("{code}: {}", detail.into()),
+        code,
+        dll,
+        pipe,
+        core,
+        #[cfg(windows)]
+        session: None,
+    }
 }
 
 fn uexplorer_data_dir() -> Result<PathBuf, String> {
-    let base = std::env::var("LOCALAPPDATA")
+    let base = std::env::var_os("LOCALAPPDATA")
+        .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .or_else(|_| std::env::current_dir().map(|p| p.join("temp")))
-        .map_err(|e| format!("Cannot resolve data dir: {e}"))?;
+        .ok_or_else(|| {
+            "LOCALAPPDATA_UNAVAILABLE: the Host configuration directory is unavailable".to_string()
+        })?;
+    if !base.is_absolute() {
+        return Err(
+            "LOCALAPPDATA_INVALID: the Host configuration directory must be absolute".to_string(),
+        );
+    }
     let dir = base.join("UExplorer");
     fs::create_dir_all(&dir).map_err(|e| format!("Create data dir failed: {e}"))?;
     Ok(dir)
@@ -87,37 +161,6 @@ fn uexplorer_data_dir() -> Result<PathBuf, String> {
 
 fn connection_ini_path() -> Result<PathBuf, String> {
     Ok(uexplorer_data_dir()?.join("connection.ini"))
-}
-
-fn runtime_ini_path() -> Result<PathBuf, String> {
-    Ok(uexplorer_data_dir()?.join("runtime.ini"))
-}
-
-fn read_ini_value(content: &str, section: &str, key: &str) -> Option<String> {
-    let mut current_section = String::new();
-    for raw_line in content.lines() {
-        let line = raw_line.trim();
-        if line.is_empty() || line.starts_with(';') || line.starts_with('#') {
-            continue;
-        }
-
-        if line.starts_with('[') && line.ends_with(']') && line.len() >= 3 {
-            current_section = line[1..line.len() - 1].trim().to_string();
-            continue;
-        }
-
-        if !current_section.eq_ignore_ascii_case(section) {
-            continue;
-        }
-
-        if let Some(idx) = line.find('=') {
-            let k = line[..idx].trim();
-            if k.eq_ignore_ascii_case(key) {
-                return Some(line[idx + 1..].trim().to_string());
-            }
-        }
-    }
-    None
 }
 
 #[command]
@@ -130,38 +173,6 @@ fn save_connection_settings(port: u16, token: String) -> Result<bool, String> {
     );
     fs::write(&path, content).map_err(|e| format!("Write connection settings failed: {e}"))?;
     Ok(true)
-}
-
-#[command]
-fn load_runtime_endpoint() -> Result<Option<RuntimeEndpoint>, String> {
-    let path = runtime_ini_path()?;
-    if !path.exists() {
-        return Ok(None);
-    }
-
-    let content =
-        fs::read_to_string(&path).map_err(|e| format!("Read runtime state failed: {e}"))?;
-    let pid = read_ini_value(&content, "Runtime", "Pid")
-        .and_then(|v| v.parse::<u32>().ok())
-        .unwrap_or(0);
-    let port = read_ini_value(&content, "Runtime", "Port")
-        .and_then(|v| v.parse::<u16>().ok())
-        .unwrap_or(0);
-    let token = read_ini_value(&content, "Runtime", "Token").unwrap_or_default();
-    let running = read_ini_value(&content, "Runtime", "Running")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
-
-    if port == 0 || token.is_empty() {
-        return Ok(None);
-    }
-
-    Ok(Some(RuntimeEndpoint {
-        pid,
-        port,
-        token,
-        running,
-    }))
 }
 
 // Scan all running processes via Windows API and filter likely Unreal/game processes.
@@ -478,57 +489,301 @@ fn is_no_more_files(error: &WindowsError) -> bool {
     error.code() == HRESULT::from_win32(ERROR_NO_MORE_FILES.0)
 }
 
-// DLL injection using CreateRemoteThread via Windows API.
-#[command]
-fn inject_dll(
-    pid: u32,
-    dll_path: String,
-    expected_start_time_100ns: String,
-    expected_process_path: String,
-) -> Result<InjectionResult, String> {
-    #[cfg(windows)]
-    {
-        inject_dll_internal(
-            pid,
-            dll_path,
-            expected_start_time_100ns,
-            expected_process_path,
-        )
-    }
-    #[cfg(not(windows))]
-    {
-        Err("DLL injection is only supported on Windows".to_string())
+#[cfg(windows)]
+const CORE_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+#[cfg(windows)]
+const SESSION_CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg(windows)]
+const MAX_CONCURRENT_TARGET_OPERATIONS: usize = 16;
+
+#[cfg(windows)]
+#[derive(Debug, Default)]
+struct TargetOperationCoordinator {
+    target_pids: Mutex<BTreeSet<u32>>,
+}
+
+#[cfg(windows)]
+#[derive(Debug)]
+struct TargetOperationReservation {
+    coordinator: Arc<TargetOperationCoordinator>,
+    target_pid: u32,
+}
+
+#[cfg(windows)]
+impl TargetOperationCoordinator {
+    fn reserve(
+        self: &Arc<Self>,
+        target_pid: u32,
+    ) -> Result<TargetOperationReservation, InjectionError> {
+        if target_pid == 0 {
+            return Err(InjectionError::failed(
+                "TARGET_OPERATION_PID_INVALID",
+                "admission",
+                "target PID must be positive",
+            ));
+        }
+        let mut target_pids = self.target_pids.lock().map_err(|_| {
+            InjectionError::failed(
+                "TARGET_OPERATION_LOCK_POISONED",
+                "admission",
+                "target operation coordinator lock is poisoned",
+            )
+        })?;
+        if target_pids.contains(&target_pid) {
+            return Err(InjectionError::failed(
+                "TARGET_OPERATION_IN_PROGRESS",
+                "admission",
+                format!("PID {target_pid} already has a managed operation in progress"),
+            ));
+        }
+        if target_pids.len() >= MAX_CONCURRENT_TARGET_OPERATIONS {
+            return Err(InjectionError::failed(
+                "TARGET_OPERATION_LIMIT_REACHED",
+                "admission",
+                format!("at most {MAX_CONCURRENT_TARGET_OPERATIONS} target operations may run"),
+            ));
+        }
+        target_pids.insert(target_pid);
+        Ok(TargetOperationReservation {
+            coordinator: Arc::clone(self),
+            target_pid,
+        })
     }
 }
 
 #[cfg(windows)]
-fn inject_dll_internal(
+impl Drop for TargetOperationReservation {
+    fn drop(&mut self) {
+        match self.coordinator.target_pids.lock() {
+            Ok(mut target_pids) => {
+                target_pids.remove(&self.target_pid);
+            }
+            Err(poisoned) => {
+                poisoned.into_inner().remove(&self.target_pid);
+            }
+        }
+    }
+}
+
+// Injection is complete only after the PID-scoped Pipe returns a validated Ready Welcome.
+#[cfg(windows)]
+#[command]
+async fn inject_and_connect(
+    manager: State<'_, Arc<SessionManager>>,
+    coordinator: State<'_, Arc<TargetOperationCoordinator>>,
     pid: u32,
     dll_path: String,
     expected_start_time_100ns: String,
     expected_process_path: String,
 ) -> Result<InjectionResult, String> {
-    Ok(
-        match perform_injection(
+    let manager = Arc::clone(manager.inner());
+    let reservation = match coordinator.inner().reserve(pid) {
+        Ok(reservation) => reservation,
+        Err(error) => return Ok(error.into_failure(DllLoadState::NotAttempted)),
+    };
+    match tauri::async_runtime::spawn_blocking(move || {
+        let _reservation = reservation;
+        inject_and_connect_internal(
+            &manager,
             pid,
             &dll_path,
             &expected_start_time_100ns,
             &expected_process_path,
-        ) {
-            Ok(result) => result,
-            Err(error) => error.into_result(),
-        },
-    )
+        )
+    })
+    .await
+    {
+        Ok(result) => Ok(result),
+        Err(error) => Ok(injection_failure(
+            "host_task",
+            "HOST_TASK_FAILED",
+            error.to_string(),
+            DllLoadState::Failed,
+            PipeConnectionState::NotAttempted,
+            CoreReadinessState::NotChecked,
+        )),
+    }
 }
 
 #[cfg(not(windows))]
-fn inject_dll_internal(
-    _pid: u32,
-    _dll_path: String,
-    _expected_start_time_100ns: String,
-    _expected_process_path: String,
+#[command]
+async fn inject_and_connect(
+    pid: u32,
+    dll_path: String,
+    expected_start_time_100ns: String,
+    expected_process_path: String,
 ) -> Result<InjectionResult, String> {
-    Err("DLL injection is only supported on Windows".to_string())
+    let _ = (
+        pid,
+        dll_path,
+        expected_start_time_100ns,
+        expected_process_path,
+    );
+    Ok(injection_failure(
+        "preflight",
+        "PLATFORM_UNSUPPORTED",
+        "DLL injection and Core sessions are only supported on Windows",
+        DllLoadState::NotAttempted,
+        PipeConnectionState::NotAttempted,
+        CoreReadinessState::NotChecked,
+    ))
+}
+
+#[cfg(windows)]
+#[command]
+fn session_diagnostics(
+    manager: State<'_, Arc<SessionManager>>,
+) -> Result<SessionManagerDiagnostics, String> {
+    manager
+        .diagnostics()
+        .map_err(|error| format!("{}: {error}", error.code()))
+}
+
+#[cfg(not(windows))]
+#[command]
+fn session_diagnostics() -> Result<serde_json::Value, String> {
+    Err("PLATFORM_UNSUPPORTED: Core sessions are only supported on Windows".to_string())
+}
+
+#[cfg(windows)]
+#[command]
+fn activate_session(manager: State<'_, Arc<SessionManager>>, pid: u32) -> Result<bool, String> {
+    manager
+        .activate(pid)
+        .map(|()| true)
+        .map_err(|error| format!("{}: {error}", error.code()))
+}
+
+#[cfg(not(windows))]
+#[command]
+fn activate_session(pid: u32) -> Result<bool, String> {
+    let _ = pid;
+    Err("PLATFORM_UNSUPPORTED: Core sessions are only supported on Windows".to_string())
+}
+
+struct TauriChannelEventSink(Channel<HostEvent>);
+
+impl EventSink for TauriChannelEventSink {
+    fn send(&self, event: HostEvent) -> Result<(), String> {
+        self.0
+            .send(event)
+            .map_err(|error| format!("TAURI_CHANNEL_SEND_FAILED: {error}"))
+    }
+}
+
+#[cfg(windows)]
+#[command]
+fn subscribe_session_events(
+    manager: State<'_, Arc<SessionManager>>,
+    bridges: State<'_, Arc<EventBridgeManager>>,
+    pid: u32,
+    filter: EventFilter,
+    replay_after_seq: Option<u64>,
+    capacity: usize,
+    on_event: Channel<HostEvent>,
+) -> Result<EventBridgeDiagnostics, String> {
+    let session = manager
+        .get(pid)
+        .map_err(|error| format!("{}: {error}", error.code()))?;
+    let subscription = session
+        .subscribe_events(filter, replay_after_seq, capacity)
+        .map_err(|error| format!("{}: {error}", error.code()))?;
+    bridges
+        .subscribe(pid, subscription, Box::new(TauriChannelEventSink(on_event)))
+        .map_err(|error| format!("{}: {error}", error.code()))
+}
+
+#[cfg(not(windows))]
+#[command]
+fn subscribe_session_events(
+    pid: u32,
+    filter: EventFilter,
+    replay_after_seq: Option<u64>,
+    capacity: usize,
+    on_event: Channel<HostEvent>,
+) -> Result<EventBridgeDiagnostics, String> {
+    let _ = (pid, filter, replay_after_seq, capacity, on_event);
+    Err("PLATFORM_UNSUPPORTED: Core sessions are only supported on Windows".to_string())
+}
+
+#[cfg(windows)]
+#[command]
+async fn unsubscribe_session_events(
+    bridges: State<'_, Arc<EventBridgeManager>>,
+    bridge_id: u64,
+) -> Result<bool, String> {
+    let bridges = Arc::clone(bridges.inner());
+    tauri::async_runtime::spawn_blocking(move || bridges.unsubscribe(bridge_id))
+        .await
+        .map_err(|error| format!("HOST_TASK_FAILED: {error}"))?
+        .map(|()| true)
+        .map_err(|error| format!("{}: {error}", error.code()))
+}
+
+#[cfg(not(windows))]
+#[command]
+async fn unsubscribe_session_events(bridge_id: u64) -> Result<bool, String> {
+    let _ = bridge_id;
+    Err("PLATFORM_UNSUPPORTED: Core sessions are only supported on Windows".to_string())
+}
+
+#[cfg(windows)]
+#[command]
+fn event_bridge_diagnostics(
+    bridges: State<'_, Arc<EventBridgeManager>>,
+) -> Result<Vec<EventBridgeDiagnostics>, String> {
+    bridges
+        .diagnostics()
+        .map_err(|error| format!("{}: {error}", error.code()))
+}
+
+#[cfg(not(windows))]
+#[command]
+fn event_bridge_diagnostics() -> Result<Vec<EventBridgeDiagnostics>, String> {
+    Err("PLATFORM_UNSUPPORTED: Core sessions are only supported on Windows".to_string())
+}
+
+#[cfg(windows)]
+#[command]
+async fn disconnect_session(
+    manager: State<'_, Arc<SessionManager>>,
+    coordinator: State<'_, Arc<TargetOperationCoordinator>>,
+    bridges: State<'_, Arc<EventBridgeManager>>,
+    pid: u32,
+    reason: String,
+) -> Result<bool, String> {
+    let manager = Arc::clone(manager.inner());
+    let bridges = Arc::clone(bridges.inner());
+    let reservation = coordinator
+        .inner()
+        .reserve(pid)
+        .map_err(|error| format!("{}: {}", error.code, error.detail))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let _reservation = reservation;
+        let bridge_result = bridges
+            .stop_session(pid)
+            .map_err(|error| format!("{}: {error}", error.code()));
+        let session_result = manager
+            .disconnect(pid, &reason, SESSION_CLOSE_TIMEOUT)
+            .map_err(|error| format!("{}: {error}", error.code()));
+        match (bridge_result, session_result) {
+            (Ok(_), Ok(())) => Ok(()),
+            (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
+            (Err(bridge_error), Err(session_error)) => Err(format!(
+                "SESSION_DISCONNECT_MULTIPLE_FAILURES: {bridge_error}; {session_error}"
+            )),
+        }
+    })
+    .await
+    .map_err(|error| format!("HOST_TASK_FAILED: {error}"))?
+    .map(|()| true)
+}
+
+#[cfg(not(windows))]
+#[command]
+async fn disconnect_session(pid: u32, reason: String) -> Result<bool, String> {
+    let _ = (pid, reason);
+    Err("PLATFORM_UNSUPPORTED: Core sessions are only supported on Windows".to_string())
 }
 
 #[cfg(windows)]
@@ -539,6 +794,7 @@ const PE_MACHINE_AMD64: u16 = 0x8664;
 const PE32_PLUS_MAGIC: u16 = 0x020B;
 
 #[cfg(windows)]
+#[derive(Debug)]
 struct InjectionError {
     code: &'static str,
     stage: &'static str,
@@ -566,15 +822,282 @@ impl InjectionError {
         }
     }
 
-    fn into_result(self) -> InjectionResult {
-        InjectionResult {
-            success: false,
-            status: self.status.to_string(),
-            stage: self.stage.to_string(),
-            code: self.code.to_string(),
-            message: format!("{}: {}", self.code, self.detail),
-        }
+    fn is_already_loaded(&self) -> bool {
+        self.status == "already_loaded"
     }
+
+    fn into_failure(self, dll: DllLoadState) -> InjectionResult {
+        injection_failure(
+            self.stage,
+            self.code,
+            self.detail,
+            dll,
+            PipeConnectionState::NotAttempted,
+            CoreReadinessState::NotChecked,
+        )
+    }
+}
+
+#[cfg(windows)]
+struct DllLoadOutcome {
+    message: String,
+}
+
+#[cfg(windows)]
+fn inject_and_connect_internal(
+    manager: &SessionManager,
+    pid: u32,
+    dll_path: &str,
+    expected_start_time_100ns: &str,
+    expected_process_path: &str,
+) -> InjectionResult {
+    let (dll_state, dll_message) = match perform_injection(
+        pid,
+        dll_path,
+        expected_start_time_100ns,
+        expected_process_path,
+    ) {
+        Ok(outcome) => (DllLoadState::Loaded, outcome.message),
+        Err(error) if error.is_already_loaded() => (DllLoadState::AlreadyLoaded, error.detail),
+        Err(error) => {
+            let dll = if error.stage == "preflight" {
+                DllLoadState::NotAttempted
+            } else {
+                DllLoadState::Failed
+            };
+            return error.into_failure(dll);
+        }
+    };
+
+    let target = match validated_target_identity(
+        pid,
+        expected_start_time_100ns,
+        expected_process_path,
+        "post_load_identity",
+    ) {
+        Ok(identity) => identity,
+        Err(error) => return error.into_failure(dll_state),
+    };
+
+    match manager.get(pid) {
+        Ok(session) => {
+            if session.target_identity() != &target {
+                return injection_failure(
+                    "session_admission",
+                    "SESSION_PROCESS_IDENTITY_MISMATCH",
+                    "an existing session for this PID belongs to different process evidence",
+                    dll_state,
+                    PipeConnectionState::Rejected,
+                    CoreReadinessState::NotChecked,
+                );
+            }
+            let diagnostics = match session.diagnostics() {
+                Ok(diagnostics) => diagnostics,
+                Err(error) => {
+                    return session_failure_result(error, dll_state);
+                }
+            };
+            if diagnostics.phase != SessionPhase::Ready {
+                return injection_failure(
+                    "session_admission",
+                    "SESSION_NOT_READY",
+                    format!("existing PID {pid} session is {:?}", diagnostics.phase),
+                    dll_state,
+                    PipeConnectionState::Failed,
+                    CoreReadinessState::Failed,
+                );
+            }
+            if let Err(error) = manager.activate(pid) {
+                return session_failure_result(error, dll_state);
+            }
+            return injection_ready(
+                "CORE_ALREADY_READY",
+                format!("{dll_message}; existing Core session is ready"),
+                dll_state,
+                diagnostics,
+            );
+        }
+        Err(SessionManagerError::SessionNotFound(_)) => {}
+        Err(error) => return session_failure_result(error, dll_state),
+    }
+
+    let session = match manager.connect(
+        target.clone(),
+        concat!("uexplorer-host/", env!("CARGO_PKG_VERSION")),
+        CORE_CONNECT_TIMEOUT,
+    ) {
+        Ok(session) => session,
+        Err(error) => return session_failure_result(error, dll_state),
+    };
+
+    if let Err(error) = validated_target_identity(
+        pid,
+        expected_start_time_100ns,
+        expected_process_path,
+        "post_connect_identity",
+    ) {
+        let _ = manager.abort_connection(pid, SESSION_CLOSE_TIMEOUT);
+        return injection_failure(
+            error.stage,
+            error.code,
+            error.detail,
+            dll_state,
+            PipeConnectionState::Connected,
+            CoreReadinessState::Ready,
+        );
+    }
+    if let Err(error) = manager.activate(pid) {
+        let _ = manager.disconnect(pid, "activation_failed", SESSION_CLOSE_TIMEOUT);
+        return session_failure_result(error, dll_state);
+    }
+    let diagnostics = match session.diagnostics() {
+        Ok(diagnostics) => diagnostics,
+        Err(error) => {
+            let _ = manager.disconnect(pid, "diagnostics_failed", SESSION_CLOSE_TIMEOUT);
+            return session_failure_result(error, dll_state);
+        }
+    };
+    injection_ready(
+        "CORE_READY",
+        format!("{dll_message}; PID-scoped Pipe connected and Core Ready validated"),
+        dll_state,
+        diagnostics,
+    )
+}
+
+#[cfg(windows)]
+fn injection_ready(
+    code: &str,
+    message: String,
+    dll: DllLoadState,
+    session: ManagedSessionDiagnostics,
+) -> InjectionResult {
+    InjectionResult {
+        success: true,
+        status: InjectionStatus::Ready,
+        stage: "core_ready".to_string(),
+        code: code.to_string(),
+        message,
+        dll,
+        pipe: PipeConnectionState::Connected,
+        core: CoreReadinessState::Ready,
+        session: Some(session),
+    }
+}
+
+#[cfg(windows)]
+fn session_failure_result(error: SessionManagerError, dll: DllLoadState) -> InjectionResult {
+    let (stage, pipe, core) = classify_session_failure(&error);
+    injection_failure(stage, error.code(), error.to_string(), dll, pipe, core)
+}
+
+#[cfg(windows)]
+fn classify_session_failure(
+    error: &SessionManagerError,
+) -> (&'static str, PipeConnectionState, CoreReadinessState) {
+    match error {
+        SessionManagerError::Client(CoreRpcClientError::ConnectTimeout { .. }) => (
+            "pipe_connect",
+            PipeConnectionState::Failed,
+            CoreReadinessState::NotChecked,
+        ),
+        SessionManagerError::Client(CoreRpcClientError::PeerPidMismatch { .. }) => (
+            "pipe_identity",
+            PipeConnectionState::Rejected,
+            CoreReadinessState::NotChecked,
+        ),
+        SessionManagerError::Client(CoreRpcClientError::Transport { code, .. })
+            if matches!(
+                code.as_str(),
+                "RPC_PIPE_OPEN_FAILED" | "RPC_CONNECT_WAIT_FAILED" | "RPC_WORKER_CREATE_FAILED"
+            ) =>
+        {
+            (
+                "pipe_connect",
+                PipeConnectionState::Failed,
+                CoreReadinessState::NotChecked,
+            )
+        }
+        SessionManagerError::Client(CoreRpcClientError::Transport { code, .. })
+            if matches!(
+                code.as_str(),
+                "RPC_SERVER_PID_INVALID" | "RPC_SERVER_PID_QUERY_FAILED" | "RPC_PIPE_MODE_FAILED"
+            ) =>
+        {
+            (
+                "pipe_identity",
+                PipeConnectionState::Rejected,
+                CoreReadinessState::NotChecked,
+            )
+        }
+        SessionManagerError::Client(CoreRpcClientError::Session { .. })
+        | SessionManagerError::Client(CoreRpcClientError::Transport { .. })
+        | SessionManagerError::Client(CoreRpcClientError::WorkerStopped)
+        | SessionManagerError::Client(CoreRpcClientError::WorkerPanicked) => (
+            "core_ready",
+            PipeConnectionState::Connected,
+            CoreReadinessState::Failed,
+        ),
+        SessionManagerError::WorkerCreate(_)
+        | SessionManagerError::EventHub(_)
+        | SessionManagerError::Snapshot(_) => (
+            "session_start",
+            PipeConnectionState::Connected,
+            CoreReadinessState::Ready,
+        ),
+        _ => (
+            "session_admission",
+            PipeConnectionState::NotAttempted,
+            CoreReadinessState::NotChecked,
+        ),
+    }
+}
+
+#[cfg(windows)]
+fn validated_target_identity(
+    pid: u32,
+    expected_start_time_100ns: &str,
+    expected_process_path: &str,
+    stage: &'static str,
+) -> Result<TargetProcessIdentity, InjectionError> {
+    let expected_start_time = expected_start_time_100ns.parse::<u64>().map_err(|error| {
+        InjectionError::failed(
+            "PROCESS_IDENTITY_INVALID",
+            stage,
+            format!("invalid start_time_100ns '{expected_start_time_100ns}': {error}"),
+        )
+    })?;
+    if expected_start_time == 0 || expected_process_path.trim().is_empty() {
+        return Err(InjectionError::failed(
+            "PROCESS_IDENTITY_INVALID",
+            stage,
+            "a non-zero process start time and process path are required",
+        ));
+    }
+    let details = query_process_details(pid)
+        .map_err(|detail| InjectionError::failed("PROCESS_IDENTITY_QUERY_FAILED", stage, detail))?;
+    if details.start_time_100ns != expected_start_time
+        || normalize_path_key(&details.path) != normalize_path_key(expected_process_path)
+    {
+        return Err(InjectionError::failed(
+            "PROCESS_IDENTITY_MISMATCH",
+            stage,
+            format!("PID {pid} no longer matches the selected start time and process path"),
+        ));
+    }
+    if details.machine != IMAGE_FILE_MACHINE_AMD64 {
+        return Err(InjectionError::failed(
+            "TARGET_ARCH_MISMATCH",
+            stage,
+            format!(
+                "PID {pid} is {}; x64 is required",
+                machine_name(details.machine)
+            ),
+        ));
+    }
+    TargetProcessIdentity::new(pid, details.start_time_100ns, details.path).map_err(|error| {
+        InjectionError::failed("PROCESS_IDENTITY_INVALID", stage, error.to_string())
+    })
 }
 
 #[cfg(windows)]
@@ -667,7 +1190,7 @@ fn perform_injection(
     dll_path: &str,
     expected_start_time_100ns: &str,
     expected_process_path: &str,
-) -> Result<InjectionResult, InjectionError> {
+) -> Result<DllLoadOutcome, InjectionError> {
     if !cfg!(target_pointer_width = "64") {
         return Err(InjectionError::failed(
             "HOST_ARCH_MISMATCH",
@@ -896,15 +1419,8 @@ fn perform_injection(
     }
 
     remote.release()?;
-    Ok(InjectionResult {
-        success: true,
-        status: "dll_loaded".to_string(),
-        stage: "dll_loaded".to_string(),
-        code: "DLL_LOADED".to_string(),
-        message: format!(
-            "DLL load confirmed in PID {pid} ({} bytes). IPC and Core readiness are not established yet.",
-            dll.file_size
-        ),
+    Ok(DllLoadOutcome {
+        message: format!("DLL load confirmed in PID {pid} ({} bytes)", dll.file_size),
     })
 }
 
@@ -1275,37 +1791,111 @@ mod tests {
         )
         .is_empty());
     }
-}
 
-fn is_dev_server_running() -> bool {
-    let addr: SocketAddr = match "127.0.0.1:5173".parse() {
-        Ok(addr) => addr,
-        Err(_) => return false,
-    };
-    TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok()
+    #[test]
+    fn injection_result_serializes_independent_stage_states() {
+        let result = injection_failure(
+            "pipe_connect",
+            "RPC_CONNECT_TIMEOUT",
+            "fixture timeout",
+            DllLoadState::Loaded,
+            PipeConnectionState::Failed,
+            CoreReadinessState::NotChecked,
+        );
+        let value = serde_json::to_value(result).unwrap();
+        assert_eq!(value["success"], false);
+        assert_eq!(value["status"], "failed");
+        assert_eq!(value["dll"], "loaded");
+        assert_eq!(value["pipe"], "failed");
+        assert_eq!(value["core"], "not_checked");
+        assert!(value["session"].is_null());
+    }
+
+    #[test]
+    fn session_connection_failures_have_stable_stage_classification() {
+        assert_eq!(
+            classify_session_failure(&SessionManagerError::Client(
+                CoreRpcClientError::ConnectTimeout { target_pid: 7 }
+            )),
+            (
+                "pipe_connect",
+                PipeConnectionState::Failed,
+                CoreReadinessState::NotChecked
+            )
+        );
+        assert_eq!(
+            classify_session_failure(&SessionManagerError::Client(
+                CoreRpcClientError::PeerPidMismatch {
+                    expected: 7,
+                    actual: 8
+                }
+            )),
+            (
+                "pipe_identity",
+                PipeConnectionState::Rejected,
+                CoreReadinessState::NotChecked
+            )
+        );
+        assert_eq!(
+            classify_session_failure(&SessionManagerError::Client(CoreRpcClientError::Session {
+                code: "RPC_ENVELOPE_INVALID".to_string(),
+                message: "fixture".to_string()
+            })),
+            (
+                "core_ready",
+                PipeConnectionState::Connected,
+                CoreReadinessState::Failed
+            )
+        );
+    }
+
+    #[test]
+    fn injection_admission_is_pid_scoped_and_released_by_raii() {
+        let coordinator = Arc::new(TargetOperationCoordinator::default());
+        let first = coordinator.reserve(701).unwrap();
+        let other_pid = coordinator.reserve(702).unwrap();
+        let duplicate = coordinator.reserve(701).unwrap_err();
+        assert_eq!(duplicate.code, "TARGET_OPERATION_IN_PROGRESS");
+
+        drop(first);
+        let replacement = coordinator.reserve(701).unwrap();
+        drop(replacement);
+        drop(other_pid);
+        assert!(coordinator.target_pids.lock().unwrap().is_empty());
+
+        let reservations = (1..=MAX_CONCURRENT_TARGET_OPERATIONS as u32)
+            .map(|pid| coordinator.reserve(pid).unwrap())
+            .collect::<Vec<_>>();
+        let limit = coordinator.reserve(999).unwrap_err();
+        assert_eq!(limit.code, "TARGET_OPERATION_LIMIT_REACHED");
+        drop(reservations);
+        assert!(coordinator.target_pids.lock().unwrap().is_empty());
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(windows)]
+    let builder = builder
+        .manage(Arc::new(SessionManager::new()))
+        .manage(Arc::new(TargetOperationCoordinator::default()))
+        .manage(Arc::new(EventBridgeManager::new()));
+
+    builder
         .invoke_handler(tauri::generate_handler![
             scan_ue_processes,
-            inject_dll,
+            inject_and_connect,
+            session_diagnostics,
+            activate_session,
+            subscribe_session_events,
+            unsubscribe_session_events,
+            event_bridge_diagnostics,
+            disconnect_session,
             save_connection_settings,
-            load_runtime_endpoint,
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {
-                // Debug app.exe depends on devUrl; if local Vite is not running,
-                // fallback to embedded assets to avoid browser error page.
-                if !is_dev_server_running() {
-                    if let Some(window) = app.get_webview_window("main") {
-                        if let Ok(url) = tauri::Url::parse("tauri://localhost/index.html") {
-                            let _ = window.navigate(url);
-                        }
-                    }
-                }
-
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
                         .level(log::LevelFilter::Info)

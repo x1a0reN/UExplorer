@@ -302,8 +302,8 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
       <ProcessSelector
         isOpen={showProcessSelector}
         onClose={() => setShowProcessSelector(false)}
-        onDllLoaded={(pid) => {
-          console.log('DLL load confirmed; waiting for IPC/Core readiness, PID:', pid);
+        onCoreReady={(pid) => {
+          console.log('PID-scoped Pipe connected and Core Ready validated, PID:', pid);
         }}
       />
     </div>

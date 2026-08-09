@@ -27,6 +27,7 @@ const EVENT_FORWARD_WAIT: Duration = Duration::from_millis(50);
 const WORKER_CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_SNAPSHOT_RESTARTS: usize = 3;
 const MAX_SNAPSHOT_PAGE_REQUESTS: usize = MAX_SNAPSHOT_SOURCE_OBJECTS as usize + 1;
+const MAX_PROCESS_PATH_BYTES: usize = 32_768;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -38,6 +39,53 @@ pub enum SessionPhase {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct TargetProcessIdentity {
+    pid: u32,
+    start_time_100ns: String,
+    process_path: String,
+}
+
+impl TargetProcessIdentity {
+    pub fn new(
+        pid: u32,
+        start_time_100ns: u64,
+        process_path: impl Into<String>,
+    ) -> Result<Self, SessionManagerError> {
+        let process_path = process_path.into();
+        if pid == 0 || start_time_100ns == 0 {
+            return Err(SessionManagerError::InvalidConfiguration(
+                "target process identity requires positive PID and start time",
+            ));
+        }
+        if process_path.is_empty()
+            || process_path.len() > MAX_PROCESS_PATH_BYTES
+            || process_path.chars().any(char::is_control)
+        {
+            return Err(SessionManagerError::InvalidConfiguration(
+                "target process path is empty, oversized, or contains control characters",
+            ));
+        }
+        Ok(Self {
+            pid,
+            start_time_100ns: start_time_100ns.to_string(),
+            process_path,
+        })
+    }
+
+    pub fn pid(&self) -> u32 {
+        self.pid
+    }
+
+    pub fn start_time_100ns(&self) -> &str {
+        &self.start_time_100ns
+    }
+
+    pub fn process_path(&self) -> &str {
+        &self.process_path
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct SessionFailure {
     pub code: String,
     pub message: String,
@@ -46,6 +94,8 @@ pub struct SessionFailure {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ManagedSessionDiagnostics {
     pub target_pid: u32,
+    pub target_start_time_100ns: String,
+    pub target_process_path: String,
     pub phase: SessionPhase,
     pub failure: Option<SessionFailure>,
     pub pipe_name: String,
@@ -236,7 +286,7 @@ struct SessionPhaseState {
 }
 
 pub struct ManagedSession {
-    target_pid: u32,
+    target: TargetProcessIdentity,
     client: Arc<dyn RpcTransport>,
     client_identity: CoreRpcClientDiagnostics,
     event_hub: EventHub,
@@ -249,9 +299,10 @@ pub struct ManagedSession {
 
 impl ManagedSession {
     fn new(
-        target_pid: u32,
+        target: TargetProcessIdentity,
         client: Arc<dyn RpcTransport>,
     ) -> Result<Arc<Self>, SessionManagerError> {
+        let target_pid = target.pid();
         let identity = client.diagnostics();
         if identity.target_pid != target_pid
             || identity.server_pid != target_pid
@@ -291,7 +342,7 @@ impl ManagedSession {
             })?;
 
         Ok(Arc::new(Self {
-            target_pid,
+            target,
             client,
             client_identity: identity,
             event_hub,
@@ -304,7 +355,11 @@ impl ManagedSession {
     }
 
     pub fn target_pid(&self) -> u32 {
-        self.target_pid
+        self.target.pid()
+    }
+
+    pub fn target_identity(&self) -> &TargetProcessIdentity {
+        &self.target
     }
 
     pub fn session_id(&self) -> &str {
@@ -457,7 +512,9 @@ impl ManagedSession {
         let event_hub = self.event_hub.diagnostics()?;
         let snapshot = self.snapshot_cache.current()?;
         Ok(ManagedSessionDiagnostics {
-            target_pid: self.target_pid,
+            target_pid: self.target.pid(),
+            target_start_time_100ns: self.target.start_time_100ns().to_string(),
+            target_process_path: self.target.process_path().to_string(),
             phase: phase.phase,
             failure: phase.failure.clone(),
             pipe_name: transport.pipe_name,
@@ -475,6 +532,19 @@ impl ManagedSession {
     }
 
     fn close(&self, reason: &str, timeout: Duration) -> Result<(), SessionManagerError> {
+        self.close_internal(reason, timeout, true)
+    }
+
+    fn abort_transport(&self, timeout: Duration) -> Result<(), SessionManagerError> {
+        self.close_internal("transport_abort", timeout, false)
+    }
+
+    fn close_internal(
+        &self,
+        reason: &str,
+        timeout: Duration,
+        graceful: bool,
+    ) -> Result<(), SessionManagerError> {
         if timeout.is_zero() {
             return Err(SessionManagerError::InvalidConfiguration(
                 "session close timeout must be positive",
@@ -485,7 +555,7 @@ impl ManagedSession {
             match phase.phase {
                 SessionPhase::Ready => {
                     phase.phase = SessionPhase::Closing;
-                    true
+                    graceful
                 }
                 SessionPhase::Failed => {
                     phase.phase = SessionPhase::Closing;
@@ -493,7 +563,7 @@ impl ManagedSession {
                 }
                 SessionPhase::Closing | SessionPhase::Closed => {
                     return Err(SessionManagerError::SessionNotReady {
-                        pid: self.target_pid,
+                        pid: self.target.pid(),
                         phase: phase.phase,
                     })
                 }
@@ -541,7 +611,7 @@ impl ManagedSession {
         let phase = lock(&self.phase, "session phase")?;
         if phase.phase != SessionPhase::Ready {
             return Err(SessionManagerError::SessionNotReady {
-                pid: self.target_pid,
+                pid: self.target.pid(),
                 phase: phase.phase,
             });
         }
@@ -616,15 +686,16 @@ impl SessionManager {
 
     pub fn connect(
         &self,
-        target_pid: u32,
+        target: TargetProcessIdentity,
         host_version: impl Into<String>,
         timeout: Duration,
     ) -> Result<Arc<ManagedSession>, SessionManagerError> {
+        let target_pid = target.pid();
         self.reserve_connection(target_pid)?;
         let result = CoreRpcClient::connect(target_pid, host_version, timeout)
             .map(|client| Arc::new(client) as Arc<dyn RpcTransport>)
             .map_err(SessionManagerError::from)
-            .and_then(|client| ManagedSession::new(target_pid, client));
+            .and_then(|client| ManagedSession::new(target, client));
         self.finish_connection(target_pid, result)
     }
 
@@ -662,6 +733,27 @@ impl SessionManager {
     ) -> Result<(), SessionManagerError> {
         let session = self.get(target_pid)?;
         let result = session.close(reason, timeout);
+        let mut state = lock(&self.state, "session manager")?;
+        if state
+            .sessions
+            .get(&target_pid)
+            .is_some_and(|current| Arc::ptr_eq(current, &session))
+        {
+            state.sessions.remove(&target_pid);
+        }
+        if state.active_pid == Some(target_pid) {
+            state.active_pid = state.sessions.keys().next().copied();
+        }
+        result
+    }
+
+    pub fn abort_connection(
+        &self,
+        target_pid: u32,
+        timeout: Duration,
+    ) -> Result<(), SessionManagerError> {
+        let session = self.get(target_pid)?;
+        let result = session.abort_transport(timeout);
         let mut state = lock(&self.state, "session manager")?;
         if state
             .sessions
@@ -740,8 +832,13 @@ impl SessionManager {
         target_pid: u32,
         client: Arc<dyn RpcTransport>,
     ) -> Result<Arc<ManagedSession>, SessionManagerError> {
+        let target = TargetProcessIdentity::new(
+            target_pid,
+            u64::from(target_pid) + 1,
+            format!(r"C:\Fixture\Target-{target_pid}.exe"),
+        )?;
         self.reserve_connection(target_pid)?;
-        self.finish_connection(target_pid, ManagedSession::new(target_pid, client))
+        self.finish_connection(target_pid, ManagedSession::new(target, client))
     }
 }
 
@@ -1068,6 +1165,36 @@ mod tests {
             .disconnect(101, "test_close", Duration::from_secs(1))
             .unwrap();
         assert!(manager.active().unwrap().is_none());
+    }
+
+    #[test]
+    fn transport_abort_never_sends_shutdown_to_an_untrusted_pid_identity() {
+        let manager = SessionManager::new();
+        let transport = FakeTransport::new(727, "session-727", vec![]);
+        manager
+            .attach_transport(727, Arc::clone(&transport) as Arc<dyn RpcTransport>)
+            .unwrap();
+
+        manager
+            .abort_connection(727, Duration::from_secs(1))
+            .unwrap();
+        assert!(transport.disconnected.load(Ordering::Acquire));
+        assert!(!transport.shutdown_called.load(Ordering::Acquire));
+        assert!(matches!(
+            manager.get(727),
+            Err(SessionManagerError::SessionNotFound(727))
+        ));
+    }
+
+    #[test]
+    fn target_process_identity_keeps_start_time_out_of_json_number_space() {
+        let identity =
+            TargetProcessIdentity::new(77, u64::MAX, r"C:\Fixture\Target-77.exe".to_string())
+                .unwrap();
+        let serialized = serde_json::to_value(identity).unwrap();
+        assert_eq!(serialized["pid"], 77);
+        assert_eq!(serialized["start_time_100ns"], u64::MAX.to_string());
+        assert_eq!(serialized["process_path"], r"C:\Fixture\Target-77.exe");
     }
 
     #[test]

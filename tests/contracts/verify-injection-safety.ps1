@@ -12,7 +12,9 @@ $selector = Get-Content -LiteralPath $selectorPath -Raw -Encoding UTF8
 $forbiddenRust = @(
     'PROCESS_ALL_ACCESS',
     'CREATE_SUSPENDED',
-    'ResumeThread'
+    'ResumeThread',
+    'load_runtime_endpoint',
+    'runtime.ini'
 )
 foreach ($token in $forbiddenRust) {
     if ($rust.Contains($token)) {
@@ -31,7 +33,24 @@ $requiredRust = @(
     'WAIT_TIMEOUT',
     'DLL_MODULE_NOT_FOUND',
     'PROCESS_IDENTITY_MISMATCH',
-    'TARGET_ARCH_MISMATCH'
+    'TARGET_ARCH_MISMATCH',
+    'async fn inject_and_connect',
+    'State<''_, Arc<SessionManager>>',
+    'State<''_, Arc<TargetOperationCoordinator>>',
+    'MAX_CONCURRENT_TARGET_OPERATIONS: usize = 16',
+    'TARGET_OPERATION_IN_PROGRESS',
+    'spawn_blocking',
+    'validated_target_identity',
+    '"post_load_identity"',
+    '"post_connect_identity"',
+    'manager.connect(',
+    'PipeConnectionState',
+    'CoreReadinessState',
+    '.manage(Arc::new(SessionManager::new()))',
+    '.manage(Arc::new(TargetOperationCoordinator::default()))',
+    'injection_result_serializes_independent_stage_states',
+    'injection_admission_is_pid_scoped_and_released_by_raii',
+    'session_connection_failures_have_stable_stage_classification'
 )
 foreach ($token in $requiredRust) {
     if (-not $rust.Contains($token)) {
@@ -52,12 +71,32 @@ foreach ($token in @('persistConnectionSettings', 'tryAdoptRuntimeEndpoint', 'se
         throw "Injection must not imply Core readiness through '$token'"
     }
 }
+foreach ($token in @('inject_and_connect', 'expectedStartTime100ns', 'expectedProcessPath')) {
+    if (-not $injectMethod.Value.Contains($token)) {
+        throw "Injection frontend contract is missing '$token'"
+    }
+}
+foreach ($token in @('tryAdoptRuntimeEndpoint', 'load_runtime_endpoint', 'endpointRecovering')) {
+    if ($api.Contains($token)) {
+        throw "Frontend reintroduced implicit endpoint fallback '$token'"
+    }
+}
 
 if ($selector.Contains('isUEProcessCandidate')) {
     throw 'React must not maintain a second hidden UE process filter'
 }
-if ($selector.Contains('onInjectSuccess')) {
-    throw 'The UI must distinguish DLL loaded from Core ready'
+foreach ($token in @(
+        "result.status === 'ready'", "result.pipe === 'connected'",
+        "result.core === 'ready'", "result.session?.target_pid === selectedProcess.pid",
+        "result.session.phase === 'ready'", 'onCoreReady')) {
+    if (-not $selector.Contains($token)) {
+        throw "The UI readiness gate is missing '$token'"
+    }
+}
+foreach ($token in @('onInjectSuccess', 'onDllLoaded')) {
+    if ($selector.Contains($token)) {
+        throw "The UI must not report readiness through legacy callback '$token'"
+    }
 }
 
-Write-Host 'Injection safety contract verified: identity, architecture, permissions, wait/exit, cleanup, and UI readiness are explicit.'
+Write-Host 'Injection safety contract verified: identity, architecture, permissions, wait/exit, cleanup, managed Pipe/Core readiness, and UI gating are explicit.'

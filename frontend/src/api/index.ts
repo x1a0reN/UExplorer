@@ -30,10 +30,68 @@ export interface HostProcessInfo {
 
 export interface InjectionCommandResult {
   success: boolean;
-  status: 'dll_loaded' | 'already_loaded' | 'failed';
+  status: 'ready' | 'failed';
   stage: string;
   code: string;
   message: string;
+  dll: 'not_attempted' | 'loaded' | 'already_loaded' | 'failed';
+  pipe: 'not_attempted' | 'connected' | 'failed' | 'rejected';
+  core: 'not_checked' | 'ready' | 'failed';
+  session?: {
+    target_pid: number;
+    target_start_time_100ns: string;
+    target_process_path: string;
+    phase: 'ready' | 'closing' | 'closed' | 'failed';
+    core_session_id: string;
+    capabilities: Record<string, boolean>;
+  } | null;
+}
+
+export interface HostEventPayload {
+  seq: number;
+  kind: string;
+  timestamp_us: number;
+  session_id: string;
+  dropped_before: number;
+  data: unknown;
+}
+
+export interface HostSessionEvent {
+  event: HostEventPayload;
+  host_dropped_before: number;
+}
+
+export interface SessionEventFilter {
+  kinds?: string[];
+  watch_ids?: string[];
+  hook_names?: string[];
+}
+
+export interface EventBridgeFailure {
+  code: string;
+  message: string;
+}
+
+export interface EventBridgeDiagnostics {
+  bridge_id: number;
+  target_pid: number;
+  source_subscription_id: number;
+  delivered_events: number;
+  stopping: boolean;
+  finished: boolean;
+  failure: EventBridgeFailure | null;
+}
+
+export interface SessionEventSubscribeOptions {
+  filter?: SessionEventFilter;
+  replayAfterSeq?: number | null;
+  capacity?: number;
+  onEvent: (event: HostSessionEvent) => void;
+}
+
+export interface SessionEventSubscription {
+  diagnostics: EventBridgeDiagnostics;
+  unsubscribe: () => Promise<boolean>;
 }
 
 export interface StatusData {
@@ -457,13 +515,6 @@ export interface DumpJob {
   error?: string;
 }
 
-export interface RuntimeEndpoint {
-  pid: number;
-  port: number;
-  token: string;
-  running: boolean;
-}
-
 const DEFAULT_SETTINGS: ApiClientSettings = {
   port: DEFAULT_PORT,
   token: DEFAULT_TOKEN,
@@ -519,14 +570,12 @@ class UExplorerApi {
   private baseUrl: string;
   private token: string;
   private settings: ApiClientSettings;
-  private endpointRecovering = false;
 
   constructor() {
     this.settings = readSettings();
     this.baseUrl = `http://127.0.0.1:${this.settings.port}/api/v1`;
     this.token = this.settings.token;
     void this.persistConnectionSettings();
-    void this.tryAdoptRuntimeEndpoint();
   }
 
   getSettings() {
@@ -552,45 +601,6 @@ class UExplorerApi {
       console.error('Failed to persist connection settings:', error);
       return false;
     }
-  }
-
-  private applyEndpoint(port: number, token: string) {
-    if (!Number.isFinite(port) || port <= 0 || port > 65535) return;
-    if (!token) return;
-
-    this.settings = { ...this.settings, port, token };
-    this.baseUrl = `http://127.0.0.1:${port}/api/v1`;
-    this.token = token;
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify(this.settings));
-  }
-
-  async tryAdoptRuntimeEndpoint(expectedPid?: number): Promise<boolean> {
-    if (this.endpointRecovering) return false;
-    this.endpointRecovering = true;
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      const runtime = await invoke<RuntimeEndpoint | null>('load_runtime_endpoint');
-      if (!runtime || !runtime.running) return false;
-      if (expectedPid !== undefined && runtime.pid > 0 && runtime.pid !== expectedPid) return false;
-      this.applyEndpoint(runtime.port, runtime.token);
-      return true;
-    } catch (error) {
-      console.error('Failed to load runtime endpoint:', error);
-      return false;
-    } finally {
-      this.endpointRecovering = false;
-    }
-  }
-
-  private shouldAttemptEndpointRecovery(error: string | null) {
-    if (!error) return false;
-    const msg = error.toLowerCase();
-    return (
-      msg.includes('network error') ||
-      msg.includes('failed to fetch') ||
-      msg.includes('http 401') ||
-      msg.includes('unauthorized')
-    );
   }
 
   private async request<T>(endpoint: string, options: RequestInit = {}): Promise<ApiResponse<T>> {
@@ -639,14 +649,7 @@ class UExplorerApi {
       }
     };
 
-    let result = await execute();
-    if (!result.success && this.shouldAttemptEndpointRecovery(result.error)) {
-      const recovered = await this.tryAdoptRuntimeEndpoint();
-      if (recovered) {
-        result = await execute();
-      }
-    }
-    return result;
+    return execute();
   }
 
   // Status
@@ -1140,12 +1143,54 @@ class UExplorerApi {
 
   async injectDLL(process: HostProcessInfo, dllPath: string): Promise<InjectionCommandResult> {
     const { invoke } = await import('@tauri-apps/api/core');
-    return invoke<InjectionCommandResult>('inject_dll', {
+    return invoke<InjectionCommandResult>('inject_and_connect', {
       pid: process.pid,
       dllPath,
       expectedStartTime100ns: process.start_time_100ns,
       expectedProcessPath: process.path,
     });
+  }
+
+  async subscribeSessionEvents(
+    pid: number,
+    options: SessionEventSubscribeOptions,
+  ): Promise<SessionEventSubscription> {
+    const { Channel, invoke } = await import('@tauri-apps/api/core');
+    const channel = new Channel<HostSessionEvent>();
+    channel.onmessage = options.onEvent;
+    const diagnostics = await invoke<EventBridgeDiagnostics>('subscribe_session_events', {
+      pid,
+      filter: options.filter ?? {},
+      replayAfterSeq: options.replayAfterSeq ?? null,
+      capacity: options.capacity ?? 256,
+      onEvent: channel,
+    });
+    let subscribed = true;
+
+    return {
+      diagnostics,
+      unsubscribe: async () => {
+        if (!subscribed) return true;
+        const removed = await invoke<boolean>('unsubscribe_session_events', {
+          bridgeId: diagnostics.bridge_id,
+        });
+        if (removed) {
+          subscribed = false;
+          channel.onmessage = () => undefined;
+        }
+        return removed;
+      },
+    };
+  }
+
+  async getEventBridgeDiagnostics(): Promise<EventBridgeDiagnostics[]> {
+    const { invoke } = await import('@tauri-apps/api/core');
+    return invoke<EventBridgeDiagnostics[]>('event_bridge_diagnostics');
+  }
+
+  async disconnectSession(pid: number, reason: string): Promise<boolean> {
+    const { invoke } = await import('@tauri-apps/api/core');
+    return invoke<boolean>('disconnect_session', { pid, reason });
   }
 }
 

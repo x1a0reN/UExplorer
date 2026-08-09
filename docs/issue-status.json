@@ -102,7 +102,8 @@
         "2026-08-09: Host CoreRpcSession rejects duplicate/decreasing event sequence, decreasing drop counters, non-uint53 metadata, and sequence gaps not accounted for by increased Core drops",
         "2026-08-09: real Pipe event reader accepts an Event immediately after Welcome; its 1024-item nonblocking inbox records overflow, attaches the cumulative transport-drop snapshot to the next delivered event, and keeps RPC responsive",
         "2026-08-09: Host EventHub has a 1024-event replay window, 64 KiB per-event cap, shared Arc payloads, at most 64 independently bounded subscribers, nonblocking fan-out, combined transport/subscriber Host drop diagnostics, and exact kind/watch_id/hook_name filters",
-        "Real Core Watch/Hook event producers and the Tauri event adapter remain pending"
+        "2026-08-09: EventBridgeManager adapts filtered/replayable EventHub subscriptions to caller-owned Tauri Channels with a 64-bridge cap, joinable workers, delivery-failure diagnostics, PID-scoped teardown, and no detached survivor after panic",
+        "Real Core Watch/Hook event producers remain pending"
       ]
     },
     "INJ-001": {
@@ -139,11 +140,13 @@
     "INJ-005": {
       "status": "in_progress",
       "verification": [
-        "2026-08-09: dll_loaded/already_loaded/failed are explicit; frontend no longer closes, adopts runtime.ini, or reports Core ready after DLL load",
+        "2026-08-09: inject_and_connect returns independent dll/pipe/core stages and only publishes ready after a validated managed session; already_loaded is not success by itself",
         "2026-08-09: Core now binds its PID-scoped Pipe and opens admissions only after factual CoreRuntime/PostRender readiness",
         "2026-08-09: CoreRpcClient now returns only after exact Welcome/Ready validation and exposes immutable peer/readiness diagnostics",
-        "2026-08-09: SessionManager now has an exclusive PID connection reservation and creates a managed session only after CoreRpcClient returns a validated Welcome",
-        "The injection Tauri command still needs to invoke SessionManager with a bounded connected + Ready wait before this issue can close"
+        "2026-08-09: SessionManager is Tauri managed state; injection uses a bounded 15-second connected/Ready wait and validates PID/start-time/path after DLL load and again after Ready",
+        "2026-08-09: a PID-scoped RAII TargetOperationCoordinator rejects concurrent duplicate LoadLibrary operations before preflight, serializes disconnect against readiness publication, and bounds global target work at 16 operations",
+        "2026-08-09: React calls onCoreReady only for exact ready + connected + matching-PID session diagnostics and no longer reads runtime.ini or performs endpoint recovery",
+        "Live successful, timeout, PID-reuse, wrong-architecture, and already-loaded fixtures remain pending before closure"
       ]
     },
     "INJ-006": {
@@ -151,6 +154,14 @@
       "verification": [
         "2026-08-09: frontend/src-tauri/src/inject_dll.ps1 now terminates with LEGACY_INJECTOR_DISABLED",
         "PROJECT_MAP records it as historical evidence and not a fallback"
+      ]
+    },
+    "LIFE-009": {
+      "status": "in_progress",
+      "verification": [
+        "2026-08-09: Rust Host now requires a non-empty LOCALAPPDATA and returns LOCALAPPDATA_UNAVAILABLE instead of writing configuration under the current directory/temp",
+        "2026-08-09: the debug app no longer probes Vite and silently navigates to embedded assets when the configured devUrl is unavailable",
+        "Core configuration directory creation and write-result propagation remain pending"
       ]
     },
     "PROC-001": {
@@ -604,6 +615,22 @@
       "status": "verified",
       "verification": [
         "2026-08-09: Stop is the single listener/WSA cleanup owner and joins the accept thread and every client worker"
+      ]
+    },
+    "UI-003": {
+      "status": "in_progress",
+      "verification": [
+        "2026-08-09: runtime.ini loading, endpoint recovery, automatic endpoint replacement, and retry-after-network/auth-error were removed from the frontend",
+        "2026-08-09: inject_and_connect and event subscriptions are explicitly PID/session scoped",
+        "Remaining desktop domain requests still use the legacy HTTP adapter until the atomic R4 cutover"
+      ]
+    },
+    "UI-004": {
+      "status": "in_progress",
+      "verification": [
+        "2026-08-09: SessionManager and EventBridgeManager are Tauri managed state and caller-owned Channels subscribe only after a Ready session exists",
+        "2026-08-09: disconnect stops and joins every bridge for the selected PID before closing the Core session",
+        "Legacy page-level SSE/WebSocket consumers remain until the R4/R6 frontend cutover"
       ]
     },
     "UI-006": {
