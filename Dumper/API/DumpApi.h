@@ -5,5 +5,5 @@
 namespace UExplorer::API
 {
 void RegisterDumpRoutes(HttpServer& server);
-void ShutdownDumpJobs();
+bool ShutdownDumpJobs(int timeoutMs = 5000);
 } // namespace UExplorer::API

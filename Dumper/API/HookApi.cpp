@@ -82,6 +82,7 @@ static std::atomic<uint32_t> g_PostRenderCallbacksInFlight{ 0 };
 static std::atomic<bool> g_HookShutdownRequested{ false };
 static std::mutex g_CallbackDrainMutex;
 static std::condition_variable g_CallbackDrainCV;
+static constexpr bool kLegacyHookMonitoringEnabled = false;
 
 typedef void(*PostRenderFn)(void*, void*);
 typedef void(*ProcessEventFn)(void*, void*, void*);
@@ -834,6 +835,8 @@ static bool ResolveHookIdFromRequest(const HttpRequest& req, int& outId)
 void RegisterHookRoutes(HttpServer& server)
 {
 	server.Post("/api/v1/hooks/add", [](const HttpRequest& req) -> HttpResponse {
+		if (!kLegacyHookMonitoringEnabled)
+			return { 409, "application/json", MakeError("HOOK_MONITORING_UNAVAILABLE: bounded non-blocking collector is not active") };
 		try {
 			json body = json::parse(req.Body);
 			std::string functionPath = body.value("function_path", "");
@@ -860,6 +863,8 @@ void RegisterHookRoutes(HttpServer& server)
 	});
 
 	server.Delete("/api/v1/hooks/:id", [](const HttpRequest& req) -> HttpResponse {
+		if (!kLegacyHookMonitoringEnabled)
+			return { 409, "application/json", MakeError("HOOK_MONITORING_UNAVAILABLE: bounded non-blocking collector is not active") };
 		try {
 			int id = 0;
 			if (!ResolveHookIdFromRequest(req, id))
@@ -877,6 +882,8 @@ void RegisterHookRoutes(HttpServer& server)
 	});
 
 	server.Patch("/api/v1/hooks/:id", [](const HttpRequest& req) -> HttpResponse {
+		if (!kLegacyHookMonitoringEnabled)
+			return { 409, "application/json", MakeError("HOOK_MONITORING_UNAVAILABLE: bounded non-blocking collector is not active") };
 		try {
 			int id = 0;
 			if (!ResolveHookIdFromRequest(req, id))
@@ -901,7 +908,18 @@ void RegisterHookRoutes(HttpServer& server)
 		}
 	});
 
-	server.Get("/api/v1/hooks/list", [](const HttpRequest&) -> HttpResponse {
+	server.Get("/api/v1/hooks/list", [](const HttpRequest& req) -> HttpResponse {
+		if (!kLegacyHookMonitoringEnabled)
+		{
+			json data;
+			data["hooks"] = json::array();
+			data["available"] = false;
+			data["reason"] = "BOUNDED_COLLECTOR_NOT_ACTIVE";
+			data["postrender_vtable_hook_installed"] = g_PostRenderHookInstalled;
+			data["pe_vtable_hook_installed"] = false;
+			data["game_thread_enabled"] = GameThread::IsEnabled();
+			return { 200, "application/json", MakeResponse(data) };
+		}
 		json data;
 		json hooks = json::array();
 
@@ -931,6 +949,8 @@ void RegisterHookRoutes(HttpServer& server)
 	});
 
 	server.Get("/api/v1/hooks/:id/log", [](const HttpRequest& req) -> HttpResponse {
+		if (!kLegacyHookMonitoringEnabled)
+			return { 409, "application/json", MakeError("HOOK_MONITORING_UNAVAILABLE: bounded non-blocking collector is not active") };
 		try {
 			int id = 0;
 			if (!ResolveHookIdFromRequest(req, id))

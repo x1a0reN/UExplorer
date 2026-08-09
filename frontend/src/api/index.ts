@@ -986,10 +986,10 @@ class UExplorerApi {
   }
 
   // Dump
-  async startDump(type: DumpType, options: Record<string, unknown> = {}): Promise<ApiResponse<{ job_id: string; message: string }>> {
+  async startDump(type: DumpType): Promise<ApiResponse<{ job_id: string; message: string }>> {
     return this.request(`/dump/${type}`, {
       method: 'POST',
-      body: JSON.stringify(options),
+      body: '{}',
     });
   }
 

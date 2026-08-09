@@ -48,6 +48,8 @@ React -> Tauri invoke/event -> Rust Host -> Windows Named Pipe RPC -> Core DLL -
 - 临时 HTTP Server 不再创建 detached worker。接纳计数在建线程前原子保留，所有 worker 和 socket 有 owner；`Stop()` 中断慢连接并 join 全部线程后才允许析构，监听端口严格按配置 bind，不尝试替代端口，所有写入统一走 `SendAll`。
 - raw memory write 现在校验范围、`VirtualProtect`、SEH 写入和保护恢复；运行中 reconnect、raw Actor transform write、旧 Watch 和假 WebSocket Console 均明确返回 unavailable，前端也不再呈现其为已连接/实时功能。
 - USMAP 当前明确使用 `None` 压缩标记并写入等长原始 payload，检查 size/open/write/flush；这修复了“Zstd 标记 + 未压缩载荷”的确定性损坏，但在独立 consumer fixture 通过前仍不标记为 verified。
+- Dump 启动改为单一显式线程 owner；运行中第二个任务返回 `DUMP_EXECUTOR_BUSY`，关闭等待有 5 秒边界，超时则拒绝 DLL 卸载并继续持有线程。旧 API 对任何非空 option 返回 `DUMP_OPTIONS_UNAVAILABLE`，UI 已移除未生效选项和伪 60% 进度，真实取消/阶段进度留待 R5 DumpService。
+- 旧 Hook monitoring 仍含锁、JSON 和网络热路径，因此当前 capability 被硬关闭，前端无可达入口；只有无监控逻辑的 PostRender game-thread pump 保留。它必须等 R5 的预分配有界 collector、drop 指标和 Host EventHub 完成后才能重新开放。
 - `CoreHarness` 已覆盖 framing、1-byte 分片、队列背压、GameThread 所有权/超时/取消/SEH、64 生产者容量、1000 次 HTTP connect/disconnect、占用端口无 fallback 和慢客户端 shutdown。`tests/contracts/verify-core-safety.ps1` 固化静态不变量。
 
 本阶段最新本地证据：VS2026 `Release|x64` Core 与 harness 构建通过，Core harness 通过，`npm run lint` 通过。真实 UE 目标的 Hook 恢复、注入超时和 USMAP consumer 仍是明确未执行项，不能用本地 harness 代替。

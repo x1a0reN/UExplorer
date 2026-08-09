@@ -22,11 +22,6 @@ function getFormats(): DumpFormat[] {
 export default function SDKDump() {
   const formats = getFormats();
   const [activeFormat, setActiveFormat] = useState<DumpType>('sdk');
-  const [includePackages, setIncludePackages] = useState('');
-  const [excludePackages, setExcludePackages] = useState('');
-  const [includeBlueprint, setIncludeBlueprint] = useState(true);
-  const [paddingStyle, setPaddingStyle] = useState('char pad_01[0xN]');
-  const [staticAssert, setStaticAssert] = useState(true);
 
   const [jobs, setJobs] = useState<DumpJob[]>([]);
   const [runningJobId, setRunningJobId] = useState<string | null>(null);
@@ -75,18 +70,10 @@ export default function SDKDump() {
 
   const runningJob = sortedJobs.find((j) => j.id === runningJobId) || sortedJobs.find((j) => j.status === 'running') || null;
 
-  const buildOptions = () => ({
-    include_packages: includePackages,
-    exclude_packages: excludePackages,
-    include_blueprint: includeBlueprint,
-    padding_style: paddingStyle,
-    static_assert: staticAssert,
-  });
-
   const startGenerate = async (format: DumpType = activeFormat) => {
     setBusy(true);
     setError(null);
-    const res = await api.startDump(format, buildOptions());
+    const res = await api.startDump(format);
     setBusy(false);
 
     if (!res.success || !res.data) {
@@ -141,61 +128,10 @@ export default function SDKDump() {
           ))}
         </div>
 
-        <div className="bg-surface-dark border border-border-subtle rounded-xl p-6 mb-8 space-y-5">
+        <div className="bg-surface-dark border border-border-subtle rounded-xl p-6 mb-8">
           <h3 className="text-sm font-semibold text-text-high font-display">{t('Export Configuration')}</h3>
-
-          <div className="grid grid-cols-2 gap-8">
-            <div className="space-y-4">
-              <div>
-                <label className="text-[10px] font-bold text-text-low uppercase tracking-widest block mb-1.5 font-display">{t('Include Packages')}</label>
-                <input
-                  type="text"
-                  value={includePackages}
-                  onChange={(e) => setIncludePackages(e.target.value)}
-                  placeholder="Engine, CoreUObject"
-                  className="w-full bg-background-base border border-border-subtle text-text-high text-xs rounded-lg px-3 py-2 outline-none focus:border-primary font-mono placeholder:text-text-low/50"
-                />
-              </div>
-              <div>
-                <label className="text-[10px] font-bold text-text-low uppercase tracking-widest block mb-1.5 font-display">{t('Exclude Packages')}</label>
-                <input
-                  type="text"
-                  value={excludePackages}
-                  onChange={(e) => setExcludePackages(e.target.value)}
-                  placeholder="Temp, Dev"
-                  className="w-full bg-background-base border border-border-subtle text-text-high text-xs rounded-lg px-3 py-2 outline-none focus:border-primary font-mono placeholder:text-text-low/50"
-                />
-              </div>
-            </div>
-
-            <div className="space-y-4">
-              <ToggleRow
-                title={t('Include Blueprint Classes')}
-                subtitle={t('BlueprintGeneratedClass support')}
-                checked={includeBlueprint}
-                onChange={setIncludeBlueprint}
-              />
-              <ToggleRow
-                title={t('Static Asserts')}
-                subtitle={t('Generate offset/size assertions')}
-                checked={staticAssert}
-                onChange={setStaticAssert}
-              />
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-xs font-medium text-text-high mb-0.5 font-display">{t('Padding Style')}</div>
-                  <div className="text-[11px] text-text-low">{t('C++ unknown bytes style')}</div>
-                </div>
-                <select
-                  value={paddingStyle}
-                  onChange={(e) => setPaddingStyle(e.target.value)}
-                  className="bg-background-base border border-border-subtle text-text-high text-[11px] font-mono rounded-lg px-2 py-1 outline-none"
-                >
-                  <option>char pad_01[0xN]</option>
-                  <option>uint8 UnknownData_01[0xN]</option>
-                </select>
-              </div>
-            </div>
+          <div className="mt-3 rounded-lg border border-accent-yellow/20 bg-accent-yellow/5 p-3 text-xs text-text-mid font-display leading-relaxed">
+            {t('Per-format options are unavailable until the validated DumpService schema is active. Legacy requests accept no options.')}
           </div>
         </div>
 
@@ -231,9 +167,12 @@ export default function SDKDump() {
             <div className="h-2 rounded bg-surface-stripe overflow-hidden">
               <div
                 className={`h-full ${runningJob.status === 'running' ? 'bg-primary animate-pulse' : runningJob.status === 'completed' ? 'bg-accent-green' : 'bg-accent-red'}`}
-                style={{ width: runningJob.status === 'running' ? '60%' : '100%' }}
+                style={{ width: '100%' }}
               />
             </div>
+            {runningJob.status === 'running' && (
+              <div className="mt-2 text-[11px] text-text-low font-display">{t('Progress is indeterminate; no synthetic percentage is reported.')}</div>
+            )}
             <div className="mt-2 text-[11px] text-text-low font-mono">{t('Duration:')} {runningJob.duration_ms} ms</div>
           </div>
         )}
@@ -322,29 +261,3 @@ export default function SDKDump() {
     </div>
   );
 }
-
-function ToggleRow({
-  title,
-  subtitle,
-  checked,
-  onChange,
-}: {
-  title: string;
-  subtitle: string;
-  checked: boolean;
-  onChange: (v: boolean) => void;
-}) {
-  return (
-    <div className="flex items-center justify-between">
-      <div>
-        <div className="text-xs font-medium text-text-high mb-0.5 font-display">{title}</div>
-        <div className="text-[11px] text-text-low">{subtitle}</div>
-      </div>
-      <label className="relative inline-flex items-center cursor-pointer">
-        <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} className="sr-only peer" />
-        <div className="w-9 h-5 bg-background-base border border-border-subtle rounded-full peer peer-checked:bg-primary peer-checked:border-primary transition-colors after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-text-high after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full" />
-      </label>
-    </div>
-  );
-}
-

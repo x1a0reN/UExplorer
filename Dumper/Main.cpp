@@ -344,9 +344,9 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 	bool serverStopped = true;
 	if (g_Server)
 		serverStopped = g_Server->Stop();
-	UExplorer::API::ShutdownDumpJobs();
+	const bool dumpStopped = UExplorer::API::ShutdownDumpJobs();
 	const bool hooksStopped = UExplorer::API::ShutdownHooks();
-	unloadSafe = unloadSafe && serverStopped && hooksStopped;
+	unloadSafe = unloadSafe && serverStopped && dumpStopped && hooksStopped;
 	if (serverStopped)
 		g_Server.reset();
 	WriteRuntimeState(0, token, false);
@@ -354,6 +354,12 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 	if (!unloadSafe)
 	{
 		std::cerr << "[UExplorer] Shutdown could not prove all workers/hooks drained; DLL remains loaded.\n";
+		if (!dumpStopped)
+		{
+			std::cerr << "[UExplorer] Waiting for the non-cancellable dump worker before releasing its thread owner.\n";
+			while (!UExplorer::API::ShutdownDumpJobs(1000))
+				Sleep(100);
+		}
 		if (Dummy) fclose(Dummy);
 		FreeConsole();
 		return 1;

@@ -21,6 +21,7 @@ function Assert-NotContains([string]$text, [string]$token, [string]$message) {
 $gameThread = Read-ProjectFile 'Dumper\API\GameThreadQueue.h'
 $callApi = Read-ProjectFile 'Dumper\API\CallApi.cpp'
 $hookApi = Read-ProjectFile 'Dumper\API\HookApi.cpp'
+$dumpApi = Read-ProjectFile 'Dumper\API\DumpApi.cpp'
 $httpServer = Read-ProjectFile 'Dumper\Server\HttpServer.cpp'
 $main = Read-ProjectFile 'Dumper\Main.cpp'
 $mapping = Read-ProjectFile 'Dumper\Generator\Private\Generators\MappingGenerator.cpp'
@@ -28,6 +29,8 @@ $settings = Read-ProjectFile 'Dumper\Settings.h'
 $statusApi = Read-ProjectFile 'Dumper\API\StatusApi.cpp'
 $worldApi = Read-ProjectFile 'Dumper\API\WorldApi.cpp'
 $memoryPage = Read-ProjectFile 'frontend\src\pages\Memory.tsx'
+$functionsPage = Read-ProjectFile 'frontend\src\pages\Functions.tsx'
+$dumpPage = Read-ProjectFile 'frontend\src\pages\SDKDump.tsx'
 
 foreach ($token in @('std::deque<std::shared_ptr<CallTask>>', 'kQueueCapacity', 'Deadline',
         'TimedOutBeforeStart', 'TimedOutWhileRunning', '__try', 'DisableAndDrain')) {
@@ -41,7 +44,7 @@ foreach ($token in @('use_game_thread=false is disabled', 'INVALID_PARAM_SIZE', 
 Assert-NotContains $callApi 'params.resize(256)' 'Parameter buffer size must never be guessed.'
 
 foreach ($token in @('WaitForCallbacks', 'DisableAndDrain', 'unload is unsafe',
-        'ProcessEvent monitoring is installed lazily')) {
+        'ProcessEvent monitoring is installed lazily', 'kLegacyHookMonitoringEnabled = false')) {
     Assert-Contains $hookApi $token 'Hook lifecycle contract regressed.'
 }
 
@@ -68,5 +71,14 @@ Assert-Contains $statusApi 'RECONNECT_DISABLED' 'Unsafe global reconnect must re
 Assert-Contains $worldApi 'ACTOR_TRANSFORM_WRITE_DISABLED' 'Raw actor transform writes must remain disabled.'
 Assert-NotContains $memoryPage "connectWebSocket('/ws/console'" 'The fake WebSocket console must not be reachable from the UI.'
 Assert-NotContains $memoryPage "subscribeEventStream('/events/watches'" 'Polling-driven watches must not claim SSE real-time behavior.'
+Assert-Contains $functionsPage 'HOOK_MONITORING_AVAILABLE = false' 'Unsafe legacy Hook monitoring must remain capability-gated.'
+
+foreach ($token in @('DUMP_EXECUTOR_BUSY', 'DUMP_OPTIONS_UNAVAILABLE', 'g_DumpThread',
+        'g_DumpStoppedCV.wait_for')) {
+    Assert-Contains $dumpApi $token 'Dump executor safety contract regressed.'
+}
+Assert-NotContains $dumpApi 'g_DumpThreads' 'Dump jobs must have one explicit executor owner.'
+Assert-NotContains $dumpPage "'60%'" 'The UI must not report synthetic dump progress.'
+Assert-NotContains $dumpPage 'include_packages' 'Unsupported dump options must not remain interactive.'
 
 Write-Host 'Core safety contract verified: owned tasks, hook/server drain, exact bind, truthful unavailable features, and USMAP framing.'

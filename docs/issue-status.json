@@ -229,6 +229,32 @@
         "Independent USMAP consumer fixture remains pending"
       ]
     },
+    "DUMP-002": {
+      "status": "verified",
+      "verification": [
+        "2026-08-09: legacy dump routes reject every non-empty option object with DUMP_OPTIONS_UNAVAILABLE",
+        "SDKDump no longer renders or submits unsupported per-format controls"
+      ]
+    },
+    "DUMP-003": {
+      "status": "verified",
+      "verification": [
+        "2026-08-09: one owned dump thread replaces the vector cleanup that joined a running job from the request path"
+      ]
+    },
+    "DUMP-004": {
+      "status": "verified",
+      "verification": [
+        "2026-08-09: atomic single-executor admission returns DUMP_EXECUTOR_BUSY while generation is active"
+      ]
+    },
+    "DUMP-005": {
+      "status": "in_progress",
+      "verification": [
+        "2026-08-09: shutdown has a five-second bounded wait and refuses DLL unload if the generator remains active",
+        "Cooperative generator cancellation and real phase progress remain pending"
+      ]
+    },
     "WORLD-001": {
       "status": "verified",
       "verification": [
@@ -289,6 +315,13 @@
       "status": "verified",
       "verification": [
         "2026-08-09: fake WS console endpoint returns WS_CONSOLE_DISABLED; UI no longer connects to it or bypasses real local commands"
+      ]
+    },
+    "UI-013": {
+      "status": "in_progress",
+      "verification": [
+        "2026-08-09: synthetic 60 percent progress and unsupported dump controls removed; running state is explicitly indeterminate",
+        "Real phase progress and selected-detail event refresh remain pending"
       ]
     },
     "UI-016": {

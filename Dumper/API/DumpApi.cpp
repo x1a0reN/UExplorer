@@ -12,10 +12,9 @@
 #include <mutex>
 #include <thread>
 #include <atomic>
+#include <condition_variable>
 #include <unordered_map>
-#include <vector>
 #include <chrono>
-#include <algorithm>
 
 namespace UExplorer::API
 {
@@ -38,7 +37,10 @@ static std::unordered_map<std::string, DumpJob> g_Jobs;
 static std::atomic<int> g_JobCounter{ 0 };
 
 static std::mutex g_ThreadsMutex;
-static std::vector<std::thread> g_DumpThreads;
+static std::condition_variable g_DumpStoppedCV;
+static std::thread g_DumpThread;
+static std::atomic<bool> g_DumpRunning{ false };
+static std::atomic<bool> g_DumpAccepting{ true };
 
 static constexpr size_t kMaxRetainedJobs = 50;
 
@@ -90,9 +92,50 @@ static void PruneOldJobs()
 		g_Jobs.erase(oldestId);
 }
 
-template<typename GeneratorType>
-static std::string LaunchGeneratorJob(const std::string& format)
+struct DumpLaunchResult
 {
+	bool Started = false;
+	std::string JobId;
+	std::string Error;
+};
+
+class DumpRunningGuard
+{
+public:
+	~DumpRunningGuard()
+	{
+		g_DumpRunning.store(false, std::memory_order_release);
+		g_DumpStoppedCV.notify_all();
+	}
+};
+
+static void MarkJobFailedNoThrow(const std::string& jobId, const std::string& error) noexcept
+{
+	try
+	{
+		std::lock_guard<std::mutex> lock(g_JobsMutex);
+		auto it = g_Jobs.find(jobId);
+		if (it != g_Jobs.end())
+		{
+			it->second.Status = JobStatus::Failed;
+			it->second.EndTime = NowMs();
+			it->second.Error = error;
+		}
+	}
+	catch (...) {}
+}
+
+template<typename GeneratorType>
+static DumpLaunchResult LaunchGeneratorJob(const std::string& format)
+{
+	std::unique_lock<std::mutex> threadLock(g_ThreadsMutex);
+	if (!g_DumpAccepting.load(std::memory_order_acquire))
+		return { false, {}, "DUMP_EXECUTOR_STOPPING" };
+	if (g_DumpRunning.load(std::memory_order_acquire))
+		return { false, {}, "DUMP_EXECUTOR_BUSY" };
+	if (g_DumpThread.joinable())
+		g_DumpThread.join();
+
 	std::string jobId = MakeJobId();
 
 	DumpJob job;
@@ -107,95 +150,114 @@ static std::string LaunchGeneratorJob(const std::string& format)
 		g_Jobs[jobId] = job;
 	}
 
-	std::thread t([jobId]() {
+	g_DumpRunning.store(true, std::memory_order_release);
+	try
+	{
+		g_DumpThread = std::thread([jobId]() {
+		DumpRunningGuard runningGuard;
 		try {
 			Generator::Generate<GeneratorType>();
 
 			std::lock_guard<std::mutex> lock(g_JobsMutex);
-			auto& j = g_Jobs[jobId];
+			auto it = g_Jobs.find(jobId);
+			if (it == g_Jobs.end())
+				return;
+			auto& j = it->second;
 			j.Status = JobStatus::Completed;
 			j.EndTime = NowMs();
 			j.OutputPath = Generator::GetDumperFolder().string()
 				+ "/" + GeneratorType::MainFolderName;
 		}
 		catch (const std::exception& e) {
-			std::lock_guard<std::mutex> lock(g_JobsMutex);
-			auto& j = g_Jobs[jobId];
-			j.Status = JobStatus::Failed;
-			j.EndTime = NowMs();
-			j.Error = e.what();
+			MarkJobFailedNoThrow(jobId, e.what());
 		}
 		catch (...) {
-			std::lock_guard<std::mutex> lock(g_JobsMutex);
-			auto& j = g_Jobs[jobId];
-			j.Status = JobStatus::Failed;
-			j.EndTime = NowMs();
-			j.Error = "Unknown error";
+			MarkJobFailedNoThrow(jobId, "Unknown error");
 		}
-	});
-
+		});
+	}
+	catch (const std::exception& error)
 	{
-		std::lock_guard<std::mutex> lk(g_ThreadsMutex);
-		// Clean up finished threads
-		g_DumpThreads.erase(
-			std::remove_if(g_DumpThreads.begin(), g_DumpThreads.end(),
-				[](std::thread& th) {
-					if (th.joinable()) {
-						th.join();
-						return true;
-					}
-					return true;
-				}),
-			g_DumpThreads.end());
-		g_DumpThreads.push_back(std::move(t));
+		g_DumpRunning.store(false, std::memory_order_release);
+		MarkJobFailedNoThrow(jobId, error.what());
+		return { false, jobId, "DUMP_THREAD_CREATE_FAILED" };
 	}
 
-	return jobId;
+	return { true, jobId, {} };
 }
 
-void ShutdownDumpJobs()
+bool ShutdownDumpJobs(int timeoutMs)
 {
-	std::lock_guard<std::mutex> lk(g_ThreadsMutex);
-	for (auto& th : g_DumpThreads)
+	g_DumpAccepting.store(false, std::memory_order_release);
+	std::unique_lock<std::mutex> lock(g_ThreadsMutex);
+	const bool stopped = g_DumpStoppedCV.wait_for(
+		lock,
+		std::chrono::milliseconds(timeoutMs > 0 ? timeoutMs : 0),
+		[] { return !g_DumpRunning.load(std::memory_order_acquire); });
+	if (!stopped)
+		return false;
+	if (g_DumpThread.joinable())
+		g_DumpThread.join();
+	return true;
+}
+
+static bool ValidateNoDumpOptions(const HttpRequest& req, std::string& outError)
+{
+	try
 	{
-		if (th.joinable())
-			th.join();
+		const json body = req.Body.empty() ? json::object() : json::parse(req.Body);
+		if (!body.is_object())
+		{
+			outError = "DUMP_OPTIONS_MUST_BE_OBJECT";
+			return false;
+		}
+		if (!body.empty())
+		{
+			outError = "DUMP_OPTIONS_UNAVAILABLE";
+			return false;
+		}
+		return true;
 	}
-	g_DumpThreads.clear();
+	catch (const json::exception& error)
+	{
+		outError = std::string("INVALID_DUMP_OPTIONS_JSON: ") + error.what();
+		return false;
+	}
+}
+
+template<typename GeneratorType>
+static HttpResponse StartGenerator(const HttpRequest& req, const std::string& format, const std::string& message)
+{
+	std::string validationError;
+	if (!ValidateNoDumpOptions(req, validationError))
+		return { 400, "application/json", MakeError(validationError) };
+
+	const DumpLaunchResult launch = LaunchGeneratorJob<GeneratorType>(format);
+	if (!launch.Started)
+		return { 409, "application/json", MakeError(launch.Error) };
+
+	json data;
+	data["job_id"] = launch.JobId;
+	data["message"] = message;
+	return { 200, "application/json", MakeResponse(data) };
 }
 
 void RegisterDumpRoutes(HttpServer& server)
 {
 	server.Post("/api/v1/dump/sdk", [](const HttpRequest& req) -> HttpResponse {
-		std::string jobId = LaunchGeneratorJob<CppGenerator>("sdk");
-		json data;
-		data["job_id"] = jobId;
-		data["message"] = "C++ SDK generation started";
-		return { 200, "application/json", MakeResponse(data) };
+		return StartGenerator<CppGenerator>(req, "sdk", "C++ SDK generation started");
 	});
 
 	server.Post("/api/v1/dump/usmap", [](const HttpRequest& req) -> HttpResponse {
-		std::string jobId = LaunchGeneratorJob<MappingGenerator>("usmap");
-		json data;
-		data["job_id"] = jobId;
-		data["message"] = "USMAP generation started";
-		return { 200, "application/json", MakeResponse(data) };
+		return StartGenerator<MappingGenerator>(req, "usmap", "USMAP generation started");
 	});
 
 	server.Post("/api/v1/dump/dumpspace", [](const HttpRequest& req) -> HttpResponse {
-		std::string jobId = LaunchGeneratorJob<DumpspaceGenerator>("dumpspace");
-		json data;
-		data["job_id"] = jobId;
-		data["message"] = "Dumpspace generation started";
-		return { 200, "application/json", MakeResponse(data) };
+		return StartGenerator<DumpspaceGenerator>(req, "dumpspace", "Dumpspace generation started");
 	});
 
 	server.Post("/api/v1/dump/ida-script", [](const HttpRequest& req) -> HttpResponse {
-		std::string jobId = LaunchGeneratorJob<IDAMappingGenerator>("ida-script");
-		json data;
-		data["job_id"] = jobId;
-		data["message"] = "IDA mapping generation started";
-		return { 200, "application/json", MakeResponse(data) };
+		return StartGenerator<IDAMappingGenerator>(req, "ida-script", "IDA mapping generation started");
 	});
 
 	server.Get("/api/v1/dump/jobs", [](const HttpRequest& req) -> HttpResponse {

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Search, Filter, TerminalSquare, Play, Info, List, History, Power, RefreshCw, Cpu } from 'lucide-react';
+import { Search, Filter, TerminalSquare, Play, Info, List, History, RefreshCw, Cpu } from 'lucide-react';
 import { t } from '../i18n';
 import api, { type ClassFunction, type HookItem, type HookLogEntry, type ObjectDetail, type ObjectItem } from '../api';
 
@@ -7,6 +7,7 @@ type FunctionTab = 'Info' | 'Parameters' | 'Call' | 'Hook' | 'Decompile';
 type FlagTab = 'All' | 'Native' | 'Blueprint';
 type FunctionsViewMode = 'function' | 'hookManager';
 type CallMode = 'instance' | 'static' | 'batch';
+const HOOK_MONITORING_AVAILABLE = false;
 
 interface FunctionsProps {
   viewMode?: FunctionsViewMode;
@@ -106,7 +107,6 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
       { id: 'Info' as FunctionTab, icon: Info },
       { id: 'Parameters' as FunctionTab, icon: List },
       { id: 'Call' as FunctionTab, icon: Play },
-      { id: 'Hook' as FunctionTab, icon: Power },
       { id: 'Decompile' as FunctionTab, icon: TerminalSquare },
     ],
     []
@@ -232,6 +232,11 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
   }, []);
 
   useEffect(() => {
+    if (!HOOK_MONITORING_AVAILABLE) {
+      clearHookReconnectTimer();
+      stopHookPolling();
+      return;
+    }
     if (activeTab !== 'Hook' && viewMode !== 'hookManager') {
       clearHookReconnectTimer();
       hookReconnectDelayRef.current = 800;
@@ -647,12 +652,9 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
             >
               {t('Function Workbench')}
             </button>
-            <button
-              onClick={() => onViewModeChange?.('hookManager')}
-              className={`px-3 py-1.5 rounded-md text-xs font-semibold font-display transition-colors ${viewMode === 'hookManager' ? 'bg-surface-dark text-text-high shadow-sm border border-border-subtle' : 'text-text-low hover:text-text-high border border-transparent'}`}
-            >
-              {t('Hook Management')}
-            </button>
+            <span className="px-3 py-1.5 text-xs text-text-low font-display" title={t('Bounded Hook collector is not active')}>
+              {t('Hook Monitoring Unavailable')}
+            </span>
           </div>
           {viewMode === 'function' && (
             <nav className="flex items-center gap-4">
