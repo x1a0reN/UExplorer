@@ -177,6 +177,7 @@ namespace
 		probes.GameThreadPumpObserved = gameThread.PumpObserved;
 		probes.GameThreadPumpThreadStable = gameThread.PumpThreadStable;
 		probes.GameThreadPumpActive = pumpActive;
+		probes.SafeMemoryEnabled = true;
 		probes.LegacyHttpListening = legacyHttpListening;
 		const auto capabilities = UExplorer::Runtime::BuildCoreCapabilities(*snapshot.Context, probes);
 		if (!g_Runtime.PublishCapabilities(capabilities))

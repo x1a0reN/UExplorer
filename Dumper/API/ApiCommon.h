@@ -33,6 +33,21 @@ inline std::string MakeError(const std::string& error)
 	return envelope.dump();
 }
 
+inline std::string MakeError(const std::string& error, const json& details)
+{
+	auto now = std::chrono::system_clock::now();
+	auto epoch = std::chrono::duration_cast<std::chrono::seconds>(
+		now.time_since_epoch()).count();
+
+	json envelope;
+	envelope["success"] = false;
+	envelope["data"] = nullptr;
+	envelope["error"] = error;
+	envelope["details"] = details;
+	envelope["timestamp"] = epoch;
+	return envelope.dump();
+}
+
 inline int SafeParseInt(const std::string& s, int defaultVal = 0)
 {
 	try { size_t pos = 0; int v = std::stoi(s, &pos); return (pos > 0) ? v : defaultVal; }

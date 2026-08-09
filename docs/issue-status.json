@@ -51,6 +51,7 @@
       "status": "in_progress",
       "verification": [
         "2026-08-09: CoreRuntime, immutable EngineContext, CapabilityRegistry, and ShutdownCoordinator establish explicit runtime ownership",
+        "2026-08-09: SafeMemory centralizes guarded range validation, SEH copy, protection restoration, executable-write policy, and atomic hook pointer exchange",
         "Legacy domain/API monoliths and remaining direct Off/Settings consumers still require migration"
       ]
     },
@@ -219,6 +220,20 @@
         "Last-subscription automatic uninstall remains pending"
       ]
     },
+    "OBJ-003": {
+      "status": "in_progress",
+      "verification": [
+        "2026-08-09: MemoryApi and HookApi use centralized SafeMemory; API implementation files no longer call VirtualProtect directly",
+        "Legacy object/world route reads still contain direct live-memory traversal and require snapshot/codec migration"
+      ]
+    },
+    "OBJ-012": {
+      "status": "verified",
+      "verification": [
+        "2026-08-09: unsafe raw UObject property write route returns OBJECT_PROPERTY_WRITE_DISABLED",
+        "Object inspector and instance browser property controls are read-only; validated game-thread Engine writes remain explicitly unavailable"
+      ]
+    },
     "CALL-001": {
       "status": "verified",
       "verification": [
@@ -255,8 +270,30 @@
     "MEM-001": {
       "status": "in_progress",
       "verification": [
-        "2026-08-09: write path checks ranges and VirtualProtect, wraps memcpy in SEH, and verifies protection restoration",
+        "2026-08-09: SafeMemory validates every region, performs SEH-isolated copies, checks protection changes, and restores original protections in reverse order",
+        "Core harness verifies read-only restoration, no-access rejection, overflow rejection, and compare-exchange mismatch behavior",
         "Protection-failure target fixture remains pending"
+      ]
+    },
+    "MEM-002": {
+      "status": "verified",
+      "verification": [
+        "2026-08-09: address parsing uses full-consumption std::from_chars, pointer chains are capped at 64 offsets, and signed address addition rejects overflow/underflow",
+        "Contract tests forbid exception-based partial address parsing"
+      ]
+    },
+    "MEM-003": {
+      "status": "verified",
+      "verification": [
+        "2026-08-09: pointer-chain read/null/overflow failures return HTTP 400 failure envelopes with stable codes, failed_step, and completed steps"
+      ]
+    },
+    "MEM-004": {
+      "status": "in_progress",
+      "verification": [
+        "2026-08-09: typed writes are symmetric and range checked; ordinary writes to executable pages are rejected",
+        "SafeMemory requires explicit executable-write authorization plus FlushInstructionCache and the harness verifies both gates",
+        "A dedicated IPC code-write capability/schema remains pending"
       ]
     },
     "DUMP-001": {

@@ -35,20 +35,6 @@ function bytesToArray(input: string): number[] {
     .filter((n) => !Number.isNaN(n) && n >= 0 && n <= 255);
 }
 
-function parseInputValue(raw: string): unknown {
-  const trimmed = raw.trim();
-  if (trimmed === '') return '';
-  if (trimmed === 'true') return true;
-  if (trimmed === 'false') return false;
-  if (trimmed === 'null') return null;
-  if (!Number.isNaN(Number(trimmed))) return Number(trimmed);
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    return trimmed;
-  }
-}
-
 export default function Memory() {
   const [addressInput, setAddressInput] = useState('0x0');
   const [currentAddress, setCurrentAddress] = useState('0x0');
@@ -72,7 +58,7 @@ export default function Memory() {
   const [consoleInput, setConsoleInput] = useState('');
   const [consoleLogs, setConsoleLogs] = useState<string[]>([
     'UExplorer local command adapter',
-    'Supported: get/set/call/instances/mem.read/mem.write',
+    'Supported: get/call/instances/mem.read/mem.write (object property set is disabled)',
   ]);
 
   const rows = useMemo(() => {
@@ -220,14 +206,7 @@ export default function Memory() {
         }
         pushConsole(JSON.stringify(out, null, 2));
       } else if (head === 'set' && parts.length >= 3) {
-        const [objAndProp, ...valueParts] = parts.slice(1);
-        const dot = objAndProp.lastIndexOf('.');
-        if (dot <= 0) throw new Error(t('Use: set <objectIndex>.<property> <value>'));
-        const objectIndex = Number(objAndProp.slice(0, dot));
-        const property = objAndProp.slice(dot + 1);
-        const value = parseInputValue(valueParts.join(' '));
-        const out = await api.setObjectProperty(objectIndex, property, value);
-        pushConsole(JSON.stringify(out, null, 2));
+        throw new Error('OBJECT_PROPERTY_WRITE_DISABLED');
       } else if (head === 'call' && parts.length >= 3) {
         const objectIndex = Number(parts[1]);
         const functionName = parts[2];

@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { t } from '../../i18n';
-import { Search, Box, RefreshCw, Save, ExternalLink } from 'lucide-react';
+import { Search, Box, RefreshCw, ExternalLink } from 'lucide-react';
 import api, {
     type ObjectDetail,
     type ObjectProperty,
     type OuterChainItem,
 } from '../../api';
 import { Panel, InfoRow, HeaderCard, type BrowserPageProps, type ModeNavContext } from './shared';
-import { parseInputValue, toEditable } from './valueUtils';
+import { toEditable } from './valueUtils';
 
 // ─── Types ─────────────────────────────────────────────────────
 
@@ -94,13 +94,6 @@ export default function InstanceBrowser({ onNavigate, onSwitchMode, navContext }
         } finally {
             setDetailLoading(false);
         }
-    };
-
-    const handlePropertySave = async (propName: string) => {
-        if (!selected) return;
-        const raw = propertyEditMap[propName];
-        const parsed = parseInputValue(raw);
-        await api.setObjectProperty(selected.index, propName, parsed);
     };
 
     const handlePropertyRefresh = async (propName: string) => {
@@ -298,15 +291,11 @@ export default function InstanceBrowser({ onNavigate, onSwitchMode, navContext }
                                                     <td className="py-2.5 px-3">
                                                         <input type="text"
                                                             value={propertyEditMap[p.name] ?? toEditable(p.value)}
-                                                            onChange={(e) => setPropertyEditMap((prev) => ({ ...prev, [p.name]: e.target.value }))}
-                                                            className="w-full bg-black/20 border border-white/10 rounded-md px-3 py-1 text-[13px] text-white font-mono focus:outline-none focus:border-blue-500/50 focus:bg-white/5 transition-all shadow-inner" />
+                                                            readOnly
+                                                            className="w-full bg-black/20 border border-white/10 rounded-md px-3 py-1 text-[13px] text-slate-300 font-mono cursor-default shadow-inner" />
                                                     </td>
                                                     <td className="py-2.5 px-3">
                                                         <div className="flex gap-2 justify-end opacity-60 group-hover:opacity-100 transition-opacity">
-                                                            <button onClick={() => void handlePropertySave(p.name)} title={t('Save')}
-                                                                className="p-1.5 rounded-md hover:bg-emerald-500/20 text-slate-400 hover:text-emerald-400 transition-colors">
-                                                                <Save className="w-3.5 h-3.5" />
-                                                            </button>
                                                             <button onClick={() => void handlePropertyRefresh(p.name)} title={t('Refresh')}
                                                                 className={`p-1.5 rounded-md hover:bg-blue-500/20 text-slate-400 hover:text-blue-400 transition-colors ${propertyRefreshing[p.name] ? 'animate-spin text-blue-400' : ''}`}>
                                                                 <RefreshCw className="w-3.5 h-3.5" />

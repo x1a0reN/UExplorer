@@ -23,7 +23,12 @@ $context = Read-ProjectFile 'Dumper\Runtime\EngineContext.h'
 $capture = Read-ProjectFile 'Dumper\Runtime\EngineContextCapture.cpp'
 $capabilities = Read-ProjectFile 'Dumper\Runtime\CoreCapabilities.h'
 $shutdown = Read-ProjectFile 'Dumper\Runtime\ShutdownCoordinator.h'
+$safeMemoryHeader = Read-ProjectFile 'Dumper\Runtime\SafeMemory.h'
+$safeMemory = Read-ProjectFile 'Dumper\Runtime\SafeMemory.cpp'
 $gameThread = Read-ProjectFile 'Dumper\API\GameThreadQueue.h'
+$memoryApi = Read-ProjectFile 'Dumper\API\MemoryApi.cpp'
+$objectsApi = Read-ProjectFile 'Dumper\API\ObjectsApi.cpp'
+$hookApi = Read-ProjectFile 'Dumper\API\HookApi.cpp'
 $statusApi = Read-ProjectFile 'Dumper\API\StatusApi.cpp'
 $main = Read-ProjectFile 'Dumper\Main.cpp'
 $harness = Read-ProjectFile 'tests\core-harness\main.cpp'
@@ -53,6 +58,27 @@ Assert-Contains $shutdown 'SafeToUnload' 'ShutdownCoordinator must report unload
 Assert-Contains $gameThread 'PumpThreadStable' 'Game-thread pump identity diagnostics are missing.'
 Assert-Contains $gameThread 'LastPumpTickMonotonicUs' 'Game-thread liveness diagnostics are missing.'
 
+foreach ($token in @('CheckedAddressRange', 'ReadMemory', 'WriteMemory', 'CompareExchangePointer',
+        'AllowExecutableWrite', 'FlushInstructionCache')) {
+    Assert-Contains $safeMemoryHeader $token 'SafeMemory public contract regressed.'
+}
+foreach ($token in @('VirtualQuery', 'CopyWithSeh', 'CompareExchangePointerWithSeh',
+        'RestoreProtections', 'ExecutableWriteDenied', 'InstructionCacheFlushRequired')) {
+    Assert-Contains $safeMemory $token 'SafeMemory implementation contract regressed.'
+}
+foreach ($token in @('std::from_chars', 'Too many offsets (max 64)', 'POINTER_CHAIN_OVERFLOW',
+        'std::vector<std::int64_t>', 'Runtime::WriteMemory')) {
+    Assert-Contains $memoryApi $token 'Memory API validation contract regressed.'
+}
+Assert-NotContains $memoryApi 'std::stoull' 'Memory API must fully parse addresses without exception-based partial conversion.'
+Assert-Contains $objectsApi 'OBJECT_PROPERTY_WRITE_DISABLED' 'Unsafe raw UObject property writes became reachable.'
+Assert-Contains $hookApi 'CompareExchangePointer' 'Hook patching bypasses the atomic SafeMemory path.'
+
+foreach ($apiFile in Get-ChildItem -LiteralPath (Join-Path $root 'Dumper\API') -Filter '*.cpp') {
+    $apiSource = Get-Content -LiteralPath $apiFile.FullName -Raw -Encoding UTF8
+    Assert-NotContains $apiSource 'VirtualProtect' "API module $($apiFile.Name) bypasses SafeMemory."
+}
+
 foreach ($token in @('CaptureEngineContext', 'RefreshRuntimeCapabilities', 'ShutdownCoordinator',
         'BeginStopping', 'MarkStopped')) {
     Assert-Contains $main $token 'Main does not use the runtime ownership path.'
@@ -67,9 +93,10 @@ Assert-NotContains $statusApi 'Settings::' 'Status handlers must read the immuta
 Assert-NotContains $statusApi 'ObjectArray::' 'Status handlers must not query the live object array from HTTP workers.'
 
 foreach ($token in @('TestEngineContextAndCapabilities', 'TestCoreRuntimeStateAndShutdown',
+        'TestSafeMemory', 'ExecutableWriteDenied', 'InstructionCacheFlushRequired',
         'CoreRuntime became Ready without its pipe listener', 'Required capability loss left readiness true',
         'Shutdown coordinator ran twice')) {
     Assert-Contains $harness $token 'CoreRuntime harness coverage regressed.'
 }
 
-Write-Host 'Core runtime contract verified: immutable context, dependency capabilities, truthful readiness, request drain, and coordinated shutdown.'
+Write-Host 'Core runtime contract verified: immutable context, capability readiness, SafeMemory, request drain, and coordinated shutdown.'

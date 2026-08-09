@@ -1,5 +1,3 @@
-#include "WinMemApi.h"
-
 #include "ObjectsApi.h"
 #include "ApiCommon.h"
 
@@ -615,53 +613,6 @@ json SerializeFunctionUnified(const UEFunction& func)
 	return j;
 }
 
-// Helper: write a property value from JSON
-static bool WritePropertyValue(uint8* objAddr, const UEProperty& prop, const json& value)
-{
-	if (!objAddr || Platform::IsBadReadPtr(objAddr))
-		return false;
-
-	uint8* addr = objAddr + prop.GetOffset();
-	if (Platform::IsBadReadPtr(addr))
-		return false;
-
-	EClassCastFlags type = prop.GetCastFlags();
-
-	DWORD oldProtect = 0;
-	VirtualProtect(addr, prop.GetSize(), PAGE_EXECUTE_READWRITE, &oldProtect);
-
-	bool ok = true;
-	try {
-		if (type & EClassCastFlags::BoolProperty)
-		{
-			UEBoolProperty bp = prop.Cast<UEBoolProperty>();
-			uint8* byteAddr = addr + bp.GetByteOffset();
-			if (value.get<bool>())
-				*byteAddr |= bp.GetFieldMask();
-			else
-				*byteAddr &= ~bp.GetFieldMask();
-		}
-		else if (type & EClassCastFlags::ByteProperty)
-			*reinterpret_cast<uint8*>(addr) = static_cast<uint8>(value.get<int>());
-		else if (type & EClassCastFlags::IntProperty)
-			*reinterpret_cast<int32*>(addr) = value.get<int32>();
-		else if (type & EClassCastFlags::Int64Property)
-			*reinterpret_cast<int64*>(addr) = value.get<int64>();
-		else if (type & EClassCastFlags::FloatProperty)
-			*reinterpret_cast<float*>(addr) = value.get<float>();
-		else if (type & EClassCastFlags::DoubleProperty)
-			*reinterpret_cast<double*>(addr) = value.get<double>();
-		else
-			ok = false;
-	}
-	catch (...) {
-		ok = false;
-	}
-
-	VirtualProtect(addr, prop.GetSize(), oldProtect, &oldProtect);
-	return ok;
-}
-
 static bool TryParseObjectIndex(const std::string& idxStr, int32& outIdx)
 {
 	if (idxStr.empty())
@@ -1049,50 +1000,10 @@ void RegisterObjectsRoutes(HttpServer& server)
 	});
 
 	// POST /api/v1/objects/:index/property/:name — write a single property value
-	server.Post("/api/v1/objects/:index/property/:name", [](const HttpRequest& req) -> HttpResponse {
-		int32 idx = -1;
-		if (!TryParseObjectIndex(GetPathSegment(req.Path, 3), idx))
-			return { 400, "application/json", MakeError("Invalid object index") };
-
-		std::string propName = GetPathSegment(req.Path, 5);
-		if (propName.empty())
-			return { 400, "application/json", MakeError("Missing property name") };
-
-		UEObject obj = ObjectArray::GetByIndex(idx);
-		if (!obj)
-			return { 404, "application/json", MakeError("Object is null") };
-
-		try {
-			json body = json::parse(req.Body);
-			if (!body.contains("value"))
-				return { 400, "application/json", MakeError("Missing 'value' field") };
-
-			UEClass cls = obj.GetClass();
-			if (!cls)
-				return { 500, "application/json", MakeError("Object has no class") };
-
-			UEProperty prop;
-			if (!TryFindProperty(cls, propName, prop))
-				return { 404, "application/json", MakeError("Property not found: " + propName) };
-
-			uint8* objAddr = reinterpret_cast<uint8*>(obj.GetAddress());
-			if (!WritePropertyValue(objAddr, prop, body["value"]))
-				return { 400, "application/json", MakeError("Unsupported property type for writing") };
-
-			json data;
-			data["property"] = propName;
-			data["written"] = true;
-			PropertyReadResult result = ReadPropertyValue(objAddr, prop);
-			data["new_value"] = std::move(result.value);
-			data["new_value_state"] = result.state;
-			return { 200, "application/json", MakeResponse(data) };
-		}
-		catch (const json::exception& e) {
-			return { 400, "application/json", MakeError(std::string("Bad JSON: ") + e.what()) };
-		}
-		catch (...) {
-			return { 500, "application/json", MakeError("Property write failed") };
-		}
+	server.Post("/api/v1/objects/:index/property/:name", [](const HttpRequest&) -> HttpResponse {
+		return { 409, "application/json", MakeError(
+			"OBJECT_PROPERTY_WRITE_DISABLED",
+			{{"reason", "VALIDATED_GAME_THREAD_PROPERTY_COMMAND_UNAVAILABLE"}}) };
 	});
 
 	// GET /api/v1/objects/:index — single object detail

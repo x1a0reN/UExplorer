@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
-import { MoreHorizontal, Save, RefreshCw } from 'lucide-react';
+import { MoreHorizontal, RefreshCw } from 'lucide-react';
 import { t } from '../../i18n';
 import api from '../../api';
 import type { ClassFunction, ClassProperty, ClassHierarchy, ObjectDetail, ObjectProperty } from '../../api';
-import { parseInputValue, toEditable } from './valueUtils';
+import { toEditable } from './valueUtils';
 
 interface InspectorPaneProps {
     selectedClass: string | null;
@@ -20,7 +20,6 @@ export default function InspectorPane({ selectedClass, selectedType, selectedInd
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [activeTab, setActiveTab] = useState<TabType>('Properties');
-    const [saveStatus, setSaveStatus] = useState<Record<string, 'ok' | 'err' | null>>({});
 
     // Instance State
     const [instanceDetail, setInstanceDetail] = useState<ObjectDetail | null>(null);
@@ -114,15 +113,6 @@ export default function InspectorPane({ selectedClass, selectedType, selectedInd
 
         void loadData();
     }, [isInstanceMode, selectedClass, selectedIndex, selectedType]);
-
-    const handlePropertySave = async (propName: string) => {
-        if (!isInstanceMode || selectedIndex === null) return;
-        const raw = propertyEditMap[propName];
-        const parsed = parseInputValue(raw);
-        const res = await api.setObjectProperty(selectedIndex, propName, parsed);
-        setSaveStatus((prev) => ({ ...prev, [propName]: res.success ? 'ok' : 'err' }));
-        setTimeout(() => setSaveStatus((prev) => ({ ...prev, [propName]: null })), 2000);
-    };
 
     const handleCopyAddress = () => {
         const addr = instanceDetail?.address;
@@ -220,7 +210,7 @@ export default function InspectorPane({ selectedClass, selectedType, selectedInd
                         {properties.map((p, index) => {
                             const isBool = p.type === 'bool';
                             return (
-                                <div key={p.name} className={`flex items-center border-b border-border-subtle px-3 py-2 hover:bg-white/5 group/row relative ${saveStatus[p.name] === 'ok' ? 'bg-accent-green/5' : saveStatus[p.name] === 'err' ? 'bg-accent-red/5' : index % 2 === 0 ? 'bg-transparent' : 'bg-surface-stripe'}`}>
+                                <div key={p.name} className={`flex items-center border-b border-border-subtle px-3 py-2 hover:bg-white/5 group/row relative ${index % 2 === 0 ? 'bg-transparent' : 'bg-surface-stripe'}`}>
                                     <div className="w-[45%] pr-2 flex items-center gap-2">
                                         <span className="w-1 h-1 rounded-full bg-transparent group-hover/row:bg-text-low"></span>
                                         <span className="text-xs text-text-mid font-mono truncate max-w-[120px]" title={p.name}>{p.name}</span>
@@ -233,10 +223,8 @@ export default function InspectorPane({ selectedClass, selectedType, selectedInd
                                                 <input
                                                     type="checkbox"
                                                     checked={propertyEditMap[p.name] === 'true'}
-                                                    onChange={(e) => {
-                                                        setPropertyEditMap(prev => ({ ...prev, [p.name]: e.target.checked ? 'true' : 'false' }));
-                                                    }}
-                                                    className="form-checkbox h-3.5 w-3.5 text-primary bg-[#0a0a0a] border-border-subtle rounded focus:ring-0"
+                                                    disabled
+                                                    className="form-checkbox h-3.5 w-3.5 text-primary bg-[#0a0a0a] border-border-subtle rounded opacity-70"
                                                 />
                                                 <span className="text-xs text-text-low font-mono">{propertyEditMap[p.name] === 'true' ? t('True') : t('False')}</span>
                                             </div>
@@ -244,16 +232,13 @@ export default function InspectorPane({ selectedClass, selectedType, selectedInd
                                             <input
                                                 type="text"
                                                 value={propertyEditMap[p.name] ?? ''}
-                                                onChange={(e) => setPropertyEditMap(prev => ({ ...prev, [p.name]: e.target.value }))}
-                                                className="flex-1 w-full bg-[#0a0a0a] border border-border-subtle rounded px-2 py-1 text-xs text-white font-mono focus:border-primary focus:ring-1 focus:ring-primary shadow-inner"
+                                                readOnly
+                                                className="flex-1 w-full bg-[#0a0a0a] border border-border-subtle rounded px-2 py-1 text-xs text-text-mid font-mono cursor-default shadow-inner"
                                             />
                                         )}
 
                                         {/* Action Floaters */}
                                         <div className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-1 opacity-0 group-hover/row:opacity-100 flex items-center gap-0.5 bg-surface-dark border border-border-subtle rounded shadow-lg p-0.5 z-20 transition-opacity">
-                                            <button onClick={() => void handlePropertySave(p.name)} className="p-1 hover:bg-emerald-500/20 text-text-low hover:text-emerald-400 rounded" title={t('Save')}>
-                                                <Save className="w-3.5 h-3.5" />
-                                            </button>
                                             <button onClick={() => void handlePropertyRefresh(p.name)} className={`p-1 hover:bg-blue-500/20 text-text-low hover:text-primary rounded ${propertyRefreshing[p.name] ? 'animate-spin text-primary' : ''}`} title={t('Refresh')}>
                                                 <RefreshCw className="w-3.5 h-3.5" />
                                             </button>

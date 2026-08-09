@@ -1,5 +1,3 @@
-#include "WinMemApi.h"
-
 #include "WorldApi.h"
 #include "ApiCommon.h"
 
@@ -11,7 +9,6 @@
 #include "Platform.h"
 #include "Settings.h"
 
-#include <cmath>
 #include <format>
 #include <set>
 #include <vector>
@@ -913,75 +910,6 @@ static bool ReadVec3Property(UEObject obj, const std::string& propName, json& ou
 		out["z"] = v[2];
 	}
 
-	return true;
-}
-
-static bool ParseVec3(const json& input, double& x, double& y, double& z)
-{
-	try {
-		if (input.is_array() && input.size() >= 3)
-		{
-			x = input[0].get<double>();
-			y = input[1].get<double>();
-			z = input[2].get<double>();
-			if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z))
-				return false;
-			return true;
-		}
-		if (input.is_object())
-		{
-			if (!input.contains("x") || !input.contains("y") || !input.contains("z"))
-				return false;
-			x = input.at("x").get<double>();
-			y = input.at("y").get<double>();
-			z = input.at("z").get<double>();
-			if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z))
-				return false;
-			return true;
-		}
-	}
-	catch (...) {}
-	return false;
-}
-
-static bool WriteVec3Property(UEObject obj, const std::string& propName, const json& input)
-{
-	UEClass cls = obj.GetClass();
-	if (!cls) return false;
-
-	UEProperty prop;
-	if (!TryFindProperty(cls, propName, prop))
-		return false;
-	if (!(prop.GetCastFlags() & EClassCastFlags::StructProperty))
-		return false;
-
-	double x = 0.0;
-	double y = 0.0;
-	double z = 0.0;
-	if (!ParseVec3(input, x, y, z))
-		return false;
-
-	uint8* addr = reinterpret_cast<uint8*>(obj.GetAddress()) + prop.GetOffset();
-	DWORD oldProtect = 0;
-	VirtualProtect(addr, prop.GetSize(), PAGE_EXECUTE_READWRITE, &oldProtect);
-
-	const bool useDouble = Settings::Internal::bUseLargeWorldCoordinates || prop.GetSize() >= 24;
-	if (useDouble)
-	{
-		double* v = reinterpret_cast<double*>(addr);
-		v[0] = x;
-		v[1] = y;
-		v[2] = z;
-	}
-	else
-	{
-		float* v = reinterpret_cast<float*>(addr);
-		v[0] = static_cast<float>(x);
-		v[1] = static_cast<float>(y);
-		v[2] = static_cast<float>(z);
-	}
-
-	VirtualProtect(addr, prop.GetSize(), oldProtect, &oldProtect);
 	return true;
 }
 

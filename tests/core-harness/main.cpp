@@ -9,6 +9,7 @@
 #include "Runtime/BoundedQueue.h"
 #include "Runtime/CoreCapabilities.h"
 #include "Runtime/CoreRuntime.h"
+#include "Runtime/SafeMemory.h"
 #include "Runtime/ShutdownCoordinator.h"
 #include "API/GameThreadQueue.h"
 #include "Generator/Public/Generators/UsmapContainer.h"
@@ -23,6 +24,7 @@
 #include <iostream>
 #include <iterator>
 #include <future>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -363,6 +365,97 @@ namespace
 		Require(second.Stages.size() == first.Stages.size() && order.size() == 3, "Shutdown coordinator ran twice");
 	}
 
+	void TestSafeMemory()
+	{
+		using namespace UExplorer::Runtime;
+
+		std::uintptr_t endExclusive = 0;
+		Require(!CheckedAddressRange(0, 1, endExclusive), "Null memory range was accepted");
+		Require(
+			!CheckedAddressRange((std::numeric_limits<std::uintptr_t>::max)() - 1, 4, endExclusive),
+			"Overflowing memory range was accepted");
+
+		SYSTEM_INFO systemInfo{};
+		GetSystemInfo(&systemInfo);
+		void* allocation = VirtualAlloc(
+			nullptr,
+			systemInfo.dwPageSize,
+			MEM_RESERVE | MEM_COMMIT,
+			PAGE_READWRITE);
+		Require(allocation != nullptr, "SafeMemory fixture allocation failed");
+		struct AllocationGuard
+		{
+			void* Address;
+			~AllocationGuard() { if (Address) VirtualFree(Address, 0, MEM_RELEASE); }
+		} allocationGuard{allocation};
+
+		const auto address = reinterpret_cast<std::uintptr_t>(allocation);
+		const std::uint32_t initial = 0x11223344;
+		Require(WriteValue(address, initial).Ok(), "SafeMemory initial write failed");
+		std::uint32_t readBack = 0;
+		Require(ReadValue(address, readBack).Ok() && readBack == initial, "SafeMemory read changed bytes");
+
+		DWORD oldProtection = 0;
+		Require(
+			VirtualProtect(allocation, systemInfo.dwPageSize, PAGE_READONLY, &oldProtection) != FALSE,
+			"SafeMemory read-only fixture setup failed");
+		const std::uint32_t replacement = 0x55667788;
+		Require(WriteValue(address, replacement).Ok(), "SafeMemory could not write a read-only data page");
+		MEMORY_BASIC_INFORMATION information{};
+		Require(
+			VirtualQuery(allocation, &information, sizeof(information)) != 0
+				&& (information.Protect & 0xFFu) == PAGE_READONLY,
+			"SafeMemory did not restore the original page protection");
+		Require(ReadValue(address, readBack).Ok() && readBack == replacement, "SafeMemory write was not observable");
+		Require(
+			WriteValue(address, initial, {.AllowProtectionChange = false}).Error == MemoryError::AccessDenied,
+			"SafeMemory ignored a no-protection-change write policy");
+
+		DWORD ignoredProtection = 0;
+		Require(
+			VirtualProtect(allocation, systemInfo.dwPageSize, PAGE_EXECUTE_READ, &ignoredProtection) != FALSE,
+			"SafeMemory executable-page fixture setup failed");
+		Require(
+			WriteValue(address, initial).Error == MemoryError::ExecutableWriteDenied,
+			"SafeMemory allowed an ordinary write to executable memory");
+		Require(
+			WriteValue(address, initial, {.AllowExecutableWrite = true}).Error
+				== MemoryError::InstructionCacheFlushRequired,
+			"SafeMemory allowed code writes without an instruction-cache flush");
+		Require(
+			WriteValue(address, initial, {
+				.AllowExecutableWrite = true,
+				.FlushInstructionCache = true
+			}).Ok(),
+			"SafeMemory rejected an explicit code write with cache flushing");
+
+		Require(
+			VirtualProtect(allocation, systemInfo.dwPageSize, PAGE_NOACCESS, &ignoredProtection) != FALSE,
+			"SafeMemory no-access fixture setup failed");
+		Require(
+			ReadValue(address, readBack).Error == MemoryError::AccessDenied,
+			"SafeMemory attempted to read a no-access page");
+		Require(
+			VirtualProtect(allocation, systemInfo.dwPageSize, PAGE_READWRITE, &ignoredProtection) != FALSE,
+			"SafeMemory fixture protection cleanup failed");
+
+		int first = 1;
+		int second = 2;
+		void* slot = &first;
+		void* observed = nullptr;
+		Require(
+			CompareExchangePointer(&slot, &first, &second, &observed).Ok()
+				&& observed == &first && slot == &second,
+			"SafeMemory pointer patch failed");
+		Require(
+			CompareExchangePointer(&slot, &first, &first).Error == MemoryError::ValueMismatch
+				&& slot == &second,
+			"SafeMemory pointer patch ignored an expected-value mismatch");
+		Require(
+			CompareExchangePointer(&slot, &second, &first).Ok() && slot == &first,
+			"SafeMemory pointer restore failed");
+	}
+
 	void TestQueueOwnershipAndBackpressure()
 	{
 		using UExplorer::Runtime::BoundedQueue;
@@ -602,12 +695,13 @@ int main(const int argc, char** argv)
 		TestUsmapContainer(fixtureDirectory);
 		TestEngineContextAndCapabilities();
 		TestCoreRuntimeStateAndShutdown();
+		TestSafeMemory();
 		TestQueueOwnershipAndBackpressure();
 		TestQueueShutdownWakesWaiters();
 		TestGameThreadTaskOwnershipAndTimeouts();
 		TestGameThreadMpscCapacity();
 		TestHttpServerLifecycle();
-		std::cout << "Core harness passed: framing, immutable runtime/capabilities, USMAP consumer, bounded queues, owned game-thread tasks, SEH, HTTP lifecycle, and shutdown.\n";
+		std::cout << "Core harness passed: framing, immutable runtime/capabilities, SafeMemory, USMAP consumer, bounded queues, owned game-thread tasks, SEH, HTTP lifecycle, and shutdown.\n";
 		return 0;
 	}
 	catch (const std::exception& error)

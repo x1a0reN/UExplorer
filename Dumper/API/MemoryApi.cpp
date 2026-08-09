@@ -1,22 +1,23 @@
-#include "WinMemApi.h"
-
 #include "MemoryApi.h"
 #include "ApiCommon.h"
 
-#include "Unreal/ObjectArray.h"
-#include "Unreal/UnrealObjects.h"
-#include "Platform.h"
+#include "Runtime/SafeMemory.h"
 
+#include <charconv>
+#include <cstring>
+#include <cstdint>
 #include <format>
 #include <array>
 #include <limits>
 #include <sstream>
 #include <iomanip>
+#include <utility>
+#include <vector>
 
 namespace UExplorer::API
 {
 
-static std::string BytesToHex(const uint8* data, size_t size)
+static std::string BytesToHex(const std::uint8_t* data, size_t size)
 {
 	std::ostringstream ss;
 	for (size_t i = 0; i < size; i++)
@@ -27,103 +28,72 @@ static std::string BytesToHex(const uint8* data, size_t size)
 	return ss.str();
 }
 
-static bool IsReadable(const void* addr, size_t size = 1)
+static bool TryParseHexValue(std::string text, uintptr_t& output, const bool allowZero)
 {
-	if (!addr) return false;
-	if (Platform::IsBadReadPtr(addr)) return false;
-	if (size > 1 && Platform::IsBadReadPtr(reinterpret_cast<const uint8*>(addr) + size - 1)) return false;
+	if (text.starts_with("0x") || text.starts_with("0X"))
+		text.erase(0, 2);
+	if (text.empty())
+		return false;
+
+	uintptr_t parsed = 0;
+	const auto result = std::from_chars(text.data(), text.data() + text.size(), parsed, 16);
+	if (result.ec != std::errc{} || result.ptr != text.data() + text.size()
+		|| (!allowZero && parsed == 0))
+		return false;
+	output = parsed;
 	return true;
+}
+
+static bool TryParseAddress(std::string text, uintptr_t& outAddress)
+{
+	return TryParseHexValue(std::move(text), outAddress, false);
 }
 
 template<typename T>
 static bool SafeRead(uintptr_t addr, T& out)
 {
-	if (!IsReadable(reinterpret_cast<const void*>(addr), sizeof(T))) return false;
-	__try
-	{
-		out = *reinterpret_cast<const T*>(addr);
-		return true;
-	}
-	__except (EXCEPTION_EXECUTE_HANDLER)
-	{
-		return false;
-	}
+	return Runtime::ReadValue(addr, out).Ok();
 }
 
-static bool SafeReadBytes(uintptr_t addr, uint8* out, size_t size)
+static bool SafeReadBytes(uintptr_t addr, std::uint8_t* out, size_t size)
 {
-	if (!IsReadable(reinterpret_cast<const void*>(addr), size)) return false;
-	__try
-	{
-		memcpy(out, reinterpret_cast<const void*>(addr), size);
-		return true;
-	}
-	__except (EXCEPTION_EXECUTE_HANDLER)
-	{
-		return false;
-	}
+	return Runtime::ReadMemory(
+		addr,
+		std::span<std::byte>(reinterpret_cast<std::byte*>(out), size)).Ok();
 }
 
 static std::string SafeBytesToHex(uintptr_t addr, size_t size)
 {
-	std::vector<uint8> buf(size, 0);
+	std::vector<std::uint8_t> buf(size, 0);
 	if (!SafeReadBytes(addr, buf.data(), size))
 		return "";
 	return BytesToHex(buf.data(), size);
 }
 
-enum class SafeWriteStatus
+static Runtime::MemoryResult SafeWriteBytes(uintptr_t addr, const std::uint8_t* data, size_t size)
 {
-	Success,
-	InvalidRange,
-	ProtectFailed,
-	AccessViolation,
-	RestoreFailed
-};
-
-static SafeWriteStatus SafeWriteBytes(uintptr_t addr, const uint8* data, size_t size)
-{
-	if (!addr || !data || size == 0 || addr > (std::numeric_limits<uintptr_t>::max)() - size)
-		return SafeWriteStatus::InvalidRange;
-
-	DWORD oldProtect = 0;
-	if (!VirtualProtect(
-		reinterpret_cast<void*>(addr),
-		size,
-		PAGE_EXECUTE_READWRITE,
-		&oldProtect))
-	{
-		return SafeWriteStatus::ProtectFailed;
-	}
-
-	bool writeCompleted = false;
-	__try
-	{
-		memcpy(reinterpret_cast<void*>(addr), data, size);
-		writeCompleted = true;
-	}
-	__except (EXCEPTION_EXECUTE_HANDLER)
-	{
-		writeCompleted = false;
-	}
-
-	DWORD ignored = 0;
-	if (!VirtualProtect(reinterpret_cast<void*>(addr), size, oldProtect, &ignored))
-		return SafeWriteStatus::RestoreFailed;
-	return writeCompleted ? SafeWriteStatus::Success : SafeWriteStatus::AccessViolation;
+	if (!data)
+		return {.Error = Runtime::MemoryError::InvalidRange};
+	return Runtime::WriteMemory(
+		addr,
+		std::span<const std::byte>(reinterpret_cast<const std::byte*>(data), size));
 }
 
-static const char* SafeWriteStatusName(SafeWriteStatus status)
+static bool CheckedAddOffset(uintptr_t base, std::int64_t offset, uintptr_t& result)
 {
-	switch (status)
+	if (offset >= 0)
 	{
-	case SafeWriteStatus::Success: return "SUCCESS";
-	case SafeWriteStatus::InvalidRange: return "INVALID_RANGE";
-	case SafeWriteStatus::ProtectFailed: return "PROTECT_FAILED";
-	case SafeWriteStatus::AccessViolation: return "ACCESS_VIOLATION";
-	case SafeWriteStatus::RestoreFailed: return "RESTORE_PROTECTION_FAILED";
-	default: return "UNKNOWN";
+		const auto positive = static_cast<std::uint64_t>(offset);
+		if (positive > (std::numeric_limits<uintptr_t>::max)() - base)
+			return false;
+		result = base + static_cast<uintptr_t>(positive);
+		return true;
 	}
+	const std::uint64_t magnitude = static_cast<std::uint64_t>(-(offset + 1)) + 1;
+	if (magnitude > base)
+		return false;
+	result = base - static_cast<uintptr_t>(magnitude);
+	return true;
 }
 
 void RegisterMemoryRoutes(HttpServer& server)
@@ -133,11 +103,11 @@ void RegisterMemoryRoutes(HttpServer& server)
 			json body = json::parse(req.Body);
 			std::string addrStr = body.value("address", "");
 			int size = body.value("size", 64);
-			if (size < 1) size = 1;
-			if (size > 4096) size = 4096;
+			if (size < 1 || size > 4096)
+				return { 400, "application/json", MakeError("size must be in range 1..4096") };
 
-			uintptr_t addr = std::stoull(addrStr, nullptr, 16);
-			if (!addr)
+			uintptr_t addr = 0;
+			if (!TryParseAddress(addrStr, addr))
 				return { 400, "application/json", MakeError("Invalid address") };
 
 			std::string hexStr = SafeBytesToHex(addr, static_cast<size_t>(size));
@@ -150,7 +120,7 @@ void RegisterMemoryRoutes(HttpServer& server)
 			data["hex"] = hexStr;
 
 			json interp;
-			uint8 u8v; int32 i32v; float fv; int64 i64v; double dv; uintptr_t pv;
+			std::uint8_t u8v; std::int32_t i32v; float fv; std::int64_t i64v; double dv; uintptr_t pv;
 			if (size >= 1 && SafeRead(addr, u8v)) interp["uint8"] = u8v;
 			if (size >= 4 && SafeRead(addr, i32v)) interp["int32"] = i32v;
 			if (size >= 4 && SafeRead(addr, fv))   interp["float"] = fv;
@@ -175,8 +145,8 @@ void RegisterMemoryRoutes(HttpServer& server)
 			std::string addrStr = body.value("address", "");
 			std::string type = body.value("type", "int32");
 
-			uintptr_t addr = std::stoull(addrStr, nullptr, 16);
-			if (!addr)
+			uintptr_t addr = 0;
+			if (!TryParseAddress(addrStr, addr))
 				return { 400, "application/json", MakeError("Invalid address") };
 
 			json data;
@@ -185,15 +155,15 @@ void RegisterMemoryRoutes(HttpServer& server)
 
 			bool ok = false;
 			if (type == "byte" || type == "uint8") {
-				uint8 v; ok = SafeRead(addr, v); if (ok) data["value"] = v;
+				std::uint8_t v; ok = SafeRead(addr, v); if (ok) data["value"] = v;
 			} else if (type == "int32") {
-				int32 v; ok = SafeRead(addr, v); if (ok) data["value"] = v;
+				std::int32_t v; ok = SafeRead(addr, v); if (ok) data["value"] = v;
 			} else if (type == "uint32") {
-				uint32 v; ok = SafeRead(addr, v); if (ok) data["value"] = v;
+				std::uint32_t v; ok = SafeRead(addr, v); if (ok) data["value"] = v;
 			} else if (type == "int64") {
-				int64 v; ok = SafeRead(addr, v); if (ok) data["value"] = v;
+				std::int64_t v; ok = SafeRead(addr, v); if (ok) data["value"] = v;
 			} else if (type == "uint64") {
-				uint64 v; ok = SafeRead(addr, v); if (ok) data["value"] = v;
+				std::uint64_t v; ok = SafeRead(addr, v); if (ok) data["value"] = v;
 			} else if (type == "float") {
 				float v; ok = SafeRead(addr, v); if (ok) data["value"] = v;
 			} else if (type == "double") {
@@ -223,28 +193,28 @@ void RegisterMemoryRoutes(HttpServer& server)
 			std::string addrStr = body.value("address", "");
 			auto bytes = body.value("bytes", std::vector<int>{});
 
-			uintptr_t addr = std::stoull(addrStr, nullptr, 16);
-			if (!addr)
+			uintptr_t addr = 0;
+			if (!TryParseAddress(addrStr, addr))
 				return { 400, "application/json", MakeError("Invalid address") };
 			if (bytes.empty())
 				return { 400, "application/json", MakeError("No bytes to write") };
 			if (bytes.size() > 4096)
 				return { 400, "application/json", MakeError("Too many bytes (max 4096)") };
 
-			std::vector<uint8> writeBytes;
+			std::vector<std::uint8_t> writeBytes;
 			writeBytes.reserve(bytes.size());
 			for (const int value : bytes)
 			{
 				if (value < 0 || value > 0xFF)
 					return { 400, "application/json", MakeError("Byte values must be in range 0..255") };
-				writeBytes.push_back(static_cast<uint8>(value));
+				writeBytes.push_back(static_cast<std::uint8_t>(value));
 			}
 
-			const SafeWriteStatus writeStatus =
+			const Runtime::MemoryResult writeResult =
 				SafeWriteBytes(addr, writeBytes.data(), writeBytes.size());
-			if (writeStatus != SafeWriteStatus::Success)
+			if (!writeResult.Ok())
 				return { 400, "application/json",
-					MakeError(std::string("MEMORY_WRITE_") + SafeWriteStatusName(writeStatus)) };
+					MakeError(std::string("MEMORY_WRITE_") + Runtime::ToString(writeResult.Error)) };
 
 			json data;
 			data["address"] = std::format("0x{:X}", addr);
@@ -265,29 +235,44 @@ void RegisterMemoryRoutes(HttpServer& server)
 			std::string addrStr = body.value("address", "");
 			std::string type = body.value("type", "int32");
 
-			uintptr_t addr = std::stoull(addrStr, nullptr, 16);
-			if (!addr)
+			uintptr_t addr = 0;
+			if (!TryParseAddress(addrStr, addr))
 				return { 400, "application/json", MakeError("Invalid address") };
 			if (!body.contains("value"))
 				return { 400, "application/json", MakeError("Missing value") };
 
 			size_t typeSize = 0;
 			if (type == "byte" || type == "uint8") typeSize = 1;
-			else if (type == "int32" || type == "float") typeSize = 4;
-			else if (type == "double") typeSize = 8;
+			else if (type == "int32" || type == "uint32" || type == "float") typeSize = 4;
+			else if (type == "int64" || type == "uint64" || type == "double" || type == "pointer") typeSize = 8;
 			else return { 400, "application/json", MakeError("Unknown type: " + type) };
 
-			std::array<uint8, sizeof(double)> encoded{};
+			std::array<std::uint8_t, sizeof(double)> encoded{};
 			if (type == "byte" || type == "uint8")
 			{
 				const int value = body.at("value").get<int>();
 				if (value < 0 || value > 0xFF)
 					return { 400, "application/json", MakeError("Byte value must be in range 0..255") };
-				encoded[0] = static_cast<uint8>(value);
+				encoded[0] = static_cast<std::uint8_t>(value);
 			}
 			else if (type == "int32")
 			{
-				const int32 value = body.at("value").get<int32>();
+				const std::int32_t value = body.at("value").get<std::int32_t>();
+				memcpy(encoded.data(), &value, sizeof(value));
+			}
+			else if (type == "uint32")
+			{
+				const std::uint32_t value = body.at("value").get<std::uint32_t>();
+				memcpy(encoded.data(), &value, sizeof(value));
+			}
+			else if (type == "int64")
+			{
+				const std::int64_t value = body.at("value").get<std::int64_t>();
+				memcpy(encoded.data(), &value, sizeof(value));
+			}
+			else if (type == "uint64")
+			{
+				const std::uint64_t value = body.at("value").get<std::uint64_t>();
 				memcpy(encoded.data(), &value, sizeof(value));
 			}
 			else if (type == "float")
@@ -300,11 +285,20 @@ void RegisterMemoryRoutes(HttpServer& server)
 				const double value = body.at("value").get<double>();
 				memcpy(encoded.data(), &value, sizeof(value));
 			}
+			else if (type == "pointer")
+			{
+				if (!body.at("value").is_string())
+					return { 400, "application/json", MakeError("Pointer value must be a hexadecimal string") };
+				uintptr_t value = 0;
+				if (!TryParseHexValue(body.at("value").get<std::string>(), value, true))
+					return { 400, "application/json", MakeError("Invalid pointer value") };
+				memcpy(encoded.data(), &value, sizeof(value));
+			}
 
-			const SafeWriteStatus writeStatus = SafeWriteBytes(addr, encoded.data(), typeSize);
-			if (writeStatus != SafeWriteStatus::Success)
+			const Runtime::MemoryResult writeResult = SafeWriteBytes(addr, encoded.data(), typeSize);
+			if (!writeResult.Ok())
 				return { 400, "application/json",
-					MakeError(std::string("MEMORY_WRITE_") + SafeWriteStatusName(writeStatus)) };
+					MakeError(std::string("MEMORY_WRITE_") + Runtime::ToString(writeResult.Error)) };
 
 			json data;
 			data["address"] = std::format("0x{:X}", addr);
@@ -324,11 +318,13 @@ void RegisterMemoryRoutes(HttpServer& server)
 		try {
 			json body = json::parse(req.Body);
 			std::string baseStr = body.value("base", "");
-			auto offsets = body.value("offsets", std::vector<int64>{});
+			auto offsets = body.value("offsets", std::vector<std::int64_t>{});
 
-			uintptr_t addr = std::stoull(baseStr, nullptr, 16);
-			if (!addr)
+			uintptr_t addr = 0;
+			if (!TryParseAddress(baseStr, addr))
 				return { 400, "application/json", MakeError("Invalid base address") };
+			if (offsets.size() > 64)
+				return { 400, "application/json", MakeError("Too many offsets (max 64)") };
 
 			json steps = json::array();
 			json step;
@@ -340,17 +336,18 @@ void RegisterMemoryRoutes(HttpServer& server)
 			{
 				uintptr_t deref = 0;
 				if (!SafeRead(addr, deref))
-					return { 200, "application/json", MakeResponse(json{
-						{"error", "Access violation at step " + std::to_string(i) + " (0x" + std::format("{:X}", addr) + ")"},
-						{"steps", steps}
-					})};
+					return { 400, "application/json", MakeError(
+						"POINTER_CHAIN_READ_FAILED",
+						{{"failed_step", i}, {"steps", steps}}) };
 				if (!deref)
-					return { 200, "application/json", MakeResponse(json{
-						{"error", "Null pointer at step " + std::to_string(i)},
-						{"steps", steps}
-					})};
+					return { 400, "application/json", MakeError(
+						"POINTER_CHAIN_NULL",
+						{{"failed_step", i}, {"steps", steps}}) };
 
-				addr = deref + offsets[i];
+				if (!CheckedAddOffset(deref, offsets[i], addr))
+					return { 400, "application/json", MakeError(
+						"POINTER_CHAIN_OVERFLOW",
+						{{"failed_step", i}, {"steps", steps}}) };
 				json s;
 				s["deref"] = std::format("0x{:X}", deref);
 				s["offset"] = offsets[i];
@@ -363,7 +360,7 @@ void RegisterMemoryRoutes(HttpServer& server)
 			data["steps"] = steps;
 
 			json val;
-			int32 i32v; float fv; uintptr_t pv;
+			std::int32_t i32v; float fv; uintptr_t pv;
 			if (SafeRead(addr, i32v)) val["int32"] = i32v;
 			if (SafeRead(addr, fv))   val["float"] = fv;
 			if (SafeRead(addr, pv))   val["pointer"] = std::format("0x{:X}", pv);

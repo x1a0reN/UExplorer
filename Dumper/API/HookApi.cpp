@@ -1,5 +1,3 @@
-#include "WinMemApi.h"
-
 #include "HookApi.h"
 #include "ApiCommon.h"
 #include "GameThreadQueue.h"
@@ -10,6 +8,7 @@
 #include "Unreal/UnrealTypes.h"
 #include "Unreal/Enums.h"
 #include "OffsetFinder/Offsets.h"
+#include "Runtime/SafeMemory.h"
 
 #include <format>
 #include <mutex>
@@ -224,52 +223,41 @@ static bool ResolveFunctionAddress(const std::string& functionPath, std::string&
 	return outFuncAddr != nullptr;
 }
 
-static bool PatchVTableSlot(void** slot, void* replacement, void** outOriginal = nullptr)
+static bool ReadPointerSlot(void** slot, void*& value)
 {
-	if (!slot)
-	{
-		return false;
-	}
-
-	DWORD oldProtect = 0;
-	if (!VirtualProtect(slot, sizeof(void*), PAGE_READWRITE, &oldProtect))
-	{
-		return false;
-	}
-
-	void* original = *slot;
-	if (outOriginal)
-		*outOriginal = original;
-	*slot = replacement;
-
-	DWORD dummy = 0;
-	if (!VirtualProtect(slot, sizeof(void*), oldProtect, &dummy))
-	{
-		*slot = original;
-		VirtualProtect(slot, sizeof(void*), oldProtect, &dummy);
-		return false;
-	}
-	return *slot == replacement;
+	value = nullptr;
+	return slot
+		&& Runtime::ReadValue(reinterpret_cast<std::uintptr_t>(slot), value).Ok();
 }
 
-static bool RestoreVTableSlot(void** slot, void* original)
+static bool ReadObjectVTable(void* object, void**& vtable)
 {
-	if (!slot)
-	{
-		return false;
-	}
+	vtable = nullptr;
+	return object
+		&& Runtime::ReadValue(reinterpret_cast<std::uintptr_t>(object), vtable).Ok()
+		&& vtable;
+}
 
-	DWORD oldProtect = 0;
-	if (!VirtualProtect(slot, sizeof(void*), PAGE_READWRITE, &oldProtect))
-	{
+static bool PatchVTableSlot(void** slot, void* replacement, void** outOriginal = nullptr)
+{
+	if (!slot || !replacement)
 		return false;
-	}
 
-	*slot = original;
-	DWORD dummy = 0;
-	if (!VirtualProtect(slot, sizeof(void*), oldProtect, &dummy))
+	void* original = nullptr;
+	if (!ReadPointerSlot(slot, original))
 		return false;
-	return *slot == original;
+	if (!Runtime::CompareExchangePointer(slot, original, replacement).Ok())
+		return false;
+	if (outOriginal)
+		*outOriginal = original;
+	return true;
+}
+
+static bool RestoreVTableSlot(void** slot, void* expectedHook, void* original)
+{
+	if (!slot || !expectedHook || !original)
+		return false;
+	return Runtime::CompareExchangePointer(slot, expectedHook, original).Ok();
 }
 
 static void HookedProcessEvent(void* Object, void* Function, void* Params)
@@ -378,16 +366,15 @@ static bool InstallPEVTableHook()
 		return false;
 	}
 
-	void* cdoAddr = uObjectCDO.GetAddress();
-	void** cdoVft = cdoAddr ? *reinterpret_cast<void***>(cdoAddr) : nullptr;
-	if (!cdoVft)
+	void** cdoVft = nullptr;
+	if (!ReadObjectVTable(uObjectCDO.GetAddress(), cdoVft))
 	{
 		std::cerr << "[HookApi] UObject vtable not available" << std::endl;
 		return false;
 	}
 
-	void* targetPE = cdoVft[peIdx];
-	if (!targetPE)
+	void* targetPE = nullptr;
+	if (!ReadPointerSlot(cdoVft + peIdx, targetPE) || !targetPE)
 	{
 		std::cerr << "[HookApi] UObject ProcessEvent pointer not available" << std::endl;
 		return false;
@@ -422,14 +409,15 @@ static bool InstallPEVTableHook()
 			continue;
 		}
 
-		void** vft = *reinterpret_cast<void***>(clsCdoAddr);
-		if (!vft || !visitedVTables.insert(vft).second)
+		void** vft = nullptr;
+		if (!ReadObjectVTable(clsCdoAddr, vft) || !visitedVTables.insert(vft).second)
 		{
 			continue;
 		}
 
 		void** slot = vft + peIdx;
-		if (*slot != targetPE)
+		void* current = nullptr;
+		if (!ReadPointerSlot(slot, current) || current != targetPE)
 		{
 			continue;
 		}
@@ -475,9 +463,17 @@ static bool UninstallPEVTableHook()
 			continue;
 		}
 
-		if (*it->Slot == reinterpret_cast<void*>(&HookedProcessEvent))
+		void* current = nullptr;
+		if (!ReadPointerSlot(it->Slot, current))
 		{
-			if (RestoreVTableSlot(it->Slot, it->Original))
+			++failed;
+		}
+		else if (current == reinterpret_cast<void*>(&HookedProcessEvent))
+		{
+			if (RestoreVTableSlot(
+				it->Slot,
+				reinterpret_cast<void*>(&HookedProcessEvent),
+				it->Original))
 			{
 				++restored;
 			}
@@ -490,7 +486,9 @@ static bool UninstallPEVTableHook()
 
 	for (const auto& patch : g_PatchedPESlots)
 	{
-		if (patch.Slot && *patch.Slot == reinterpret_cast<void*>(&HookedProcessEvent))
+		void* current = nullptr;
+		if (!ReadPointerSlot(patch.Slot, current)
+			|| current == reinterpret_cast<void*>(&HookedProcessEvent))
 			++failed;
 	}
 	if (failed > 0)
@@ -554,8 +552,7 @@ static bool InstallPostRenderHook()
 		return false;
 	}
 
-	g_GVCVft = *reinterpret_cast<void***>(g_GVCPtr);
-	if (!g_GVCVft)
+	if (!ReadObjectVTable(g_GVCPtr, g_GVCVft))
 	{
 		std::cerr << "[HookApi] Invalid GVC vtable" << std::endl;
 		return false;
@@ -568,8 +565,7 @@ static bool InstallPostRenderHook()
 		return false;
 	}
 
-	g_OrigPostRender = g_GVCVft[postRenderIdx];
-	if (!g_OrigPostRender)
+	if (!ReadPointerSlot(g_GVCVft + postRenderIdx, g_OrigPostRender) || !g_OrigPostRender)
 	{
 		std::cerr << "[HookApi] Original PostRender not found" << std::endl;
 		return false;
@@ -592,12 +588,12 @@ static bool InstallPostRenderHook()
 			UEObject uObjectCDO = uObjectClass.GetDefaultObject();
 			if (uObjectCDO)
 			{
-				void* cdoAddr = uObjectCDO.GetAddress();
-				void** cdoVft = cdoAddr ? *reinterpret_cast<void***>(cdoAddr) : nullptr;
+				void** cdoVft = nullptr;
 				const int32 peIdx = Off::InSDK::ProcessEvent::PEIndex;
-				if (peIdx > 0 && peIdx < 512 && cdoVft)
+				if (peIdx > 0 && peIdx < 512
+					&& ReadObjectVTable(uObjectCDO.GetAddress(), cdoVft))
 				{
-					globalPE = cdoVft[peIdx];
+					ReadPointerSlot(cdoVft + peIdx, globalPE);
 				}
 			}
 		}
@@ -608,7 +604,10 @@ static bool InstallPostRenderHook()
 		std::cerr << "[HookApi] Global ProcessEvent: " << std::hex << globalPE << std::dec << std::endl;
 		if (!GameThread::Enable(reinterpret_cast<ProcessEventFn>(globalPE)))
 		{
-			if (!RestoreVTableSlot(g_GVCVft + postRenderIdx, g_OrigPostRender))
+			if (!RestoreVTableSlot(
+				g_GVCVft + postRenderIdx,
+				reinterpret_cast<void*>(&HookedPostRender),
+				g_OrigPostRender))
 			{
 				std::cerr << "[HookApi] Failed to roll back PostRender after executor enable failure; unload is unsafe" << std::endl;
 				return false;
@@ -623,7 +622,10 @@ static bool InstallPostRenderHook()
 	}
 	else
 	{
-		if (!RestoreVTableSlot(g_GVCVft + postRenderIdx, g_OrigPostRender))
+		if (!RestoreVTableSlot(
+			g_GVCVft + postRenderIdx,
+			reinterpret_cast<void*>(&HookedPostRender),
+			g_OrigPostRender))
 		{
 			std::cerr << "[HookApi] Failed to roll back PostRender without ProcessEvent; unload is unsafe" << std::endl;
 			return false;
@@ -658,13 +660,23 @@ static bool UninstallPostRenderHook()
 	if (postRenderIdx >= 0 && g_GVCVft && g_OrigPostRender)
 	{
 		void** slot = g_GVCVft + postRenderIdx;
-		if (*slot == reinterpret_cast<void*>(&HookedPostRender)
-			&& !RestoreVTableSlot(slot, g_OrigPostRender))
+		void* current = nullptr;
+		if (!ReadPointerSlot(slot, current))
+		{
+			std::cerr << "[HookApi] Failed to read PostRender vtable slot" << std::endl;
+			return false;
+		}
+		if (current == reinterpret_cast<void*>(&HookedPostRender)
+			&& !RestoreVTableSlot(
+				slot,
+				reinterpret_cast<void*>(&HookedPostRender),
+				g_OrigPostRender))
 		{
 			std::cerr << "[HookApi] Failed to restore PostRender vtable slot" << std::endl;
 			return false;
 		}
-		if (*slot == reinterpret_cast<void*>(&HookedPostRender))
+		if (!ReadPointerSlot(slot, current)
+			|| current == reinterpret_cast<void*>(&HookedPostRender))
 			return false;
 	}
 	else
