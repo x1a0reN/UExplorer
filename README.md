@@ -49,6 +49,12 @@ activation: unknown property, FText, GWorld, or generator layouts cannot make th
 runtime pretend to be unsupported or execute ProcessEvent from the startup worker.
 The `engine.reflection` capability remains unavailable until an immutable layout passes
 semantic witnesses; range-valid legacy offsets alone are insufficient.
+The Core now also contains a transport-neutral, SafeMemory-only `PropertyCodec` with
+explicit `ok/empty/unsupported/unavailable/error` states, stable-handle references,
+recursive budgets, coherent FString/array/sparse-container reads, and atomic immutable
+publication. Resolver success is rejected unless its handle is complete and matches the
+resolver session/context and observed reference. The codec is deliberately
+not exposed until a real reflection/profile witness configures `engine.property_codec`.
 Object/type/package/instance collections now use exact full-path filters and
 generation/query-bound cursor pages capped at 128 records; the Host reuses its snapshot
 indexes instead of rescanning the snapshot or accepting legacy offset pagination.

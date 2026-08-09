@@ -49,6 +49,8 @@ $objectArrayImplementation = Read-ProjectFile 'Dumper\Engine\Private\Unreal\Obje
 $objectArray = $objectArrayHeader + $objectArrayImplementation
 $objectSnapshotSourceHeader = Read-ProjectFile 'Dumper\Runtime\ObjectArraySnapshotSource.h'
 $objectSnapshotSource = Read-ProjectFile 'Dumper\Runtime\ObjectArraySnapshotSource.cpp'
+$propertyCodecHeader = Read-ProjectFile 'Dumper\Runtime\PropertyCodec.h'
+$propertyCodec = Read-ProjectFile 'Dumper\Runtime\PropertyCodec.cpp'
 $callbackBarrier = Read-ProjectFile 'Dumper\Runtime\CallbackBarrier.h'
 $safeMemoryHeader = Read-ProjectFile 'Dumper\Runtime\SafeMemory.h'
 $safeMemory = Read-ProjectFile 'Dumper\Runtime\SafeMemory.cpp'
@@ -125,6 +127,7 @@ foreach ($token in @('Off::', 'Settings::', 'NameArray::', 'FName::', ' FName(')
 foreach ($token in @('transport.named_pipe', 'PIPE_LISTENER_NOT_READY', 'objects.identity_source',
 		'engine.names', 'NAME_STORAGE_LAYOUT_NOT_VALIDATED',
 		'engine.reflection', 'REFLECTION_LAYOUT_NOT_VALIDATED',
+		'engine.property_codec', 'PROPERTY_CODEC_NOT_CONFIGURED',
 		'functions.handles', 'FUNCTION_HANDLE_VALIDATION_NOT_READY',
         'GAME_THREAD_PUMP_NOT_OBSERVED', 'GAME_THREAD_PUMP_STALLED', 'RequiredReadyCapabilities')) {
     Assert-Contains $capabilities $token 'Capability dependency/readiness contract regressed.'
@@ -213,9 +216,32 @@ foreach ($token in @('Off::', 'Settings::', 'NameArray::', 'ObjectArray::', 'UEO
 }
 foreach ($token in @('ObjectHandleService', 'EngineNameCodec', 'Names() const noexcept',
 		'EngineSnapshotStore', 'EngineSnapshotCapture',
+		'PropertyCodec', 'ConfigurePropertyCodec', 'Properties() const noexcept',
+		'std::atomic<std::shared_ptr<const PropertyCodec>>', 'm_PropertyMutex',
 		'ConfigureSnapshotCapture', 'IssueObjectHandle', 'ValidateFunctionHandle',
 		'std::shared_ptr<const EngineContext>')) {
 	Assert-Contains $engineFacade $token 'EngineFacade ownership boundary regressed.'
+}
+foreach ($token in @('PropertyValueState', 'Ok', 'Empty', 'Unsupported', 'Unavailable', 'Error',
+		'PropertyCodecProfile', 'IPropertyReferenceResolver', 'PropertyDecodeLimits',
+		'SessionId() const noexcept', 'ContextGeneration() const noexcept',
+		'MaxContainerElements', 'MaxTotalNodes', 'MaxReadableContainerBytes',
+		'PropertyDescriptor', 'PropertyObjectReference')) {
+	Assert-Contains $propertyCodecHeader $token 'Property codec public contract regressed.'
+}
+foreach ($token in @('ReadMemory', 'ReadValue', 'ValidateReadableMemory',
+		'PROPERTY_CONTAINER_HEADER_INVALID', 'PROPERTY_CONTAINER_SIZE_OVERFLOW',
+		'PROPERTY_VALUE_CHANGED_DURING_READ', 'PROPERTY_RECURSION_CYCLE',
+		'PROPERTY_REFERENCE_RESULT_INVALID', 'IsStableObjectHandle',
+		'IsReferenceResolverConfigured',
+		'PROPERTY_DELEGATE_UNSUPPORTED', 'PROPERTY_REFERENCE_RESOLVER_UNAVAILABLE',
+		'PROPERTY_STRING_ENCODING_INVALID', 'IsPropertyCodecProfileValid',
+		'DecodeSparse', 'DecodeSoftObject', 'DecodeStruct', 'DecodeArray')) {
+	Assert-Contains $propertyCodec $token 'Bounded property codec implementation regressed.'
+}
+foreach ($token in @('Off::', 'Settings::', 'ObjectArray::', '#include "Unreal/',
+		'Platform::IsBadReadPtr', 'reinterpret_cast<const TArray')) {
+	Assert-NotContains $propertyCodec $token 'Property codec bypassed its immutable descriptor/SafeMemory boundary.'
 }
 foreach ($token in @('EngineSnapshotObject', 'SessionId', 'ContextGeneration', 'Generation',
 		'SourceObjectCount', 'SkippedSlots', 'std::atomic<std::shared_ptr<const EngineSnapshot>>')) {
@@ -292,6 +318,23 @@ Assert-NotContains $statusApi 'CoreRuntimeSnapshot' 'Status HTTP adapter must no
 foreach ($token in @('TestEngineContextAndCapabilities', 'TestCoreRuntimeStateAndShutdown',
         'TestCoreSessionIdentity',
 		'TestEngineNameCodec', 'Invalid UTF-8 FName entry was accepted',
+		'TestPropertyCodec', 'Property value states are not explicit and stable',
+		'FString was not copied and converted through the bounded UTF-16 codec',
+		'Validated FText layout returned an unresolved placeholder',
+		'Object property returned a raw address instead of a stable handle',
+		'Reference resolver success bypassed the stable-handle envelope checks',
+		'Reference resolver success returned a handle for a different address',
+		'Reference resolver returned a handle from a different context generation',
+		'Soft object path was guessed as weak index/serial or decoded out of order',
+		'Recursive property descriptor/address pair bypassed the cycle guard',
+		'Recursive array descriptor/address pair bypassed the generic cycle guard',
+		'Array with Num greater than Max was accepted',
+		'Total property node budget did not stop and truncate the output value tree',
+		'Sparse container item wrappers bypassed the total property node budget',
+		'Sparse map key/value pairs were not decoded through bounded descriptors',
+		'Overlapping sparse map key/value ranges were accepted',
+		'Overlapping layout fields configured a partially usable property codec',
+		'Unimplemented delegate codec was reported as a successful value',
 		'NamePool redirect cycle was not rejected',
 		'Chunked name-array entry identity mismatch was accepted',
 		'Name codec did not convert an inaccessible storage read into a stable error',

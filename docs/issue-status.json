@@ -411,6 +411,7 @@
         "2026-08-09: MemoryApi and HookApi use centralized SafeMemory; API implementation files no longer call VirtualProtect directly",
 		"2026-08-09: EngineNameCodec replaces raw/catch-based FName entry reads with checked range arithmetic, SafeMemory, strict encoding, and bounded redirects",
 		"2026-08-09: production snapshot metadata revalidates every referenced live object through a typed serial-backed slot and performs all field reads through SafeMemory without legacy UE wrappers",
+		"2026-08-09: the new PropertyCodec consumes only immutable descriptors/profiles and SafeMemory; its contract forbids Off, Settings, ObjectArray, legacy UE wrappers, and IsBadReadPtr; FString content/header and recursive container reads have explicit coherence/cycle guards",
         "Legacy object/world route reads still contain direct live-memory traversal and require snapshot/codec migration"
       ]
     },
@@ -427,12 +428,19 @@
       ]
     },
 	"OBJ-004": {
-	  "status": "in_progress",
+	  "status": "verified",
 	  "verification": [
 		"2026-08-09: immutable snapshot publication rejects empty name/full-path/class-path/package-path metadata instead of publishing placeholders as usable records",
 		"2026-08-09: name decoding now returns explicit typed errors for unsupported layouts, bounds, memory, headers, encoding, and redirect cycles instead of an apparently valid placeholder",
 		"2026-08-09: production snapshot capture emits only fully decoded name/full/class/package/kind metadata and rejects any read/decode/coherence failure instead of publishing placeholders",
-		"Property codec result states remain pending"
+		"2026-08-09: PropertyValue has stable ok/empty/unsupported/unavailable/error states; FText requires a validated layout, Map/Set are actually decoded, Delegate returns PROPERTY_DELEGATE_UNSUPPORTED, and resolver success with an incomplete, cross-context, or raw-identity-mismatched ObjectHandle is rejected"
+	  ]
+	},
+	"OBJ-005": {
+	  "status": "in_progress",
+	  "verification": [
+		"2026-08-09: SoftObject decoding now requires an explicit immutable asset-name/subpath layout and no longer interprets the first eight bytes as weak index/serial",
+		"The synthetic two-FName plus FString fixture passes; real UE4/UE5 layout witnesses remain pending"
 	  ]
 	},
 	"OBJ-006": {
@@ -441,7 +449,8 @@
 		"2026-08-09: snapshot envelopes enforce an 8,000,000 source-slot ceiling, complete skipped-slot accounting, strict index ordering, and bounded metadata lengths",
 		"2026-08-09: snapshot capture scans both live and empty slots in bounded batches and revalidates the entire source range before atomic publication",
 		"2026-08-09: production object/class/package path traversal uses checked address arithmetic, bounded 128-level outer depth, metadata byte ceilings, cycle rejection, and a final source-count coherence check",
-		"Container/property traversal bounds and cycle guards remain pending"
+		"2026-08-09: PropertyCodec validates full array/sparse ranges, header/content coherence, allocation bits, address/multiplication overflow, disjoint layout fields, recursion depth, exact output-node count including Map/Set wrappers, and descriptor/address cycles",
+		"Real reflection descriptors and target-scale container fixtures remain pending"
 	  ]
 	},
     "OBJ-012": {
@@ -504,6 +513,13 @@
         "2026-08-09: missing/invalid parameter struct size is rejected and each scalar property range is checked before access"
       ]
     },
+	"CALL-003": {
+	  "status": "in_progress",
+	  "verification": [
+		"2026-08-09: PropertyCodec now provides bounded FString/FName/FText/Object/Weak/Soft/Struct/Array/Map/Set/Enum decode primitives and stable ObjectHandle references",
+		"ParamFrame construction/destruction, input encoding, and function round-trip fixtures remain pending"
+	  ]
+	},
     "CALL-004": {
       "status": "verified",
       "verification": [

@@ -111,7 +111,7 @@ R3 的协议、Core/Host transport、SessionManager、EventHub、真实跨语言
 - `DomainService` 不再对 immutable snapshot 重复执行 O(N) 扫描或短名称匹配；对象、类型、包内容和类实例查询统一调用 `SnapshotIndex::query`，对象分类计数也直接读取 kind index，复用 kind/full-path/class-path/package-path/token-prefix 索引。每页返回精确 `matched/total`、`snapshot_generation/context_generation`、来源/快照记录数、`has_more` 和绑定 generation + normalized-query fingerprint 的 `next_cursor`；把游标用于另一查询会明确返回 `SNAPSHOT_QUERY_CURSOR_MISMATCH`。
 - 执行身份改为完整对象路径：类型选择、详情请求、包过滤和实例过滤均传 full path；短名称只用于显示和 token-prefix 搜索。同一 full path 在 snapshot 中出现多条记录时返回 `OBJECT_IDENTITY_AMBIGUOUS`，不选择第一条。TypeScript 的 Struct/Enum/Package 项不再把缺失 full path 回退为短名称。
 - package contents 从“超过 128 就失败且无法继续”改为严格的 1..128 cursor pagination；旧 `offset/q/class/package` 请求字段由 `deny_unknown_fields` 明确拒绝。跨语言 fixture 已验证真实 C++ snapshot 的连续两页保持同一 generation；Rust 单元测试另覆盖 exact package/class path、查询游标错配、重复 full path 和旧 schema 拒绝。
-- 当前 R5.1 只完成查询/身份/分页切片，不能据此宣称属性反射可用。PropertyCodec、direct/inherited 语义、CDO/层级 cycle guard、GC churn、目标规模索引性能和真实 UE fixture 仍未完成；对应 capability 继续明确 unavailable。
+- 该切片只完成查询/身份/分页；PropertyCodec 基础随后在 0.8 完成。真实反射 descriptor、direct/inherited 语义、CDO/层级 cycle guard、GC churn、目标规模索引性能和真实 UE fixture 仍未完成；对应领域 capability 继续明确 unavailable。
 
 本切片验证证据：Tauri Host 58 项单元测试（另含真实 C++ Core 进程 fixture 与真实注入进程 fixture各 1 项）、Rust protocol 10 项、FakeCore 5 项、前端 8 项 Vitest、ESLint、TypeScript/Vite production build、Clippy `-D warnings` 和 12 项静态契约均通过。
 
@@ -122,7 +122,16 @@ R3 的协议、Core/Host transport、SessionManager、EventHub、真实跨语言
 - `Off::InitReflection()` 是显式、fail-closed 的可选领域入口；当前没有命令激活它。`UStruct` 和 `Property` offset 在 `EngineContext` 中不再是全局 required，而 `UClass::CastFlags` 仍是 PostRender/对象快照基础要求。这样“某版本属性布局未知”只会关闭反射领域，不会伪装成 transport/Core 初始化失败。
 - 能力图新增 `engine.reflection`。只有显式语义 witness 和完整 immutable offset set 同时成立才可能可用；当前 production probe 保持 false，`objects.properties` 与 `types.inspect` 继续明确 unavailable，不能因若干范围合法的 offset 或旧硬编码默认值被误开放。
 
-本切片已通过 Core release build、`verify-core-runtime.ps1` 和 capability harness 覆盖；真实 UE 反射 witness、PropertyCodec、类型 snapshot 与目标版本 fixture 仍是 R5.1 后续工作。
+本切片已通过 Core release build、`verify-core-runtime.ps1` 和 capability harness 覆盖；PropertyCodec 基础见下一节，真实 UE 反射 witness、类型 snapshot 与目标版本 fixture 仍是 R5.1 后续工作。
+
+### 0.8 R5.1 PropertyValue/PropertyCodec 基础
+
+- 新增 transport-neutral `Runtime/PropertyCodec`，统一输出 `ok/empty/unsupported/unavailable/error`，值树与稳定错误码分离。FText 不再使用 unresolved 字符串，Map/Set/Delegate 也不会以 note 占位后返回成功；Delegate 当前明确 `unsupported`。
+- Codec 只接受 immutable `PropertyDescriptor` 与经过 witness 标记的 `PropertyCodecProfile`，profile 的字段范围必须有界、完整且不重叠，任一子布局不合法都会让整个 codec unavailable。所有读取只经过 `SafeMemory`。实现覆盖严格宽度的 bool/整数/浮点、FName、FString、FText、Object/Weak/Soft reference、Enum、Struct、Array、Map 和 Set；Object/Weak 只有 resolver 返回完整、属于 resolver 当前 session/context 且与原始 address 或 index/serial 一致的 `ObjectHandle` 才是 `ok`，不会信任裸地址、裸 index 或伪造成功结果。
+- FString 会对 header 和完整 UTF-16 内容做前后双重一致性校验；Array 会校验 Data/Num/Max、完整逻辑元素范围和逐项稳定读取；稀疏 Map/Set 同时验证 Data range、allocation bitset、active slot 与前后快照。所有递归类型统一使用深度/node budget 和 descriptor+address cycle guard，Struct 另验证字段边界与唯一名称。容器响应带精确 `TotalCount` 与显式 `Truncated`，不会静默把超限内容当完整值。
+- `EngineFacade` 以原子 `shared_ptr<const PropertyCodec>` 单次发布经过完整 profile 验证且自包含 name codec 的不可变快照，并以互斥锁串行化发布与 Stop；已有读者可安全完成，新的读者在 Stop 后得到空快照。能力图增加 `engine.property_codec`，依赖 `engine.reflection`。当前生产环境没有反射 witness，二者继续 unavailable，因此本切片只建立安全解码基础，不宣称任一 UE 版本属性读取已开放。
+
+CoreHarness 已覆盖各已实现类型、缺失/重叠布局、无 resolver、无效/跨 context/错配 resolver 成功结果、stale weak identity、SoftObject 明确路径布局、Struct/Array 递归 cycle、数组非法 header/preview/node 上限、稀疏 Map/Set allocation bits 与合成节点预算、Delegate unsupported，以及 Facade 原子发布/停止后的安全读者生命周期。真实 UE 4.26/4.27/5.x layout profile、反射 descriptor 构建与属性领域命令仍待后续切片。
 
 ## Context
 

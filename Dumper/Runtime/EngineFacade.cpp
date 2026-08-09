@@ -63,6 +63,27 @@ FunctionValidationResult EngineFacade::ValidateFunctionHandle(const FunctionHand
 	return m_Handles.ValidateFunction(handle);
 }
 
+bool EngineFacade::ConfigurePropertyCodec(PropertyCodecProfile profile) noexcept
+{
+	if (!IsConfigured())
+		return false;
+	try
+	{
+		auto codec = std::make_shared<const PropertyCodec>(m_Names, std::move(profile));
+		if (!codec->IsConfigured())
+			return false;
+		std::lock_guard lock(m_PropertyMutex);
+		if (!IsConfigured() || Properties())
+			return false;
+		m_Properties.store(std::move(codec), std::memory_order_release);
+		return true;
+	}
+	catch (...)
+	{
+		return false;
+	}
+}
+
 bool EngineFacade::ConfigureSnapshotCapture(IEngineSnapshotSource& source) noexcept
 {
 	if (!IsConfigured()
@@ -91,9 +112,11 @@ bool EngineFacade::ConfigureSnapshotCapture(IEngineSnapshotSource& source) noexc
 
 bool EngineFacade::Stop(const std::chrono::milliseconds timeout)
 {
+	std::lock_guard lock(m_PropertyMutex);
 	if (m_SnapshotCapture && !m_SnapshotCapture->StopAndDrain(timeout))
 		return false;
 	m_SnapshotCapture.reset();
+	m_Properties.store({}, std::memory_order_release);
 	m_Snapshots.Stop();
 	return true;
 }

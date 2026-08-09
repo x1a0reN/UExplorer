@@ -25,6 +25,7 @@
 #include "Runtime/ObjectHandle.h"
 #include "Runtime/ObjectIdentityContext.h"
 #include "Runtime/ObjectArraySnapshotSource.h"
+#include "Runtime/PropertyCodec.h"
 #include "Runtime/SafeMemory.h"
 #include "Runtime/ShutdownCoordinator.h"
 #include "Runtime/VTableHook.h"
@@ -662,9 +663,24 @@ namespace
 			reflection
 				&& !reflection->Available
 				&& reflection->ReasonCode == "REFLECTION_LAYOUT_NOT_VALIDATED"
+				&& !withoutPipe->IsAvailable("engine.property_codec")
 				&& !withoutPipe->IsAvailable("objects.properties")
 				&& !withoutPipe->IsAvailable("types.inspect"),
 			"Unvalidated optional reflection metadata leaked into a domain capability");
+		RuntimeProbes falselyClaimedReflection = probes;
+		falselyClaimedReflection.ReflectionLayoutValidated = true;
+		falselyClaimedReflection.PropertyCodecEnabled = true;
+		const auto withoutCompleteReflection = BuildCoreCapabilities(
+			*context,
+			falselyClaimedReflection);
+		const CapabilityStatus* incompleteReflection =
+			withoutCompleteReflection->Find("engine.reflection");
+		Require(
+			incompleteReflection
+				&& !incompleteReflection->Available
+				&& incompleteReflection->ReasonCode == "REFLECTION_LAYOUT_INCOMPLETE"
+				&& !withoutCompleteReflection->IsAvailable("engine.property_codec"),
+			"A probe claim bypassed the complete immutable reflection-offset requirement");
 		RuntimeProbes missingFunctionHandles = probes;
 		missingFunctionHandles.FunctionHandleValidationEnabled = false;
 		const auto withoutFunctionHandles = BuildCoreCapabilities(*context, missingFunctionHandles);
@@ -864,6 +880,587 @@ namespace
 		Require(
 			EngineNameCodec(inaccessibleProfile).Decode(1).Error == EngineNameError::EntryUnavailable,
 			"Name codec did not convert an inaccessible storage read into a stable error");
+	}
+
+	void TestPropertyCodec()
+	{
+		using namespace UExplorer::Runtime;
+
+		const auto writeBytes = [](auto& buffer, const std::size_t offset, const auto& value) {
+			Require(
+				offset <= buffer.size() && sizeof(value) <= buffer.size() - offset,
+				"Property codec fixture write exceeded its buffer");
+			std::memcpy(buffer.data() + offset, &value, sizeof(value));
+		};
+		const auto writeSpan = [](auto& buffer, const std::size_t offset, const void* value, const std::size_t size) {
+			Require(
+				offset <= buffer.size() && size <= buffer.size() - offset,
+				"Property codec string fixture write exceeded its buffer");
+			std::memcpy(buffer.data() + offset, value, size);
+		};
+
+		std::array<std::byte, 64> pool{};
+		std::array<std::byte, 96> block{};
+		writeBytes(pool, 0, std::int32_t{0});
+		writeBytes(pool, 4, std::int32_t{64});
+		writeBytes(pool, 16, reinterpret_cast<std::uintptr_t>(block.data()));
+		writeBytes(block, 0, static_cast<std::uint16_t>(4u << 6));
+		constexpr char noneText[] = "None";
+		writeSpan(block, 2, noneText, 4);
+		writeBytes(block, 6, static_cast<std::uint16_t>(5u << 6));
+		constexpr char actorText[] = "Actor";
+		writeSpan(block, 8, actorText, 5);
+		writeBytes(block, 14, static_cast<std::uint16_t>(5u << 6));
+		constexpr char assetText[] = "Asset";
+		writeSpan(block, 16, assetText, 5);
+
+		EngineNameProfile nameProfile{
+			.Storage = EngineNameStorageKind::NamePool,
+			.StorageAddress = reinterpret_cast<std::uintptr_t>(pool.data()),
+			.FNameSize = 8,
+			.ComparisonIndexOffset = 0,
+			.NumberOffset = 4,
+			.BlockOffsetBits = 14,
+			.EntryStride = 2,
+			.ChunksStart = 16,
+			.MaxChunkIndexOffset = 0,
+			.ByteCursorOffset = 4,
+			.EntryStringOffset = 2,
+			.EntryHeaderOffset = 0,
+			.EntryLengthShift = 6,
+			.Validated = true,
+			.Source = "property-codec-name-fixture"
+		};
+		EngineNameCodec names(nameProfile);
+		Require(names.IsConfigured(), "Property codec fixture name profile was rejected");
+
+		PropertyCodecProfile profile{
+			.Validated = true,
+			.Source = "ue-x64-property-fixture",
+			.DynamicArray = {
+				.Validated = true,
+				.DataOffset = 0,
+				.NumOffset = 8,
+				.MaxOffset = 12,
+				.HeaderSize = 16
+			},
+			.Text = {
+				.Validated = true,
+				.DataPointerOffset = 0,
+				.StringOffsetInData = 0,
+				.MinimumValueSize = 8
+			},
+			.WeakObject = {
+				.Validated = true,
+				.IndexOffset = 0,
+				.SerialOffset = 4,
+				.ValueSize = 8
+			},
+			.SoftObject = {
+				.Validated = true,
+				.AssetPathNameOffsets = {0, 8},
+				.AssetPathNameCount = 2,
+				.SubPathStringOffset = 16,
+				.MinimumValueSize = 32
+			},
+			.SparseContainer = {
+				.Validated = true,
+				.ElementsDataOffset = 0,
+				.ElementsNumOffset = 8,
+				.ElementsMaxOffset = 12,
+				.AllocationInlineDataOffset = 16,
+				.AllocationSecondaryDataOffset = 32,
+				.AllocationNumBitsOffset = 40,
+				.AllocationMaxBitsOffset = 44,
+				.HeaderSize = 56,
+				.InlineBitWordCount = 4
+			}
+		};
+		PropertyCodec codec(names, profile);
+		Require(
+			codec.IsConfigured()
+				&& IsPropertyCodecProfileValid(profile, nameProfile),
+			"A complete validated property codec profile was rejected");
+		Require(
+			std::string(ToString(PropertyValueState::Unsupported)) == "unsupported"
+				&& std::string(ToString(PropertyValueState::Unavailable)) == "unavailable"
+				&& std::string(ToString(PropertyValueState::Error)) == "error",
+			"Property value states are not explicit and stable");
+
+		const auto intDescriptor = std::make_shared<PropertyDescriptor>(PropertyDescriptor{
+			.Kind = PropertyKind::Int32,
+			.TypeName = "int32",
+			.Size = 4
+		});
+		std::int32_t integer = -17;
+		PropertyValue integerValue = codec.Decode(
+			reinterpret_cast<std::uintptr_t>(&integer),
+			*intDescriptor);
+		Require(
+			integerValue.State == PropertyValueState::Ok
+				&& std::get<std::int64_t>(integerValue.Scalar) == -17,
+			"Signed scalar property decoding changed its width or value");
+
+		std::uint8_t boolByte = 0x04;
+		PropertyDescriptor boolDescriptor{
+			.Kind = PropertyKind::Bool,
+			.TypeName = "bool",
+			.Size = 1,
+			.BoolByteOffset = 0,
+			.BoolMask = 0x04
+		};
+		Require(
+			std::get<bool>(codec.Decode(
+				reinterpret_cast<std::uintptr_t>(&boolByte),
+				boolDescriptor).Scalar),
+			"Bitfield bool mask was ignored");
+
+		const std::array<std::uint32_t, 2> actorName{3, 0};
+		PropertyDescriptor nameDescriptor{
+			.Kind = PropertyKind::Name,
+			.TypeName = "FName",
+			.Size = 8
+		};
+		PropertyValue decodedName = codec.Decode(
+			reinterpret_cast<std::uintptr_t>(actorName.data()),
+			nameDescriptor);
+		Require(
+			decodedName.State == PropertyValueState::Ok
+				&& std::get<std::string>(decodedName.Scalar) == "Actor",
+			"FName property bypassed the immutable name codec");
+
+		struct ArrayHeader
+		{
+			std::uintptr_t Data = 0;
+			std::int32_t Num = 0;
+			std::int32_t Max = 0;
+		};
+		static_assert(sizeof(ArrayHeader) == 16);
+		std::array<wchar_t, 6> hello{L'H', L'e', L'l', L'l', L'o', L'\0'};
+		ArrayHeader stringHeader{
+			.Data = reinterpret_cast<std::uintptr_t>(hello.data()),
+			.Num = static_cast<std::int32_t>(hello.size()),
+			.Max = static_cast<std::int32_t>(hello.size())
+		};
+		PropertyDescriptor stringDescriptor{
+			.Kind = PropertyKind::String,
+			.TypeName = "FString",
+			.Size = 16
+		};
+		PropertyValue stringValue = codec.Decode(
+			reinterpret_cast<std::uintptr_t>(&stringHeader),
+			stringDescriptor);
+		Require(
+			stringValue.State == PropertyValueState::Ok
+				&& std::get<std::string>(stringValue.Scalar) == "Hello",
+			"FString was not copied and converted through the bounded UTF-16 codec");
+
+		std::uintptr_t textData = reinterpret_cast<std::uintptr_t>(&stringHeader);
+		PropertyDescriptor textDescriptor{
+			.Kind = PropertyKind::Text,
+			.TypeName = "FText",
+			.Size = 8
+		};
+		PropertyValue textValue = codec.Decode(
+			reinterpret_cast<std::uintptr_t>(&textData),
+			textDescriptor);
+		Require(
+			textValue.State == PropertyValueState::Ok
+				&& std::get<std::string>(textValue.Scalar) == "Hello",
+			"Validated FText layout returned an unresolved placeholder");
+
+		class FixtureReferenceResolver final : public IPropertyReferenceResolver
+		{
+		public:
+			bool ReturnInvalidHandle = false;
+			bool ReturnMismatchedAddress = false;
+			bool ReturnWrongContext = false;
+
+			std::string_view SessionId() const noexcept override { return "property-fixture"; }
+			std::uint64_t ContextGeneration() const noexcept override { return 9; }
+
+			PropertyReferenceResult ResolveAddress(const std::uintptr_t address) override
+			{
+				return address == 0x1234
+					? Success(address)
+					: Failure();
+			}
+
+			PropertyReferenceResult ResolveWeak(
+				const std::int32_t index,
+				const std::int32_t serialNumber) override
+			{
+				return index == 7 && serialNumber == 77
+					? Success(0x1234)
+					: Failure();
+			}
+
+		private:
+			PropertyReferenceResult Success(const std::uintptr_t address) const
+			{
+				return {
+					.State = PropertyValueState::Ok,
+					.Handle = {
+						.SessionId = "property-fixture",
+						.ContextGeneration = ReturnInvalidHandle ? 0u : (ReturnWrongContext ? 10u : 9u),
+						.Index = 7,
+						.SerialNumber = 77,
+						.Address = ReturnMismatchedAddress ? address + 8u : address,
+						.ClassFingerprint = 0xABCD
+					}
+				};
+			}
+
+			static PropertyReferenceResult Failure()
+			{
+				return {
+					.State = PropertyValueState::Error,
+					.ErrorCode = "PROPERTY_REFERENCE_STALE",
+					.ErrorMessage = "Fixture reference is stale"
+				};
+			}
+		} resolver;
+		PropertyDecodeOptions referenceOptions;
+		referenceOptions.ReferenceResolver = &resolver;
+		std::uintptr_t objectPointer = 0x1234;
+		PropertyDescriptor objectDescriptor{
+			.Kind = PropertyKind::Object,
+			.TypeName = "UObject*",
+			.Size = 8
+		};
+		PropertyValue objectValue = codec.Decode(
+			reinterpret_cast<std::uintptr_t>(&objectPointer),
+			objectDescriptor,
+			referenceOptions);
+		Require(
+			objectValue.State == PropertyValueState::Ok
+				&& std::get<PropertyObjectReference>(objectValue.Scalar).Handle.SerialNumber == 77,
+			"Object property returned a raw address instead of a stable handle");
+		Require(
+			codec.Decode(
+				reinterpret_cast<std::uintptr_t>(&objectPointer),
+				objectDescriptor).State == PropertyValueState::Unavailable,
+			"Object property succeeded without a stable reference resolver");
+		resolver.ReturnInvalidHandle = true;
+		Require(
+			codec.Decode(
+				reinterpret_cast<std::uintptr_t>(&objectPointer),
+				objectDescriptor,
+				referenceOptions).ErrorCode == "PROPERTY_REFERENCE_RESULT_INVALID",
+			"Reference resolver success bypassed the stable-handle envelope checks");
+		resolver.ReturnInvalidHandle = false;
+		resolver.ReturnMismatchedAddress = true;
+		Require(
+			codec.Decode(
+				reinterpret_cast<std::uintptr_t>(&objectPointer),
+				objectDescriptor,
+				referenceOptions).ErrorCode == "PROPERTY_REFERENCE_RESULT_INVALID",
+			"Reference resolver success returned a handle for a different address");
+		resolver.ReturnMismatchedAddress = false;
+		resolver.ReturnWrongContext = true;
+		Require(
+			codec.Decode(
+				reinterpret_cast<std::uintptr_t>(&objectPointer),
+				objectDescriptor,
+				referenceOptions).ErrorCode == "PROPERTY_REFERENCE_RESULT_INVALID",
+			"Reference resolver returned a handle from a different context generation");
+		resolver.ReturnWrongContext = false;
+
+		std::array<std::int32_t, 2> weakIdentity{7, 77};
+		PropertyDescriptor weakDescriptor{
+			.Kind = PropertyKind::WeakObject,
+			.TypeName = "TWeakObjectPtr<UObject>",
+			.Size = 8
+		};
+		Require(
+			codec.Decode(
+				reinterpret_cast<std::uintptr_t>(weakIdentity.data()),
+				weakDescriptor,
+				referenceOptions).State == PropertyValueState::Ok,
+			"Weak object index/serial did not resolve to a stable handle");
+		weakIdentity[1] = 78;
+		Require(
+			codec.Decode(
+				reinterpret_cast<std::uintptr_t>(weakIdentity.data()),
+				weakDescriptor,
+				referenceOptions).ErrorCode == "PROPERTY_REFERENCE_STALE",
+			"Stale weak object identity was reported as a successful value");
+
+		std::array<wchar_t, 4> subPathText{L'S', L'u', L'b', L'\0'};
+		ArrayHeader subPathHeader{
+			.Data = reinterpret_cast<std::uintptr_t>(subPathText.data()),
+			.Num = static_cast<std::int32_t>(subPathText.size()),
+			.Max = static_cast<std::int32_t>(subPathText.size())
+		};
+		std::array<std::byte, 32> softValueBytes{};
+		const std::array<std::uint32_t, 2> assetName{3, 0};
+		const std::array<std::uint32_t, 2> objectName{7, 0};
+		writeBytes(softValueBytes, 0, assetName);
+		writeBytes(softValueBytes, 8, objectName);
+		writeBytes(softValueBytes, 16, subPathHeader);
+		PropertyDescriptor softDescriptor{
+			.Kind = PropertyKind::SoftObject,
+			.TypeName = "TSoftObjectPtr<UObject>",
+			.Size = 32
+		};
+		PropertyValue softValue = codec.Decode(
+			reinterpret_cast<std::uintptr_t>(softValueBytes.data()),
+			softDescriptor);
+		Require(
+			softValue.State == PropertyValueState::Ok
+				&& std::get<std::string>(softValue.Scalar) == "Actor.Asset:Sub",
+			"Soft object path was guessed as weak index/serial or decoded out of order");
+
+		std::array<std::int32_t, 2> structData{11, 22};
+		PropertyDescriptor structDescriptor{
+			.Kind = PropertyKind::Struct,
+			.TypeName = "FixtureStruct",
+			.Size = 8,
+			.Fields = {
+				{.Name = "A", .Offset = 0, .Descriptor = intDescriptor},
+				{.Name = "B", .Offset = 4, .Descriptor = intDescriptor}
+			}
+		};
+		PropertyValue structValue = codec.Decode(
+			reinterpret_cast<std::uintptr_t>(structData.data()),
+			structDescriptor);
+		Require(
+			structValue.State == PropertyValueState::Ok
+				&& structValue.Children.size() == 2
+				&& structValue.Children[1].Label == "B",
+			"Struct fields were not bounded and labeled deterministically");
+		PropertyDescriptor cyclicDescriptor{
+			.Kind = PropertyKind::Struct,
+			.TypeName = "Cycle",
+			.Size = 4
+		};
+		cyclicDescriptor.Fields.push_back({
+			.Name = "Self",
+			.Offset = 0,
+			.Descriptor = std::shared_ptr<const PropertyDescriptor>(
+				&cyclicDescriptor,
+				[](const PropertyDescriptor*) {})
+		});
+		Require(
+			codec.Decode(
+				reinterpret_cast<std::uintptr_t>(&integer),
+				cyclicDescriptor).ErrorCode == "PROPERTY_RECURSION_CYCLE",
+			"Recursive property descriptor/address pair bypassed the cycle guard");
+		PropertyDescriptor cyclicArrayDescriptor{
+			.Kind = PropertyKind::Array,
+			.TypeName = "TArray<Self>",
+			.Size = 16,
+			.ElementStride = 16
+		};
+		cyclicArrayDescriptor.Element = std::shared_ptr<const PropertyDescriptor>(
+			&cyclicArrayDescriptor,
+			[](const PropertyDescriptor*) {});
+		ArrayHeader cyclicArrayHeader{
+			.Data = 0,
+			.Num = 1,
+			.Max = 1
+		};
+		cyclicArrayHeader.Data = reinterpret_cast<std::uintptr_t>(&cyclicArrayHeader);
+		Require(
+			codec.Decode(
+				reinterpret_cast<std::uintptr_t>(&cyclicArrayHeader),
+				cyclicArrayDescriptor).ErrorCode == "PROPERTY_RECURSION_CYCLE",
+			"Recursive array descriptor/address pair bypassed the generic cycle guard");
+
+		std::array<std::int32_t, 3> arrayData{3, 5, 8};
+		ArrayHeader arrayHeader{
+			.Data = reinterpret_cast<std::uintptr_t>(arrayData.data()),
+			.Num = static_cast<std::int32_t>(arrayData.size()),
+			.Max = static_cast<std::int32_t>(arrayData.size())
+		};
+		PropertyDescriptor arrayDescriptor{
+			.Kind = PropertyKind::Array,
+			.TypeName = "TArray<int32>",
+			.Size = 16,
+			.ElementStride = 4,
+			.Element = intDescriptor
+		};
+		PropertyDecodeOptions previewOptions;
+		previewOptions.Limits.MaxContainerElements = 2;
+		PropertyValue arrayValue = codec.Decode(
+			reinterpret_cast<std::uintptr_t>(&arrayHeader),
+			arrayDescriptor,
+			previewOptions);
+		Require(
+			arrayValue.State == PropertyValueState::Ok
+				&& arrayValue.TotalCount == 3
+				&& arrayValue.Truncated
+				&& arrayValue.Children.size() == 2,
+			"Array preview did not expose exact total/truncation bounds");
+		PropertyDecodeOptions nodeBudgetOptions;
+		nodeBudgetOptions.Limits.MaxTotalNodes = 2;
+		PropertyValue budgetedArray = codec.Decode(
+			reinterpret_cast<std::uintptr_t>(&arrayHeader),
+			arrayDescriptor,
+			nodeBudgetOptions);
+		Require(
+			budgetedArray.State == PropertyValueState::Error
+				&& budgetedArray.ErrorCode == "PROPERTY_NODE_BUDGET_EXCEEDED"
+				&& budgetedArray.Truncated
+				&& budgetedArray.Children.size() == 1,
+			"Total property node budget did not stop and truncate the output value tree");
+		ArrayHeader invalidArray = arrayHeader;
+		invalidArray.Max = 1;
+		Require(
+			codec.Decode(
+				reinterpret_cast<std::uintptr_t>(&invalidArray),
+				arrayDescriptor).ErrorCode == "PROPERTY_CONTAINER_HEADER_INVALID",
+			"Array with Num greater than Max was accepted");
+
+		std::array<std::byte, 48> setSlots{};
+		writeBytes(setSlots, 0, std::int32_t{10});
+		writeBytes(setSlots, 16, std::int32_t{20});
+		writeBytes(setSlots, 32, std::int32_t{30});
+		std::array<std::byte, 56> setHeader{};
+		writeBytes(setHeader, 0, reinterpret_cast<std::uintptr_t>(setSlots.data()));
+		writeBytes(setHeader, 8, std::int32_t{3});
+		writeBytes(setHeader, 12, std::int32_t{3});
+		writeBytes(setHeader, 16, std::uint32_t{0b101});
+		writeBytes(setHeader, 32, std::uintptr_t{0});
+		writeBytes(setHeader, 40, std::int32_t{3});
+		writeBytes(setHeader, 44, std::int32_t{128});
+		PropertyDescriptor setDescriptor{
+			.Kind = PropertyKind::Set,
+			.TypeName = "TSet<int32>",
+			.Size = 56,
+			.ElementStride = 16,
+			.ElementValueOffset = 0,
+			.Element = intDescriptor
+		};
+		PropertyValue setValue = codec.Decode(
+			reinterpret_cast<std::uintptr_t>(setHeader.data()),
+			setDescriptor);
+		Require(
+			setValue.State == PropertyValueState::Ok
+				&& setValue.TotalCount == 2
+				&& setValue.Children.size() == 2,
+			"Sparse set allocation bits were ignored or inactive slots were decoded");
+		PropertyDecodeOptions sparseNodeBudgetOptions;
+		sparseNodeBudgetOptions.Limits.MaxTotalNodes = 2;
+		PropertyValue budgetedSet = codec.Decode(
+			reinterpret_cast<std::uintptr_t>(setHeader.data()),
+			setDescriptor,
+			sparseNodeBudgetOptions);
+		Require(
+			budgetedSet.State == PropertyValueState::Error
+				&& budgetedSet.Truncated
+				&& budgetedSet.Children.size() == 1
+				&& budgetedSet.Children[0].Children.empty(),
+			"Sparse container item wrappers bypassed the total property node budget");
+
+		std::array<std::byte, 48> mapSlots{};
+		writeBytes(mapSlots, 0, std::int32_t{1});
+		writeBytes(mapSlots, 4, std::int32_t{100});
+		writeBytes(mapSlots, 32, std::int32_t{2});
+		writeBytes(mapSlots, 36, std::int32_t{200});
+		std::array<std::byte, 56> mapHeader = setHeader;
+		writeBytes(mapHeader, 0, reinterpret_cast<std::uintptr_t>(mapSlots.data()));
+		PropertyDescriptor mapDescriptor{
+			.Kind = PropertyKind::Map,
+			.TypeName = "TMap<int32,int32>",
+			.Size = 56,
+			.ElementStride = 16,
+			.MapKeyOffset = 0,
+			.MapValueOffset = 4,
+			.Key = intDescriptor,
+			.Mapped = intDescriptor
+		};
+		PropertyValue mapValue = codec.Decode(
+			reinterpret_cast<std::uintptr_t>(mapHeader.data()),
+			mapDescriptor);
+		Require(
+			mapValue.State == PropertyValueState::Ok
+				&& mapValue.TotalCount == 2
+				&& mapValue.Children[0].Children.size() == 2,
+			"Sparse map key/value pairs were not decoded through bounded descriptors");
+		PropertyDescriptor overlappingMapDescriptor = mapDescriptor;
+		overlappingMapDescriptor.MapValueOffset = 2;
+		Require(
+			codec.Decode(
+				reinterpret_cast<std::uintptr_t>(mapHeader.data()),
+				overlappingMapDescriptor).ErrorCode == "PROPERTY_DESCRIPTOR_INVALID",
+			"Overlapping sparse map key/value ranges were accepted");
+
+		PropertyDescriptor enumDescriptor{
+			.Kind = PropertyKind::Enum,
+			.TypeName = "EFixture",
+			.Size = 4,
+			.Element = intDescriptor,
+			.EnumEntries = {
+				{.RawValue = 2, .Name = "EFixture::Two"}
+			}
+		};
+		std::int32_t enumRaw = 2;
+		PropertyValue enumValue = codec.Decode(
+			reinterpret_cast<std::uintptr_t>(&enumRaw),
+			enumDescriptor);
+		Require(
+			enumValue.State == PropertyValueState::Ok
+				&& enumValue.DisplayName == "EFixture::Two",
+			"Enum underlying value was not preserved with an exact symbolic match");
+
+		PropertyDescriptor delegateDescriptor{
+			.Kind = PropertyKind::Delegate,
+			.TypeName = "FScriptDelegate",
+			.Size = 16
+		};
+		Require(
+			codec.Decode(
+				reinterpret_cast<std::uintptr_t>(&stringHeader),
+				delegateDescriptor).State == PropertyValueState::Unsupported,
+			"Unimplemented delegate codec was reported as a successful value");
+		PropertyCodec unavailableCodec(names, {});
+		Require(
+			!unavailableCodec.IsConfigured()
+				&& unavailableCodec.Decode(
+					reinterpret_cast<std::uintptr_t>(&stringHeader),
+					stringDescriptor).State == PropertyValueState::Unavailable,
+			"Missing property layout profile silently fell back to the x64 fixture layout");
+		PropertyCodecProfile overlappingProfile = profile;
+		overlappingProfile.DynamicArray.NumOffset = 0;
+		PropertyCodec overlappingCodec(names, overlappingProfile);
+		Require(
+			!overlappingCodec.IsConfigured()
+				&& overlappingCodec.Decode(
+					reinterpret_cast<std::uintptr_t>(&integer),
+					*intDescriptor).ErrorCode == "PROPERTY_CODEC_NOT_CONFIGURED",
+			"Overlapping layout fields configured a partially usable property codec");
+
+		class FacadeIdentitySource final : public IHandleIdentitySource
+		{
+		public:
+			std::uint64_t ContextGeneration() const noexcept override { return 51; }
+			bool IsCurrentExecutionThreadValid() const noexcept override { return true; }
+			bool TryReadObject(std::int32_t, ObjectIdentity&) override { return false; }
+			bool TryReadFunction(std::int32_t, FunctionIdentity&) override { return false; }
+		} facadeIdentity;
+		EngineContextBuilder contextBuilder(51);
+		contextBuilder.SetIdentity(0x140000000, 0x140100000, 4242, 0, "Fixture", "5.4");
+		contextBuilder.SetNameProfile(nameProfile);
+		EngineFacade facade(
+			contextBuilder.Build(),
+			"property-codec-facade",
+			facadeIdentity);
+		Require(facade.ConfigurePropertyCodec(profile),
+			"EngineFacade rejected its first immutable property codec");
+		const std::shared_ptr<const PropertyCodec> retainedCodec = facade.Properties();
+		Require(
+			retainedCodec
+				&& retainedCodec->IsConfigured()
+				&& !facade.ConfigurePropertyCodec(profile),
+			"EngineFacade did not enforce single ownership of the immutable property codec");
+		Require(
+			facade.Stop()
+				&& !facade.Properties()
+				&& retainedCodec->Decode(
+					reinterpret_cast<std::uintptr_t>(&integer),
+					*intDescriptor).Ok(),
+			"EngineFacade did not atomically unpublish a self-contained property codec at stop");
 	}
 
 	void TestCoreRuntimeStateAndShutdown()
@@ -3396,6 +3993,7 @@ int main(const int argc, char** argv)
 		TestCoreSessionIdentity();
 		TestEngineContextAndCapabilities();
 		TestEngineNameCodec();
+		TestPropertyCodec();
 		TestCoreRuntimeStateAndShutdown();
 		TestStableObjectAndFunctionHandles();
 		TestProductionSnapshotMetadataSource();
@@ -3416,7 +4014,7 @@ int main(const int argc, char** argv)
 		TestPostRenderFrameClientOwnershipAndDrain();
 		TestGameThreadMpscCapacity();
 		TestHttpServerLifecycle();
-		std::cout << "Core harness passed: deterministic bounded frame fuzz/disconnect matrix, secure sessions, real current-user Windows Named Pipe RPC/event lifecycle, runtime/capabilities, EngineFacade/immutable budgeted snapshots, domain commands, stable handles/FUObjectItem layout, bounded PE/version/global-pointer probing, pattern scanning, Hook RAII/drain, SafeMemory, USMAP consumer, bounded queues, cancellable owned game-thread/frame-client work, SEH, HTTP lifecycle, and shutdown.\n";
+		std::cout << "Core harness passed: deterministic bounded frame fuzz/disconnect matrix, secure sessions, real current-user Windows Named Pipe RPC/event lifecycle, runtime/capabilities, EngineFacade/immutable budgeted snapshots, domain commands, stable handles/FUObjectItem layout, bounded property codecs, bounded PE/version/global-pointer probing, pattern scanning, Hook RAII/drain, SafeMemory, USMAP consumer, bounded queues, cancellable owned game-thread/frame-client work, SEH, HTTP lifecycle, and shutdown.\n";
 		return 0;
 	}
 	catch (const std::exception& error)

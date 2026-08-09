@@ -133,6 +133,7 @@
 	<ClCompile Include="Runtime\ObjectArraySnapshotSource.cpp" />
     <ClCompile Include="Runtime\ObjectHandle.cpp" />
 	<ClCompile Include="Runtime\PostRenderHook.cpp" />
+	<ClCompile Include="Runtime\PropertyCodec.cpp" />
     <ClCompile Include="Runtime\SafeMemory.cpp" />
     <ClCompile Include="Runtime\VTableHook.cpp" />
 	<!-- Domain services -->
@@ -217,6 +218,7 @@
 	<ClInclude Include="Runtime\ObjectIdentityContext.h" />
 	<ClInclude Include="Runtime\ObjectSnapshotIdentitySource.h" />
 	<ClInclude Include="Runtime\PostRenderHook.h" />
+	<ClInclude Include="Runtime\PropertyCodec.h" />
     <ClInclude Include="Runtime\SafeMemory.h" />
     <ClInclude Include="Runtime\ShutdownCoordinator.h" />
     <ClInclude Include="Runtime\VTableHook.h" />

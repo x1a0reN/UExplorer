@@ -24,6 +24,7 @@ struct RuntimeProbes
 	bool FunctionHandleValidationEnabled = false;
 	bool ObjectSnapshotPublished = false;
 	bool ReflectionLayoutValidated = false;
+	bool PropertyCodecEnabled = false;
 	bool FunctionCallServiceEnabled = false;
 	bool NamedPipeListening = false;
 };
@@ -116,6 +117,12 @@ inline std::shared_ptr<const CapabilitySnapshot> BuildCoreCapabilities(
 			: "No immutable reflection layout has passed semantic witnesses",
 		{"engine.names", "memory.safe"});
 	builder.Define(
+		"engine.property_codec",
+		probes.PropertyCodecEnabled,
+		"PROPERTY_CODEC_NOT_CONFIGURED",
+		"No complete immutable property codec profile has passed its layout witnesses",
+		{"engine.reflection"});
+	builder.Define(
 		"objects.identity_source",
 		probes.ObjectIdentitySourceEnabled,
 		"OBJECT_IDENTITY_SOURCE_NOT_READY",
@@ -150,7 +157,7 @@ inline std::shared_ptr<const CapabilitySnapshot> BuildCoreCapabilities(
 		false,
 		"OBJECT_PROPERTY_COMMAND_NOT_IMPLEMENTED",
 		"Validated reflected property commands are not registered",
-		{"engine.reflection", "objects.handles"});
+		{"engine.property_codec", "objects.handles"});
 	builder.Define(
 		"types.inspect",
 		false,

@@ -59,6 +59,7 @@ UExplorer/
 │   │   ├── EngineContext*.h/.cpp     #   一次性发布的引擎 profile/offset report
 │   │   ├── EngineFacade.h/.cpp       #   session/context/identity 的单一领域入口
 │   │   ├── EngineNameCodec.h/.cpp    #   immutable layout + SafeMemory 的严格 FName 解码
+│   │   ├── PropertyCodec.h/.cpp      #   显式状态、完整 profile、稳定句柄与精确值树预算
 │   │   ├── EngineVersionProbe.h/.cpp #   只扫描已验证 PE 可读节的版本标记探测
 │   │   ├── EngineSnapshot.h/.cpp     #   严格校验并原子发布的不可变快照 store
 │   │   ├── EngineSnapshotCapture.*   #   budgeted capture/validate/publish producer
@@ -241,7 +242,7 @@ React pages -> api/client.ts -> Tauri invoke / Channel
 Main.cpp -> NamedPipeRpcServer -> CoreCommandService -> EngineFacade
     |                                      |               |
     +-> PostRenderHook -> GameThreadExecutor              Snapshot
-    +-> CoreRuntime / CapabilityRegistry                  SafeMemory
+    +-> CoreRuntime / CapabilityRegistry                  SafeMemory / PropertyCodec
     +-> Generator / Engine / Platform
 ```
 

@@ -5,9 +5,12 @@
 #include "EngineSnapshot.h"
 #include "EngineSnapshotCapture.h"
 #include "ObjectHandle.h"
+#include "PropertyCodec.h"
 
+#include <atomic>
 #include <memory>
 #include <chrono>
+#include <mutex>
 #include <string>
 
 namespace UExplorer::Runtime
@@ -35,6 +38,11 @@ public:
 	FunctionHandleResult IssueFunctionHandle(std::int32_t index);
 	FunctionValidationResult ValidateFunctionHandle(const FunctionHandle& handle);
 	const EngineNameCodec& Names() const noexcept { return m_Names; }
+	bool ConfigurePropertyCodec(PropertyCodecProfile profile) noexcept;
+	std::shared_ptr<const PropertyCodec> Properties() const noexcept
+	{
+		return m_Properties.load(std::memory_order_acquire);
+	}
 
 	EngineSnapshotStore& Snapshots() noexcept { return m_Snapshots; }
 	const EngineSnapshotStore& Snapshots() const noexcept { return m_Snapshots; }
@@ -48,6 +56,8 @@ private:
 	std::string m_SessionId;
 	IHandleIdentitySource& m_IdentitySource;
 	EngineNameCodec m_Names;
+	std::atomic<std::shared_ptr<const PropertyCodec>> m_Properties;
+	mutable std::mutex m_PropertyMutex;
 	ObjectHandleService m_Handles;
 	EngineSnapshotStore m_Snapshots;
 	std::unique_ptr<EngineSnapshotCapture> m_SnapshotCapture;

@@ -38,6 +38,11 @@ Generator indexing are separate capabilities. Failure to validate one of those o
 layouts must leave that domain unavailable rather than failing or silently guessing the
 transport/runtime profile.
 
+The generic Core harness now exercises a synthetic, explicitly validated x64 property
+profile for scalar, FName/FString/FText, object/weak/soft reference, enum, struct,
+array, map, and set decoding. This proves codec bounds and result-state behavior only;
+it is not evidence that the same offsets/layouts apply to any engine row above.
+
 ## Generic boundary evidence (not an engine support claim)
 
 The R4 desktop transport boundary is verified independently of an Unreal profile:
