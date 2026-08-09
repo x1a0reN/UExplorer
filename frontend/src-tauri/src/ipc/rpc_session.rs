@@ -582,13 +582,25 @@ impl CoreRpcSession {
         let event: EventPayload = deserialize_payload(&frame.payload)?;
         self.validate_session(&event.session_id)?;
         if event.seq == 0
+            || event.seq > MAX_GENERATION
             || event.seq <= self.last_event_seq
+            || event.timestamp_us > MAX_GENERATION
+            || event.dropped_before > MAX_GENERATION
+            || event.dropped_before >= event.seq
             || event.dropped_before < self.last_dropped_before
             || !is_valid_operation(&event.kind)
         {
             return Err(RpcSessionError::InvalidEnvelope(
                 "Event sequence, drop counter, or kind is invalid",
             ));
+        }
+        if self.last_event_seq != 0 && event.seq > self.last_event_seq + 1 {
+            let missing = event.seq - self.last_event_seq - 1;
+            if event.dropped_before < self.last_dropped_before.saturating_add(missing) {
+                return Err(RpcSessionError::InvalidEnvelope(
+                    "Event sequence gap is not accounted for by the drop counter",
+                ));
+            }
         }
         self.last_event_seq = event.seq;
         self.last_dropped_before = event.dropped_before;
@@ -1155,6 +1167,18 @@ mod tests {
         ));
         assert!(session.receive(&encoded_event).is_err());
         assert_eq!(session.state(), RpcSessionState::Failed);
+
+        let mut gap_session = ready_session();
+        gap_session.receive(&encoded_event).unwrap();
+        let unaccounted_gap = EventPayload { seq: 12, ..event };
+        let unaccounted_gap = encode_frame(
+            FrameKind::Event,
+            0,
+            &serde_json::to_vec(&unaccounted_gap).unwrap(),
+        )
+        .unwrap();
+        assert!(gap_session.receive(&unaccounted_gap).is_err());
+        assert_eq!(gap_session.state(), RpcSessionState::Failed);
     }
 
     #[test]

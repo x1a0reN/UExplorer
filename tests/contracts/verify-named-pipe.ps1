@@ -88,6 +88,7 @@ foreach ($token in @(
         'SECURITY_IDENTIFICATION', 'GetNamedPipeServerProcessId', 'SetNamedPipeHandleState',
         'CoreRpcSession', 'PendingRead', 'CancelIoEx', 'GetOverlappedResult',
         'WaitForMultipleObjects', 'COMMAND_CAPACITY', 'EVENT_CAPACITY',
+        'pub struct CoreRpcEvent', 'transport_dropped_before',
         'expire_requests', 'RequestCancelled', 'DeadlineExpired', 'join_worker',
         'real_named_pipe_lifecycle_verifies_peer_and_joins_worker',
         'rejects_pipe_server_pid_mismatch_before_hello',

@@ -22,6 +22,7 @@ jobs:
           ./tests/contracts/verify-core-safety.ps1
           ./tests/contracts/verify-core-runtime.ps1
           ./tests/contracts/verify-host-snapshot.ps1
+          ./tests/contracts/verify-host-session.ps1
           ./tests/contracts/verify-rpc-session.ps1
           ./tests/contracts/verify-named-pipe.ps1
           ./tests/contracts/verify-platform-safety.ps1

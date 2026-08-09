@@ -99,8 +99,29 @@ requires the exact protocol acknowledgement before the worker joins. Real NPFS t
 cover 1-byte response fragmentation, a Welcome followed immediately by Event,
 concurrent Ping correlation, cancellation/deadline, event overflow without RPC
 starvation, mid-request disconnect, peer-PID rejection before Hello, and a fresh
-connection to the same PID-scoped name. EventHub and multi-PID SessionManager remain
-R3 work, so the desktop application is not yet connected to this endpoint.
+connection to the same PID-scoped name.
+
+The Host `EventHub` is session-scoped and retains at most 1024 events for exact replay.
+It accepts at most 64 KiB of serialized data per event and shares the retained payload
+with subscriber queues instead of cloning the JSON per consumer. It supports exact kind,
+`watch_id`, and `hook_name` selectors, at most 64 subscribers, and a bounded
+1..1024-event queue per subscriber. Producers use nonblocking enqueue;
+a slow subscriber receives a cumulative `host_dropped_before` count without stalling
+the Pipe reader or another subscriber. The Pipe inbox attaches its cumulative transport
+drop snapshot to the next successfully queued event; EventHub combines that value with
+subscriber-local drops as `host_dropped_before`. Event sequence plus Core and transport
+drop counters must be monotonic, and every post-observation sequence gap must be
+accounted for by one of those drop sources. Replay retains the transport drop snapshot;
+history that is no longer available or cannot fit the requested subscriber capacity
+fails explicitly rather than returning a partial result.
+
+The Windows Host `SessionManager` supports up to 16 PID-keyed sessions with one explicit
+active session. Each session owns immutable Welcome identity/capabilities, one
+`CoreRpcClient`, EventHub, SnapshotCache, and joinable event forwarder. Snapshot refresh
+pulls `objects.snapshot.page` using the remaining negotiated deadline, restarts a
+generation-changing page chain at most three times, and atomically publishes only a
+complete generation. The manager is not yet registered as Tauri state, so injection
+readiness and the React product path remain R3 work.
 
 ## Identity and errors
 

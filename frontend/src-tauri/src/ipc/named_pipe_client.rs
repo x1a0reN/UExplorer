@@ -9,6 +9,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 use uexplorer_protocol::{
     EventPayload, HeartbeatPayload, ResponsePayload, ShutdownPayload, WelcomePayload,
+    MAX_GENERATION,
 };
 use windows::core::{Error as WindowsError, HRESULT, PCWSTR};
 use windows::Win32::Foundation::{
@@ -138,7 +139,13 @@ pub struct CoreRpcClientDiagnostics {
     pub pipe_name: String,
     pub server_pid: u32,
     pub welcome: WelcomePayload,
-    pub dropped_host_events: u64,
+    pub transport_dropped_events: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CoreRpcEvent {
+    pub event: EventPayload,
+    pub transport_dropped_before: u64,
 }
 
 pub struct PendingRpc {
@@ -170,7 +177,7 @@ pub struct CoreRpcClient {
     command_tx: SyncSender<WorkerCommand>,
     command_event: Arc<WinEvent>,
     stop_event: Arc<WinEvent>,
-    event_rx: Mutex<Receiver<EventPayload>>,
+    event_rx: Mutex<Receiver<CoreRpcEvent>>,
     dropped_events: Arc<AtomicU64>,
     done_rx: Mutex<Option<Receiver<()>>>,
     worker: Mutex<Option<JoinHandle<()>>>,
@@ -276,7 +283,7 @@ impl CoreRpcClient {
             pipe_name: self.pipe_name.clone(),
             server_pid: self.server_pid,
             welcome: self.welcome.clone(),
-            dropped_host_events: self.dropped_events.load(Ordering::Acquire),
+            transport_dropped_events: self.dropped_events.load(Ordering::Acquire),
         }
     }
 
@@ -376,11 +383,22 @@ impl CoreRpcClient {
         }
     }
 
-    pub fn try_recv_event(&self) -> Result<Option<EventPayload>, CoreRpcClientError> {
+    pub fn try_recv_event(&self) -> Result<Option<CoreRpcEvent>, CoreRpcClientError> {
         match lock(&self.event_rx).try_recv() {
             Ok(event) => Ok(Some(event)),
             Err(mpsc::TryRecvError::Empty) => Ok(None),
             Err(mpsc::TryRecvError::Disconnected) => Err(CoreRpcClientError::WorkerStopped),
+        }
+    }
+
+    pub fn recv_event_timeout(
+        &self,
+        timeout: Duration,
+    ) -> Result<Option<CoreRpcEvent>, CoreRpcClientError> {
+        match lock(&self.event_rx).recv_timeout(timeout) {
+            Ok(event) => Ok(Some(event)),
+            Err(RecvTimeoutError::Timeout) => Ok(None),
+            Err(RecvTimeoutError::Disconnected) => Err(CoreRpcClientError::WorkerStopped),
         }
     }
 
@@ -513,7 +531,7 @@ struct WorkerConfig {
     command_rx: Receiver<WorkerCommand>,
     command_event: Arc<WinEvent>,
     stop_event: Arc<WinEvent>,
-    event_tx: SyncSender<EventPayload>,
+    event_tx: SyncSender<CoreRpcEvent>,
     dropped_events: Arc<AtomicU64>,
     handshake_tx: SyncSender<Result<HandshakeInfo, CoreRpcClientError>>,
 }
@@ -535,7 +553,7 @@ struct WorkerState {
     command_rx: Receiver<WorkerCommand>,
     command_event: Arc<WinEvent>,
     stop_event: Arc<WinEvent>,
-    event_tx: SyncSender<EventPayload>,
+    event_tx: SyncSender<CoreRpcEvent>,
     dropped_events: Arc<AtomicU64>,
     requests: BTreeMap<u64, SyncSender<Result<ResponsePayload, CoreRpcClientError>>>,
     pings: BTreeMap<u64, SyncSender<Result<HeartbeatPayload, CoreRpcClientError>>>,
@@ -882,8 +900,16 @@ impl WorkerState {
                     }
                 }
                 RpcInbound::Event(event) => {
-                    if self.event_tx.try_send(event).is_err() {
-                        self.dropped_events.fetch_add(1, Ordering::AcqRel);
+                    let queued = CoreRpcEvent {
+                        event,
+                        transport_dropped_before: self.dropped_events.load(Ordering::Acquire),
+                    };
+                    if self.event_tx.try_send(queued).is_err() {
+                        let _ = self.dropped_events.fetch_update(
+                            Ordering::AcqRel,
+                            Ordering::Acquire,
+                            |value| Some(value.saturating_add(1).min(MAX_GENERATION)),
+                        );
                     }
                 }
                 RpcInbound::Reply(reply) => {
@@ -1678,6 +1704,29 @@ mod tests {
                     );
                 }
             }
+            if mode == ServerMode::BurstEvents
+                && observed
+                    .iter()
+                    .any(|frame| frame.header.kind == FrameKind::Request)
+            {
+                let seq = (EVENT_CAPACITY + 3) as u64;
+                let event = EventPayload {
+                    seq,
+                    kind: "runtime.tick".to_string(),
+                    timestamp_us: seq,
+                    session_id: format!("fake-session-{target_pid}"),
+                    dropped_before: 0,
+                    data: json!({ "ready": true }),
+                };
+                output.extend(
+                    encode_frame(
+                        FrameKind::Event,
+                        0,
+                        &serde_json::to_vec(&event).map_err(|error| error.to_string())?,
+                    )
+                    .map_err(|error| error.to_string())?,
+                );
+            }
             if mode == ServerMode::FragmentResponses {
                 for byte in output {
                     write_test_server_bytes(pipe.raw(), &[byte])?;
@@ -1739,8 +1788,9 @@ mod tests {
             );
             thread::sleep(Duration::from_millis(1));
         };
-        assert_eq!(event.seq, 1);
-        assert_eq!(event.kind, "runtime.ready");
+        assert_eq!(event.event.seq, 1);
+        assert_eq!(event.transport_dropped_before, 0);
+        assert_eq!(event.event.kind, "runtime.ready");
 
         let response = client.request("status.inspect", 5_000, json!({})).unwrap();
         assert!(response.ok);
@@ -1821,19 +1871,42 @@ mod tests {
         let client = CoreRpcClient::connect(pid, "test-host", Duration::from_secs(5)).unwrap();
 
         let deadline = Instant::now() + Duration::from_secs(5);
-        while client.diagnostics().dropped_host_events < 2 {
+        while client.diagnostics().transport_dropped_events < 2 {
             assert!(
                 Instant::now() < deadline,
                 "bounded event queue did not record overflow"
             );
             thread::sleep(Duration::from_millis(1));
         }
+        let first = client
+            .try_recv_event()
+            .unwrap()
+            .expect("burst queue must retain its first event");
+        assert_eq!(first.event.seq, 1);
+        assert_eq!(first.transport_dropped_before, 0);
         assert!(
             client
                 .request("status.inspect", 5_000, json!({}))
                 .unwrap()
                 .ok
         );
+        let recovery_seq = (EVENT_CAPACITY + 3) as u64;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let recovered = loop {
+            if let Some(event) = client
+                .recv_event_timeout(Duration::from_millis(10))
+                .unwrap()
+            {
+                if event.event.seq == recovery_seq {
+                    break event;
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "event after transport overflow was not delivered"
+            );
+        };
+        assert_eq!(recovered.transport_dropped_before, 2);
         client
             .shutdown("event_backpressure_test", Duration::from_secs(5))
             .unwrap();

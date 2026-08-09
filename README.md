@@ -105,6 +105,7 @@ Core harness and contract checks:
 & 'D:\Projects\UExplorer\tests\contracts\verify-core-safety.ps1'
 & 'D:\Projects\UExplorer\tests\contracts\verify-core-runtime.ps1'
 & 'D:\Projects\UExplorer\tests\contracts\verify-host-snapshot.ps1'
+& 'D:\Projects\UExplorer\tests\contracts\verify-host-session.ps1'
 & 'D:\Projects\UExplorer\tests\contracts\verify-rpc-session.ps1'
 & 'D:\Projects\UExplorer\tests\contracts\verify-named-pipe.ps1'
 & 'D:\Projects\UExplorer\tests\contracts\verify-platform-safety.ps1'

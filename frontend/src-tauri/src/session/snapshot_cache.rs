@@ -379,6 +379,10 @@ impl SnapshotIndex {
         Ok(index)
     }
 
+    pub fn record_count(&self) -> u32 {
+        self.metadata.record_count
+    }
+
     pub fn session_id(&self) -> &str {
         &self.session_id
     }
