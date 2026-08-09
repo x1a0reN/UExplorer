@@ -27,6 +27,7 @@ $shutdown = Read-ProjectFile 'Dumper\Runtime\ShutdownCoordinator.h'
 $handleHeader = Read-ProjectFile 'Dumper\Runtime\ObjectHandle.h'
 $handleImplementation = Read-ProjectFile 'Dumper\Runtime\ObjectHandle.cpp'
 $identityLayout = Read-ProjectFile 'Dumper\Runtime\FUObjectItemLayout.cpp'
+$identityContext = Read-ProjectFile 'Dumper\Runtime\ObjectIdentityContext.h'
 $identitySource = Read-ProjectFile 'Dumper\Runtime\ObjectArrayIdentitySource.cpp'
 $objectArray = Read-ProjectFile 'Dumper\Engine\Private\Unreal\ObjectArray.cpp'
 $callbackBarrier = Read-ProjectFile 'Dumper\Runtime\CallbackBarrier.h'
@@ -68,6 +69,7 @@ foreach ($token in @('gobjects', 'process_event.index', 'positive_member_offset'
 }
 
 foreach ($token in @('transport.named_pipe', 'PIPE_LISTENER_NOT_READY', 'objects.identity_source',
+		'functions.handles', 'FUNCTION_HANDLE_VALIDATION_NOT_READY',
         'GAME_THREAD_PUMP_NOT_OBSERVED', 'GAME_THREAD_PUMP_STALLED', 'RequiredReadyCapabilities')) {
     Assert-Contains $capabilities $token 'Capability dependency/readiness contract regressed.'
 }
@@ -109,6 +111,11 @@ foreach ($token in @('epic_fuobjectitem_64_v1', 'exact_epic_object_offset',
         'FUOBJECTITEM_POSITIVE_SERIAL_NOT_OBSERVED')) {
     Assert-Contains $identityLayout $token 'FUObjectItem serial profile validation regressed.'
 }
+foreach ($token in @('CaptureObjectIdentityContext', 'CanIssueObjectHandles',
+		'CanIssueFunctionHandles', 'FUObjectItemSerial', 'FNameComparisonIndex',
+		'FunctionExec')) {
+	Assert-Contains $identityContext $token 'Immutable object-identity offset context regressed.'
+}
 foreach ($token in @('TryReadIdentityCandidate', 'objectFirst != objectSecond', 'internalIndex != Index',
 		'FUObjectItemSerialNumberOffset', 'count > capacity', 'Index >= count',
 		'internalIndexOffset > (std::numeric_limits<uintptr_t>::max)() - objectAddress')) {
@@ -116,9 +123,11 @@ foreach ($token in @('TryReadIdentityCandidate', 'objectFirst != objectSecond', 
 }
 foreach ($token in @('IsCurrentExecutionThreadValid', 'executor.IsCurrentPumpThread()',
         'TryReadObjectCore', 'TryReadCanonicalFNameToken', 'TryBuildCanonicalFunctionPath',
-        'finalPath != fullPath', 'SignatureFingerprint')) {
+		'm_Offsets.ObjectClass', 'm_Offsets.FunctionExec',
+		'finalPath != fullPath', 'SignatureFingerprint')) {
     Assert-Contains $identitySource $token 'Production object/function identity source regressed.'
 }
+Assert-NotContains $identitySource 'Off::' 'Production identity validation must use its immutable context, not mutable offset globals.'
 foreach ($token in @('CALL_HANDLE_REQUIRED', 'SESSION_SERIAL_OBJECT_AND_FUNCTION_HANDLES_REQUIRED',
         'server.Post("/api/v1/call/function"',
         'server.Post("/api/v1/call/static"',
@@ -168,6 +177,8 @@ Assert-NotContains $statusApi 'CoreRuntimeSnapshot' 'Status HTTP adapter must no
 foreach ($token in @('TestEngineContextAndCapabilities', 'TestCoreRuntimeStateAndShutdown',
         'TestCoreSessionIdentity',
         'TestCoreDomainCommandsAndHandleExecution', 'Handle command accepted transport-supplied identity fields',
+		'Missing function metadata did not disable only function handles',
+		'Function handle command ignored its dedicated capability',
         'Domain command ticket did not cancel queued work',
         'TestStableObjectAndFunctionHandles', 'Object handle crossed a session boundary',
         'Recycled object slot retained a valid handle', 'Function handle ignored owner recycling',

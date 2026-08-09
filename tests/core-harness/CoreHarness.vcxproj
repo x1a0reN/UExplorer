@@ -73,6 +73,7 @@
 	<ClInclude Include="..\..\Dumper\Runtime\FUObjectItemLayout.h" />
 	<ClInclude Include="..\..\Dumper\Runtime\GameThreadExecutor.h" />
     <ClInclude Include="..\..\Dumper\Runtime\ObjectHandle.h" />
+	<ClInclude Include="..\..\Dumper\Runtime\ObjectIdentityContext.h" />
     <ClInclude Include="..\..\Dumper\Runtime\SafeMemory.h" />
     <ClInclude Include="..\..\Dumper\Runtime\ShutdownCoordinator.h" />
     <ClInclude Include="..\..\Dumper\Runtime\VTableHook.h" />

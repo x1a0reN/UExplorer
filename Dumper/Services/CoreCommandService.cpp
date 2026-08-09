@@ -472,8 +472,9 @@ CoreCommandResponse CoreCommandService::ExecuteHandleIssue(
 			admissionError.empty() ? "CORE_NOT_READY" : admissionError,
 			"CoreRuntime is not accepting domain commands");
 	}
+	const char* capabilityName = functionHandle ? "functions.handles" : "objects.handles";
 	const Runtime::CapabilityStatus* capability = lease->Capabilities()
-		? lease->Capabilities()->Find("objects.handles")
+		? lease->Capabilities()->Find(capabilityName)
 		: nullptr;
 	if (!capability || !capability->Available)
 	{
@@ -484,8 +485,8 @@ CoreCommandResponse CoreCommandService::ExecuteHandleIssue(
 				: "OBJECT_HANDLE_CAPABILITY_UNAVAILABLE",
 			capability && !capability->Reason.empty()
 				? capability->Reason
-				: "Stable object handles are unavailable",
-			{{"capability", "objects.handles"}});
+				: "Stable execution handles are unavailable",
+			{{"capability", capabilityName}});
 	}
 
 	std::shared_ptr<Runtime::IGameThreadWork> work;

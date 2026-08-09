@@ -14,6 +14,7 @@
 #include "Runtime/FUObjectItemLayout.h"
 #include "Runtime/GameThreadExecutor.h"
 #include "Runtime/ObjectHandle.h"
+#include "Runtime/ObjectIdentityContext.h"
 #include "Runtime/SafeMemory.h"
 #include "Runtime/ShutdownCoordinator.h"
 #include "Runtime/VTableHook.h"
@@ -242,7 +243,8 @@ namespace
 	}
 
 	std::shared_ptr<const UExplorer::Runtime::EngineContext> MakeEngineContext(
-		const std::uint64_t generation = 1)
+		const std::uint64_t generation = 1,
+		const bool includeFunctionIdentity = true)
 	{
 		UExplorer::Runtime::EngineContextBuilder builder(generation);
 		builder.SetIdentity(0x140000000, 0x140100000, 4242, 100, "FixtureGame", "5.4");
@@ -251,6 +253,19 @@ namespace
 		builder.AddOffset(ValidatedOffset("gworld", 0x200000));
 		builder.AddOffset(ValidatedOffset("process_event.index", 0x4C, true));
 		builder.AddOffset(ValidatedOffset("process_event.offset", 0x300000, true));
+		builder.AddOffset(ValidatedOffset("fuobjectitem.serial_number", 0x10));
+		builder.AddOffset(ValidatedOffset("uobject.index", 0x0C));
+		builder.AddOffset(ValidatedOffset("uobject.class", 0x10));
+		builder.AddOffset(ValidatedOffset("uobject.name", 0x18));
+		builder.AddOffset(ValidatedOffset("uobject.outer", 0x20));
+		builder.AddOffset(ValidatedOffset("fname.size", 0x08));
+		builder.AddOffset(ValidatedOffset("fname.comparison_index", 0x00));
+		builder.AddOffset(ValidatedOffset("fname.number", 0x04));
+		builder.AddOffset(ValidatedOffset("uclass.cast_flags", 0x38));
+		builder.AddOffset(ValidatedOffset("ufunction.function_flags", 0xB0));
+		if (includeFunctionIdentity)
+			builder.AddOffset(ValidatedOffset("ufunction.exec_function", 0xD8));
+		builder.AddOffset(ValidatedOffset("ustruct.size", 0x58));
 		return builder.Build();
 	}
 
@@ -286,6 +301,17 @@ namespace
 		Require(context->Generation() == 1, "Engine context generation changed");
 		Require(context->HasValidatedOffset("gobjects"), "Validated offset was not published");
 		Require(context->Profile().UsesFProperty, "Immutable engine profile was not published");
+		const ObjectIdentityContext identityContext = CaptureObjectIdentityContext(*context);
+		Require(
+			identityContext.CanIssueObjectHandles()
+				&& identityContext.CanIssueFunctionHandles(),
+			"Immutable context did not configure stable object/function identities");
+		const ObjectIdentityContext objectOnlyIdentity =
+			CaptureObjectIdentityContext(*MakeEngineContext(2, false));
+		Require(
+			objectOnlyIdentity.CanIssueObjectHandles()
+				&& !objectOnlyIdentity.CanIssueFunctionHandles(),
+			"Missing function metadata did not disable only function handles");
 
 		bool missingRequiredRejected = false;
 		try
@@ -314,6 +340,7 @@ namespace
 		probes.SafeMemoryEnabled = true;
 		probes.ObjectIdentitySourceEnabled = true;
 		probes.ObjectHandleValidationEnabled = true;
+		probes.FunctionHandleValidationEnabled = true;
 		const auto withoutCallService = BuildCoreCapabilities(*context, probes);
 		Require(
 			withoutCallService->IsAvailable("objects.handles")
@@ -323,6 +350,14 @@ namespace
 		const auto withoutPipe = BuildCoreCapabilities(*context, probes);
 		Require(!withoutPipe->IsAvailable("transport.named_pipe"), "Missing pipe listener was advertised");
 		Require(withoutPipe->IsAvailable("call.invoke"), "Validated call dependencies were rejected");
+		RuntimeProbes missingFunctionHandles = probes;
+		missingFunctionHandles.FunctionHandleValidationEnabled = false;
+		const auto withoutFunctionHandles = BuildCoreCapabilities(*context, missingFunctionHandles);
+		Require(
+			withoutFunctionHandles->IsAvailable("objects.handles")
+				&& !withoutFunctionHandles->IsAvailable("functions.handles")
+				&& !withoutFunctionHandles->IsAvailable("call.invoke"),
+			"Function call capability ignored the function-handle dependency");
 		RuntimeProbes missingIdentitySource = probes;
 		missingIdentitySource.ObjectIdentitySourceEnabled = false;
 		const auto withoutIdentitySource = BuildCoreCapabilities(*context, missingIdentitySource);
@@ -380,6 +415,7 @@ namespace
 		probes.SafeMemoryEnabled = true;
 		probes.ObjectIdentitySourceEnabled = true;
 		probes.ObjectHandleValidationEnabled = true;
+		probes.FunctionHandleValidationEnabled = true;
 		Require(
 			runtime.PublishCapabilities(BuildCoreCapabilities(*context, probes)),
 			"CoreRuntime rejected capability publication");
@@ -620,6 +656,7 @@ namespace
 		probes.SafeMemoryEnabled = true;
 		probes.ObjectIdentitySourceEnabled = true;
 		probes.ObjectHandleValidationEnabled = true;
+		probes.FunctionHandleValidationEnabled = true;
 		probes.NamedPipeListening = true;
 		Require(
 			runtime.PublishCapabilities(BuildCoreCapabilities(*context, probes))
@@ -708,9 +745,20 @@ namespace
 					== "Function fname:10:0.fname:20:0"
 				&& functionResponse.Data.at("owner").at("serial") == 401,
 			"Function handle domain command did not bind its owner/path identity");
+		RuntimeProbes objectOnlyProbes = probes;
+		objectOnlyProbes.FunctionHandleValidationEnabled = false;
+		Require(
+			runtime.PublishCapabilities(BuildCoreCapabilities(*context, objectOnlyProbes)),
+			"Command runtime rejected a truthful function-handle capability downgrade");
+		functionRequest.RequestId = 4;
+		const CoreCommandResponse unavailableFunction = service.Execute(functionRequest);
+		Require(
+			!unavailableFunction.Ok && unavailableFunction.Error
+				&& unavailableFunction.Error->Code == "FUNCTION_HANDLE_VALIDATION_NOT_READY",
+			"Function handle command ignored its dedicated capability");
 
 		CoreCommandRequest wrongSession = objectRequest;
-		wrongSession.RequestId = 4;
+		wrongSession.RequestId = 5;
 		wrongSession.SessionId = "stale-session";
 		const CoreCommandResponse rejectedSession = service.Execute(wrongSession);
 		Require(
@@ -719,14 +767,14 @@ namespace
 			"Domain command crossed a Core session boundary");
 
 		CoreCommandRequest invalidData = objectRequest;
-		invalidData.RequestId = 5;
+		invalidData.RequestId = 6;
 		invalidData.Data = {{"index", 7}, {"address", "0x1000"}};
 		const CoreCommandResponse rejectedData = service.Execute(invalidData);
 		Require(
 			!rejectedData.Ok && rejectedData.Error
 				&& rejectedData.Error->Code == "INVALID_ARGUMENT",
 			"Handle command accepted transport-supplied identity fields");
-		invalidData.RequestId = 6;
+		invalidData.RequestId = 7;
 		invalidData.Data = {{"index", (std::numeric_limits<std::uint64_t>::max)()}};
 		const CoreCommandResponse rejectedUnsignedIndex = service.Execute(invalidData);
 		Require(
@@ -737,7 +785,7 @@ namespace
 		std::promise<GameThreadTicket> publishedTicket;
 		auto ticketFuture = publishedTicket.get_future();
 		CoreCommandRequest cancelledRequest = objectRequest;
-		cancelledRequest.RequestId = 7;
+		cancelledRequest.RequestId = 8;
 		auto cancelledResponseFuture = std::async(
 			std::launch::async,
 			[&service, cancelledRequest, &publishedTicket] {

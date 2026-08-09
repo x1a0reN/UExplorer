@@ -55,6 +55,7 @@
         "2026-08-09: VTableHookToken and CallbackBarrier replace manual Hook ownership flags and callback counters; ownership is allocated before CAS and status reads use atomic projections",
         "2026-08-09: ObjectArrayIdentitySource establishes a production SafeMemory/game-thread identity boundary for the explicit Epic 64-bit FUObjectItem profile",
         "2026-08-09: transport-neutral CoreCommandService now owns status and handle-issue business logic; StatusApi is only a legacy HTTP adapter",
+        "2026-08-09: production handle validation captures its offsets from one immutable EngineContext and no longer reads mutable Off globals or a reconfigurable identity singleton",
         "Remaining legacy domain/API monoliths and direct Off/Settings consumers still require migration"
       ]
     },
@@ -171,6 +172,7 @@
       "verification": [
         "2026-08-09: EngineContext publishes per-offset value, required flag, source, checks, validation state, and stable failure reason",
         "2026-08-09: EngineContext reports fuobjectitem.serial_number only after exact profile and runtime witness validation",
+        "2026-08-09: FName size/comparison/number and UClass cast-flags now have bounded validation reports and are frozen into the handle identity context",
         "Required offset validation blocks context publication; candidate lists and deeper semantic validation remain incomplete"
       ]
     },
@@ -258,6 +260,7 @@
         "Core harness proves stale sessions, generation changes, slot recycling, address changes, and class changes are rejected",
         "2026-08-09: production ObjectArrayIdentitySource accepts only the explicit Epic x64 FUObjectItem 0x18/0x20 profile after stable slot/InternalIndex, cluster, and positive-serial witness checks; it rejects non-PostRender threads",
         "2026-08-09: objects.handle.issue accepts only an index and creates the complete handle through owned work at the verified PostRender execution point",
+        "2026-08-09: the production source is constructed from one immutable context generation and verifies its captured serial offset still matches the live validated layout",
         "Real UE target profile fixtures remain pending"
       ]
     },
@@ -315,6 +318,7 @@
         "Legacy HTTP function/static/batch routes now return CALL_HANDLE_REQUIRED before registering index/name implementations; frontend execution controls are disabled",
         "2026-08-09: production function identity source binds a bounded raw-FName-token outer path, serial-backed owner, reflected flags/size, and exec pointer with coherent re-reads on the observed PostRender thread",
         "2026-08-09: functions.handle.issue is integrated through the game-thread CoreCommandService and rejects caller-supplied identity fields",
+        "2026-08-09: functions.handles is a dedicated capability requiring the complete immutable owner/path/signature offset profile; call.invoke depends on it separately from object handles",
         "Actual handle-validated call invocation, Named Pipe command wiring, and real UE fixtures remain pending"
       ]
     },

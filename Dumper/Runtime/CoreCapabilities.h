@@ -20,6 +20,7 @@ struct RuntimeProbes
 	bool SafeMemoryEnabled = false;
 	bool ObjectIdentitySourceEnabled = false;
 	bool ObjectHandleValidationEnabled = false;
+	bool FunctionHandleValidationEnabled = false;
 	bool FunctionCallServiceEnabled = false;
 	bool NamedPipeListening = false;
 	bool LegacyHttpListening = false;
@@ -95,6 +96,12 @@ inline std::shared_ptr<const CapabilitySnapshot> BuildCoreCapabilities(
 		"Index and serial validation is not active",
 		{"objects.identity_source", "game_thread.executor"});
 	builder.Define(
+		"functions.handles",
+		probes.FunctionHandleValidationEnabled,
+		"FUNCTION_HANDLE_VALIDATION_NOT_READY",
+		"Function owner, path, and signature validation is not active",
+		{"objects.handles"});
+	builder.Define(
 		"transport.named_pipe",
 		probes.NamedPipeListening,
 		"PIPE_LISTENER_NOT_READY",
@@ -119,7 +126,7 @@ inline std::shared_ptr<const CapabilitySnapshot> BuildCoreCapabilities(
 		probes.FunctionCallServiceEnabled,
 		"FUNCTION_CALL_SERVICE_NOT_READY",
 		"No validated function-call domain command is registered",
-		{"game_thread.executor", "objects.handles"});
+		{"game_thread.executor", "functions.handles"});
 	builder.Define("world.inspect", true, {}, {}, {"engine.world_global", "objects.handles"});
 	builder.Define(
 		"world.mutate",

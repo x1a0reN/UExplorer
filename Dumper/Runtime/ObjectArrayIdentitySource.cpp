@@ -1,7 +1,6 @@
 #include "ObjectArrayIdentitySource.h"
 
 #include "GameThreadExecutor.h"
-#include "OffsetFinder/Offsets.h"
 #include "SafeMemory.h"
 #include "Unreal/Enums.h"
 #include "Unreal/ObjectArray.h"
@@ -77,12 +76,11 @@ bool AppendUnsigned(
 }
 
 bool TryReadCanonicalFNameToken(
+	const ObjectIdentityContext& offsets,
 	const std::uintptr_t objectAddress,
 	std::string& output)
 {
-	if (Off::UObject::Name <= 0
-		|| Off::FName::CompIdx < 0
-		|| Off::InSDK::Name::FNameSize < static_cast<std::int32_t>(sizeof(std::uint32_t)))
+	if (!offsets.CanIssueFunctionHandles())
 	{
 		return false;
 	}
@@ -90,15 +88,15 @@ bool TryReadCanonicalFNameToken(
 	std::uintptr_t nameBase = 0;
 	if (!TryAddFieldAddress(
 		objectAddress,
-		Off::UObject::Name,
-		static_cast<std::size_t>(Off::InSDK::Name::FNameSize),
+		offsets.ObjectName,
+		static_cast<std::size_t>(offsets.FNameSize),
 		nameBase))
 	{
 		return false;
 	}
-	const auto comparisonOffset = static_cast<std::uint32_t>(Off::FName::CompIdx);
+	const auto comparisonOffset = static_cast<std::uint32_t>(offsets.FNameComparisonIndex);
 	if (comparisonOffset + sizeof(std::uint32_t)
-		> static_cast<std::uint32_t>(Off::InSDK::Name::FNameSize))
+		> static_cast<std::uint32_t>(offsets.FNameSize))
 	{
 		return false;
 	}
@@ -107,11 +105,11 @@ bool TryReadCanonicalFNameToken(
 		return false;
 
 	std::uint32_t number = 0;
-	if (Off::FName::Number >= 0)
+	if (offsets.FNameNumber >= 0)
 	{
-		const auto numberOffset = static_cast<std::uint32_t>(Off::FName::Number);
+		const auto numberOffset = static_cast<std::uint32_t>(offsets.FNameNumber);
 		if (numberOffset + sizeof(std::uint32_t)
-			> static_cast<std::uint32_t>(Off::InSDK::Name::FNameSize)
+			> static_cast<std::uint32_t>(offsets.FNameSize)
 			|| !ReadValue(nameBase + numberOffset, number).Ok())
 		{
 			return false;
@@ -126,6 +124,7 @@ bool TryReadCanonicalFNameToken(
 }
 
 bool TryBuildCanonicalFunctionPath(
+	const ObjectIdentityContext& offsets,
 	const std::uintptr_t functionAddress,
 	std::string& output)
 {
@@ -144,7 +143,7 @@ bool TryBuildCanonicalFunctionPath(
 		chain[depth++] = current;
 
 		std::uintptr_t outerField = 0;
-		if (!TryAddFieldAddress(current, Off::UObject::Outer, sizeof(void*), outerField))
+		if (!TryAddFieldAddress(current, offsets.ObjectOuter, sizeof(void*), outerField))
 			return false;
 		void* outer = nullptr;
 		if (!ReadValue(outerField, outer).Ok())
@@ -156,7 +155,7 @@ bool TryBuildCanonicalFunctionPath(
 	for (std::size_t reverseIndex = depth; reverseIndex > 0; --reverseIndex)
 	{
 		std::string nameToken;
-		if (!TryReadCanonicalFNameToken(chain[reverseIndex - 1], nameToken))
+		if (!TryReadCanonicalFNameToken(offsets, chain[reverseIndex - 1], nameToken))
 			return false;
 		if (output.size() + nameToken.size() + 1 > kMaxCanonicalPathLength)
 			return false;
@@ -177,13 +176,26 @@ bool SameIdentity(const ObjectIdentity& left, const ObjectIdentity& right) noexc
 
 } // namespace
 
-bool ObjectArrayIdentitySource::IsLayoutAvailable() const noexcept
+ObjectArrayIdentitySource::ObjectArrayIdentitySource(
+	std::shared_ptr<const EngineContext> context)
+	: m_Context(std::move(context)),
+	  m_Offsets(m_Context ? CaptureObjectIdentityContext(*m_Context) : ObjectIdentityContext{})
+{
+}
+
+bool ObjectArrayIdentitySource::CanIssueObjectHandles() const noexcept
 {
 	const FUObjectItemIdentityLayout& layout = ObjectArray::GetIdentityLayout();
-	return layout.Validated
+	return m_Context
+		&& m_Offsets.CanIssueObjectHandles()
+		&& layout.Validated
 		&& layout.SerialOffset >= 0
-		&& Off::UObject::Index > 0
-		&& Off::UObject::Class > 0;
+		&& layout.SerialOffset == m_Offsets.FUObjectItemSerial;
+}
+
+bool ObjectArrayIdentitySource::CanIssueFunctionHandles() const noexcept
+{
+	return CanIssueObjectHandles() && m_Offsets.CanIssueFunctionHandles();
 }
 
 bool ObjectArrayIdentitySource::IsCurrentExecutionThreadValid() const noexcept
@@ -206,7 +218,7 @@ bool ObjectArrayIdentitySource::TryReadObjectCore(
 		return false;
 
 	std::uintptr_t classField = 0;
-	if (!TryAddFieldAddress(item.ObjectAddress, Off::UObject::Class, sizeof(void*), classField))
+	if (!TryAddFieldAddress(item.ObjectAddress, m_Offsets.ObjectClass, sizeof(void*), classField))
 		return false;
 	void* classObject = nullptr;
 	if (!ReadValue(classField, classObject).Ok() || !classObject)
@@ -215,7 +227,7 @@ bool ObjectArrayIdentitySource::TryReadObjectCore(
 	std::uintptr_t classIndexField = 0;
 	if (!TryAddFieldAddress(
 		reinterpret_cast<std::uintptr_t>(classObject),
-		Off::UObject::Index,
+		m_Offsets.ObjectIndex,
 		sizeof(std::int32_t),
 		classIndexField))
 	{
@@ -261,7 +273,7 @@ bool ObjectArrayIdentitySource::TryReadObject(
 	const std::int32_t index,
 	ObjectIdentity& identity)
 {
-	if (!IsLayoutAvailable() || !IsCurrentExecutionThreadValid())
+	if (!CanIssueObjectHandles() || !IsCurrentExecutionThreadValid())
 		return false;
 	return TryReadObjectCore(index, identity);
 }
@@ -271,10 +283,7 @@ bool ObjectArrayIdentitySource::TryReadFunction(
 	FunctionIdentity& identity)
 {
 	identity = {};
-	if (!IsLayoutAvailable() || !IsCurrentExecutionThreadValid()
-		|| Off::UClass::CastFlags <= 0
-		|| Off::UFunction::FunctionFlags <= 0
-		|| Off::UStruct::Size <= 0)
+	if (!CanIssueFunctionHandles() || !IsCurrentExecutionThreadValid())
 	{
 		return false;
 	}
@@ -284,7 +293,7 @@ bool ObjectArrayIdentitySource::TryReadFunction(
 		return false;
 
 	std::uintptr_t classField = 0;
-	if (!TryAddFieldAddress(functionIdentity.Address, Off::UObject::Class, sizeof(void*), classField))
+	if (!TryAddFieldAddress(functionIdentity.Address, m_Offsets.ObjectClass, sizeof(void*), classField))
 		return false;
 	void* classObject = nullptr;
 	if (!ReadValue(classField, classObject).Ok() || !classObject)
@@ -292,7 +301,7 @@ bool ObjectArrayIdentitySource::TryReadFunction(
 	std::uintptr_t castFlagsField = 0;
 	if (!TryAddFieldAddress(
 		reinterpret_cast<std::uintptr_t>(classObject),
-		Off::UClass::CastFlags,
+		m_Offsets.ClassCastFlags,
 		sizeof(std::uint64_t),
 		castFlagsField))
 	{
@@ -306,7 +315,7 @@ bool ObjectArrayIdentitySource::TryReadFunction(
 	}
 
 	std::uintptr_t outerField = 0;
-	if (!TryAddFieldAddress(functionIdentity.Address, Off::UObject::Outer, sizeof(void*), outerField))
+	if (!TryAddFieldAddress(functionIdentity.Address, m_Offsets.ObjectOuter, sizeof(void*), outerField))
 		return false;
 	void* ownerObject = nullptr;
 	if (!ReadValue(outerField, ownerObject).Ok() || !ownerObject)
@@ -314,7 +323,7 @@ bool ObjectArrayIdentitySource::TryReadFunction(
 	std::uintptr_t ownerIndexField = 0;
 	if (!TryAddFieldAddress(
 		reinterpret_cast<std::uintptr_t>(ownerObject),
-		Off::UObject::Index,
+		m_Offsets.ObjectIndex,
 		sizeof(std::int32_t),
 		ownerIndexField))
 	{
@@ -331,19 +340,19 @@ bool ObjectArrayIdentitySource::TryReadFunction(
 	}
 
 	std::string fullPath;
-	if (!TryBuildCanonicalFunctionPath(functionIdentity.Address, fullPath))
+	if (!TryBuildCanonicalFunctionPath(m_Offsets, functionIdentity.Address, fullPath))
 		return false;
 
 	std::uintptr_t flagsField = 0;
 	std::uintptr_t sizeField = 0;
 	if (!TryAddFieldAddress(
 		functionIdentity.Address,
-		Off::UFunction::FunctionFlags,
+		m_Offsets.FunctionFlags,
 		sizeof(std::uint32_t),
 		flagsField)
 		|| !TryAddFieldAddress(
 			functionIdentity.Address,
-			Off::UStruct::Size,
+			m_Offsets.StructSize,
 			sizeof(std::int32_t),
 			sizeField))
 	{
@@ -360,12 +369,12 @@ bool ObjectArrayIdentitySource::TryReadFunction(
 	}
 
 	std::uintptr_t execFunction = 0;
-	if (Off::UFunction::ExecFunction > 0)
+	if (m_Offsets.FunctionExec > 0)
 	{
 		std::uintptr_t execField = 0;
 		if (!TryAddFieldAddress(
 			functionIdentity.Address,
-			Off::UFunction::ExecFunction,
+			m_Offsets.FunctionExec,
 			sizeof(void*),
 			execField)
 			|| !ReadValue(execField, execFunction).Ok())
@@ -398,7 +407,7 @@ bool ObjectArrayIdentitySource::TryReadFunction(
 		|| !TryReadObjectCore(ownerIndex, ownerFinal)
 		|| !SameIdentity(functionIdentity, functionFinal)
 		|| !SameIdentity(ownerIdentity, ownerFinal)
-		|| !TryBuildCanonicalFunctionPath(functionIdentity.Address, finalPath)
+		|| !TryBuildCanonicalFunctionPath(m_Offsets, functionIdentity.Address, finalPath)
 		|| finalPath != fullPath
 		|| !ReadValue(outerField, finalOwnerObject).Ok()
 		|| finalOwnerObject != ownerObject
@@ -409,12 +418,12 @@ bool ObjectArrayIdentitySource::TryReadFunction(
 	{
 		return false;
 	}
-	if (Off::UFunction::ExecFunction > 0)
+	if (m_Offsets.FunctionExec > 0)
 	{
 		std::uintptr_t execField = 0;
 		if (!TryAddFieldAddress(
 			functionIdentity.Address,
-			Off::UFunction::ExecFunction,
+			m_Offsets.FunctionExec,
 			sizeof(void*),
 			execField)
 			|| !ReadValue(execField, finalExecFunction).Ok()
@@ -431,12 +440,6 @@ bool ObjectArrayIdentitySource::TryReadFunction(
 		.SignatureFingerprint = signature
 	};
 	return true;
-}
-
-ObjectArrayIdentitySource& GetObjectArrayIdentitySource()
-{
-	static ObjectArrayIdentitySource source;
-	return source;
 }
 
 } // namespace UExplorer::Runtime

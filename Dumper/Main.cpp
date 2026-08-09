@@ -35,6 +35,7 @@ static std::atomic<bool> g_Running{ true };
 static std::unique_ptr<UExplorer::HttpServer> g_Server;
 static UExplorer::Runtime::CoreRuntime g_Runtime;
 static UExplorer::Services::EngineCoreStatusDiagnosticsSource g_StatusDiagnostics;
+static std::unique_ptr<UExplorer::Runtime::ObjectArrayIdentitySource> g_IdentitySource;
 static std::unique_ptr<UExplorer::Services::CoreCommandService> g_CommandService;
 static HMODULE g_Module = nullptr;
 
@@ -187,9 +188,11 @@ namespace
 		probes.GameThreadPumpActive = pumpActive;
 		probes.SafeMemoryEnabled = true;
 		probes.ObjectIdentitySourceEnabled =
-			UExplorer::Runtime::GetObjectArrayIdentitySource().IsLayoutAvailable();
+			g_IdentitySource && g_IdentitySource->CanIssueObjectHandles();
 		probes.ObjectHandleValidationEnabled =
 			g_CommandService && g_CommandService->IsConfigured();
+		probes.FunctionHandleValidationEnabled =
+			g_IdentitySource && g_IdentitySource->CanIssueFunctionHandles();
 		probes.FunctionCallServiceEnabled = false;
 		probes.LegacyHttpListening = legacyHttpListening;
 		const auto capabilities = UExplorer::Runtime::BuildCoreCapabilities(*snapshot.Context, probes);
@@ -204,6 +207,7 @@ namespace
 	{
 		UExplorer::Services::SetCoreCommandService(nullptr);
 		g_CommandService.reset();
+		g_IdentitySource.reset();
 		g_Runtime.MarkFailed(code, message);
 		g_Runtime.BeginStopping();
 		g_Runtime.MarkStopped();
@@ -368,10 +372,15 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 	std::cerr << "[UExplorer] Engine core initialized.\n";
 	try
 	{
+		const UExplorer::Runtime::CoreRuntimeSnapshot runtimeSnapshot = g_Runtime.Snapshot();
+		if (!runtimeSnapshot.Context)
+			throw std::runtime_error("Immutable EngineContext is unavailable");
+		g_IdentitySource = std::make_unique<UExplorer::Runtime::ObjectArrayIdentitySource>(
+			runtimeSnapshot.Context);
 		g_CommandService = std::make_unique<UExplorer::Services::CoreCommandService>(
 			g_Runtime,
 			UExplorer::Runtime::GetGameThreadExecutor(),
-			UExplorer::Runtime::GetObjectArrayIdentitySource(),
+			*g_IdentitySource,
 			g_StatusDiagnostics);
 		if (!g_CommandService->IsConfigured())
 			throw std::runtime_error("Core command service rejected the runtime session/context");
@@ -491,6 +500,7 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 		return 1;
 	}
 	g_CommandService.reset();
+	g_IdentitySource.reset();
 	if (!g_Runtime.MarkStopped())
 	{
 		g_Runtime.RecordShutdownFailure(

@@ -145,6 +145,36 @@ std::shared_ptr<const EngineContext> CaptureEngineContext(const std::uint64_t ge
 			"No supported FUObjectItem profile produced a stable positive serial witness";
 	}
 	builder.AddOffset(std::move(serialOffsetReport));
+	const std::int32_t fNameSize = Off::InSDK::Name::FNameSize;
+	builder.AddOffset(MakeOffsetReport(
+		"fname.size",
+		fNameSize,
+		false,
+		fNameSize > 0,
+		fNameSize >= static_cast<std::int32_t>(sizeof(std::uint32_t)) && fNameSize <= 64,
+		"runtime_name_layout",
+		{"at_least_comparison_index_size", "fname_size_at_most_64"}));
+	const auto nameFieldFits = [fNameSize](const std::int32_t offset) {
+		return fNameSize >= static_cast<std::int32_t>(sizeof(std::uint32_t))
+			&& offset >= 0
+			&& offset <= fNameSize - static_cast<std::int32_t>(sizeof(std::uint32_t));
+	};
+	builder.AddOffset(MakeOffsetReport(
+		"fname.comparison_index",
+		Off::FName::CompIdx,
+		false,
+		Off::FName::CompIdx >= 0,
+		nameFieldFits(Off::FName::CompIdx),
+		"runtime_name_layout",
+		{"non_negative_field_offset", "field_within_fname"}));
+	builder.AddOffset(MakeOffsetReport(
+		"fname.number",
+		Off::FName::Number,
+		false,
+		Off::FName::Number >= 0,
+		nameFieldFits(Off::FName::Number),
+		"runtime_name_layout",
+		{"non_negative_field_offset", "field_within_fname"}));
 	builder.AddOffset(ModuleOffset("gnames", Off::InSDK::NameArray::GNames, false, "name_array_scan"));
 	builder.AddOffset(ModuleOffset("gworld", Off::InSDK::World::GWorld, false, "reference_scan"));
 	builder.AddOffset(ModuleOffset("gengine", Off::InSDK::Engine::GEngine, false, "reference_scan"));
@@ -158,6 +188,7 @@ std::shared_ptr<const EngineContext> CaptureEngineContext(const std::uint64_t ge
 	builder.AddOffset(MemberOffset("ustruct.children", Off::UStruct::Children, true));
 	builder.AddOffset(MemberOffset("ustruct.child_properties", Off::UStruct::ChildProperties, Settings::Internal::bUseFProperty));
 	builder.AddOffset(MemberOffset("ustruct.size", Off::UStruct::Size, true));
+	builder.AddOffset(MemberOffset("uclass.cast_flags", Off::UClass::CastFlags, false));
 	builder.AddOffset(MemberOffset("uclass.default_object", Off::UClass::ClassDefaultObject, true));
 	builder.AddOffset(MemberOffset("ufunction.function_flags", Off::UFunction::FunctionFlags, true));
 	builder.AddOffset(MemberOffset("ufunction.exec_function", Off::UFunction::ExecFunction, false));

@@ -75,6 +75,9 @@ The v1 command registry is explicit. Unknown operations return
 Handle issue commands accept only an index as discovery input. Caller-supplied
 addresses, serials, classes, owners, paths, or fingerprints are rejected rather than
 trusted. The response contains the complete handle produced at the execution point.
+`objects.handle.issue` requires `objects.handles`; `functions.handle.issue` requires
+the stricter `functions.handles` capability. A valid object-handle profile therefore
+cannot accidentally advertise function identity or function invocation support.
 
 See `protocol.json`, `schema/payload.schema.json`, and `fixtures/` for the
 machine-readable contract and golden data.
