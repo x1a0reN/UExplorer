@@ -81,28 +81,59 @@ json SerializeGameThreadDiagnostics(const Runtime::GameThreadExecutor& executor)
 	};
 }
 
-json SerializeSnapshotDiagnostics(const Runtime::EngineSnapshotStore& store)
+json SerializeSnapshotDiagnostics(const Runtime::EngineFacade& engine)
 {
+	const Runtime::EngineSnapshotStore& store = engine.Snapshots();
 	const std::shared_ptr<const Runtime::EngineSnapshot> snapshot = store.Current();
-	if (!snapshot)
+	json data;
+	if (snapshot)
 	{
-		return {
+		data = {
+			{"published", true},
+			{"generation", snapshot->Generation},
+			{"context_generation", snapshot->ContextGeneration},
+			{"captured_at_monotonic_us", snapshot->CapturedAtMonotonicUs},
+			{"capture_duration_us", snapshot->CaptureDurationUs},
+			{"source_object_count", snapshot->SourceObjectCount},
+			{"object_count", snapshot->Objects.size()},
+			{"skipped_slots", snapshot->SkippedSlots},
+			{"stopped", store.IsStopped()}
+		};
+	}
+	else
+	{
+		data = {
 			{"published", false},
 			{"generation", nullptr},
 			{"stopped", store.IsStopped()}
 		};
 	}
-	return {
-		{"published", true},
-		{"generation", snapshot->Generation},
-		{"context_generation", snapshot->ContextGeneration},
-		{"captured_at_monotonic_us", snapshot->CapturedAtMonotonicUs},
-		{"capture_duration_us", snapshot->CaptureDurationUs},
-		{"source_object_count", snapshot->SourceObjectCount},
-		{"object_count", snapshot->Objects.size()},
-		{"skipped_slots", snapshot->SkippedSlots},
-		{"stopped", store.IsStopped()}
-	};
+
+	const Runtime::EngineSnapshotCapture* capture = engine.SnapshotCapture();
+	data["capture_configured"] = capture != nullptr;
+	if (capture)
+	{
+		const Runtime::SnapshotCaptureDiagnostics diagnostics = capture->Diagnostics();
+		data["capture"] = {
+			{"state", Runtime::ToString(diagnostics.State)},
+			{"error_code", diagnostics.Error == Runtime::SnapshotCaptureError::None
+				? json(nullptr)
+				: json(Runtime::ToString(diagnostics.Error))},
+			{"requested_generation", diagnostics.RequestedGeneration},
+			{"active_generation", diagnostics.ActiveGeneration},
+			{"source_object_count", diagnostics.SourceObjectCount},
+			{"next_slot", diagnostics.NextSlot},
+			{"captured_objects", diagnostics.CapturedObjects},
+			{"skipped_slots", diagnostics.SkippedSlots},
+			{"error_index", diagnostics.ErrorIndex},
+			{"pump_in_flight", diagnostics.PumpInFlight}
+		};
+	}
+	else
+	{
+		data["capture"] = nullptr;
+	}
+	return data;
 }
 
 json SerializeScriptOffsetDiagnostics(const ScriptOffsetDiagnostics& diagnostics)
@@ -399,7 +430,7 @@ CoreCommandResponse CoreCommandService::ExecuteStatus(const CoreCommandRequest& 
 		json data = SerializeRuntime(snapshot);
 		data["alive"] = snapshot.IsLive();
 		data["game_thread"] = SerializeGameThreadDiagnostics(m_GameThread);
-		data["object_snapshot"] = SerializeSnapshotDiagnostics(m_Engine.Snapshots());
+		data["object_snapshot"] = SerializeSnapshotDiagnostics(m_Engine);
 		return Success(request, std::move(data), {.ExecuteUs = ElapsedMicroseconds(started)});
 	}
 	if (!snapshot.Context)
@@ -421,7 +452,7 @@ CoreCommandResponse CoreCommandService::ExecuteStatus(const CoreCommandRequest& 
 		data["runtime"] = SerializeRuntime(snapshot);
 		data["capabilities"] = SerializeCapabilities(snapshot);
 		data["game_thread"] = SerializeGameThreadDiagnostics(m_GameThread);
-		data["object_snapshot"] = SerializeSnapshotDiagnostics(m_Engine.Snapshots());
+		data["object_snapshot"] = SerializeSnapshotDiagnostics(m_Engine);
 		return Success(request, std::move(data), {.ExecuteUs = ElapsedMicroseconds(started)});
 	}
 
@@ -465,7 +496,7 @@ CoreCommandResponse CoreCommandService::ExecuteStatus(const CoreCommandRequest& 
 	data["runtime"] = SerializeRuntime(snapshot);
 	data["capabilities"] = SerializeCapabilities(snapshot);
 	data["game_thread"] = SerializeGameThreadDiagnostics(m_GameThread);
-	data["object_snapshot"] = SerializeSnapshotDiagnostics(m_Engine.Snapshots());
+	data["object_snapshot"] = SerializeSnapshotDiagnostics(m_Engine);
 	return Success(request, std::move(data), {.ExecuteUs = ElapsedMicroseconds(started)});
 }
 

@@ -49,6 +49,7 @@ UExplorer/
 │   │   ├── EngineContext*.h/.cpp     #   一次性发布的引擎 profile/offset report
 │   │   ├── EngineFacade.h/.cpp       #   session/context/identity 的单一领域入口
 │   │   ├── EngineSnapshot.h/.cpp     #   严格校验并原子发布的不可变快照 store
+│   │   ├── EngineSnapshotCapture.*   #   budgeted capture/validate/publish producer
 │   │   ├── GameThreadExecutor.h/.cpp #   有界 owned work、deadline、cancel、drain
 │   │   ├── ObjectHandle*.h/.cpp      #   serial-backed Object/FunctionHandle
 │   │   ├── SafeMemory.h/.cpp         #   范围、SEH、保护恢复与代码写策略

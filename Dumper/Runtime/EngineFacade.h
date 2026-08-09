@@ -2,9 +2,11 @@
 
 #include "EngineContext.h"
 #include "EngineSnapshot.h"
+#include "EngineSnapshotCapture.h"
 #include "ObjectHandle.h"
 
 #include <memory>
+#include <chrono>
 #include <string>
 
 namespace UExplorer::Runtime
@@ -34,7 +36,10 @@ public:
 
 	EngineSnapshotStore& Snapshots() noexcept { return m_Snapshots; }
 	const EngineSnapshotStore& Snapshots() const noexcept { return m_Snapshots; }
-	void Stop() noexcept;
+	bool ConfigureSnapshotCapture(IEngineSnapshotSource& source) noexcept;
+	EngineSnapshotCapture* SnapshotCapture() noexcept { return m_SnapshotCapture.get(); }
+	const EngineSnapshotCapture* SnapshotCapture() const noexcept { return m_SnapshotCapture.get(); }
+	bool Stop(std::chrono::milliseconds timeout = std::chrono::milliseconds(5000));
 
 private:
 	std::shared_ptr<const EngineContext> m_Context;
@@ -42,6 +47,7 @@ private:
 	IHandleIdentitySource& m_IdentitySource;
 	ObjectHandleService m_Handles;
 	EngineSnapshotStore m_Snapshots;
+	std::unique_ptr<EngineSnapshotCapture> m_SnapshotCapture;
 };
 
 } // namespace UExplorer::Runtime

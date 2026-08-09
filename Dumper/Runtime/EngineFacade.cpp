@@ -62,9 +62,38 @@ FunctionValidationResult EngineFacade::ValidateFunctionHandle(const FunctionHand
 	return m_Handles.ValidateFunction(handle);
 }
 
-void EngineFacade::Stop() noexcept
+bool EngineFacade::ConfigureSnapshotCapture(IEngineSnapshotSource& source) noexcept
 {
+	if (!IsConfigured()
+		|| m_SnapshotCapture
+		|| source.ContextGeneration() != ContextGeneration())
+	{
+		return false;
+	}
+	try
+	{
+		auto capture = std::make_unique<EngineSnapshotCapture>(
+			m_SessionId,
+			ContextGeneration(),
+			source,
+			m_Snapshots);
+		if (!capture->IsConfigured())
+			return false;
+		m_SnapshotCapture = std::move(capture);
+		return true;
+	}
+	catch (...)
+	{
+		return false;
+	}
+}
+
+bool EngineFacade::Stop(const std::chrono::milliseconds timeout)
+{
+	if (m_SnapshotCapture && !m_SnapshotCapture->StopAndDrain(timeout))
+		return false;
 	m_Snapshots.Stop();
+	return true;
 }
 
 } // namespace UExplorer::Runtime

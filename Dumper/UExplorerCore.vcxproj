@@ -120,6 +120,7 @@
 	<ClCompile Include="Runtime\CoreSession.cpp" />
 	<ClCompile Include="Runtime\EngineFacade.cpp" />
 	<ClCompile Include="Runtime\EngineSnapshot.cpp" />
+	<ClCompile Include="Runtime\EngineSnapshotCapture.cpp" />
     <ClCompile Include="Runtime\EngineContextCapture.cpp" />
 	<ClCompile Include="Runtime\FUObjectItemLayout.cpp" />
 	<ClCompile Include="Runtime\GameThreadExecutor.cpp" />
@@ -210,6 +211,7 @@
     <ClInclude Include="Runtime\EngineContextCapture.h" />
 	<ClInclude Include="Runtime\EngineFacade.h" />
 	<ClInclude Include="Runtime\EngineSnapshot.h" />
+	<ClInclude Include="Runtime\EngineSnapshotCapture.h" />
 	<ClInclude Include="Runtime\FUObjectItemLayout.h" />
 	<ClInclude Include="Runtime\GameThreadExecutor.h" />
 	<ClInclude Include="Runtime\ObjectArrayIdentitySource.h" />

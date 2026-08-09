@@ -486,9 +486,8 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 		return hooksStopped;
 	});
 	shutdown.AddStage("engine_facade", [&] {
-		if (g_EngineFacade)
-			g_EngineFacade->Stop();
-		return true;
+		return !g_EngineFacade
+			|| g_EngineFacade->Stop(std::chrono::milliseconds(5000));
 	});
 	shutdown.AddStage("runtime_requests", [&] {
 		return g_Runtime.WaitForRequests(std::chrono::milliseconds(5000));

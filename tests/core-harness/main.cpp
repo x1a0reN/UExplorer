@@ -13,6 +13,7 @@
 #include "Runtime/CoreSession.h"
 #include "Runtime/EngineFacade.h"
 #include "Runtime/EngineSnapshot.h"
+#include "Runtime/EngineSnapshotCapture.h"
 #include "Runtime/FUObjectItemLayout.h"
 #include "Runtime/GameThreadExecutor.h"
 #include "Runtime/ObjectHandle.h"
@@ -36,6 +37,7 @@
 #include <future>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <sstream>
@@ -540,6 +542,106 @@ namespace
 		}
 	};
 
+	UExplorer::Runtime::EngineSnapshotObject MakeSnapshotObject(
+		const std::string& sessionId,
+		const std::uint64_t contextGeneration,
+		const std::int32_t index,
+		const UExplorer::Runtime::EngineObjectKind kind = UExplorer::Runtime::EngineObjectKind::Object)
+	{
+		return {
+			.Handle = {
+				.SessionId = sessionId,
+				.ContextGeneration = contextGeneration,
+				.Index = index,
+				.SerialNumber = 100 + index,
+				.Address = static_cast<std::uintptr_t>(0x1000 + index * 0x100),
+				.ClassFingerprint = static_cast<std::uint64_t>(0xA000 + index)
+			},
+			.Name = "Object" + std::to_string(index),
+			.FullPath = "/Script/Fixture.Object" + std::to_string(index),
+			.ClassPath = "/Script/CoreUObject.Object",
+			.PackagePath = "/Script/Fixture",
+			.Kind = kind
+		};
+	}
+
+	class FakeSnapshotSource final : public UExplorer::Runtime::IEngineSnapshotSource
+	{
+	public:
+		std::uint64_t Generation = 42;
+		std::atomic<bool> ExecutionThreadValid{true};
+		std::atomic<bool> BlockCapture{false};
+		std::atomic<bool> CaptureEntered{false};
+		std::atomic<bool> ThrowOnCount{false};
+		std::atomic<std::int32_t> FailReadIndex{-1};
+		std::atomic<std::int32_t> FailValidationIndex{-1};
+		std::atomic<std::uint32_t> WorkCalls{0};
+		std::vector<std::optional<UExplorer::Runtime::EngineSnapshotObject>> Slots;
+
+		std::uint64_t ContextGeneration() const noexcept override { return Generation; }
+		bool IsCurrentExecutionThreadValid() const noexcept override
+		{
+			return ExecutionThreadValid.load(std::memory_order_acquire);
+		}
+
+		bool TryGetObjectCount(std::int32_t& objectCount) override
+		{
+			if (ThrowOnCount.load(std::memory_order_acquire))
+				throw std::runtime_error("fixture snapshot count failure");
+			if (Slots.size() > static_cast<std::size_t>((std::numeric_limits<std::int32_t>::max)()))
+				return false;
+			objectCount = static_cast<std::int32_t>(Slots.size());
+			return true;
+		}
+
+		UExplorer::Runtime::SnapshotSlotReadResult TryCaptureObject(
+			const std::int32_t index,
+			UExplorer::Runtime::EngineSnapshotObject& object) override
+		{
+			WorkCalls.fetch_add(1, std::memory_order_relaxed);
+			CaptureEntered.store(true, std::memory_order_release);
+			while (BlockCapture.load(std::memory_order_acquire))
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			if (index < 0 || static_cast<std::size_t>(index) >= Slots.size()
+				|| FailReadIndex.load(std::memory_order_acquire) == index)
+			{
+				return UExplorer::Runtime::SnapshotSlotReadResult::Failed;
+			}
+			if (!Slots[static_cast<std::size_t>(index)])
+				return UExplorer::Runtime::SnapshotSlotReadResult::Empty;
+			object = *Slots[static_cast<std::size_t>(index)];
+			return UExplorer::Runtime::SnapshotSlotReadResult::Captured;
+		}
+
+		bool ValidateSlot(
+			const std::int32_t index,
+			const UExplorer::Runtime::EngineSnapshotObject* expectedObject) override
+		{
+			WorkCalls.fetch_add(1, std::memory_order_relaxed);
+			if (index < 0 || static_cast<std::size_t>(index) >= Slots.size()
+				|| FailValidationIndex.load(std::memory_order_acquire) == index)
+			{
+				return false;
+			}
+			const auto& current = Slots[static_cast<std::size_t>(index)];
+			if (!expectedObject)
+				return !current.has_value();
+			if (!current)
+				return false;
+			return current->Handle.SessionId == expectedObject->Handle.SessionId
+				&& current->Handle.ContextGeneration == expectedObject->Handle.ContextGeneration
+				&& current->Handle.Index == expectedObject->Handle.Index
+				&& current->Handle.SerialNumber == expectedObject->Handle.SerialNumber
+				&& current->Handle.Address == expectedObject->Handle.Address
+				&& current->Handle.ClassFingerprint == expectedObject->Handle.ClassFingerprint
+				&& current->Name == expectedObject->Name
+				&& current->FullPath == expectedObject->FullPath
+				&& current->ClassPath == expectedObject->ClassPath
+				&& current->PackagePath == expectedObject->PackagePath
+				&& current->Kind == expectedObject->Kind;
+		}
+	};
+
 	void TestStableObjectAndFunctionHandles()
 	{
 		using namespace UExplorer::Runtime;
@@ -783,7 +885,7 @@ namespace
 			facade.Snapshots().Publish(makeSnapshot(1)).Ok()
 				&& facade.Snapshots().CurrentGeneration() == 1,
 			"EngineFacade did not own its snapshot store");
-		facade.Stop();
+		Require(facade.Stop(), "EngineFacade snapshot store did not stop");
 		Require(
 			!facade.IsConfigured()
 				&& facade.Snapshots().Publish(makeSnapshot(2)).Error == SnapshotPublishError::StoreStopped,
@@ -793,6 +895,150 @@ namespace
 		Require(
 			store.Publish(makeSnapshot(33)).Error == SnapshotPublishError::StoreStopped,
 			"Stopped snapshot store accepted a publisher");
+	}
+
+	void TestIncrementalSnapshotCapture()
+	{
+		using namespace UExplorer::Runtime;
+
+		FakeSnapshotSource source;
+		source.Slots.resize(10);
+		for (std::int32_t index = 0; index < 10; index += 2)
+		{
+			source.Slots[static_cast<std::size_t>(index)] = MakeSnapshotObject(
+				"fixture-capture-session",
+				42,
+				index,
+				index == 2 ? EngineObjectKind::Class : EngineObjectKind::Object);
+		}
+		EngineSnapshotStore store("fixture-capture-session", 42);
+		EngineSnapshotCapture capture("fixture-capture-session", 42, source, store);
+		Require(capture.IsConfigured(), "Incremental snapshot capture was not configured");
+		const SnapshotCaptureRequestResult requested = capture.RequestCapture();
+		Require(requested.Ok() && requested.Generation == 1, "Snapshot capture request was rejected");
+		Require(
+			capture.RequestCapture().Error == SnapshotCaptureError::Busy,
+			"Snapshot capture accepted concurrent generation construction");
+
+		SnapshotPumpResult result = SnapshotPumpResult::Idle;
+		std::size_t pumpCount = 0;
+		while (result != SnapshotPumpResult::Published && pumpCount < 16)
+		{
+			const std::uint32_t callsBefore = source.WorkCalls.load(std::memory_order_acquire);
+			result = capture.Pump(3);
+			const std::uint32_t callsAfter = source.WorkCalls.load(std::memory_order_acquire);
+			Require(callsAfter - callsBefore <= 3, "Snapshot pump exceeded its per-frame work budget");
+			++pumpCount;
+		}
+		Require(result == SnapshotPumpResult::Published, "Budgeted snapshot capture did not publish");
+		Require(pumpCount >= 7, "Snapshot capture traversed capture/validation in one unbounded frame");
+		const std::shared_ptr<const EngineSnapshot> first = store.Current();
+		Require(
+			first && first->Generation == 1 && first->Objects.size() == 5
+				&& first->SkippedSlots == 5,
+			"Incremental snapshot published incomplete slot accounting");
+		const SnapshotCaptureDiagnostics completed = capture.Diagnostics();
+		Require(
+			completed.State == SnapshotCaptureState::Completed
+				&& completed.CapturedObjects == 5
+				&& completed.SkippedSlots == 5,
+			"Snapshot capture diagnostics did not report the completed generation");
+
+		Require(capture.RequestCapture().Ok(), "Second snapshot generation was not requested");
+		Require(
+			capture.Pump(10) == SnapshotPumpResult::Progress,
+			"Capture phase did not yield before full-slot validation");
+		source.Slots[2]->Name = "ChangedDuringCapture";
+		Require(
+			capture.Pump(10) == SnapshotPumpResult::Failed,
+			"A slot mutation between capture and validation was published");
+		const SnapshotCaptureDiagnostics stale = capture.Diagnostics();
+		Require(
+			stale.State == SnapshotCaptureState::Failed
+				&& stale.Error == SnapshotCaptureError::SourceValidationFailed
+				&& stale.ErrorIndex == 2
+				&& store.CurrentGeneration() == 1,
+			"Failed revalidation replaced the last complete snapshot");
+		source.Slots[2]->Name = "Object2";
+
+		Require(capture.RequestCapture().Ok(), "Third snapshot generation was not requested");
+		source.ExecutionThreadValid.store(false, std::memory_order_release);
+		Require(
+			capture.Pump(1) == SnapshotPumpResult::Failed
+				&& capture.Diagnostics().Error == SnapshotCaptureError::ExecutionThreadInvalid,
+			"Snapshot capture ran outside its verified execution thread");
+		source.ExecutionThreadValid.store(true, std::memory_order_release);
+		Require(
+			capture.Pump(0) == SnapshotPumpResult::InvalidBudget
+				&& capture.Pump(EngineSnapshotCapture::kMaxPumpBudget + 1)
+					== SnapshotPumpResult::InvalidBudget,
+			"Snapshot capture accepted an invalid per-frame budget");
+		Require(capture.RequestCapture().Ok(), "Exception capture generation was not requested");
+		source.ThrowOnCount.store(true, std::memory_order_release);
+		Require(
+			capture.Pump(1) == SnapshotPumpResult::Failed
+				&& capture.Diagnostics().Error == SnapshotCaptureError::UnexpectedException,
+			"Snapshot source exception escaped the guarded pump boundary");
+		source.ThrowOnCount.store(false, std::memory_order_release);
+		Require(capture.RequestCapture().Ok(), "Generation-drift capture was not requested");
+		Require(capture.Pump(1) == SnapshotPumpResult::Progress, "Generation-drift fixture did not start");
+		source.Generation = 43;
+		Require(
+			capture.Pump(1) == SnapshotPumpResult::Failed
+				&& capture.Diagnostics().Error == SnapshotCaptureError::SourceContextMismatch,
+			"Snapshot producer crossed an identity-source context generation");
+		source.Generation = 42;
+
+		EngineSnapshotStore blockingStore("fixture-capture-session", 42);
+		EngineSnapshotCapture blockingCapture(
+			"fixture-capture-session",
+			42,
+			source,
+			blockingStore);
+		Require(blockingCapture.RequestCapture().Ok(), "Blocking capture fixture did not start");
+		source.CaptureEntered.store(false, std::memory_order_release);
+		source.BlockCapture.store(true, std::memory_order_release);
+		auto pumping = std::async(std::launch::async, [&blockingCapture] {
+			return blockingCapture.Pump(1);
+		});
+		WaitUntil(
+			[&source] { return source.CaptureEntered.load(std::memory_order_acquire); },
+			"Blocking snapshot source was not entered");
+		Require(
+			blockingCapture.Pump(1) == SnapshotPumpResult::Busy,
+			"Concurrent snapshot pumps accessed one mutable working generation");
+		Require(
+			!blockingCapture.StopAndDrain(std::chrono::milliseconds(1)),
+			"Snapshot shutdown ignored an in-flight pump");
+		source.BlockCapture.store(false, std::memory_order_release);
+		Require(
+			pumping.get() == SnapshotPumpResult::Stopping,
+			"In-flight snapshot pump published after shutdown began");
+		Require(
+			blockingCapture.StopAndDrain(std::chrono::milliseconds(100))
+				&& blockingCapture.Diagnostics().State == SnapshotCaptureState::Stopped
+				&& blockingCapture.RequestCapture().Error == SnapshotCaptureError::Stopped,
+			"Snapshot capture did not drain to a terminal stopped state");
+		Require(
+			capture.StopAndDrain(std::chrono::milliseconds(100)),
+			"Completed/failed snapshot capture did not stop cleanly");
+
+		FakeHandleIdentitySource identitySource;
+		EngineFacade owner(
+			MakeEngineContext(42),
+			"fixture-capture-session",
+			identitySource);
+		Require(
+			owner.ConfigureSnapshotCapture(source)
+				&& !owner.ConfigureSnapshotCapture(source)
+				&& owner.SnapshotCapture(),
+			"EngineFacade did not uniquely own its snapshot producer");
+		Require(
+			owner.SnapshotCapture()->RequestCapture().Ok()
+				&& owner.SnapshotCapture()->Pump(64) == SnapshotPumpResult::Published
+				&& owner.Snapshots().CurrentGeneration() == 1,
+			"EngineFacade-owned snapshot producer did not publish through its store");
+		Require(owner.Stop(), "EngineFacade did not drain its owned snapshot producer");
 	}
 
 	void TestCoreDomainCommandsAndHandleExecution()
@@ -861,7 +1107,8 @@ namespace
 			status.Ok
 				&& status.Data.at("runtime").at("session_id") == "fixture-command-session"
 				&& status.Data.at("architecture") == "x64-fixture"
-				&& !status.Data.at("object_snapshot").at("published").get<bool>(),
+				&& !status.Data.at("object_snapshot").at("published").get<bool>()
+				&& !status.Data.at("object_snapshot").at("capture_configured").get<bool>(),
 			"Status domain command did not serialize the immutable runtime");
 
 		CoreCommandRequest objectRequest{
@@ -1521,6 +1768,7 @@ int main(const int argc, char** argv)
 		TestCoreRuntimeStateAndShutdown();
 		TestStableObjectAndFunctionHandles();
 		TestEngineFacadeAndImmutableSnapshots();
+		TestIncrementalSnapshotCapture();
 		TestCoreDomainCommandsAndHandleExecution();
 		TestFUObjectItemIdentityLayout();
 		TestHookOwnershipAndCallbackDrain();
@@ -1531,7 +1779,7 @@ int main(const int argc, char** argv)
 		TestGenericGameThreadWorkAndCancellation();
 		TestGameThreadMpscCapacity();
 		TestHttpServerLifecycle();
-		std::cout << "Core harness passed: framing, secure sessions, runtime/capabilities, EngineFacade/immutable snapshots, domain commands, stable handles/FUObjectItem layout, Hook RAII/drain, SafeMemory, USMAP consumer, bounded queues, cancellable owned game-thread work, SEH, HTTP lifecycle, and shutdown.\n";
+		std::cout << "Core harness passed: framing, secure sessions, runtime/capabilities, EngineFacade/immutable budgeted snapshots, domain commands, stable handles/FUObjectItem layout, Hook RAII/drain, SafeMemory, USMAP consumer, bounded queues, cancellable owned game-thread work, SEH, HTTP lifecycle, and shutdown.\n";
 		return 0;
 	}
 	catch (const std::exception& error)

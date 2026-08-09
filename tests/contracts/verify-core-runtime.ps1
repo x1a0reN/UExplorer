@@ -32,6 +32,8 @@ $identitySource = Read-ProjectFile 'Dumper\Runtime\ObjectArrayIdentitySource.cpp
 $engineFacade = Read-ProjectFile 'Dumper\Runtime\EngineFacade.h'
 $engineSnapshotHeader = Read-ProjectFile 'Dumper\Runtime\EngineSnapshot.h'
 $engineSnapshot = Read-ProjectFile 'Dumper\Runtime\EngineSnapshot.cpp'
+$snapshotCaptureHeader = Read-ProjectFile 'Dumper\Runtime\EngineSnapshotCapture.h'
+$snapshotCapture = Read-ProjectFile 'Dumper\Runtime\EngineSnapshotCapture.cpp'
 $objectArray = Read-ProjectFile 'Dumper\Engine\Private\Unreal\ObjectArray.cpp'
 $callbackBarrier = Read-ProjectFile 'Dumper\Runtime\CallbackBarrier.h'
 $safeMemoryHeader = Read-ProjectFile 'Dumper\Runtime\SafeMemory.h'
@@ -134,8 +136,9 @@ foreach ($token in @('IsCurrentExecutionThreadValid', 'executor.IsCurrentPumpThr
     Assert-Contains $identitySource $token 'Production object/function identity source regressed.'
 }
 Assert-NotContains $identitySource 'Off::' 'Production identity validation must use its immutable context, not mutable offset globals.'
-foreach ($token in @('ObjectHandleService', 'EngineSnapshotStore', 'IssueObjectHandle',
-		'ValidateFunctionHandle', 'std::shared_ptr<const EngineContext>')) {
+foreach ($token in @('ObjectHandleService', 'EngineSnapshotStore', 'EngineSnapshotCapture',
+		'ConfigureSnapshotCapture', 'IssueObjectHandle', 'ValidateFunctionHandle',
+		'std::shared_ptr<const EngineContext>')) {
 	Assert-Contains $engineFacade $token 'EngineFacade ownership boundary regressed.'
 }
 foreach ($token in @('EngineSnapshotObject', 'SessionId', 'ContextGeneration', 'Generation',
@@ -146,6 +149,17 @@ foreach ($token in @('SNAPSHOT_GENERATION_NOT_MONOTONIC', 'SNAPSHOT_RECORDS_NOT_
 		'IsValidHandleEnvelope', 'IsValidMetadata', 'm_Current.store', 'm_Current.load')) {
 	Assert-Contains $engineSnapshot $token 'Atomic EngineSnapshot publication regressed.'
 }
+foreach ($token in @('IEngineSnapshotSource', 'kDefaultPumpBudget', 'kMaxPumpBudget',
+		'Capturing', 'Validating', 'Publishing', 'StopAndDrain', 'CallbackBarrier')) {
+	Assert-Contains $snapshotCaptureHeader $token 'Incremental snapshot capture contract regressed.'
+}
+foreach ($token in @('m_PumpOwned.test_and_set', 'SnapshotSlotReadResult::Empty',
+		'ValidateSlot(index, expected)', 'PublishedObjects.reserve',
+		'SnapshotCaptureError::SourceValidationFailed', 'm_PumpBarrier.WaitForDrain')) {
+	Assert-Contains $snapshotCapture $token 'Budgeted snapshot capture implementation regressed.'
+}
+Assert-NotContains $snapshotCapture 'ObjectArray::' 'Generic snapshot scheduling must not bypass its source boundary.'
+Assert-NotContains $snapshotCapture 'Off::' 'Generic snapshot scheduling must not read mutable engine offsets.'
 foreach ($token in @('CALL_HANDLE_REQUIRED', 'SESSION_SERIAL_OBJECT_AND_FUNCTION_HANDLES_REQUIRED',
         'server.Post("/api/v1/call/function"',
         'server.Post("/api/v1/call/static"',
@@ -196,6 +210,12 @@ foreach ($token in @('TestEngineContextAndCapabilities', 'TestCoreRuntimeStateAn
         'TestCoreSessionIdentity',
 		'TestEngineFacadeAndImmutableSnapshots', 'Snapshot reader observed a torn generation',
 		'Incomplete snapshot metadata was published as usable data',
+		'TestIncrementalSnapshotCapture', 'Snapshot pump exceeded its per-frame work budget',
+		'A slot mutation between capture and validation was published',
+		'Concurrent snapshot pumps accessed one mutable working generation',
+		'Snapshot source exception escaped the guarded pump boundary',
+		'Snapshot producer crossed an identity-source context generation',
+		'Snapshot shutdown ignored an in-flight pump',
         'TestCoreDomainCommandsAndHandleExecution', 'Handle command accepted transport-supplied identity fields',
 		'Missing function metadata did not disable only function handles',
 		'Function handle command ignored its dedicated capability',
