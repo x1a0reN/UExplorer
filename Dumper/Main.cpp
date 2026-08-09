@@ -199,7 +199,6 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 	try
 	{
 		Generator::InitEngineCore();
-		Generator::InitInternal();
 		const auto context = UExplorer::Runtime::CaptureEngineContext(1);
 		if (!g_Runtime.PublishContext(context))
 			throw std::runtime_error("CoreRuntime rejected immutable EngineContext publication");

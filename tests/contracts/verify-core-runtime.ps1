@@ -22,6 +22,9 @@ $runtime = Read-ProjectFile 'Dumper\Runtime\CoreRuntime.h'
 $coreSession = Read-ProjectFile 'Dumper\Runtime\CoreSession.cpp'
 $context = Read-ProjectFile 'Dumper\Runtime\EngineContext.h'
 $capture = Read-ProjectFile 'Dumper\Runtime\EngineContextCapture.cpp'
+$offsetsHeader = Read-ProjectFile 'Dumper\Engine\Public\OffsetFinder\Offsets.h'
+$offsets = Read-ProjectFile 'Dumper\Engine\Private\OffsetFinder\Offsets.cpp'
+$generator = Read-ProjectFile 'Dumper\Generator\Private\Generators\Generator.cpp'
 $nameArrayHeader = Read-ProjectFile 'Dumper\Engine\Public\Unreal\NameArray.h'
 $nameArray = Read-ProjectFile 'Dumper\Engine\Private\Unreal\NameArray.cpp'
 $nameCodecHeader = Read-ProjectFile 'Dumper\Runtime\EngineNameCodec.h'
@@ -86,6 +89,25 @@ foreach ($token in @('gobjects', 'process_event.index', 'positive_member_offset'
 		'name_index_zero_decodes_none', 'NAME_STORAGE_SEMANTIC_VALIDATION_FAILED')) {
     Assert-Contains $capture $token 'Offset validation report regressed.'
 }
+foreach ($token in @('void InitRuntime();', 'void InitReflection();')) {
+	Assert-Contains $offsetsHeader $token 'Runtime/reflection initialization boundary regressed.'
+}
+foreach ($token in @('void Off::InitRuntime()', 'void Off::InitReflection()',
+		'Required runtime offset was not discovered')) {
+	Assert-Contains $offsets $token 'Runtime/reflection offset initialization boundary regressed.'
+}
+foreach ($token in @('Off::InitRuntime();', 'Generator::InitEngineCore()')) {
+	Assert-Contains $generator $token 'Baseline Generator initialization no longer uses the runtime-only path.'
+}
+foreach ($token in @('Off::Init();', 'PropertySizes::Init()', 'InitTextOffsets()',
+		'InitGWorld()', 'InitGEngine()')) {
+	Assert-NotContains $generator $token 'Baseline Generator initialization reintroduced optional reflection/world execution.'
+}
+foreach ($token in @('MemberOffset("ustruct.super_struct", Off::UStruct::SuperStruct, false)',
+		'MemberOffset("property.array_dim", Off::Property::ArrayDim, false)',
+		'MemberOffset("uclass.cast_flags", Off::UClass::CastFlags, true)')) {
+	Assert-Contains $capture $token 'Optional reflection offsets became global Core requirements.'
+}
 
 foreach ($token in @('FNameStorageLayout', 'TryCaptureRuntimeLayout')) {
 	Assert-Contains $nameArrayHeader $token 'Initialized name storage layout capture regressed.'
@@ -102,6 +124,7 @@ foreach ($token in @('Off::', 'Settings::', 'NameArray::', 'FName::', ' FName(')
 
 foreach ($token in @('transport.named_pipe', 'PIPE_LISTENER_NOT_READY', 'objects.identity_source',
 		'engine.names', 'NAME_STORAGE_LAYOUT_NOT_VALIDATED',
+		'engine.reflection', 'REFLECTION_LAYOUT_NOT_VALIDATED',
 		'functions.handles', 'FUNCTION_HANDLE_VALIDATION_NOT_READY',
         'GAME_THREAD_PUMP_NOT_OBSERVED', 'GAME_THREAD_PUMP_STALLED', 'RequiredReadyCapabilities')) {
     Assert-Contains $capabilities $token 'Capability dependency/readiness contract regressed.'
@@ -251,6 +274,7 @@ foreach ($token in @('CaptureEngineContext', 'RefreshRuntimeCapabilities', 'Shut
 		'BeginStopping', 'MarkStopped')) {
     Assert-Contains $main $token 'Main does not use the runtime ownership path.'
 }
+Assert-NotContains $main 'Generator::InitInternal()' 'Baseline Core startup eagerly builds the mutable Generator type index.'
 
 foreach ($token in @('liveness', 'readiness', 'offset_reports', 'capabilities', 'context_generation',
 		'last_tick_monotonic_us', 'queue_depth', 'object_snapshot', 'name_profile',
@@ -306,7 +330,8 @@ foreach ($token in @('TestEngineContextAndCapabilities', 'TestCoreRuntimeStateAn
 		'Post-stop callback was allowed to run owned frame-client work',
         'Post-stop callback was allowed to run owned work',
         'TestSafeMemory', 'ExecutableWriteDenied', 'InstructionCacheFlushRequired',
-        'CoreRuntime became Ready without its pipe listener', 'Required capability loss left readiness true',
+		'CoreRuntime became Ready without its pipe listener', 'Required capability loss left readiness true',
+		'Unvalidated optional reflection metadata leaked into a domain capability',
         'Shutdown coordinator ran twice')) {
     Assert-Contains $harness $token 'CoreRuntime harness coverage regressed.'
 }

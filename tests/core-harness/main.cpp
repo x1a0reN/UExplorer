@@ -657,6 +657,14 @@ namespace
 		Require(!withoutPipe->IsAvailable("transport.named_pipe"), "Missing pipe listener was advertised");
 		Require(withoutPipe->IsAvailable("objects.snapshot"), "Published immutable snapshot was unavailable");
 		Require(withoutPipe->IsAvailable("call.invoke"), "Validated call dependencies were rejected");
+		const CapabilityStatus* reflection = withoutPipe->Find("engine.reflection");
+		Require(
+			reflection
+				&& !reflection->Available
+				&& reflection->ReasonCode == "REFLECTION_LAYOUT_NOT_VALIDATED"
+				&& !withoutPipe->IsAvailable("objects.properties")
+				&& !withoutPipe->IsAvailable("types.inspect"),
+			"Unvalidated optional reflection metadata leaked into a domain capability");
 		RuntimeProbes missingFunctionHandles = probes;
 		missingFunctionHandles.FunctionHandleValidationEnabled = false;
 		const auto withoutFunctionHandles = BuildCoreCapabilities(*context, missingFunctionHandles);

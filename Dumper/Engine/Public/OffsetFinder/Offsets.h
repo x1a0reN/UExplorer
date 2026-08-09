@@ -36,6 +36,16 @@ struct FChunkedFixedUObjectArrayLayout
 
 namespace Off
 {
+	// Runtime startup only discovers fields required by the pipe, object identity,
+	// ProcessEvent, and the PostRender game-thread pump.
+	void InitRuntime();
+
+	// Reflection/generator activation is explicit and fail-closed. It must never
+	// be part of baseline Core startup because unsupported layouts are a domain
+	// capability failure, not a transport/runtime failure.
+	void InitReflection();
+
+	// Legacy composite entry point retained for generator-only callers.
 	void Init();
 
 	//Offsets not to be used during generation but inside of the generated SDK

@@ -259,20 +259,9 @@ DllMain(DLL_PROCESS_ATTACH)
        ├─ Generator::InitEngineCore()     ★ 引擎核心初始化
        │   ├─ ObjectArray::Init()          定位 GObjects
        │   ├─ FName::Init()               定位 GNames
-       │   ├─ Off::Init()                 计算所有偏移
-       │   ├─ PropertySizes::Init()       属性大小初始化
+       │   ├─ Off::InitRuntime()          仅发现基础运行/identity/Hook 偏移
        │   ├─ Off::InitPE_Windows()       定位 ProcessEvent
-       │   ├─ Off::InitGWorld()           定位 GWorld
-       │   ├─ Off::InitGEngine()          定位 GEngine
-       │   ├─ Off::InitTextOffsets()      定位 FText 布局
        │   └─ Off::InitPostRender_Windows() 定位 PostRender VTable
-       │
-       ├─ Generator::InitInternal()       ★ 类型系统索引
-       │   ├─ PackageManager::Init()
-       │   ├─ StructManager::Init()
-       │   ├─ EnumManager::Init()
-       │   ├─ MemberManager::Init()
-       │   └─ PackageManager::PostInit()
        │
        ├─ Publish EngineContext / EngineFacade / CoreCommandService
        ├─ NamedPipeRpcServer::Start()      绑定 PID-scoped Pipe，尚未开放 admission
@@ -288,6 +277,10 @@ DllMain(DLL_PROCESS_ATTACH)
             ├─ Drain CoreRuntime request leases
             └─ 安全性可证明时 FreeLibraryAndExitThread()
 ```
+
+`Off::InitReflection()`、GWorld/GEngine/FText/PropertySizes 探测和
+`Generator::InitInternal()` 不属于基础启动；它们只能由后续具备能力 witness、
+游戏线程约束和独立失败状态的领域/生成任务显式激活。当前 release 未开放该入口。
 
 ### 3.3 Engine 层内部依赖
 

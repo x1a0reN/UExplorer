@@ -13,16 +13,6 @@
 
 #include <fstream>
 
-inline void InitSettings()
-{
-	Settings::InitWeakObjectPtrSettings();
-	Settings::InitLargeWorldCoordinateSettings();
-
-	Settings::InitObjectPtrPropertySettings();
-	Settings::InitArrayDimSizeSettings();
-}
-
-
 void Generator::InitEngineCore()
 {
 	/* manual override */
@@ -46,15 +36,9 @@ void Generator::InitEngineCore()
 
 	CALL_PLATFORM_SPECIFIC_FUNCTION(FName::Init);
 
-	Off::Init();
-	PropertySizes::Init();
+	Off::InitRuntime();
 
-	CALL_PLATFORM_SPECIFIC_FUNCTION(Off::InSDK::ProcessEvent::InitPE); // Must be at this position, relies on offsets initialized in Off::Init()
-
-	Off::InSDK::World::InitGWorld(); // Must be at this position, relies on offsets initialized in Off::Init()
-	Off::InSDK::Engine::InitGEngine(); // Must be at this position, relies on offsets initialized in Off::Init()
-
-	Off::InSDK::Text::InitTextOffsets(); // Must be at this position, relies on offsets initialized in Off::InitPE()
+	CALL_PLATFORM_SPECIFIC_FUNCTION(Off::InSDK::ProcessEvent::InitPE); // Requires validated runtime offsets.
 
 	// PostRender vtable index detection - must be after Off::Init() (needs ClassDefaultObject offset)
 	if (Settings::PostRender::GVCPostRenderIndex >= 0)
@@ -72,7 +56,6 @@ void Generator::InitEngineCore()
 		CALL_PLATFORM_SPECIFIC_FUNCTION(Off::InSDK::PostRender::InitPostRender);
 	}
 
-	InitSettings();
 }
 
 void Generator::InitInternal()

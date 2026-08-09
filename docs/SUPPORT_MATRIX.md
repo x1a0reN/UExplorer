@@ -32,6 +32,12 @@ Each fixture must record:
 Until a fixture exists, the corresponding profile remains `Not supported`; offset or
 layout heuristics must not upgrade that status.
 
+Baseline startup discovers only the runtime fields required for object identity,
+ProcessEvent, and the PostRender pump. Reflection, property/FText, GWorld/GEngine, and
+Generator indexing are separate capabilities. Failure to validate one of those optional
+layouts must leave that domain unavailable rather than failing or silently guessing the
+transport/runtime profile.
+
 ## Generic boundary evidence (not an engine support claim)
 
 The R4 desktop transport boundary is verified independently of an Unreal profile:

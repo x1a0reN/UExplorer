@@ -115,6 +115,15 @@ R3 的协议、Core/Host transport、SessionManager、EventHub、真实跨语言
 
 本切片验证证据：Tauri Host 58 项单元测试（另含真实 C++ Core 进程 fixture 与真实注入进程 fixture各 1 项）、Rust protocol 10 项、FakeCore 5 项、前端 8 项 Vitest、ESLint、TypeScript/Vite production build、Clippy `-D warnings` 和 12 项静态契约均通过。
 
+### 0.7 R5.1 基础运行与反射能力边界
+
+- Core 启动不再调用 `Generator::InitInternal()`，因此不会在 Named Pipe/状态/对象快照尚未建立前创建全局 Package/Struct/Enum/Member 索引。旧 Generator 索引仍保留给后续受控的 Dump job，但不是基础运行依赖。
+- `Generator::InitEngineCore()` 现在只调用 `Off::InitRuntime()`：发现 UObject identity/name、UClass cast flags/CDO、UFunction flags、ProcessEvent 与 PostRender 所需字段。GWorld、GEngine、FText、PropertySizes 和整套反射字段不再在启动 worker 上探测，也不会通过 `InitTextOffsets()` 提前调用 ProcessEvent。
+- `Off::InitReflection()` 是显式、fail-closed 的可选领域入口；当前没有命令激活它。`UStruct` 和 `Property` offset 在 `EngineContext` 中不再是全局 required，而 `UClass::CastFlags` 仍是 PostRender/对象快照基础要求。这样“某版本属性布局未知”只会关闭反射领域，不会伪装成 transport/Core 初始化失败。
+- 能力图新增 `engine.reflection`。只有显式语义 witness 和完整 immutable offset set 同时成立才可能可用；当前 production probe 保持 false，`objects.properties` 与 `types.inspect` 继续明确 unavailable，不能因若干范围合法的 offset 或旧硬编码默认值被误开放。
+
+本切片已通过 Core release build、`verify-core-runtime.ps1` 和 capability harness 覆盖；真实 UE 反射 witness、PropertyCodec、类型 snapshot 与目标版本 fixture 仍是 R5.1 后续工作。
+
 ## Context
 
 基于 Dumper-7 的实现原理，设计一个桌面端 Unreal Engine SDK Dump + 实时探索工具。

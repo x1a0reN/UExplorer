@@ -44,6 +44,11 @@ injection matrix are implemented. React domain calls now use one Tauri
 `domain_request` command and event consumers use caller-owned Tauri channels. The Host
 operation registry serves status and immutable-snapshot object/type queries; domains
 not yet implemented return a stable capability error instead of reaching legacy code.
+Baseline Core initialization is also separated from optional reflection/generator
+activation: unknown property, FText, GWorld, or generator layouts cannot make the pipe
+runtime pretend to be unsupported or execute ProcessEvent from the startup worker.
+The `engine.reflection` capability remains unavailable until an immutable layout passes
+semantic witnesses; range-valid legacy offsets alone are insufficient.
 Object/type/package/instance collections now use exact full-path filters and
 generation/query-bound cursor pages capped at 128 records; the Host reuses its snapshot
 indexes instead of rescanning the snapshot or accepting legacy offset pagination.

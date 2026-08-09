@@ -645,7 +645,55 @@ void Off::InSDK::PostRender::InitPostRender_Windows()
 #endif // PLATFORM_WINDOWS
 }
 
-void Off::Init()
+void Off::InitRuntime()
+{
+	auto RequireDiscoveredOffset = [](const int32 Offset, const char* Name)
+	{
+		if (Offset <= 0)
+			throw std::runtime_error(std::string("Required runtime offset was not discovered: ") + Name);
+	};
+
+	Off::UObject::Flags = OffsetFinder::FindUObjectFlagsOffset();
+	RequireDiscoveredOffset(Off::UObject::Flags, "UObject::Flags");
+	std::cerr << std::format("Off::UObject::Flags: 0x{:X}\n", Off::UObject::Flags);
+
+	Off::UObject::Index = OffsetFinder::FindUObjectIndexOffset();
+	RequireDiscoveredOffset(Off::UObject::Index, "UObject::Index");
+	std::cerr << std::format("Off::UObject::Index: 0x{:X}\n", Off::UObject::Index);
+
+	Off::UObject::Class = OffsetFinder::FindUObjectClassOffset();
+	RequireDiscoveredOffset(Off::UObject::Class, "UObject::Class");
+	std::cerr << std::format("Off::UObject::Class: 0x{:X}\n", Off::UObject::Class);
+
+	Off::UObject::Outer = OffsetFinder::FindUObjectOuterOffset();
+	RequireDiscoveredOffset(Off::UObject::Outer, "UObject::Outer");
+	std::cerr << std::format("Off::UObject::Outer: 0x{:X}\n", Off::UObject::Outer);
+
+	Off::UObject::Name = OffsetFinder::FindUObjectNameOffset();
+	RequireDiscoveredOffset(Off::UObject::Name, "UObject::Name");
+	std::cerr << std::format("Off::UObject::Name: 0x{:X}\n\n", Off::UObject::Name);
+
+	OffsetFinder::InitFNameSettings();
+	::NameArray::PostInit();
+
+	Off::UClass::CastFlags = OffsetFinder::FindCastFlagsOffset();
+	RequireDiscoveredOffset(Off::UClass::CastFlags, "UClass::CastFlags");
+	std::cerr << std::format("Off::UClass::CastFlags: 0x{:X}\n", Off::UClass::CastFlags);
+
+	Off::UClass::ClassDefaultObject = OffsetFinder::FindDefaultObjectOffset();
+	RequireDiscoveredOffset(Off::UClass::ClassDefaultObject, "UClass::ClassDefaultObject");
+	std::cerr << std::format(
+		"Off::UClass::ClassDefaultObject: 0x{:X}\n",
+		Off::UClass::ClassDefaultObject);
+
+	Off::UFunction::FunctionFlags = OffsetFinder::FindFunctionFlagsOffset();
+	RequireDiscoveredOffset(Off::UFunction::FunctionFlags, "UFunction::FunctionFlags");
+	std::cerr << std::format(
+		"Off::UFunction::FunctionFlags: 0x{:X}\n",
+		Off::UFunction::FunctionFlags);
+}
+
+void Off::InitReflection()
 {
 	auto RequireDiscoveredOffset = [](int32 Offset, const char* Name)
 	{
@@ -833,6 +881,11 @@ void Off::Init()
 	Off::OptionalProperty::ValueProperty = Off::InSDK::Properties::PropertySize;
 
 	Off::ClassProperty::MetaClass = Off::ObjectProperty::PropertyClass + sizeof(void*); //0x8 inheritance from ObjectProperty
+}
+
+void Off::Init()
+{
+	InitReflection();
 }
 
 void PropertySizes::Init()

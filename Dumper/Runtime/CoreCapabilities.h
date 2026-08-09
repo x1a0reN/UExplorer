@@ -23,6 +23,7 @@ struct RuntimeProbes
 	bool ObjectHandleValidationEnabled = false;
 	bool FunctionHandleValidationEnabled = false;
 	bool ObjectSnapshotPublished = false;
+	bool ReflectionLayoutValidated = false;
 	bool FunctionCallServiceEnabled = false;
 	bool NamedPipeListening = false;
 };
@@ -95,6 +96,25 @@ inline std::shared_ptr<const CapabilitySnapshot> BuildCoreCapabilities(
 		"SAFE_MEMORY_NOT_READY",
 		"Centralized checked memory access is not active",
 		{"engine.core"});
+	const bool reflectionOffsetsPresent = context.HasValidatedOffset("ustruct.super_struct")
+		&& context.HasValidatedOffset("ustruct.size")
+		&& context.HasValidatedOffset("property.array_dim")
+		&& context.HasValidatedOffset("property.element_size")
+		&& context.HasValidatedOffset("property.flags")
+		&& context.HasValidatedOffset("property.offset_internal")
+		&& (context.Profile().UsesFProperty
+			? context.HasValidatedOffset("ustruct.child_properties")
+			: context.HasValidatedOffset("ustruct.children"));
+	builder.Define(
+		"engine.reflection",
+		probes.ReflectionLayoutValidated && reflectionOffsetsPresent,
+		probes.ReflectionLayoutValidated
+			? "REFLECTION_LAYOUT_INCOMPLETE"
+			: "REFLECTION_LAYOUT_NOT_VALIDATED",
+		probes.ReflectionLayoutValidated
+			? "The reflection witness passed but the immutable offset set is incomplete"
+			: "No immutable reflection layout has passed semantic witnesses",
+		{"engine.names", "memory.safe"});
 	builder.Define(
 		"objects.identity_source",
 		probes.ObjectIdentitySourceEnabled,
@@ -130,13 +150,13 @@ inline std::shared_ptr<const CapabilitySnapshot> BuildCoreCapabilities(
 		false,
 		"OBJECT_PROPERTY_COMMAND_NOT_IMPLEMENTED",
 		"Validated reflected property commands are not registered",
-		{"objects.handles"});
+		{"engine.reflection", "objects.handles"});
 	builder.Define(
 		"types.inspect",
 		false,
 		"TYPE_COMMAND_NOT_IMPLEMENTED",
 		"Validated class, struct, enum, and package commands are not registered",
-		{"objects.snapshot"});
+		{"engine.reflection", "objects.snapshot"});
 	builder.Define(
 		"memory.raw_read",
 		false,

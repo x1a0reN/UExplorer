@@ -232,6 +232,7 @@
       "status": "in_progress",
       "verification": [
         "2026-08-09: direct startup-worker Kismet ProcessEvent calls removed",
+		"2026-08-09: baseline Generator initialization no longer calls InitTextOffsets or any optional FText/property/world probe, and Main no longer eagerly creates the mutable Generator type index",
         "Game metadata command and target-process fixture remain pending"
       ]
     },
@@ -296,7 +297,7 @@
 		"Remaining hard-coded FField/FName/property-size layouts must still be replaced or semantically validated before this issue can be verified"
 	  ]
 	},
-    "OFF-002": {
+	"OFF-002": {
       "status": "in_progress",
       "verification": [
         "2026-08-09: EngineContext publishes per-offset value, required flag, source, checks, validation state, and stable failure reason",
@@ -306,6 +307,7 @@
 		"2026-08-09: production object snapshot metadata consumes only the frozen UObject index/class/name/outer and UClass cast-flags profile; runtime source code is contract-checked against Off/Settings access",
 		"2026-08-09: offset reports now expose confidence and candidate offsets; GWorld/GEngine reports preserve every observed module-relative candidate and the full validation checklist",
 		"2026-08-09: ProcessEvent discovery now reads the first-object VTable and manual slot through SafeMemory, bounds the VTable index, and rejects module offsets that do not fit the published int32 contract",
+		"2026-08-09: Off::InitRuntime is now separate from explicit Off::InitReflection; optional UStruct/property offsets no longer block EngineContext publication, and engine.reflection remains unavailable without a semantic witness plus a complete immutable offset set",
         "Required offset validation blocks context publication; candidate lists and deeper semantic validation remain incomplete"
       ]
     },

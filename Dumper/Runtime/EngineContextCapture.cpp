@@ -297,19 +297,19 @@ std::shared_ptr<const EngineContext> CaptureEngineContext(const std::uint64_t ge
 	builder.AddOffset(MemberOffset("uobject.class", Off::UObject::Class, true));
 	builder.AddOffset(MemberOffset("uobject.name", Off::UObject::Name, true));
 	builder.AddOffset(MemberOffset("uobject.outer", Off::UObject::Outer, true));
-	builder.AddOffset(MemberOffset("ustruct.super_struct", Off::UStruct::SuperStruct, true));
-	builder.AddOffset(MemberOffset("ustruct.children", Off::UStruct::Children, true));
-	builder.AddOffset(MemberOffset("ustruct.child_properties", Off::UStruct::ChildProperties, Settings::Internal::bUseFProperty));
-	builder.AddOffset(MemberOffset("ustruct.size", Off::UStruct::Size, true));
-	builder.AddOffset(MemberOffset("uclass.cast_flags", Off::UClass::CastFlags, false));
+	builder.AddOffset(MemberOffset("ustruct.super_struct", Off::UStruct::SuperStruct, false));
+	builder.AddOffset(MemberOffset("ustruct.children", Off::UStruct::Children, false));
+	builder.AddOffset(MemberOffset("ustruct.child_properties", Off::UStruct::ChildProperties, false));
+	builder.AddOffset(MemberOffset("ustruct.size", Off::UStruct::Size, false));
+	builder.AddOffset(MemberOffset("uclass.cast_flags", Off::UClass::CastFlags, true));
 	builder.AddOffset(MemberOffset("uclass.default_object", Off::UClass::ClassDefaultObject, true));
 	builder.AddOffset(MemberOffset("ufunction.function_flags", Off::UFunction::FunctionFlags, true));
 	builder.AddOffset(MemberOffset("ufunction.exec_function", Off::UFunction::ExecFunction, false));
 	builder.AddOffset(MemberOffset("ufunction.script", Off::UFunction::Script, false, "scored_runtime_validation"));
-	builder.AddOffset(MemberOffset("property.array_dim", Off::Property::ArrayDim, true));
-	builder.AddOffset(MemberOffset("property.element_size", Off::Property::ElementSize, true));
-	builder.AddOffset(MemberOffset("property.flags", Off::Property::PropertyFlags, true));
-	builder.AddOffset(MemberOffset("property.offset_internal", Off::Property::Offset_Internal, true));
+	builder.AddOffset(MemberOffset("property.array_dim", Off::Property::ArrayDim, false));
+	builder.AddOffset(MemberOffset("property.element_size", Off::Property::ElementSize, false));
+	builder.AddOffset(MemberOffset("property.flags", Off::Property::PropertyFlags, false));
+	builder.AddOffset(MemberOffset("property.offset_internal", Off::Property::Offset_Internal, false));
 	builder.AddOffset(MemberOffset("ulevel.actors", Off::InSDK::ULevel::Actors, false));
 
 	builder.AddOffset(VTableIndex(
