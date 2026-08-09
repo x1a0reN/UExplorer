@@ -59,6 +59,13 @@ function extractFunctionParts(detail: ObjectDetail | null): { classPath: string;
   return { classPath, functionName, functionPath: classPath ? fullPath : '' };
 }
 
+function hasFunctionFlag(flags: string, mask: bigint): boolean {
+  if (!/^0x[0-9A-F]{16}$/.test(flags)) {
+    throw new Error(`Invalid canonical function flags: ${flags}`);
+  }
+  return (BigInt(flags) & mask) !== 0n;
+}
+
 export default function Functions({ viewMode = 'function', onViewModeChange }: FunctionsProps) {
   const [activeTab, setActiveTab] = useState<FunctionTab>('Call');
   const [flagTab, setFlagTab] = useState<FlagTab>('All');
@@ -227,20 +234,12 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
       });
       if (!res.success || !res.data) throw new Error(res.error || t('Failed to load functions'));
 
-      let next = res.data.items.map((it: ObjectItem) => ({
+      const next = res.data.items.map((it: ObjectItem) => ({
         index: it.index,
         name: it.name,
         className: it.class,
         address: it.address,
       }));
-
-      if (flagTab !== 'All') {
-        next = next.filter((it) => {
-          const n = it.name.toLowerCase();
-          if (flagTab === 'Native') return n.includes('native') || !n.includes('bp');
-          return n.includes('bp') || n.includes('k2_') || n.includes('blueprint');
-        });
-      }
 
       setItems(next);
     } catch (error) {
@@ -249,7 +248,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
     } finally {
       setListLoading(false);
     }
-  }, [flagTab, packageFilter, search]);
+  }, [packageFilter, search]);
 
   const loadFunctionDetail = useCallback(async (index: number) => {
     setDetailLoading(true);
@@ -267,34 +266,30 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
       setDetail(detailRes.data);
 
       const parts = extractFunctionParts(detailRes.data);
-      if (!parts.classPath) return;
+      if (!parts.classPath || !parts.functionPath) {
+        throw new Error('Function metadata does not contain an exact owner/function path');
+      }
       setStaticClassName(parts.classPath);
       setBlueprintPath(parts.functionPath);
 
-      const classFuncRes = await api.getClassFunctions(parts.classPath);
-      if (!classFuncRes.success || !classFuncRes.data) {
-        throw new Error(classFuncRes.error || t('Failed to load class functions'));
+      const functionRes = await api.getFunctionByPath(parts.functionPath);
+      if (!functionRes.success || !functionRes.data) {
+        throw new Error(functionRes.error || t('Failed to load function metadata'));
       }
-      const found = classFuncRes.data.find((f) => f.name === parts.functionName) || null;
+      const found = functionRes.data;
       setFunctionMeta(found);
 
-      if (found) {
-        setCallMode(found.flags.toLowerCase().includes('static') ? 'static' : 'instance');
-        const inputMap: Record<string, string> = {};
-        found.params
-          .filter((p) => !p.flags.includes('OutParm') && !p.flags.includes('ReturnParm'))
-          .forEach((p) => {
-            inputMap[p.name] = '';
-          });
-        setParamInputs(inputMap);
-      }
+      setCallMode(hasFunctionFlag(found.flags, 0x0000000000002000n) ? 'static' : 'instance');
+      const inputMap: Record<string, string> = {};
+      found.parameters
+        .filter((parameter) => parameter.direction === 'input' || parameter.direction === 'inout')
+        .forEach((parameter) => {
+          inputMap[parameter.name] = '';
+        });
+      setParamInputs(inputMap);
 
-      const classDetail = await api.getObjectByPath(parts.classPath);
-      if (classDetail.success && classDetail.data?.kind === 'class') {
-        setTargetIndex(String(classDetail.data.index));
-      } else {
-        setTargetIndex('');
-      }
+      // An owning UClass is never a valid implicit instance-call target.
+      setTargetIndex('');
 
     } catch (error) {
       setDetailError(error instanceof Error ? error.message : String(error));
@@ -319,33 +314,32 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
 
     const parseParamValue = async (raw: string): Promise<unknown> => {
       const trimmed = raw.trim();
-      const enumMatch = trimmed.match(/^([A-Za-z0-9_]+)::([A-Za-z0-9_]+)$/);
+      const enumMatch = trimmed.match(/^(\/.+)::([^:]+)$/);
       if (!enumMatch) return parseInputValue(raw);
 
-      const [, enumName, enumValueName] = enumMatch;
-      const enumRes = await api.getEnumByName(enumName);
-      if (!enumRes.success || !enumRes.data) {
-        return parseInputValue(raw);
-      }
-
-      const found = enumRes.data.values.find((v) => v.name === enumValueName || v.name.endsWith(`::${enumValueName}`));
-      return found ? found.value : parseInputValue(raw);
+      const [, enumPath, enumValueName] = enumMatch;
+      const enumRes = await api.getEnumValues(enumPath);
+      if (!enumRes.success || !enumRes.data) throw new Error(enumRes.error || 'Enum metadata unavailable');
+      const found = enumRes.data.items.find((value) => value.name === enumValueName || value.name.endsWith(`::${enumValueName}`));
+      if (found) return found.value;
+      if (enumRes.data.has_more) throw new Error('Enum value is outside the loaded metadata page; exact enum lookup is not available yet');
+      throw new Error(`Enum value not found: ${enumPath}::${enumValueName}`);
     };
-
-    const params: Record<string, unknown> = {};
-    for (const [name, raw] of Object.entries(paramInputs)) {
-      params[name] = await parseParamValue(raw);
-    }
 
     setCalling(true);
     try {
+      const params: Record<string, unknown> = {};
+      for (const [name, raw] of Object.entries(paramInputs)) {
+        params[name] = await parseParamValue(raw);
+      }
+
       if (callMode === 'static') {
         if (!staticClassName.trim()) {
           setCallResult('Static call requires a class full path');
           return;
         }
 
-        const classCheck = await api.getClassByName(staticClassName.trim());
+        const classCheck = await api.getClassByPath(staticClassName.trim());
         if (!classCheck.success || !classCheck.data) {
           setCallResult(classCheck.error || 'Class not found');
           return;
@@ -397,6 +391,8 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
         return;
       }
       setCallResult(JSON.stringify(res.data.result, null, 2));
+    } catch (error) {
+      setCallResult(error instanceof Error ? error.message : String(error));
     } finally {
       setCalling(false);
     }
@@ -458,26 +454,17 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
     if (!selected) return;
     setDecompileLoading(true);
     const path = blueprintPath.trim();
-    let byteRes;
-    let decompileRes;
-
-    if (path) {
-      [byteRes, decompileRes] = await Promise.all([
-        api.getBlueprintBytecodeByPath(path),
-        api.decompileBlueprintByPath(path),
-      ]);
-      if (!byteRes.success || !decompileRes.success) {
-        [byteRes, decompileRes] = await Promise.all([
-          api.getBlueprintBytecode(selected.index),
-          api.decompileBlueprint(selected.index),
-        ]);
-      }
-    } else {
-      [byteRes, decompileRes] = await Promise.all([
-        api.getBlueprintBytecode(selected.index),
-        api.decompileBlueprint(selected.index),
-      ]);
+    if (!path) {
+      const message = 'Blueprint metadata requires an exact function path';
+      setBytecode(message);
+      setDecompiled(message);
+      setDecompileLoading(false);
+      return;
     }
+    const [byteRes, decompileRes] = await Promise.all([
+      api.getBlueprintBytecodeByPath(path),
+      api.decompileBlueprintByPath(path),
+    ]);
 
     if (byteRes.success && byteRes.data) {
       setBytecode(byteRes.data.hex);
@@ -523,8 +510,10 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
                 <button
                   key={tab}
                   onClick={() => setFlagTab(tab)}
+                  disabled={tab !== 'All'}
+                  title={tab === 'All' ? undefined : 'Backend-indexed implementation filtering is not available yet'}
                   className={`px-2.5 py-1 rounded-md text-[11px] font-semibold tracking-tight transition-colors font-display ${flagTab === tab ? 'bg-background-base text-text-high shadow-sm border border-border-subtle' : 'text-text-low hover:text-text-high border border-transparent'
-                    }`}
+                    } disabled:opacity-40 disabled:cursor-not-allowed`}
                 >
                   {tab}
                 </button>
@@ -766,7 +755,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
                             {selected.className}
                           </span>
                           <span className="px-2.5 py-1 rounded-[6px] bg-background-base border border-border-subtle text-[11px] font-mono text-text-mid">
-                            Param Size: {functionMeta?.param_size ?? '-'}
+                            Param Size: {functionMeta?.parameter_size ?? '-'}
                           </span>
                           <span className="px-2.5 py-1 rounded-[6px] bg-background-base border border-border-subtle text-[11px] font-mono text-text-mid">
                             Flags: {functionMeta?.flags || '-'}
@@ -783,10 +772,11 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
                     <div className="bg-surface-dark border border-border-subtle rounded-xl p-6 space-y-2 text-sm shadow-sm">
                       <InfoLine k="Name" v={detail?.name || selected.name} />
                       <InfoLine k="Class" v={currentParts.classPath || selected.className} />
-                      <InfoLine k="Address" v={functionMeta?.address || selected.address} />
-                      <InfoLine k="Param Size" v={String(functionMeta?.param_size ?? '-')} />
+                      <InfoLine k="Native Address" v={functionMeta?.native_address || '-'} />
+                      <InfoLine k="Param Size" v={String(functionMeta?.parameter_size ?? '-')} />
                       <InfoLine k="Flags" v={functionMeta?.flags || '-'} />
-                      <InfoLine k="Has Script" v={String(functionMeta?.has_script ?? false)} />
+                      <InfoLine k="Implementation" v={functionMeta?.implementation || 'unavailable'} />
+                      {functionMeta?.reason && <InfoLine k="Unavailable Reason" v={functionMeta.reason} />}
                     </div>
                   )}
 
@@ -802,10 +792,10 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
                           </tr>
                         </thead>
                         <tbody>
-                          {functionMeta?.params.map((p) => (
+                          {functionMeta?.parameters.map((p) => (
                             <tr key={`${p.name}-${p.offset}`} className="border-b border-border-subtle last:border-0 hover:bg-surface-stripe/30 transition-colors">
                               <td className="py-2.5 text-text-high font-mono">{p.name}</td>
-                              <td className="text-text-mid font-mono">{p.type}</td>
+                              <td className="text-text-mid font-mono">{p.type_name}</td>
                               <td className="text-text-low font-display text-[11px]">{p.flags}</td>
                               <td className="text-text-low font-mono">{p.offset}</td>
                             </tr>
@@ -883,13 +873,13 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
                               </div>
                             )}
 
-                            {functionMeta?.params
-                              .filter((p) => !p.flags.includes('OutParm') && !p.flags.includes('ReturnParm'))
+                            {functionMeta?.parameters
+                              .filter((p) => p.direction === 'input' || p.direction === 'inout')
                               .map((p) => (
                                 <div key={p.name} className="space-y-1.5">
                                   <label className="text-[10px] font-bold text-text-low uppercase tracking-widest flex items-center justify-between font-display">
                                     <span>{p.name}</span>
-                                    <span className="text-primary lowercase font-mono">{p.type}</span>
+                                    <span className="text-primary lowercase font-mono">{p.type_name}</span>
                                   </label>
                                   <input
                                     type="text"

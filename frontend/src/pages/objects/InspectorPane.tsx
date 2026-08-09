@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { MoreHorizontal, RefreshCw } from 'lucide-react';
 import { t } from '../../i18n';
 import api from '../../api';
-import type { ClassFunction, ClassProperty, ClassHierarchy, ObjectDetail, ObjectProperty } from '../../api';
+import type { ClassCDOResponse, ClassFunction, ClassProperty, ClassHierarchy, EnumValue, ObjectDetail, ObjectProperty, TypeQueryCursor } from '../../api';
 import { toEditable } from './valueUtils';
 
 interface InspectorPaneProps {
@@ -31,8 +31,14 @@ export default function InspectorPane({ selectedClass, selectedType, selectedInd
     const [classFunctions, setClassFunctions] = useState<ClassFunction[]>([]);
     const [classFullName, setClassFullName] = useState<string>('');
     const [hierarchy, setHierarchy] = useState<ClassHierarchy | null>(null);
-    const [cdoProperties, setCdoProperties] = useState<ObjectProperty[]>([]);
-    const [enumValues, setEnumValues] = useState<Array<{ name: string, value: number }>>([]);
+    const [cdoMetadata, setCdoMetadata] = useState<ClassCDOResponse | null>(null);
+    const [enumValues, setEnumValues] = useState<EnumValue[]>([]);
+    const [fieldCursor, setFieldCursor] = useState<TypeQueryCursor | null>(null);
+    const [fieldHasMore, setFieldHasMore] = useState(false);
+    const [functionCursor, setFunctionCursor] = useState<TypeQueryCursor | null>(null);
+    const [functionHasMore, setFunctionHasMore] = useState(false);
+    const [enumCursor, setEnumCursor] = useState<TypeQueryCursor | null>(null);
+    const [enumHasMore, setEnumHasMore] = useState(false);
 
     const availableTabs: TabType[] = isInstanceMode
         ? ['Properties']
@@ -57,6 +63,17 @@ export default function InspectorPane({ selectedClass, selectedType, selectedInd
         const loadData = async () => {
             setLoading(true);
             setError(null);
+            setClassFields([]);
+            setClassFunctions([]);
+            setHierarchy(null);
+            setCdoMetadata(null);
+            setEnumValues([]);
+            setFieldCursor(null);
+            setFieldHasMore(false);
+            setFunctionCursor(null);
+            setFunctionHasMore(false);
+            setEnumCursor(null);
+            setEnumHasMore(false);
             try {
                 if (isInstanceMode) {
                     const [detailRes, propsRes] = await Promise.all([
@@ -75,33 +92,50 @@ export default function InspectorPane({ selectedClass, selectedType, selectedInd
                         const [fieldRes, funcRes, classRes, hierRes, cdoRes] = await Promise.all([
                             api.getClassFields(selectedClass),
                             api.getClassFunctions(selectedClass),
-                            api.getClassByName(selectedClass),
+                            api.getClassByPath(selectedClass),
                             api.getClassHierarchy(selectedClass),
                             api.getClassCDO(selectedClass),
                         ]);
-                        if (fieldRes.success && fieldRes.data) setClassFields(fieldRes.data);
-                        if (funcRes.success && funcRes.data) setClassFunctions(funcRes.data);
-                        if (classRes.success && classRes.data) setClassFullName(classRes.data.full_name);
+                        const failures: string[] = [];
+                        if (fieldRes.success && fieldRes.data) {
+                            setClassFields(fieldRes.data.items);
+                            setFieldCursor(fieldRes.data.next_cursor);
+                            setFieldHasMore(fieldRes.data.has_more);
+                        } else failures.push(fieldRes.error || 'Class fields failed');
+                        if (funcRes.success && funcRes.data) {
+                            setClassFunctions(funcRes.data.items);
+                            setFunctionCursor(funcRes.data.next_cursor);
+                            setFunctionHasMore(funcRes.data.has_more);
+                        } else failures.push(funcRes.error || 'Class functions failed');
+                        if (classRes.success && classRes.data) setClassFullName(classRes.data.full_path);
+                        else failures.push(classRes.error || 'Class detail failed');
                         if (hierRes.success && hierRes.data) setHierarchy(hierRes.data);
-                        if (cdoRes.success && cdoRes.data) setCdoProperties(cdoRes.data.properties ?? []);
+                        else failures.push(hierRes.error || 'Class hierarchy failed');
+                        if (cdoRes.success && cdoRes.data) setCdoMetadata(cdoRes.data);
+                        else failures.push(cdoRes.error || 'Class default object failed');
+                        if (failures.length > 0) throw new Error(failures.join(' | '));
                     } else if (selectedType === 'Struct') {
-                        const res = await api.getStructByName(selectedClass);
-                        if (res.success && res.data) {
-                            setClassFields(res.data.fields);
-                            setClassFullName(res.data.full_name);
-                            if (res.data.super) {
-                                setHierarchy({ name: res.data.name, parents: [res.data.super], children: [] });
-                            } else {
-                                setHierarchy(null);
-                            }
-                        }
+                        const [detailRes, fieldsRes] = await Promise.all([
+                            api.getStructByPath(selectedClass),
+                            api.getStructFields(selectedClass),
+                        ]);
+                        if (!detailRes.success || !detailRes.data) throw new Error(detailRes.error || 'Struct detail failed');
+                        if (!fieldsRes.success || !fieldsRes.data) throw new Error(fieldsRes.error || 'Struct fields failed');
+                        setClassFields(fieldsRes.data.items);
+                        setFieldCursor(fieldsRes.data.next_cursor);
+                        setFieldHasMore(fieldsRes.data.has_more);
+                        setClassFullName(detailRes.data.full_path);
                     } else if (selectedType === 'Enum') {
-                        const res = await api.getEnumByName(selectedClass);
-                        if (res.success && res.data) {
-                            setClassFullName(res.data.full_name);
-                            setEnumValues(res.data.values);
-                            setHierarchy(null);
-                        }
+                        const [detailRes, valuesRes] = await Promise.all([
+                            api.getEnumByPath(selectedClass),
+                            api.getEnumValues(selectedClass),
+                        ]);
+                        if (!detailRes.success || !detailRes.data) throw new Error(detailRes.error || 'Enum detail failed');
+                        if (!valuesRes.success || !valuesRes.data) throw new Error(valuesRes.error || 'Enum values failed');
+                        setClassFullName(detailRes.data.full_path);
+                        setEnumValues(valuesRes.data.items);
+                        setEnumCursor(valuesRes.data.next_cursor);
+                        setEnumHasMore(valuesRes.data.has_more);
                     }
                 }
             } catch (err) {
@@ -113,6 +147,39 @@ export default function InspectorPane({ selectedClass, selectedType, selectedInd
 
         void loadData();
     }, [isInstanceMode, selectedClass, selectedIndex, selectedType]);
+
+    const loadMoreMetadata = async (kind: 'fields' | 'functions' | 'values') => {
+        if (!selectedClass || loading) return;
+        setLoading(true);
+        setError(null);
+        try {
+            if (kind === 'fields' && fieldCursor) {
+                const response = selectedType === 'Struct'
+                    ? await api.getStructFields(selectedClass, fieldCursor)
+                    : await api.getClassFields(selectedClass, fieldCursor);
+                if (!response.success || !response.data) throw new Error(response.error || 'Field continuation failed');
+                setClassFields((current) => [...current, ...response.data!.items]);
+                setFieldCursor(response.data.next_cursor);
+                setFieldHasMore(response.data.has_more);
+            } else if (kind === 'functions' && functionCursor) {
+                const response = await api.getClassFunctions(selectedClass, functionCursor);
+                if (!response.success || !response.data) throw new Error(response.error || 'Function continuation failed');
+                setClassFunctions((current) => [...current, ...response.data!.items]);
+                setFunctionCursor(response.data.next_cursor);
+                setFunctionHasMore(response.data.has_more);
+            } else if (kind === 'values' && enumCursor) {
+                const response = await api.getEnumValues(selectedClass, enumCursor);
+                if (!response.success || !response.data) throw new Error(response.error || 'Enum continuation failed');
+                setEnumValues((current) => [...current, ...response.data!.items]);
+                setEnumCursor(response.data.next_cursor);
+                setEnumHasMore(response.data.has_more);
+            }
+        } catch (metadataError) {
+            setError(metadataError instanceof Error ? metadataError.message : String(metadataError));
+        } finally {
+            setLoading(false);
+        }
+    };
 
     const handleCopyAddress = () => {
         const addr = instanceDetail?.address;
@@ -255,10 +322,10 @@ export default function InspectorPane({ selectedClass, selectedType, selectedInd
                     <div className="px-3 py-2 border-b border-border-subtle bg-surface-stripe/30 flex items-center gap-1 text-[10px] text-text-low font-mono overflow-x-auto flex-none">
                         <span className="text-text-mid font-display font-bold mr-1">{t('Inheritance:')}</span>
                         {hierarchy.parents.map((p, i) => (
-                            <span key={p}>{i > 0 && <span className="text-text-low mx-0.5">&rarr;</span>}{p}</span>
+                            <span key={p.full_path}>{i > 0 && <span className="text-text-low mx-0.5">&rarr;</span>}{p.full_path}</span>
                         ))}
                         <span className="text-text-low mx-0.5">&rarr;</span>
-                        <span className="text-primary font-bold">{hierarchy.name}</span>
+                        <span className="text-primary font-bold">{hierarchy.path}</span>
                     </div>
                 )}
 
@@ -268,12 +335,19 @@ export default function InspectorPane({ selectedClass, selectedType, selectedInd
                             <div className="p-4 text-center text-text-low text-xs">{t('No fields found.')}</div>
                         )}
                         {classFields.map((f, i) => (
-                            <div key={f.name} className={`flex items-center border-b border-border-subtle px-3 py-2 hover:bg-white/5 ${i % 2 === 0 ? 'bg-transparent' : 'bg-surface-stripe'}`}>
+                            <div key={`${f.declaring_type.full_path}:${f.name}:${f.offset}`} className={`flex items-center border-b border-border-subtle px-3 py-2 hover:bg-white/5 ${i % 2 === 0 ? 'bg-transparent' : 'bg-surface-stripe'}`}>
                                 <div className="w-[15%] text-text-low font-mono text-[10px]">+0x{f.offset.toString(16).toUpperCase().padStart(4, '0')}</div>
                                 <div className="w-[45%] text-text-mid font-mono text-xs truncate pr-2" title={f.name}>{f.name}</div>
-                                <div className="w-[40%] text-text-low px-1 py-0.5 border border-border-subtle rounded font-mono text-[10px] truncate" title={f.type}>{f.type}</div>
+                                <div className="w-[40%] text-text-low px-1 py-0.5 border border-border-subtle rounded font-mono text-[10px] truncate" title={f.reason || f.type_name}>
+                                    {f.type_name}{f.state !== 'supported' ? ` (${f.state})` : ''}
+                                </div>
                             </div>
                         ))}
+                        {fieldHasMore && fieldCursor && (
+                            <button onClick={() => void loadMoreMetadata('fields')} className="m-3 py-1.5 border border-border-subtle rounded text-xs text-text-mid hover:text-white">
+                                {t('Load more')}
+                            </button>
+                        )}
                     </div>
                 )}
 
@@ -284,13 +358,20 @@ export default function InspectorPane({ selectedClass, selectedType, selectedInd
                             <div className="p-4 text-center text-text-low text-xs">{t('No functions found.')}</div>
                         )}
                         {classFunctions.map((f, i) => (
-                            <div key={f.name} className={`flex flex-col border-b border-border-subtle px-3 py-2 hover:bg-white/5 ${i % 2 === 0 ? 'bg-transparent' : 'bg-surface-stripe'}`}>
+                            <div key={f.full_path} className={`flex flex-col border-b border-border-subtle px-3 py-2 hover:bg-white/5 ${i % 2 === 0 ? 'bg-transparent' : 'bg-surface-stripe'}`}>
                                 <div className="flex items-center gap-2">
                                     <span className="text-primary text-xs font-mono truncate flex-1" title={f.name}>{f.name}()</span>
+                                    <span className="text-[10px] text-text-low font-mono">{f.implementation}</span>
                                 </div>
                                 {f.flags && <div className="text-[10px] text-text-low font-mono mt-1 opacity-60">{t('Flags')}: {f.flags}</div>}
+                                {f.reason && <div className="text-[10px] text-yellow-400 font-mono mt-1">{f.reason_code}: {f.reason}</div>}
                             </div>
                         ))}
+                        {functionHasMore && functionCursor && (
+                            <button onClick={() => void loadMoreMetadata('functions')} className="m-3 py-1.5 border border-border-subtle rounded text-xs text-text-mid hover:text-white">
+                                {t('Load more')}
+                            </button>
+                        )}
                     </div>
                 )}
 
@@ -299,18 +380,15 @@ export default function InspectorPane({ selectedClass, selectedType, selectedInd
                         <div className="px-3 py-2 border-b border-border-subtle bg-surface-stripe/20 text-[10px] text-text-low font-display">
                             {t('CDO Readonly Hint')}
                         </div>
-                        {cdoProperties.length === 0 && !loading && (
-                            <div className="p-4 text-center text-text-low text-xs">{t('No properties')}</div>
-                        )}
-                        {cdoProperties.map((p, i) => (
-                            <div key={p.name} className={`flex items-center border-b border-border-subtle px-3 py-2 ${i % 2 === 0 ? 'bg-transparent' : 'bg-surface-stripe'}`}>
-                                <div className="w-[45%] pr-2 text-xs text-text-mid font-mono truncate" title={p.name}>{p.name}</div>
-                                <div className="w-[55%] flex items-center gap-2">
-                                    <span className="text-2xs text-text-low border border-border-subtle rounded px-1 font-mono truncate max-w-[70px]" title={p.type}>{p.type}</span>
-                                    <span className="text-xs text-text-high font-mono truncate flex-1">{typeof p.value === 'object' ? JSON.stringify(p.value) : String(p.value ?? '')}</span>
-                                </div>
+                        {!cdoMetadata && !loading && <div className="p-4 text-center text-text-low text-xs">{t('No metadata')}</div>}
+                        {cdoMetadata && (
+                            <div className="p-4 space-y-2 text-xs font-mono">
+                                <div className="text-text-mid">State: <span className="text-primary">{cdoMetadata.state}</span></div>
+                                <div className="text-text-mid break-all">Address: <span className="text-text-high">{cdoMetadata.handle?.address || 'unavailable'}</span></div>
+                                {cdoMetadata.reason && <div className="text-yellow-400">{cdoMetadata.reason_code}: {cdoMetadata.reason}</div>}
+                                <div className="text-text-low">Property values are not fabricated before the property codec command is available.</div>
                             </div>
-                        ))}
+                        )}
                     </div>
                 )}
 
@@ -326,6 +404,11 @@ export default function InspectorPane({ selectedClass, selectedType, selectedInd
                                 <div className="text-xs text-primary font-mono font-medium">{v.value}</div>
                             </div>
                         ))}
+                        {enumHasMore && enumCursor && (
+                            <button onClick={() => void loadMoreMetadata('values')} className="m-3 py-1.5 border border-border-subtle rounded text-xs text-text-mid hover:text-white">
+                                {t('Load more')}
+                            </button>
+                        )}
                     </div>
                 )}
             </div>

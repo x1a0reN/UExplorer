@@ -55,8 +55,8 @@
 	  "verification": [
 		"2026-08-09: DESIGN uses evidence-driven R0-R7 status and explicitly lists disabled/unverified capabilities",
 		"2026-08-09: DESIGN, README, PROJECT_MAP, and AGENTS now describe the completed R4 Tauri/Named-Pipe-only desktop boundary and label retained HTTP/API material as non-release history",
-		"2026-08-10: DESIGN, README, PROJECT_MAP, AGENTS, and SUPPORT_MATRIX now distinguish attached production reflection/type structural sources from still-missing target-profile, PropertyCodec, descriptor/enum/bytecode, and type-detail-command evidence",
-		"R5 domain behavior and final R7 target evidence still require documentation reconciliation"
+		"2026-08-10: DESIGN, README, PROJECT_MAP, AGENTS, and SUPPORT_MATRIX now distinguish attached production reflection/type structural sources and immutable type-detail commands from still-missing target-profile, PropertyCodec, descriptor/enum/bytecode, and real-target evidence",
+		"Remaining R5 domains and final R7 target evidence still require documentation reconciliation"
 	  ]
 	},
     "ENG-005": {
@@ -86,6 +86,7 @@
 		"2026-08-10: ObjectSnapshotReflectionCandidateSource is the production immutable-snapshot/SafeMemory boundary for complete UProperty/FProperty evidence; Main owns its scheduler attachment, snapshot-refresh exclusion, terminal plan release, diagnostics, and shutdown drain",
 		"2026-08-10: EngineFacade uniquely owns TypeSnapshotCapture; its strict record stream, exact object/reflection shared_ptr sealing, worker-only Store publication, callback drain, and fixed-capacity worker retirement prevent partial publication and frame-thread O(N) validation/destruction",
 		"2026-08-10: ObjectSnapshotTypeCandidateSource and Main now own the production exact-snapshot/layout type metadata path, scheduler attachment, worker publication, per-generation retry, plan release, and observable diagnostics without legacy Off/Settings/wrapper reads",
+		"2026-08-10: worker-only TypeCommandService separates immutable exact-path type details, scoped member paging, hierarchy/CDO metadata, and function identity from transport and live UE access; TypeSnapshot owns direct-child and full-function-path indexes",
 		"2026-08-09: Rust DomainService and the split TypeScript Tauri client replace the frontend REST/SSE/WebSocket/configuration monolith at the process boundary",
         "Remaining legacy domain/API monoliths and direct Off/Settings consumers still require migration"
       ]
@@ -101,6 +102,8 @@
         "2026-08-09: payload schema and golden fixtures define session/context/index/serial/address/class object handles plus owner/path/signature function handles",
         "2026-08-09: status commands require empty data and object/function handle issue commands require exactly one non-negative int32 index; request/response fixtures cover the object-handle flow",
         "2026-08-09: shared deny-unknown-fields Rust types and schema now cover Hello/Welcome/limits, Request/Response/error/timing, Event, Cancel, Ping/Pong, and Shutdown; FakeCore consumes the same types",
+		"2026-08-10: strict operation-specific schema, Rust types, and golden fixtures cover exact-path type detail, explicitly scoped member pages, session/context/generation/query-bound cursors, CDO/function metadata, and decimal-string enum int64 values",
+		"2026-08-10: Draft 2020-12 validation fixed the root oneOf ambiguity between shape-identical Cancel and Shutdown payloads; frame kind selects the exact definition while root anyOf remains only a payload-shape catalogue",
         "Operation-specific schemas for the remaining domain commands remain pending"
       ]
     },
@@ -481,10 +484,10 @@
 	  ]
 	},
 	"OBJ-007": {
-	  "status": "in_progress",
+	  "status": "verified",
 	  "verification": [
 		"2026-08-10: immutable TypeSnapshot records only DirectProperties and DirectFunctions; QueryTypeProperties/QueryTypeFunctions require an explicit direct or include_inherited scope and return declaring type plus inheritance depth in nearest-first order",
-		"2026-08-10: production type capture now records only direct properties/functions and exact declaring owners; Named Pipe schemas and Rust Host detail indexes still need to expose and verify the same explicit scope"
+		"2026-08-10: production type capture records only direct properties/functions and exact declaring owners; strict Named Pipe schema, Rust types, Host routing, TypeScript client, UI and C++ fixtures preserve the same explicit scope end to end"
 	  ]
 	},
 	"CLASS-001": {
@@ -492,7 +495,8 @@
 	  "verification": [
 		"2026-08-10: class metadata distinguishes CDO present, not constructed, and unavailable; a present CDO must be an exact stable handle whose snapshot class_path equals the owning class full path",
 		"2026-08-10: complete super references are handle-bound and publication/query paths reject missing parents, kind mismatches, cycles, and depth overflow",
-		"2026-08-10: production type capture reads witnessed super and class CDO fields, distinguishes null not-constructed from nonzero unavailable CDO identity, and validates complete handles in the synthetic fixture; Host instance/hierarchy commands and real-target evidence remain pending"
+		"2026-08-10: production type capture reads witnessed super and class CDO fields, distinguishes null not-constructed from nonzero unavailable CDO identity, and validates complete handles in the synthetic fixture",
+		"2026-08-10: exact-path hierarchy and CDO commands now cross Core/Host/protocol/UI with direct-child indexes, cycle-safe snapshot publication, explicit CDO state/handle/reason, and no fabricated property list; real instance filtering and target evidence remain pending"
 	  ]
 	},
     "OBJ-012": {
@@ -509,6 +513,7 @@
 		"2026-08-09: objects.snapshot.page enforces an exact cursor/limit object, rejects unknown filter fields and non-integral/out-of-range values, caps limit at 128, and reports exact snapshot-wide source/record/skipped totals",
 		"2026-08-09: Host SnapshotIndex queries cap limit at 128, validate typed/canonical filters, bind cursor to generation and normalized query fingerprint, and report separate exact snapshot_record_count/matched_count",
 		"2026-08-09: Tauri object/type/package/instance schemas deny unknown legacy offset/q/class/package fields, require 1..128 limits, and expose exact matched/total semantics without silently clamping invalid requests",
+		"2026-08-10: all ten type-detail operations now have exact deny-unknown-fields request schemas and bounded typed outputs; enum int64 values are strings and cursor scope/generation/query mismatches are explicit",
 		"2026-08-09: legacy routes are excluded from release and Tauri DomainService exposes only strict snapshot-backed object queries; remaining non-snapshot domain schemas keep this issue in progress"
       ]
     },
@@ -521,6 +526,7 @@
 		"2026-08-09: bounded indexes cover kind, case-insensitive full/class/package paths, unique address, and token-prefix search without rescanning live GObjects",
 		"2026-08-09: each ManagedSession owns its SnapshotCache, pulls pages through CoreRpcClient with a total deadline, restarts a changing generation at most three times, and returns the already-published Arc for an unchanged generation",
 		"2026-08-09: Tauri DomainService delegates object/type/package/instance list, search, identity, and kind counts directly to SnapshotIndex instead of rescanning the immutable snapshot for each request",
+		"2026-08-10: TypeSnapshot publication builds immutable direct-child and exact full-function-path indexes; type detail and paged member queries do not rescan live GObjects or the complete type/function set",
 		"Real target-scale refresh/GC/reconnect fixtures and query-index performance evidence remain pending"
 	  ]
 	},
@@ -529,7 +535,8 @@
 	  "verification": [
 		"2026-08-09: all reachable Object/Type execution identities use exact full_path, class_path, or package_path filters; short names are display/search text only",
 		"2026-08-09: type/instance React selections preserve full_name across subsequent commands, and TypeScript no longer falls back from a missing struct full path to its short name",
-		"2026-08-09: duplicate case-insensitive full paths return OBJECT_IDENTITY_AMBIGUOUS instead of selecting the first snapshot record; legacy short-name HTTP resolvers are excluded from release"
+		"2026-08-09: duplicate case-insensitive full paths return OBJECT_IDENTITY_AMBIGUOUS instead of selecting the first snapshot record; legacy short-name HTTP resolvers are excluded from release",
+		"2026-08-10: Class/Struct/Enum/Function detail commands accept only exact {path}; strict schema and C++ fixtures reject legacy {name}, and function detail resolves through an exact full-path index"
 	  ]
 	},
 	"OBJ-011": {
@@ -539,7 +546,8 @@
 		"2026-08-09: Host indexed collection queries also require a query-bound cursor and 1..128 limit; incomplete page chains cannot be published",
 		"2026-08-09: C++ Pipe decoder validates the 8 MiB header limit before allocation and the encoder rejects oversized serialized payloads",
 		"2026-08-09: package contents now returns stable generation/query-bound cursor pages with a strict 1..128 limit and exact count; a Rust fixture proves two-page continuation and rejects cursor reuse for another package",
-		"2026-08-09: legacy unbounded package contents is unreachable, and all currently reachable Object/Type collection operations use the same bounded SnapshotIndex paging contract"
+		"2026-08-09: legacy unbounded package contents is unreachable, and all currently reachable Object/Type collection operations use the same bounded SnapshotIndex paging contract",
+		"2026-08-10: type member/hierarchy/enum pages cap at 128 and reject session/context/generation/query/terminal-ordinal cursor reuse; function parameters cap at 128, serialized type command data caps at 4 MiB, and Rust rejects noncanonical or out-of-int64 enum strings"
 	  ]
 	},
     "CALL-001": {
@@ -761,6 +769,7 @@
       "status": "in_progress",
       "verification": [
         "2026-08-09: the former monolith is split into api/index.ts types/exports and api/client.ts Tauri-only transport; Rust DomainService owns the explicit domain registry",
+		"2026-08-10: strict shared Rust payload types and exact TypeScript models replace fabricated type metadata for ten type-detail operations; pages consume backend cursors and explicit unavailable states",
         "Generated contracts and the R6 frontend session store remain pending"
       ]
     },
@@ -803,7 +812,8 @@
       "status": "in_progress",
       "verification": [
         "2026-08-09: instance/static/batch execution buttons and console call command are disabled while stable handles are unavailable",
-        "Backend metadata classification, owner handles, and real instance selection remain pending"
+		"2026-08-10: Functions now uses exact function detail, backend implementation/native-address metadata, stable owner handles, parameter direction, and canonical flag masks; name-based Native/Blueprint filters are disabled, UClass index is never an implicit instance target, and Blueprint failure does not fall back to a naked index",
+		"Actual Call commands and real instance selection remain pending"
       ]
     },
     "UI-009": {
@@ -812,6 +822,7 @@
         "2026-08-09: Object/Type searches now execute against the Host snapshot index and continuation pages are bound to both snapshot generation and normalized query fingerprint",
         "2026-08-09: four list views no longer request the invalid legacy PAGE_SIZE=500; they use the protocol maximum 128 and consume next_cursor/has_more instead of offsets",
 		"2026-08-09: failed continuation pages clear has_more/cursor instead of retrying the same rejected page indefinitely; missing instance outer metadata is no longer fabricated as Package",
+		"2026-08-10: TypeBrowser and InspectorPane consume generation/query-bound detail pages with explicit load-more state instead of loading or fabricating unbounded metadata",
         "React request cancellation and stale-response generation guards remain pending in R6"
       ]
     },

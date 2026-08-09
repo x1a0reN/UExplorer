@@ -36,6 +36,7 @@
 #include "Runtime/ShutdownCoordinator.h"
 #include "Runtime/VTableHook.h"
 #include "Services/CoreCommandService.h"
+#include "Services/TypeCommandService.h"
 #include "API/GameThreadQueue.h"
 #include "Generator/Public/Generators/UsmapContainer.h"
 #include "Server/HttpServer.h"
@@ -2180,8 +2181,11 @@ namespace
 						.FullPath = "/Script/Fixture.Mode",
 						.PackagePath = "/Script/Fixture",
 						.EnumState = ReflectedMemberState::Supported,
-						.EnumUnderlyingKind = PropertyKind::UInt8,
-						.EnumEntries = {{"Off", 0}, {"On", 1}}
+						.EnumUnderlyingKind = PropertyKind::Int64,
+						.EnumEntries = {
+							{"Off", (std::numeric_limits<std::int64_t>::min)()},
+							{"On", (std::numeric_limits<std::int64_t>::max)()}
+						}
 					}
 				}
 			};
@@ -2678,6 +2682,247 @@ namespace
 				&& invalidScope.Error == TypeMemberQueryError::ScopeInvalid,
 			"Direct and inherited type-member semantics were not explicit and stable");
 
+		const auto executeType = [&typePublished](
+			const std::string_view operation,
+			const nlohmann::json& data) {
+			return UExplorer::Services::TypeCommandService::Execute(
+				typePublished.Snapshot,
+				operation,
+				data,
+				"reflection-facade",
+				51,
+				7);
+		};
+		Require(
+			UExplorer::Services::TypeCommandService::Handles("types.classes.get")
+				&& UExplorer::Services::TypeCommandService::Handles("types.functions.get")
+				&& UExplorer::Services::TypeCommandService::Handles("types.structs.fields")
+				&& UExplorer::Services::TypeCommandService::Handles("types.enums.values")
+				&& !UExplorer::Services::TypeCommandService::Handles("types.classes.legacy"),
+			"Immutable type command registry is incomplete or accepts a legacy route");
+
+		const auto classDetail = executeType(
+			"types.classes.get", {{"path", "/Script/Fixture.Derived"}});
+		Require(
+			classDetail.Ok()
+				&& classDetail.Data.at("type_snapshot_generation") == 1
+				&& classDetail.Data.at("object_snapshot_generation") == 7
+				&& classDetail.Data.at("kind") == "class"
+				&& classDetail.Data.at("properties_size") == 32
+				&& classDetail.Data.at("super").at("full_path") == "/Script/Fixture.Base"
+				&& classDetail.Data.at("default_object").at("state") == "present"
+				&& classDetail.Data.at("default_object").at("handle").at("index") == 8
+				&& !classDetail.Data.contains("fields")
+				&& !classDetail.Data.contains("functions"),
+			"Class detail did not preserve exact hierarchy/CDO metadata or returned an unbounded member set");
+		const auto legacyClassInput = executeType(
+			"types.classes.get", {{"name", "Derived"}});
+		Require(
+			!legacyClassInput.Ok()
+				&& legacyClassInput.Error->Code == "INVALID_ARGUMENT",
+			"Type detail accepted a short-name legacy identity");
+
+		const auto firstFields = executeType(
+			"types.classes.fields",
+			{
+				{"path", "/Script/Fixture.Derived"},
+				{"scope", "include_inherited"},
+				{"cursor", nullptr},
+				{"limit", 2}
+			});
+		Require(
+			firstFields.Ok()
+				&& firstFields.Data.at("total") == 3
+				&& firstFields.Data.at("items").size() == 2
+				&& firstFields.Data.at("items")[0].at("name") == "DerivedValue"
+				&& firstFields.Data.at("items")[0].at("inheritance_depth") == 0
+				&& firstFields.Data.at("items")[1].at("name") == "BaseValue"
+				&& firstFields.Data.at("items")[1].at("inheritance_depth") == 1
+				&& firstFields.Data.at("items")[1].at("flags") == "0x0000000000000001"
+				&& firstFields.Data.at("has_more").get<bool>()
+				&& firstFields.Data.at("next_cursor").at("after_ordinal") == 1,
+			"Inherited class field paging lost ordering, flags, or exact totals");
+		const auto finalFields = executeType(
+			"types.classes.fields",
+			{
+				{"path", "/Script/Fixture.Derived"},
+				{"scope", "include_inherited"},
+				{"cursor", firstFields.Data.at("next_cursor")},
+				{"limit", 2}
+			});
+		Require(
+			finalFields.Ok()
+				&& finalFields.Data.at("items").size() == 1
+				&& finalFields.Data.at("items")[0].at("name") == "OnChanged"
+				&& finalFields.Data.at("items")[0].at("state") == "unsupported"
+				&& finalFields.Data.at("items")[0].at("reason_code")
+					== "PROPERTY_DELEGATE_UNSUPPORTED"
+				&& !finalFields.Data.at("has_more").get<bool>()
+				&& finalFields.Data.at("next_cursor").is_null(),
+			"Unsupported field state was erased or the final type page did not terminate");
+		nlohmann::json exhaustedCursor = firstFields.Data.at("next_cursor");
+		exhaustedCursor["after_ordinal"] = 2;
+		const auto exhaustedFields = executeType(
+			"types.classes.fields",
+			{
+				{"path", "/Script/Fixture.Derived"},
+				{"scope", "include_inherited"},
+				{"cursor", exhaustedCursor},
+				{"limit", 2}
+			});
+		Require(
+			!exhaustedFields.Ok()
+				&& exhaustedFields.Error->Code == "TYPE_QUERY_CURSOR_INVALID",
+			"Type paging accepted a fabricated cursor that cannot have a continuation");
+
+		nlohmann::json wrongQueryCursor = firstFields.Data.at("next_cursor");
+		const auto wrongQuery = executeType(
+			"types.classes.fields",
+			{
+				{"path", "/Script/Fixture.Base"},
+				{"scope", "include_inherited"},
+				{"cursor", wrongQueryCursor},
+				{"limit", 1}
+			});
+		wrongQueryCursor["generation"] = 2;
+		const auto wrongGeneration = executeType(
+			"types.classes.fields",
+			{
+				{"path", "/Script/Fixture.Derived"},
+				{"scope", "include_inherited"},
+				{"cursor", wrongQueryCursor},
+				{"limit", 1}
+			});
+		Require(
+			!wrongQuery.Ok()
+				&& wrongQuery.Error->Code == "TYPE_QUERY_CURSOR_MISMATCH"
+				&& !wrongGeneration.Ok()
+				&& wrongGeneration.Error->Code == "TYPE_SNAPSHOT_GENERATION_MISMATCH",
+			"Type paging cursor crossed a query or immutable generation boundary");
+
+		const auto firstFunctions = executeType(
+			"types.classes.functions",
+			{
+				{"path", "/Script/Fixture.Derived"},
+				{"scope", "include_inherited"},
+				{"cursor", nullptr},
+				{"limit", 1}
+			});
+		const auto finalFunctions = executeType(
+			"types.classes.functions",
+			{
+				{"path", "/Script/Fixture.Derived"},
+				{"scope", "include_inherited"},
+				{"cursor", firstFunctions.Data.at("next_cursor")},
+				{"limit", 1}
+			});
+		const auto exactFunction = executeType(
+			"types.functions.get",
+			{{"path", "/Script/Fixture.Base.BaseOnly"}});
+		Require(
+			firstFunctions.Ok()
+				&& firstFunctions.Data.at("items")[0].at("name") == "DerivedOnly"
+				&& firstFunctions.Data.at("items")[0].at("implementation") == "bytecode"
+				&& firstFunctions.Data.at("items")[0].at("native_address").is_null()
+				&& finalFunctions.Ok()
+				&& finalFunctions.Data.at("items")[0].at("name") == "BaseOnly"
+				&& finalFunctions.Data.at("items")[0].at("implementation") == "native"
+				&& finalFunctions.Data.at("items")[0].at("native_address") == "0x5000"
+				&& finalFunctions.Data.at("items")[0].at("parameters")[0].at("direction") == "input"
+				&& finalFunctions.Data.at("items")[0].at("parameters")[0].at("type_name") == "int32"
+				&& exactFunction.Ok()
+				&& exactFunction.Data.at("full_path")
+					== "/Script/Fixture.Base.BaseOnly"
+				&& exactFunction.Data.at("declaring_type").at("full_path")
+					== "/Script/Fixture.Base",
+			"Function pages guessed implementation state or lost parameter metadata");
+
+		const auto hierarchy = executeType(
+			"types.classes.hierarchy",
+			{
+				{"path", "/Script/Fixture.Base"},
+				{"cursor", nullptr},
+				{"limit", 1}
+			});
+		Require(
+			hierarchy.Ok()
+				&& hierarchy.Data.at("parents").empty()
+				&& hierarchy.Data.at("children").size() == 1
+				&& hierarchy.Data.at("children")[0].at("full_path")
+					== "/Script/Fixture.Derived"
+				&& hierarchy.Data.at("total") == 1,
+			"Class hierarchy did not use the immutable direct-child index");
+
+		const auto classCdo = executeType(
+			"types.classes.cdo", {{"path", "/Script/Fixture.Derived"}});
+		const auto structDetail = executeType(
+			"types.structs.get", {{"path", "/Script/Fixture.Vector"}});
+		const auto structFields = executeType(
+			"types.structs.fields",
+			{
+				{"path", "/Script/Fixture.Vector"},
+				{"scope", "direct"},
+				{"cursor", nullptr},
+				{"limit", 2}
+			});
+		Require(
+			classCdo.Ok()
+				&& classCdo.Data.at("state") == "present"
+				&& classCdo.Data.at("handle").at("index") == 8
+				&& !classCdo.Data.contains("properties")
+				&& structDetail.Ok()
+				&& structDetail.Data.at("properties_size") == 12
+				&& structFields.Ok()
+				&& structFields.Data.at("total") == 3
+				&& structFields.Data.at("items")[0].at("name") == "X"
+				&& structFields.Data.at("has_more").get<bool>(),
+			"Class CDO or struct metadata returned fabricated values or unbounded fields");
+
+		const auto enumDetail = executeType(
+			"types.enums.get", {{"path", "/Script/Fixture.Mode"}});
+		const auto firstEnumValues = executeType(
+			"types.enums.values",
+			{
+				{"path", "/Script/Fixture.Mode"},
+				{"cursor", nullptr},
+				{"limit", 1}
+			});
+		const auto finalEnumValues = executeType(
+			"types.enums.values",
+			{
+				{"path", "/Script/Fixture.Mode"},
+				{"cursor", firstEnumValues.Data.at("next_cursor")},
+				{"limit", 1}
+			});
+		Require(
+			enumDetail.Ok()
+				&& enumDetail.Data.at("enum").at("underlying_kind") == "int64"
+				&& enumDetail.Data.at("enum").at("value_count") == 2
+				&& !enumDetail.Data.contains("values")
+				&& firstEnumValues.Ok()
+				&& firstEnumValues.Data.at("items")[0].at("value")
+					== "-9223372036854775808"
+				&& finalEnumValues.Ok()
+				&& finalEnumValues.Data.at("items")[0].at("value")
+					== "9223372036854775807",
+			"Enum query truncated int64 values or embedded an unbounded value array");
+
+		const auto wrongKind = executeType(
+			"types.classes.get", {{"path", "/Script/Fixture.Vector"}});
+		const auto wrongContext = UExplorer::Services::TypeCommandService::Execute(
+			typePublished.Snapshot,
+			"types.classes.get",
+			{{"path", "/Script/Fixture.Derived"}},
+			"reflection-facade",
+			52,
+			7);
+		Require(
+			!wrongKind.Ok()
+				&& wrongKind.Error->Code == "TYPE_KIND_INVALID"
+				&& !wrongContext.Ok()
+				&& wrongContext.Error->Code == "TYPE_SNAPSHOT_CONTEXT_MISMATCH",
+			"Type commands crossed a kind or immutable context-generation boundary");
+
 		TypeSnapshotCandidate repeatedGeneration = makeTypeCandidate();
 		Require(
 			publishTypeCandidate(std::move(repeatedGeneration)).Error
@@ -2698,8 +2943,8 @@ namespace
 		const auto typeCapabilities = BuildCoreCapabilities(*context, typeProbes);
 		Require(
 			typeCapabilities->IsAvailable("engine.type_snapshot")
-				&& !typeCapabilities->IsAvailable("types.inspect"),
-			"Type snapshot readiness either ignored its dependencies or advertised an unregistered command");
+				&& typeCapabilities->IsAvailable("types.inspect"),
+			"Type command capability did not follow the complete immutable type snapshot dependency");
 		typeProbes.ObjectSnapshotGeneration = 8;
 		const auto staleTypeCapabilities = BuildCoreCapabilities(*context, typeProbes);
 		Require(
@@ -4918,6 +5163,20 @@ namespace
 				&& !status.Data.at("type_snapshot").at("published").get<bool>()
 				&& !status.Data.at("type_snapshot").at("capture_configured").get<bool>(),
 			"Status domain command did not serialize the immutable runtime/name profile");
+
+		const CoreCommandResponse unavailableType = service.Execute({
+			.RequestId = 16,
+			.Operation = "types.classes.get",
+			.SessionId = service.SessionId(),
+			.TimeoutMs = 1000,
+			.Data = {{"path", "/Script/Fixture.Missing"}}
+		});
+		Require(
+			!unavailableType.Ok
+				&& unavailableType.Error
+				&& unavailableType.Error->Code != "OPERATION_NOT_SUPPORTED"
+				&& unavailableType.Error->Details.at("capability") == "types.inspect",
+			"Core command registry did not route type operations through their capability boundary");
 
 		CoreCommandRequest objectRequest{
 			.RequestId = 2,

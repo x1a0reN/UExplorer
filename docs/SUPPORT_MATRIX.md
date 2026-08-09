@@ -74,7 +74,13 @@ fixtures prove per-unit capture/validation, no partial visibility, exact depende
 identity, mutation rejection, fixed-capacity retirement/backpressure, deep-frozen generic
 descriptor graphs, bounded member ranges, direct versus inherited ordering, exact
 CDO/owner matching, and hierarchy guards. Property descriptors, UEnum layout, and
-Blueprint bytecode are still explicitly unavailable in the production stream. No
+Blueprint bytecode are still explicitly unavailable in the production stream. The same
+harness exercises the worker-only immutable `TypeCommandService` for exact-path
+Class/Struct/Enum/Function detail, explicit member scope, hierarchy/CDO metadata,
+session/context/generation/query-bound pagination, 128-record page limits, a 4 MiB command-data ceiling,
+hex 64-bit flags, decimal-string enum int64 values, and deterministic unavailable states.
+Rust/schema fixtures and React builds cover their side of this contract. The real
+cross-language process fixture does not yet publish a production TypeSnapshot, and no
 target-process reflection/type run exists, so this does not change any support row.
 
 ## Generic boundary evidence (not an engine support claim)

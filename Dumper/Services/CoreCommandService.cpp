@@ -2,6 +2,7 @@
 
 #include "Runtime/ObjectSnapshotReflectionCandidateSource.h"
 #include "Runtime/ObjectSnapshotTypeCandidateSource.h"
+#include "TypeCommandService.h"
 
 #include <algorithm>
 #include <chrono>
@@ -715,6 +716,8 @@ CoreCommandResponse CoreCommandService::Execute(
 			return ExecuteHandleIssue(request, false, onGameThreadQueued);
 		if (request.Operation == kFunctionHandleIssue)
 			return ExecuteHandleIssue(request, true, onGameThreadQueued);
+		if (TypeCommandService::Handles(request.Operation))
+			return ExecuteTypeCommand(request);
 		return Failure(
 			request,
 			"OPERATION_NOT_SUPPORTED",
@@ -729,6 +732,77 @@ CoreCommandResponse CoreCommandService::Execute(
 	{
 		return Failure(request, "COMMAND_INTERNAL_ERROR", "Core command raised an unknown exception");
 	}
+}
+
+CoreCommandResponse CoreCommandService::ExecuteTypeCommand(
+	const CoreCommandRequest& request)
+{
+	const auto started = std::chrono::steady_clock::now();
+	const auto timing = [&started]() noexcept {
+		return CoreCommandTiming{.ExecuteUs = ElapsedMicroseconds(started)};
+	};
+
+	std::string admissionError;
+	auto lease = m_Runtime.TryAcquireRequest(&admissionError);
+	if (!lease)
+	{
+		return Failure(
+			request,
+			admissionError.empty() ? "CORE_NOT_READY" : admissionError,
+			"CoreRuntime is not accepting domain commands",
+			json::object(),
+			timing());
+	}
+
+	constexpr const char* capabilityName = "types.inspect";
+	const Runtime::CapabilityStatus* capability = lease->Capabilities()
+		? lease->Capabilities()->Find(capabilityName)
+		: nullptr;
+	if (!capability || !capability->Available)
+	{
+		return Failure(
+			request,
+			capability && !capability->ReasonCode.empty()
+				? capability->ReasonCode
+				: "TYPE_SNAPSHOT_UNAVAILABLE",
+			capability && !capability->Reason.empty()
+				? capability->Reason
+				: "No complete immutable type snapshot is available",
+			{{"capability", capabilityName}},
+			timing());
+	}
+
+	const std::shared_ptr<const Runtime::EngineSnapshot> objects =
+		m_Engine.Snapshots().Current();
+	const std::shared_ptr<const Runtime::TypeSnapshot> types =
+		m_Engine.Types().Current();
+	if (!objects || !types || !lease->Context())
+	{
+		return Failure(
+			request,
+			"TYPE_SNAPSHOT_UNAVAILABLE",
+			"The type capability is available but its immutable dependencies are not published",
+			{{"capability", capabilityName}},
+			timing());
+	}
+
+	TypeCommandResult result = TypeCommandService::Execute(
+		types,
+		request.Operation,
+		request.Data,
+		m_SessionId,
+		lease->Context()->Generation(),
+		objects->Generation);
+	if (!result.Ok())
+	{
+		return Failure(
+			request,
+			std::move(result.Error->Code),
+			std::move(result.Error->Message),
+			std::move(result.Error->Details),
+			timing());
+	}
+	return Success(request, std::move(result.Data), timing());
 }
 
 CoreCommandResponse CoreCommandService::ExecuteSnapshotPage(const CoreCommandRequest& request)

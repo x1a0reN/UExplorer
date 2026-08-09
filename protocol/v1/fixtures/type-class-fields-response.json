@@ -1,0 +1,56 @@
+{
+  "ok": true,
+  "request_id": 51,
+  "session_id": "core-TYPE-FIXTURE",
+  "error": null,
+  "data": {
+    "type_snapshot_generation": 3,
+    "object_snapshot_generation": 9,
+    "context_generation": 1,
+    "path": "/Script/Fixture.Derived",
+    "kind": "class",
+    "scope": "include_inherited",
+    "items": [
+      {
+        "name": "DerivedValue",
+        "type_name": "int64",
+        "kind": "int64",
+        "offset": 16,
+        "size": 8,
+        "array_dim": 1,
+        "flags": "0x0010000000000001",
+        "state": "supported",
+        "reason_code": null,
+        "reason": null,
+        "descriptor_available": true,
+        "declaring_type": {
+          "handle": {
+            "session_id": "core-TYPE-FIXTURE",
+            "context_generation": 1,
+            "index": 2,
+            "serial": 102,
+            "address": "0x2000",
+            "class_fingerprint": "000000000000C002"
+          },
+          "kind": "class",
+          "name": "Derived",
+          "full_path": "/Script/Fixture.Derived"
+        },
+        "inheritance_depth": 0
+      }
+    ],
+    "total": 2,
+    "matched": 2,
+    "limit": 1,
+    "has_more": true,
+    "next_cursor": {
+      "generation": 3,
+      "after_ordinal": 0,
+      "query_fingerprint": "0123456789ABCDEF"
+    }
+  },
+  "timing": {
+    "queued_us": 0,
+    "execute_us": 40
+  }
+}

@@ -27,6 +27,11 @@ All integer fields are unsigned little-endian. Unknown flags, invalid magic, unk
 frame kinds, a different major version, or payloads above 8 MiB are terminal protocol
 errors. The connection is closed; no alternate protocol is attempted.
 
+The frame kind selects the exact payload definition under `payload.schema.json/$defs`.
+The schema root is therefore an `anyOf` shape catalogue, not a discriminator: v1
+`Cancel` and `Shutdown` intentionally have the same JSON fields and are distinguished
+by the header. Using root `oneOf` would reject either valid payload as ambiguous.
+
 ## Handshake
 
 1. Host sends `Hello` with a nonzero request ID.
@@ -184,6 +189,16 @@ The v1 command registry is explicit. Unknown operations return
 | `objects.snapshot.page` | `{"cursor": null \| {"generation": uint53, "after_index": int32}, "limit": 1..128}` | Worker-safe immutable snapshot page |
 | `objects.handle.issue` | `{"index": int32}` | PostRender game-thread identity re-read |
 | `functions.handle.issue` | `{"index": int32}` | PostRender game-thread function/owner/path re-read |
+| `types.classes.get` | `{"path": full_path}` | Worker-safe immutable class summary |
+| `types.classes.fields` | `{"path": full_path, "scope": "direct" \| "include_inherited", "cursor": null \| type_cursor, "limit": 1..128}` | Worker-safe immutable field page |
+| `types.classes.functions` | same member-page shape | Worker-safe immutable function page |
+| `types.classes.hierarchy` | `{"path": full_path, "cursor": null \| type_cursor, "limit": 1..128}` | Complete bounded parent chain plus direct-child page |
+| `types.classes.cdo` | `{"path": full_path}` | CDO state/handle only; never fabricated property values |
+| `types.functions.get` | `{"path": full_function_path}` | Exact immutable function metadata and execution handle |
+| `types.structs.get` | `{"path": full_path}` | Worker-safe immutable struct summary |
+| `types.structs.fields` | same member-page shape | Worker-safe immutable struct field page |
+| `types.enums.get` | `{"path": full_path}` | Worker-safe immutable enum summary/state |
+| `types.enums.values` | `{"path": full_path, "cursor": null \| type_cursor, "limit": 1..128}` | Worker-safe immutable enum-value page |
 
 Handle issue commands accept only an index as discovery input. Caller-supplied
 addresses, serials, classes, owners, paths, or fingerprints are rejected rather than
@@ -207,6 +222,21 @@ The shared Rust types live in `protocol/rust`; the Host must deserialize pages w
 unknown-field rejection. `frontend/src-tauri/src/session/snapshot_cache.rs` validates
 the complete cursor chain and snapshot-wide metadata before atomically publishing a
 generation. A rejected or incomplete generation never replaces the current cache.
+
+Type commands read only the atomically published `TypeSnapshot` that matches the
+active session, context generation, object-snapshot generation, and reflection-layout
+fingerprint. Detail commands require an exact full path; short names are discovery
+labels and are rejected as identity. Collection cursors contain
+`generation`, `after_ordinal`, and a 16-hex-digit query fingerprint derived from the
+session/context/object dependency, operation, path, and scope. A cursor cannot cross a
+session or type generation and cannot be reused for another query. Pages contain at
+most 128 records and the serialized command data is
+capped at 4 MiB. Function records cap serialized parameters at 128 and fail explicitly
+instead of truncating. Property/function flags are canonical 64-bit hex strings;
+signed enum values are decimal strings so the Host and React never narrow them through
+JavaScript Number. Unsupported and unavailable properties, functions, enums, and CDOs
+retain their state and reason. `types.classes.cdo` deliberately does not return a fake
+empty property list before the property codec commands exist.
 
 See `protocol.json`, `schema/payload.schema.json`, and `fixtures/` for the
 machine-readable contract and golden data.

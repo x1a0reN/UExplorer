@@ -15,6 +15,7 @@ import type {
   DumpType,
   EngineStatusData,
   EnumDetail,
+  EnumValuePageResponse,
   EnumItem,
   EventBridgeDiagnostics,
   FunctionCallResultData,
@@ -44,6 +45,9 @@ import type {
   StatusData,
   StructDetail,
   StructItem,
+  TypeMemberPageResponse,
+  TypeMemberScope,
+  TypeQueryCursor,
   Vec3Data,
   WatchHistoryData,
   WatchListResponse,
@@ -250,20 +254,38 @@ class UExplorerApi {
     });
   }
 
-  async getClassByName(name: string): Promise<ApiResponse<ClassDetail>> {
-    return this.command('types.classes.get', { name });
+  async getClassByPath(path: string): Promise<ApiResponse<ClassDetail>> {
+    return this.command('types.classes.get', { path });
   }
 
-  async getClassFields(name: string): Promise<ApiResponse<ClassProperty[]>> {
-    return this.command('types.classes.fields', { name });
+  async getClassFields(
+    path: string,
+    cursor: TypeQueryCursor | null = null,
+    limit = 128,
+    scope: TypeMemberScope = 'include_inherited',
+  ): Promise<ApiResponse<TypeMemberPageResponse<ClassProperty>>> {
+    return this.command('types.classes.fields', { path, scope, cursor, limit });
   }
 
-  async getClassFunctions(name: string): Promise<ApiResponse<ClassFunction[]>> {
-    return this.command('types.classes.functions', { name });
+  async getClassFunctions(
+    path: string,
+    cursor: TypeQueryCursor | null = null,
+    limit = 128,
+    scope: TypeMemberScope = 'include_inherited',
+  ): Promise<ApiResponse<TypeMemberPageResponse<ClassFunction>>> {
+    return this.command('types.classes.functions', { path, scope, cursor, limit });
   }
 
-  async getClassHierarchy(name: string): Promise<ApiResponse<ClassHierarchy>> {
-    return this.command('types.classes.hierarchy', { name });
+  async getFunctionByPath(path: string): Promise<ApiResponse<ClassFunction>> {
+    return this.command('types.functions.get', { path });
+  }
+
+  async getClassHierarchy(
+    path: string,
+    cursor: TypeQueryCursor | null = null,
+    limit = 128,
+  ): Promise<ApiResponse<ClassHierarchy>> {
+    return this.command('types.classes.hierarchy', { path, cursor, limit });
   }
 
   async getClassInstances(
@@ -280,8 +302,8 @@ class UExplorerApi {
     });
   }
 
-  async getClassCDO(name: string): Promise<ApiResponse<ClassCDOResponse>> {
-    return this.command('types.classes.cdo', { name });
+  async getClassCDO(path: string): Promise<ApiResponse<ClassCDOResponse>> {
+    return this.command('types.classes.cdo', { path });
   }
 
   async getStructs(
@@ -296,8 +318,17 @@ class UExplorerApi {
     });
   }
 
-  async getStructByName(name: string): Promise<ApiResponse<StructDetail>> {
-    return this.command('types.structs.get', { name });
+  async getStructByPath(path: string): Promise<ApiResponse<StructDetail>> {
+    return this.command('types.structs.get', { path });
+  }
+
+  async getStructFields(
+    path: string,
+    cursor: TypeQueryCursor | null = null,
+    limit = 128,
+    scope: TypeMemberScope = 'include_inherited',
+  ): Promise<ApiResponse<TypeMemberPageResponse<ClassProperty>>> {
+    return this.command('types.structs.fields', { path, scope, cursor, limit });
   }
 
   async getEnums(
@@ -312,8 +343,16 @@ class UExplorerApi {
     });
   }
 
-  async getEnumByName(name: string): Promise<ApiResponse<EnumDetail>> {
-    return this.command('types.enums.get', { name });
+  async getEnumByPath(path: string): Promise<ApiResponse<EnumDetail>> {
+    return this.command('types.enums.get', { path });
+  }
+
+  async getEnumValues(
+    path: string,
+    cursor: TypeQueryCursor | null = null,
+    limit = 128,
+  ): Promise<ApiResponse<EnumValuePageResponse>> {
+    return this.command('types.enums.values', { path, cursor, limit });
   }
 
   async getWorld(): Promise<ApiResponse<WorldData>> {

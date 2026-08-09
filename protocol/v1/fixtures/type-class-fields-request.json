@@ -1,0 +1,11 @@
+{
+  "operation": "types.classes.fields",
+  "session_id": "core-TYPE-FIXTURE",
+  "timeout_ms": 5000,
+  "data": {
+    "path": "/Script/Fixture.Derived",
+    "scope": "include_inherited",
+    "cursor": null,
+    "limit": 1
+  }
+}

@@ -6,7 +6,9 @@ import api, {
     type ClassFunction,
     type ClassProperty,
     type EnumDetail,
+    type EnumValue,
     type SnapshotQueryCursor,
+    type TypeQueryCursor,
 } from '../../api';
 import { Panel, HeaderCard, type BrowserPageProps } from './shared';
 
@@ -46,10 +48,18 @@ export default function TypeBrowser({ onSwitchMode }: BrowserPageProps) {
     const [functions, setFunctions] = useState<ClassFunction[]>([]);
     const [instances, setInstances] = useState<Array<{ index: number; name: string; address: string }>>([]);
     const [enumDetail, setEnumDetail] = useState<EnumDetail | null>(null);
+    const [enumValues, setEnumValues] = useState<EnumValue[]>([]);
     const [superChain, setSuperChain] = useState<string[]>([]);
     const [fullName, setFullName] = useState('');
+    const [typeSize, setTypeSize] = useState<number | null>(null);
     const [alignment, setAlignment] = useState(0);
     const [classSchemaError, setClassSchemaError] = useState<string | null>(null);
+    const [fieldCursor, setFieldCursor] = useState<TypeQueryCursor | null>(null);
+    const [fieldHasMore, setFieldHasMore] = useState(false);
+    const [functionCursor, setFunctionCursor] = useState<TypeQueryCursor | null>(null);
+    const [functionHasMore, setFunctionHasMore] = useState(false);
+    const [enumCursor, setEnumCursor] = useState<TypeQueryCursor | null>(null);
+    const [enumHasMore, setEnumHasMore] = useState(false);
 
     // Available detail tabs per subTab type
     const availableTabs: TypeDetailTab[] =
@@ -115,58 +125,113 @@ export default function TypeBrowser({ onSwitchMode }: BrowserPageProps) {
         setFunctions([]);
         setInstances([]);
         setEnumDetail(null);
+        setEnumValues([]);
         setSuperChain([]);
         setFullName(item.fullName);
+        setTypeSize(null);
         setAlignment(0);
         setClassSchemaError(null);
+        setFieldCursor(null);
+        setFieldHasMore(false);
+        setFunctionCursor(null);
+        setFunctionHasMore(false);
+        setEnumCursor(null);
+        setEnumHasMore(false);
         // Reset to first available tab
         setDetailTab(subTab === 'Enum' ? 'Values' : 'Fields');
 
         try {
             if (subTab === 'Class') {
-                const [fieldRes, funcRes, instanceRes] = await Promise.all([
+                const [detailRes, fieldRes, funcRes, hierarchyRes, instanceRes] = await Promise.all([
+                    api.getClassByPath(item.fullName),
                     api.getClassFields(item.fullName),
                     api.getClassFunctions(item.fullName),
+                    api.getClassHierarchy(item.fullName),
                     api.getClassInstances(item.fullName, null, 100),
                 ]);
                 const errors: string[] = [];
-                if (fieldRes.success && fieldRes.data) setFields(fieldRes.data);
+                if (detailRes.success && detailRes.data) {
+                    setFullName(detailRes.data.full_path);
+                    setTypeSize(detailRes.data.properties_size);
+                    setAlignment(detailRes.data.min_alignment);
+                } else errors.push(`Detail: ${detailRes.error || 'failed'}`);
+                if (fieldRes.success && fieldRes.data) {
+                    setFields(fieldRes.data.items);
+                    setFieldCursor(fieldRes.data.next_cursor);
+                    setFieldHasMore(fieldRes.data.has_more);
+                }
                 else errors.push(`Fields: ${fieldRes.error || 'failed'}`);
-                if (funcRes.success && funcRes.data) setFunctions(funcRes.data);
+                if (funcRes.success && funcRes.data) {
+                    setFunctions(funcRes.data.items);
+                    setFunctionCursor(funcRes.data.next_cursor);
+                    setFunctionHasMore(funcRes.data.has_more);
+                }
                 else errors.push(`Functions: ${funcRes.error || 'failed'}`);
+                if (hierarchyRes.success && hierarchyRes.data) {
+                    setSuperChain(hierarchyRes.data.parents.map((parent) => parent.full_path));
+                } else errors.push(`Hierarchy: ${hierarchyRes.error || 'failed'}`);
                 if (instanceRes.success && instanceRes.data) setInstances(instanceRes.data.items);
                 else errors.push(`Instances: ${instanceRes.error || 'failed'}`);
                 if (errors.length > 0) setClassSchemaError(errors.join(' | '));
-
-                // Build super chain
-                const chain: string[] = [];
-                let cur = item.super;
-                while (cur) {
-                    chain.push(cur);
-                    const superRes = await api.getClassByName(cur);
-                    if (superRes.success && superRes.data) {
-                        setFullName((prev) => prev || superRes.data!.full_name);
-                        setAlignment((prev) => prev || superRes.data!.alignment);
-                        cur = superRes.data.super || '';
-                    } else {
-                        break;
-                    }
-                }
-                setSuperChain(chain);
             } else if (subTab === 'Struct') {
-                const res = await api.getStructByName(item.fullName);
-                if (res.success && res.data) {
-                    setFields(res.data.fields);
-                    setFullName(res.data.full_name);
-                    setAlignment(res.data.alignment);
-                    if (res.data.super) setSuperChain([res.data.super]);
-                }
+                const [detailRes, fieldRes] = await Promise.all([
+                    api.getStructByPath(item.fullName),
+                    api.getStructFields(item.fullName),
+                ]);
+                if (!detailRes.success || !detailRes.data) throw new Error(detailRes.error || 'Struct detail failed');
+                if (!fieldRes.success || !fieldRes.data) throw new Error(fieldRes.error || 'Struct fields failed');
+                setFields(fieldRes.data.items);
+                setFieldCursor(fieldRes.data.next_cursor);
+                setFieldHasMore(fieldRes.data.has_more);
+                setFullName(detailRes.data.full_path);
+                setTypeSize(detailRes.data.properties_size);
+                setAlignment(detailRes.data.min_alignment);
+                if (detailRes.data.super) setSuperChain([detailRes.data.super.full_path]);
             } else if (subTab === 'Enum') {
-                const res = await api.getEnumByName(item.fullName);
-                if (res.success && res.data) {
-                    setEnumDetail(res.data);
-                    setFullName(res.data.full_name);
-                }
+                const [detailRes, valuesRes] = await Promise.all([
+                    api.getEnumByPath(item.fullName),
+                    api.getEnumValues(item.fullName),
+                ]);
+                if (!detailRes.success || !detailRes.data) throw new Error(detailRes.error || 'Enum detail failed');
+                if (!valuesRes.success || !valuesRes.data) throw new Error(valuesRes.error || 'Enum values failed');
+                setEnumDetail(detailRes.data);
+                setEnumValues(valuesRes.data.items);
+                setEnumCursor(valuesRes.data.next_cursor);
+                setEnumHasMore(valuesRes.data.has_more);
+                setFullName(detailRes.data.full_path);
+            }
+        } catch (error) {
+            setDetailError(error instanceof Error ? error.message : String(error));
+        } finally {
+            setDetailLoading(false);
+        }
+    };
+
+    const loadMoreDetail = async (kind: 'fields' | 'functions' | 'values') => {
+        if (!selected || detailLoading) return;
+        setDetailLoading(true);
+        setDetailError(null);
+        try {
+            if (kind === 'fields' && fieldCursor) {
+                const res = subTab === 'Struct'
+                    ? await api.getStructFields(selected.fullName, fieldCursor)
+                    : await api.getClassFields(selected.fullName, fieldCursor);
+                if (!res.success || !res.data) throw new Error(res.error || 'Field continuation failed');
+                setFields((current) => [...current, ...res.data!.items]);
+                setFieldCursor(res.data.next_cursor);
+                setFieldHasMore(res.data.has_more);
+            } else if (kind === 'functions' && functionCursor) {
+                const res = await api.getClassFunctions(selected.fullName, functionCursor);
+                if (!res.success || !res.data) throw new Error(res.error || 'Function continuation failed');
+                setFunctions((current) => [...current, ...res.data!.items]);
+                setFunctionCursor(res.data.next_cursor);
+                setFunctionHasMore(res.data.has_more);
+            } else if (kind === 'values' && enumCursor) {
+                const res = await api.getEnumValues(selected.fullName, enumCursor);
+                if (!res.success || !res.data) throw new Error(res.error || 'Enum continuation failed');
+                setEnumValues((current) => [...current, ...res.data!.items]);
+                setEnumCursor(res.data.next_cursor);
+                setEnumHasMore(res.data.has_more);
             }
         } catch (error) {
             setDetailError(error instanceof Error ? error.message : String(error));
@@ -214,6 +279,7 @@ export default function TypeBrowser({ onSwitchMode }: BrowserPageProps) {
         { id: 'Struct', icon: Database, label: 'Struct' },
         { id: 'Enum', icon: Layers, label: 'Enum' },
     ];
+    const displaySize = typeSize ?? selected?.size;
 
     return (
         <div className="flex h-full">
@@ -338,9 +404,9 @@ export default function TypeBrowser({ onSwitchMode }: BrowserPageProps) {
                             iconColor={subTab === 'Class' ? 'text-blue-400' : subTab === 'Struct' ? 'text-orange-400' : 'text-yellow-400'}
                             glow={subTab === 'Class' ? 'bg-blue-500/20' : subTab === 'Struct' ? 'bg-orange-500/20' : 'bg-yellow-500/20'}
                             badges={<>
-                                {selected.size !== undefined && (
+                                {displaySize !== undefined && (
                                     <span className="px-3 py-1.5 rounded-md bg-white/[0.03] border border-white/10 text-xs font-mono text-slate-300 shadow-sm backdrop-blur-md">
-                                        Size: <span className="text-white/70">0x{selected.size.toString(16).toUpperCase()}</span> <span className="text-slate-500">({selected.size} B)</span>
+                                        Size: <span className="text-white/70">0x{displaySize.toString(16).toUpperCase()}</span> <span className="text-slate-500">({displaySize} B)</span>
                                     </span>
                                 )}
                                 {alignment > 0 && (
@@ -398,11 +464,14 @@ export default function TypeBrowser({ onSwitchMode }: BrowserPageProps) {
                                             </tr>
                                         </thead>
                                         <tbody>
-                                            {fields.map((f, i) => (
-                                                <tr key={i} className="border-b border-white/[0.03] hover:bg-white/[0.03]">
+                                            {fields.map((f) => (
+                                                <tr key={`${f.declaring_type.full_path}:${f.name}:${f.offset}`} className="border-b border-white/[0.03] hover:bg-white/[0.03]">
                                                     <td className="py-1.5 px-2 font-mono text-green-400">+0x{f.offset.toString(16).toUpperCase()}</td>
                                                     <td className="py-1.5 px-2 font-mono text-white/90">{f.name}</td>
-                                                    <td className="py-1.5 px-2 font-mono text-blue-400">{f.type}</td>
+                                                    <td className="py-1.5 px-2 font-mono text-blue-400" title={f.reason || undefined}>
+                                                        {f.type_name}
+                                                        {f.state !== 'supported' && <span className="ml-2 text-yellow-400">({f.state})</span>}
+                                                    </td>
                                                     <td className="py-1.5 px-2 font-mono text-white/50">{f.size}</td>
                                                     <td className="py-1.5 px-2 text-white/30">{f.flags}</td>
                                                 </tr>
@@ -410,6 +479,11 @@ export default function TypeBrowser({ onSwitchMode }: BrowserPageProps) {
                                         </tbody>
                                     </table>
                                     {fields.length === 0 && <div className="text-white/40 text-sm py-3">{t('No fields')}</div>}
+                                    {fieldHasMore && fieldCursor && (
+                                        <button onClick={() => void loadMoreDetail('fields')} className="mt-3 px-3 py-1.5 rounded border border-white/10 text-xs text-white/60 hover:text-white hover:bg-white/5">
+                                            {t('Load more')}
+                                        </button>
+                                    )}
                                 </div>
                             </Panel>
                         )}
@@ -418,21 +492,28 @@ export default function TypeBrowser({ onSwitchMode }: BrowserPageProps) {
                         {detailTab === 'Functions' && (
                             <Panel title={t('Functions')}>
                                 <div className="space-y-2">
-                                    {functions.map((fn, i) => (
-                                        <div key={i} className="px-4 py-3 rounded-xl border border-white/[0.03] bg-black/10 hover:bg-white/[0.02] transition-colors">
+                                    {functions.map((fn) => (
+                                        <div key={fn.full_path} className="px-4 py-3 rounded-xl border border-white/[0.03] bg-black/10 hover:bg-white/[0.02] transition-colors">
                                             <div className="flex items-center gap-3">
                                                 <Hash className="w-4 h-4 text-emerald-500 opacity-80 flex-none" />
                                                 <span className="text-[14px] text-slate-200 font-mono font-medium">{fn.name}</span>
+                                                <span className="text-[10px] text-emerald-400/70 font-mono">{fn.implementation}</span>
                                                 <span className="text-xs text-slate-500 ml-auto font-mono max-w-[200px] truncate" title={fn.flags}>{fn.flags}</span>
                                             </div>
-                                            {fn.params.length > 0 && (
+                                            {fn.reason && <div className="mt-2 ml-7 text-xs text-yellow-300">{fn.reason_code}: {fn.reason}</div>}
+                                            {fn.parameters.length > 0 && (
                                                 <div className="mt-2.5 ml-7 text-xs text-slate-400 font-mono leading-relaxed p-2 bg-black/20 rounded-md border border-white/[0.02]">
-                                                    <span className="text-slate-500">{t('Params')}:</span> ({fn.params.map((p) => `${p.name}: `).map((_, idx) => <span key={idx}><span className="text-slate-300">{fn.params[idx].name}</span><span className="text-emerald-400/70">: {fn.params[idx].type}</span>{idx < fn.params.length - 1 ? ', ' : ''}</span>)})
+                                                    <span className="text-slate-500">{t('Params')}:</span> ({fn.parameters.map((parameter, idx) => <span key={`${parameter.name}:${parameter.offset}`}><span className="text-slate-300">{parameter.name}</span><span className="text-emerald-400/70">: {parameter.type_name}</span>{idx < fn.parameters.length - 1 ? ', ' : ''}</span>)})
                                                 </div>
                                             )}
                                         </div>
                                     ))}
                                     {functions.length === 0 && <div className="text-slate-500 text-sm py-4 text-center">{t('No functions')}</div>}
+                                    {functionHasMore && functionCursor && (
+                                        <button onClick={() => void loadMoreDetail('functions')} className="px-3 py-1.5 rounded border border-white/10 text-xs text-white/60 hover:text-white hover:bg-white/5">
+                                            {t('Load more')}
+                                        </button>
+                                    )}
                                 </div>
                             </Panel>
                         )}
@@ -463,8 +544,10 @@ export default function TypeBrowser({ onSwitchMode }: BrowserPageProps) {
                         {detailTab === 'Values' && enumDetail && (
                             <Panel title={t('Enum Values')}>
                                 <div className="text-xs text-white/50 mb-3">
-                                    Underlying Type: <span className="text-blue-400 font-mono">{enumDetail.underlying_type}</span>
+                                    State: <span className="text-blue-400 font-mono">{enumDetail.enum.state}</span>
+                                    {' | '}Underlying Type: <span className="text-blue-400 font-mono">{enumDetail.enum.underlying_kind || 'unavailable'}</span>
                                 </div>
+                                {enumDetail.enum.reason && <div className="text-xs text-yellow-300 mb-3">{enumDetail.enum.reason_code}: {enumDetail.enum.reason}</div>}
                                 <table className="w-full text-xs">
                                     <thead>
                                         <tr className="text-white/40 border-b border-white/5">
@@ -474,8 +557,8 @@ export default function TypeBrowser({ onSwitchMode }: BrowserPageProps) {
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {enumDetail.values.map((v, i) => (
-                                            <tr key={i} className="border-b border-white/[0.03] hover:bg-white/[0.03]">
+                                        {enumValues.map((v, i) => (
+                                            <tr key={`${v.name}:${v.value}`} className="border-b border-white/[0.03] hover:bg-white/[0.03]">
                                                 <td className="py-1.5 px-2 text-white/30">{i}</td>
                                                 <td className="py-1.5 px-2 font-mono text-white/90">{v.name}</td>
                                                 <td className="py-1.5 px-2 font-mono text-yellow-400">{v.value}</td>
@@ -483,6 +566,11 @@ export default function TypeBrowser({ onSwitchMode }: BrowserPageProps) {
                                         ))}
                                     </tbody>
                                 </table>
+                                {enumHasMore && enumCursor && (
+                                    <button onClick={() => void loadMoreDetail('values')} className="mt-3 px-3 py-1.5 rounded border border-white/10 text-xs text-white/60 hover:text-white hover:bg-white/5">
+                                        {t('Load more')}
+                                    </button>
+                                )}
                             </Panel>
                         )}
                     </div>

@@ -13,6 +13,7 @@ pub const MAX_SNAPSHOT_SOURCE_OBJECTS: u32 = 8_000_000;
 pub const MAX_SNAPSHOT_PAGE_RECORDS: usize = 128;
 pub const MAX_SNAPSHOT_NAME_BYTES: usize = 1_024;
 pub const MAX_SNAPSHOT_PATH_BYTES: usize = 4_096;
+pub const MAX_TYPE_PAGE_RECORDS: usize = 128;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -68,6 +69,354 @@ pub struct SnapshotPage {
     pub items: Vec<SnapshotRecord>,
     pub has_more: bool,
     pub next_cursor: Option<SnapshotCursor>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TypeQueryCursor {
+    pub generation: u64,
+    pub after_ordinal: u64,
+    pub query_fingerprint: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TypeMemberScope {
+    Direct,
+    IncludeInherited,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TypePathData {
+    pub path: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TypeMemberPageData {
+    pub path: String,
+    pub scope: TypeMemberScope,
+    pub cursor: Option<TypeQueryCursor>,
+    pub limit: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TypePathPageData {
+    pub path: String,
+    pub cursor: Option<TypeQueryCursor>,
+    pub limit: u32,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReflectedTypeKind {
+    Class,
+    Struct,
+    Enum,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReflectedMemberState {
+    Supported,
+    Unsupported,
+    Unavailable,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReflectedParameterDirection {
+    Input,
+    Output,
+    Inout,
+    Return,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReflectedFunctionImplementation {
+    Unavailable,
+    Native,
+    Bytecode,
+    NativeAndBytecode,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TypeDefaultObjectState {
+    NotApplicable,
+    Present,
+    NotConstructed,
+    Unavailable,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClassDefaultObjectState {
+    Present,
+    NotConstructed,
+    Unavailable,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PropertyKind {
+    Unknown,
+    Bool,
+    Int8,
+    Int16,
+    Int32,
+    Int64,
+    Uint8,
+    Uint16,
+    Uint32,
+    Uint64,
+    Float,
+    Double,
+    Name,
+    String,
+    Text,
+    Object,
+    WeakObject,
+    SoftObject,
+    Enum,
+    Struct,
+    Array,
+    Map,
+    Set,
+    Delegate,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TypeReference {
+    pub handle: ObjectHandle,
+    pub kind: ReflectedTypeKind,
+    pub name: String,
+    pub full_path: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TypeDefaultObjectMetadata {
+    pub state: TypeDefaultObjectState,
+    pub handle: Option<ObjectHandle>,
+    pub reason_code: Option<String>,
+    pub reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TypeEnumMetadata {
+    pub state: ReflectedMemberState,
+    pub underlying_kind: Option<PropertyKind>,
+    pub reason_code: Option<String>,
+    pub reason: Option<String>,
+    pub value_count: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TypeDetail {
+    pub type_snapshot_generation: u64,
+    pub object_snapshot_generation: u64,
+    pub context_generation: u64,
+    pub handle: ObjectHandle,
+    pub kind: ReflectedTypeKind,
+    pub name: String,
+    pub full_path: String,
+    pub package_path: String,
+    pub properties_size: u32,
+    pub min_alignment: u32,
+    #[serde(rename = "super")]
+    pub super_type: Option<TypeReference>,
+    pub direct_property_count: u32,
+    pub direct_function_count: u32,
+    pub default_object: Option<TypeDefaultObjectMetadata>,
+    #[serde(rename = "enum")]
+    pub enum_metadata: Option<TypeEnumMetadata>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TypePropertyItem {
+    pub name: String,
+    pub type_name: String,
+    pub kind: PropertyKind,
+    pub offset: u32,
+    pub size: u32,
+    pub array_dim: u32,
+    pub flags: String,
+    pub state: ReflectedMemberState,
+    pub reason_code: Option<String>,
+    pub reason: Option<String>,
+    pub descriptor_available: bool,
+    pub declaring_type: TypeReference,
+    pub inheritance_depth: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TypeFunctionParameter {
+    pub name: String,
+    pub type_name: String,
+    pub kind: PropertyKind,
+    pub offset: u32,
+    pub size: u32,
+    pub array_dim: u32,
+    pub flags: String,
+    pub state: ReflectedMemberState,
+    pub reason_code: Option<String>,
+    pub reason: Option<String>,
+    pub descriptor_available: bool,
+    pub direction: ReflectedParameterDirection,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FunctionHandle {
+    pub function: ObjectHandle,
+    pub owner: ObjectHandle,
+    pub full_path: String,
+    pub signature_fingerprint: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TypeFunctionItem {
+    pub handle: FunctionHandle,
+    pub name: String,
+    pub full_path: String,
+    pub flags: String,
+    pub parameter_size: u32,
+    pub parameter_count: u32,
+    pub native_address: Option<String>,
+    pub implementation: ReflectedFunctionImplementation,
+    pub reason_code: Option<String>,
+    pub reason: Option<String>,
+    pub parameters: Vec<TypeFunctionParameter>,
+    pub declaring_type: TypeReference,
+    pub inheritance_depth: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TypeFunctionDetail {
+    pub type_snapshot_generation: u64,
+    pub object_snapshot_generation: u64,
+    pub context_generation: u64,
+    pub handle: FunctionHandle,
+    pub name: String,
+    pub full_path: String,
+    pub flags: String,
+    pub parameter_size: u32,
+    pub parameter_count: u32,
+    pub native_address: Option<String>,
+    pub implementation: ReflectedFunctionImplementation,
+    pub reason_code: Option<String>,
+    pub reason: Option<String>,
+    pub parameters: Vec<TypeFunctionParameter>,
+    pub declaring_type: TypeReference,
+    pub inheritance_depth: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TypeMemberPage<T> {
+    pub type_snapshot_generation: u64,
+    pub object_snapshot_generation: u64,
+    pub context_generation: u64,
+    pub path: String,
+    pub kind: ReflectedTypeKind,
+    pub scope: TypeMemberScope,
+    pub items: Vec<T>,
+    pub total: u32,
+    pub matched: u32,
+    pub limit: u32,
+    pub has_more: bool,
+    pub next_cursor: Option<TypeQueryCursor>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TypeHierarchyReference {
+    pub handle: ObjectHandle,
+    pub kind: ReflectedTypeKind,
+    pub name: String,
+    pub full_path: String,
+    pub inheritance_depth: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TypeHierarchyPage {
+    pub type_snapshot_generation: u64,
+    pub object_snapshot_generation: u64,
+    pub context_generation: u64,
+    pub path: String,
+    pub parents: Vec<TypeHierarchyReference>,
+    pub children: Vec<TypeReference>,
+    pub total: u32,
+    pub matched: u32,
+    pub limit: u32,
+    pub has_more: bool,
+    pub next_cursor: Option<TypeQueryCursor>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClassDefaultObjectData {
+    pub type_snapshot_generation: u64,
+    pub object_snapshot_generation: u64,
+    pub context_generation: u64,
+    pub class_path: String,
+    pub state: ClassDefaultObjectState,
+    pub handle: Option<ObjectHandle>,
+    pub reason_code: Option<String>,
+    pub reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TypeEnumValue {
+    pub name: String,
+    // Decimal text preserves the complete signed int64 domain in JavaScript.
+    #[serde(deserialize_with = "deserialize_i64_decimal")]
+    pub value: String,
+}
+
+fn deserialize_i64_decimal<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    match value.parse::<i64>() {
+        Ok(parsed) if parsed.to_string() == value => Ok(value),
+        _ => Err(serde::de::Error::custom(
+            "expected a canonical signed int64 decimal string",
+        )),
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TypeEnumValuePage {
+    pub type_snapshot_generation: u64,
+    pub object_snapshot_generation: u64,
+    pub context_generation: u64,
+    pub path: String,
+    pub state: ReflectedMemberState,
+    pub underlying_kind: Option<PropertyKind>,
+    pub reason_code: Option<String>,
+    pub reason: Option<String>,
+    pub items: Vec<TypeEnumValue>,
+    pub total: u32,
+    pub matched: u32,
+    pub limit: u32,
+    pub has_more: bool,
+    pub next_cursor: Option<TypeQueryCursor>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -644,6 +993,83 @@ mod tests {
             "generation":9,"after_index":1,"unexpected":true
         }"#;
         assert!(serde_json::from_str::<SnapshotCursor>(unknown_field).is_err());
+    }
+
+    #[test]
+    fn type_query_golden_payloads_are_strict_and_generation_bound() {
+        let request: RequestPayload = serde_json::from_str(include_str!(
+            "../../v1/fixtures/type-class-fields-request.json"
+        ))
+        .unwrap();
+        let data: TypeMemberPageData = serde_json::from_value(request.data).unwrap();
+        assert_eq!(data.path, "/Script/Fixture.Derived");
+        assert_eq!(data.scope, TypeMemberScope::IncludeInherited);
+        assert_eq!(data.limit, 1);
+
+        let response: ResponsePayload = serde_json::from_str(include_str!(
+            "../../v1/fixtures/type-class-fields-response.json"
+        ))
+        .unwrap();
+        let page: TypeMemberPage<TypePropertyItem> = serde_json::from_value(response.data).unwrap();
+        assert_eq!(page.type_snapshot_generation, 3);
+        assert_eq!(page.items[0].flags, "0x0010000000000001");
+        assert_eq!(page.items[0].kind, PropertyKind::Int64);
+        assert_eq!(page.next_cursor.unwrap().after_ordinal, 0);
+
+        let unknown_cursor = serde_json::json!({
+            "generation": 3,
+            "after_ordinal": 0,
+            "query_fingerprint": "0123456789ABCDEF",
+            "offset": 1
+        });
+        assert!(serde_json::from_value::<TypeQueryCursor>(unknown_cursor).is_err());
+        let legacy_input = serde_json::json!({
+            "name": "Derived",
+            "scope": "include_inherited",
+            "cursor": null,
+            "limit": 1
+        });
+        assert!(serde_json::from_value::<TypeMemberPageData>(legacy_input).is_err());
+
+        let enum_value: TypeEnumValue = serde_json::from_value(serde_json::json!({
+            "name": "Maximum",
+            "value": "9223372036854775807"
+        }))
+        .unwrap();
+        assert_eq!(enum_value.value, "9223372036854775807");
+        assert!(serde_json::from_value::<TypeEnumValue>(serde_json::json!({
+            "name": "UnsafeNumber",
+            "value": 9223372036854775807u64
+        }))
+        .is_err());
+        for invalid in ["9223372036854775808", "-9223372036854775809", "01", "-0"] {
+            assert!(serde_json::from_value::<TypeEnumValue>(serde_json::json!({
+                "name": "OutOfContract",
+                "value": invalid
+            }))
+            .is_err());
+        }
+
+        let not_applicable = serde_json::json!({
+            "state": "not_applicable",
+            "handle": null,
+            "reason_code": null,
+            "reason": null
+        });
+        assert!(serde_json::from_value::<TypeDefaultObjectMetadata>(not_applicable).is_ok());
+        assert!(
+            serde_json::from_value::<ClassDefaultObjectData>(serde_json::json!({
+                "type_snapshot_generation": 3,
+                "object_snapshot_generation": 7,
+                "context_generation": 1,
+                "class_path": "/Script/Fixture.Derived",
+                "state": "not_applicable",
+                "handle": null,
+                "reason_code": null,
+                "reason": null
+            }))
+            .is_err()
+        );
     }
 
     #[test]

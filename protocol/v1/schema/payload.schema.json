@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://uexplorer.invalid/protocol/v1/payload.schema.json",
   "title": "UExplorer IPC v1 payloads",
-  "oneOf": [
+  "anyOf": [
     { "$ref": "#/$defs/hello" },
     { "$ref": "#/$defs/welcome" },
     { "$ref": "#/$defs/request" },
@@ -85,6 +85,413 @@
           ]
         },
         "limit": { "type": "integer", "minimum": 1, "maximum": 128 }
+      }
+    },
+    "typePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "typeQueryCursor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["generation", "after_ordinal", "query_fingerprint"],
+      "properties": {
+        "generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "after_ordinal": { "type": "integer", "minimum": 0, "maximum": 7999999 },
+        "query_fingerprint": { "type": "string", "pattern": "^[0-9A-F]{16}$" }
+      }
+    },
+    "typePathData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path"],
+      "properties": {
+        "path": { "$ref": "#/$defs/typePath" }
+      }
+    },
+    "typeMemberPageData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "scope", "cursor", "limit"],
+      "properties": {
+        "path": { "$ref": "#/$defs/typePath" },
+        "scope": { "enum": ["direct", "include_inherited"] },
+        "cursor": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/typeQueryCursor" }
+          ]
+        },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 128 }
+      }
+    },
+    "typePathPageData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "cursor", "limit"],
+      "properties": {
+        "path": { "$ref": "#/$defs/typePath" },
+        "cursor": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/typeQueryCursor" }
+          ]
+        },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 128 }
+      }
+    },
+    "reflectedTypeKind": {
+      "enum": ["class", "struct", "enum"]
+    },
+    "reflectedMemberState": {
+      "enum": ["supported", "unsupported", "unavailable"]
+    },
+    "propertyKind": {
+      "enum": [
+        "unknown", "bool", "int8", "int16", "int32", "int64",
+        "uint8", "uint16", "uint32", "uint64", "float", "double",
+        "name", "string", "text", "object", "weak_object", "soft_object",
+        "enum", "struct", "array", "map", "set", "delegate"
+      ]
+    },
+    "nullableTypeText": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string", "minLength": 1, "maxLength": 4096 }
+      ]
+    },
+    "typeReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["handle", "kind", "name", "full_path"],
+      "properties": {
+        "handle": { "$ref": "#/$defs/objectHandle" },
+        "kind": { "$ref": "#/$defs/reflectedTypeKind" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "full_path": { "$ref": "#/$defs/typePath" }
+      }
+    },
+    "typeDefaultObjectMetadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "handle", "reason_code", "reason"],
+      "properties": {
+        "state": { "enum": ["not_applicable", "present", "not_constructed", "unavailable"] },
+        "handle": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/objectHandle" }
+          ]
+        },
+        "reason_code": { "$ref": "#/$defs/nullableTypeText" },
+        "reason": { "$ref": "#/$defs/nullableTypeText" }
+      }
+    },
+    "typeEnumMetadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "underlying_kind", "reason_code", "reason", "value_count"],
+      "properties": {
+        "state": { "$ref": "#/$defs/reflectedMemberState" },
+        "underlying_kind": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/propertyKind" }
+          ]
+        },
+        "reason_code": { "$ref": "#/$defs/nullableTypeText" },
+        "reason": { "$ref": "#/$defs/nullableTypeText" },
+        "value_count": { "type": "integer", "minimum": 0, "maximum": 1000000 }
+      }
+    },
+    "typeDetailResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type_snapshot_generation", "object_snapshot_generation", "context_generation",
+        "handle", "kind", "name", "full_path", "package_path",
+        "properties_size", "min_alignment", "super", "direct_property_count",
+        "direct_function_count", "default_object", "enum"
+      ],
+      "properties": {
+        "type_snapshot_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "object_snapshot_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "context_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "handle": { "$ref": "#/$defs/objectHandle" },
+        "kind": { "$ref": "#/$defs/reflectedTypeKind" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "full_path": { "$ref": "#/$defs/typePath" },
+        "package_path": { "$ref": "#/$defs/typePath" },
+        "properties_size": { "type": "integer", "minimum": 0, "maximum": 1073741824 },
+        "min_alignment": { "type": "integer", "minimum": 0, "maximum": 4096 },
+        "super": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/typeReference" }
+          ]
+        },
+        "direct_property_count": { "type": "integer", "minimum": 0, "maximum": 8000000 },
+        "direct_function_count": { "type": "integer", "minimum": 0, "maximum": 8000000 },
+        "default_object": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/typeDefaultObjectMetadata" }
+          ]
+        },
+        "enum": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/typeEnumMetadata" }
+          ]
+        }
+      }
+    },
+    "typePropertyItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name", "type_name", "kind", "offset", "size", "array_dim", "flags",
+        "state", "reason_code", "reason", "descriptor_available",
+        "declaring_type", "inheritance_depth"
+      ],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "type_name": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "kind": { "$ref": "#/$defs/propertyKind" },
+        "offset": { "type": "integer", "minimum": 0, "maximum": 1073741824 },
+        "size": { "type": "integer", "minimum": 1, "maximum": 1073741824 },
+        "array_dim": { "type": "integer", "minimum": 1, "maximum": 1024 },
+        "flags": { "type": "string", "pattern": "^0x[0-9A-F]{16}$" },
+        "state": { "$ref": "#/$defs/reflectedMemberState" },
+        "reason_code": { "$ref": "#/$defs/nullableTypeText" },
+        "reason": { "$ref": "#/$defs/nullableTypeText" },
+        "descriptor_available": { "type": "boolean" },
+        "declaring_type": { "$ref": "#/$defs/typeReference" },
+        "inheritance_depth": { "type": "integer", "minimum": 0, "maximum": 512 }
+      }
+    },
+    "typeFunctionParameter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name", "type_name", "kind", "offset", "size", "array_dim", "flags",
+        "state", "reason_code", "reason", "descriptor_available", "direction"
+      ],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "type_name": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "kind": { "$ref": "#/$defs/propertyKind" },
+        "offset": { "type": "integer", "minimum": 0, "maximum": 16777216 },
+        "size": { "type": "integer", "minimum": 1, "maximum": 1073741824 },
+        "array_dim": { "type": "integer", "minimum": 1, "maximum": 1024 },
+        "flags": { "type": "string", "pattern": "^0x[0-9A-F]{16}$" },
+        "state": { "$ref": "#/$defs/reflectedMemberState" },
+        "reason_code": { "$ref": "#/$defs/nullableTypeText" },
+        "reason": { "$ref": "#/$defs/nullableTypeText" },
+        "descriptor_available": { "type": "boolean" },
+        "direction": { "enum": ["input", "output", "inout", "return"] }
+      }
+    },
+    "typeFunctionItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "handle", "name", "full_path", "flags", "parameter_size", "parameter_count",
+        "native_address", "implementation", "reason_code", "reason", "parameters",
+        "declaring_type", "inheritance_depth"
+      ],
+      "properties": {
+        "handle": { "$ref": "#/$defs/functionHandle" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "full_path": { "$ref": "#/$defs/typePath" },
+        "flags": { "type": "string", "pattern": "^0x[0-9A-F]{16}$" },
+        "parameter_size": { "type": "integer", "minimum": 0, "maximum": 16777216 },
+        "parameter_count": { "type": "integer", "minimum": 0, "maximum": 128 },
+        "native_address": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "pattern": "^0x[0-9A-F]{1,16}$" }
+          ]
+        },
+        "implementation": { "enum": ["unavailable", "native", "bytecode", "native_and_bytecode"] },
+        "reason_code": { "$ref": "#/$defs/nullableTypeText" },
+        "reason": { "$ref": "#/$defs/nullableTypeText" },
+        "parameters": {
+          "type": "array",
+          "maxItems": 128,
+          "items": { "$ref": "#/$defs/typeFunctionParameter" }
+        },
+        "declaring_type": { "$ref": "#/$defs/typeReference" },
+        "inheritance_depth": { "type": "integer", "minimum": 0, "maximum": 512 }
+      }
+    },
+    "typeFunctionDetailResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type_snapshot_generation", "object_snapshot_generation", "context_generation",
+        "handle", "name", "full_path", "flags", "parameter_size", "parameter_count",
+        "native_address", "implementation", "reason_code", "reason", "parameters",
+        "declaring_type", "inheritance_depth"
+      ],
+      "properties": {
+        "type_snapshot_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "object_snapshot_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "context_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "handle": { "$ref": "#/$defs/functionHandle" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "full_path": { "$ref": "#/$defs/typePath" },
+        "flags": { "type": "string", "pattern": "^0x[0-9A-F]{16}$" },
+        "parameter_size": { "type": "integer", "minimum": 0, "maximum": 16777216 },
+        "parameter_count": { "type": "integer", "minimum": 0, "maximum": 128 },
+        "native_address": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "pattern": "^0x[0-9A-F]{1,16}$" }
+          ]
+        },
+        "implementation": { "enum": ["unavailable", "native", "bytecode", "native_and_bytecode"] },
+        "reason_code": { "$ref": "#/$defs/nullableTypeText" },
+        "reason": { "$ref": "#/$defs/nullableTypeText" },
+        "parameters": {
+          "type": "array",
+          "maxItems": 128,
+          "items": { "$ref": "#/$defs/typeFunctionParameter" }
+        },
+        "declaring_type": { "$ref": "#/$defs/typeReference" },
+        "inheritance_depth": { "type": "integer", "minimum": 0, "maximum": 512 }
+      }
+    },
+    "typePropertyPageResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type_snapshot_generation", "object_snapshot_generation", "context_generation",
+        "path", "kind", "scope", "items", "total", "matched", "limit",
+        "has_more", "next_cursor"
+      ],
+      "properties": {
+        "type_snapshot_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "object_snapshot_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "context_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "path": { "$ref": "#/$defs/typePath" },
+        "kind": { "enum": ["class", "struct"] },
+        "scope": { "enum": ["direct", "include_inherited"] },
+        "items": { "type": "array", "maxItems": 128, "items": { "$ref": "#/$defs/typePropertyItem" } },
+        "total": { "type": "integer", "minimum": 0, "maximum": 8000000 },
+        "matched": { "type": "integer", "minimum": 0, "maximum": 8000000 },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 128 },
+        "has_more": { "type": "boolean" },
+        "next_cursor": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/typeQueryCursor" }] }
+      }
+    },
+    "typeFunctionPageResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type_snapshot_generation", "object_snapshot_generation", "context_generation",
+        "path", "kind", "scope", "items", "total", "matched", "limit",
+        "has_more", "next_cursor"
+      ],
+      "properties": {
+        "type_snapshot_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "object_snapshot_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "context_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "path": { "$ref": "#/$defs/typePath" },
+        "kind": { "const": "class" },
+        "scope": { "enum": ["direct", "include_inherited"] },
+        "items": { "type": "array", "maxItems": 128, "items": { "$ref": "#/$defs/typeFunctionItem" } },
+        "total": { "type": "integer", "minimum": 0, "maximum": 8000000 },
+        "matched": { "type": "integer", "minimum": 0, "maximum": 8000000 },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 128 },
+        "has_more": { "type": "boolean" },
+        "next_cursor": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/typeQueryCursor" }] }
+      }
+    },
+    "typeHierarchyReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["handle", "kind", "name", "full_path", "inheritance_depth"],
+      "properties": {
+        "handle": { "$ref": "#/$defs/objectHandle" },
+        "kind": { "const": "class" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "full_path": { "$ref": "#/$defs/typePath" },
+        "inheritance_depth": { "type": "integer", "minimum": 1, "maximum": 512 }
+      }
+    },
+    "typeHierarchyPageResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type_snapshot_generation", "object_snapshot_generation", "context_generation",
+        "path", "parents", "children", "total", "matched", "limit", "has_more", "next_cursor"
+      ],
+      "properties": {
+        "type_snapshot_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "object_snapshot_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "context_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "path": { "$ref": "#/$defs/typePath" },
+        "parents": { "type": "array", "maxItems": 512, "items": { "$ref": "#/$defs/typeHierarchyReference" } },
+        "children": { "type": "array", "maxItems": 128, "items": { "$ref": "#/$defs/typeReference" } },
+        "total": { "type": "integer", "minimum": 0, "maximum": 1000000 },
+        "matched": { "type": "integer", "minimum": 0, "maximum": 1000000 },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 128 },
+        "has_more": { "type": "boolean" },
+        "next_cursor": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/typeQueryCursor" }] }
+      }
+    },
+    "classDefaultObjectResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type_snapshot_generation", "object_snapshot_generation", "context_generation",
+        "class_path", "state", "handle", "reason_code", "reason"
+      ],
+      "properties": {
+        "type_snapshot_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "object_snapshot_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "context_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "class_path": { "$ref": "#/$defs/typePath" },
+        "state": { "enum": ["present", "not_constructed", "unavailable"] },
+        "handle": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/objectHandle" }] },
+        "reason_code": { "$ref": "#/$defs/nullableTypeText" },
+        "reason": { "$ref": "#/$defs/nullableTypeText" }
+      }
+    },
+    "typeEnumValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "value"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "value": { "type": "string", "pattern": "^(0|[1-9][0-9]{0,18}|-[1-9][0-9]{0,18})$" }
+      }
+    },
+    "typeEnumValuePageResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type_snapshot_generation", "object_snapshot_generation", "context_generation",
+        "path", "state", "underlying_kind", "reason_code", "reason", "items",
+        "total", "matched", "limit", "has_more", "next_cursor"
+      ],
+      "properties": {
+        "type_snapshot_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "object_snapshot_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "context_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "path": { "$ref": "#/$defs/typePath" },
+        "state": { "$ref": "#/$defs/reflectedMemberState" },
+        "underlying_kind": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/propertyKind" }] },
+        "reason_code": { "$ref": "#/$defs/nullableTypeText" },
+        "reason": { "$ref": "#/$defs/nullableTypeText" },
+        "items": { "type": "array", "maxItems": 128, "items": { "$ref": "#/$defs/typeEnumValue" } },
+        "total": { "type": "integer", "minimum": 0, "maximum": 1000000 },
+        "matched": { "type": "integer", "minimum": 0, "maximum": 1000000 },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 128 },
+        "has_more": { "type": "boolean" },
+        "next_cursor": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/typeQueryCursor" }] }
       }
     },
     "snapshotRecord": {
@@ -228,6 +635,49 @@
             "required": ["operation"]
           },
           "then": { "properties": { "data": { "$ref": "#/$defs/snapshotPageData" } } }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "enum": [
+                  "types.classes.get",
+                  "types.classes.cdo",
+                  "types.functions.get",
+                  "types.structs.get",
+                  "types.enums.get"
+                ]
+              }
+            },
+            "required": ["operation"]
+          },
+          "then": { "properties": { "data": { "$ref": "#/$defs/typePathData" } } }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "enum": [
+                  "types.classes.fields",
+                  "types.classes.functions",
+                  "types.structs.fields"
+                ]
+              }
+            },
+            "required": ["operation"]
+          },
+          "then": { "properties": { "data": { "$ref": "#/$defs/typeMemberPageData" } } }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "enum": ["types.classes.hierarchy", "types.enums.values"]
+              }
+            },
+            "required": ["operation"]
+          },
+          "then": { "properties": { "data": { "$ref": "#/$defs/typePathPageData" } } }
         }
       ]
     },

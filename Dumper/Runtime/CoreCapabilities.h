@@ -174,9 +174,9 @@ inline std::shared_ptr<const CapabilitySnapshot> BuildCoreCapabilities(
 		{"engine.property_codec", "objects.handles"});
 	builder.Define(
 		"types.inspect",
-		false,
-		"TYPE_COMMAND_NOT_IMPLEMENTED",
-		"Validated class, struct, enum, and package commands are not registered",
+		true,
+		{},
+		{},
 		{"engine.type_snapshot"});
 	builder.Define(
 		"memory.raw_read",

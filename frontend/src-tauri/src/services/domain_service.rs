@@ -329,13 +329,16 @@ fn resolve_operation(operation: &str) -> Option<DomainRoute> {
         | "objects.outer_chain"
         | "objects.property.read"
         | "objects.property.write" => DomainRoute::Unavailable("objects.properties"),
-        "types.classes.get"
-        | "types.classes.fields"
-        | "types.classes.functions"
-        | "types.classes.hierarchy"
-        | "types.classes.cdo"
-        | "types.structs.get"
-        | "types.enums.get" => DomainRoute::Unavailable("types.inspect"),
+        "types.classes.get" => DomainRoute::Core("types.classes.get"),
+        "types.classes.fields" => DomainRoute::Core("types.classes.fields"),
+        "types.classes.functions" => DomainRoute::Core("types.classes.functions"),
+        "types.classes.hierarchy" => DomainRoute::Core("types.classes.hierarchy"),
+        "types.classes.cdo" => DomainRoute::Core("types.classes.cdo"),
+        "types.functions.get" => DomainRoute::Core("types.functions.get"),
+        "types.structs.get" => DomainRoute::Core("types.structs.get"),
+        "types.structs.fields" => DomainRoute::Core("types.structs.fields"),
+        "types.enums.get" => DomainRoute::Core("types.enums.get"),
+        "types.enums.values" => DomainRoute::Core("types.enums.values"),
         "world.inspect"
         | "world.levels"
         | "world.actors.list"
@@ -847,6 +850,22 @@ mod tests {
             );
         }
         assert!(resolve_operation("core.raw_passthrough").is_none());
+        assert_eq!(
+            resolve_operation("types.classes.get"),
+            Some(DomainRoute::Core("types.classes.get"))
+        );
+        assert_eq!(
+            resolve_operation("types.structs.fields"),
+            Some(DomainRoute::Core("types.structs.fields"))
+        );
+        assert_eq!(
+            resolve_operation("types.functions.get"),
+            Some(DomainRoute::Core("types.functions.get"))
+        );
+        assert_eq!(
+            resolve_operation("types.enums.values"),
+            Some(DomainRoute::Core("types.enums.values"))
+        );
     }
 
     #[test]

@@ -73,6 +73,9 @@ foreach ($token in @('struct Hello', 'struct Welcome', 'struct Request', 'status
 }
 
 $limits = $schema.'$defs'.protocolLimits
+if (-not $schema.anyOf -or $schema.oneOf) {
+    throw 'Schema root must be an anyOf catalogue because the frame header, not JSON shape, discriminates Cancel from Shutdown.'
+}
 if ($limits.additionalProperties -ne $false -or
         $limits.properties.max_payload_bytes.maximum -ne 8388608 -or
         $limits.properties.pending_rpc_per_session.maximum -ne 256 -or

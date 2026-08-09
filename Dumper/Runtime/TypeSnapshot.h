@@ -13,6 +13,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace UExplorer::Runtime
@@ -132,6 +133,14 @@ struct ReflectedType
 	std::vector<ReflectedEnumEntry> EnumEntries;
 };
 
+struct ReflectedFunctionLookup
+{
+	const ReflectedFunction* Function = nullptr;
+	const ReflectedType* DeclaringType = nullptr;
+
+	bool Found() const noexcept { return Function && DeclaringType; }
+};
+
 struct TypeSnapshotCandidate
 {
 	std::string SessionId;
@@ -211,6 +220,10 @@ public:
 	const std::vector<ReflectedType>& Types() const noexcept { return m_Types; }
 	const ReflectedType* FindByFullPath(std::string_view fullPath) const noexcept;
 	const ReflectedType* FindByObjectIndex(std::int32_t objectIndex) const noexcept;
+	ReflectedFunctionLookup FindFunctionByFullPath(
+		std::string_view fullPath) const noexcept;
+	const std::vector<std::size_t>* FindDirectChildIndices(
+		std::int32_t superObjectIndex) const noexcept;
 	bool IsConfigured(std::uint64_t expectedContextGeneration) const noexcept;
 
 private:
@@ -231,6 +244,13 @@ private:
 	std::vector<ReflectedType> m_Types;
 	std::map<std::string, std::size_t, std::less<>> m_TypeByFullPath;
 	std::map<std::int32_t, std::size_t> m_TypeByObjectIndex;
+	std::map<
+		std::string,
+		std::pair<std::size_t, std::size_t>,
+		std::less<>> m_FunctionByFullPath;
+	std::map<std::int32_t, std::vector<std::size_t>> m_DirectChildrenBySuperIndex;
+	std::size_t m_DirectChildCount = 0;
+	std::size_t m_FunctionCount = 0;
 };
 
 enum class TypeMemberScope : std::uint8_t

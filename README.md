@@ -87,8 +87,15 @@ captures complete structural type/function coverage through stable handles and
 SafeMemory, incrementally revalidates every live evidence record, and is attached by
 Main to the same scheduler. It publishes witnessed super/CDO, direct property/parameter,
 and native-exec structure while explicitly marking unavailable property descriptors,
-enum layouts, and bytecode. The type-detail command is not registered, so
-`types.inspect` still returns `TYPE_COMMAND_NOT_IMPLEMENTED`; no UE profile is claimed.
+enum layouts, and bytecode. A worker-only `TypeCommandService` now exposes exact-path
+Class/Struct/Enum/Function detail, explicitly scoped direct/inherited member pages,
+direct-child hierarchy pages, and CDO identity through Named Pipe. It reads only the
+current immutable type snapshot: pages are capped at 128 records, cursors bind the
+session/context, snapshot generation, and query fingerprint, serialized command data is capped at 4 MiB,
+64-bit flags stay canonical hex strings, and enum int64 values stay decimal strings.
+It does not enter the game thread, rescan live UE memory, fabricate CDO property values,
+or make unavailable descriptors/enum layouts/bytecode appear supported. No UE profile
+is claimed until the target-process fixtures pass.
 PostRender now drives one `GameThreadFrameScheduler` rather than giving the object
 snapshot producer an exclusive callback slot. The scheduler supports at most eight
 clients, shares a 32-unit frame budget in four-unit round-robin quanta, stops further

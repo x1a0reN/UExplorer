@@ -786,6 +786,31 @@ const ReflectedType* TypeSnapshot::FindByObjectIndex(
 	return it == m_TypeByObjectIndex.end() ? nullptr : &m_Types[it->second];
 }
 
+ReflectedFunctionLookup TypeSnapshot::FindFunctionByFullPath(
+	const std::string_view fullPath) const noexcept
+{
+	const auto it = m_FunctionByFullPath.find(fullPath);
+	if (it == m_FunctionByFullPath.end())
+		return {};
+	const auto [typeIndex, functionIndex] = it->second;
+	if (typeIndex >= m_Types.size()
+		|| functionIndex >= m_Types[typeIndex].DirectFunctions.size())
+	{
+		return {};
+	}
+	return {
+		.Function = &m_Types[typeIndex].DirectFunctions[functionIndex],
+		.DeclaringType = &m_Types[typeIndex]
+	};
+}
+
+const std::vector<std::size_t>* TypeSnapshot::FindDirectChildIndices(
+	const std::int32_t superObjectIndex) const noexcept
+{
+	const auto it = m_DirectChildrenBySuperIndex.find(superObjectIndex);
+	return it == m_DirectChildrenBySuperIndex.end() ? nullptr : &it->second;
+}
+
 bool TypeSnapshot::IsConfigured(
 	const std::uint64_t expectedContextGeneration) const noexcept
 {
@@ -806,7 +831,9 @@ bool TypeSnapshot::IsConfigured(
 		&& IsReflectionLayoutValid(*m_ReflectionLayout, m_ContextGeneration)
 		&& m_ReflectionLayout->Fingerprint() == m_ReflectionLayoutFingerprint
 		&& m_TypeByFullPath.size() == m_Types.size()
-		&& m_TypeByObjectIndex.size() == m_Types.size();
+		&& m_TypeByObjectIndex.size() == m_Types.size()
+		&& m_DirectChildCount <= m_Types.size()
+		&& m_FunctionByFullPath.size() == m_FunctionCount;
 }
 
 const char* ToString(const TypeMemberScope scope) noexcept
@@ -1151,10 +1178,14 @@ TypeSnapshotPublishResult TypeSnapshotStore::Publish(
 					|| !IsValidText(function.Name)
 					|| !IsValidText(function.FullPath)
 					|| function.ParameterSize > kMaxParameterSize
-					|| !seenFunctions.emplace(function.Handle.Function.Index).second)
+					|| !seenFunctions.emplace(function.Handle.Function.Index).second
+					|| !published->m_FunctionByFullPath.emplace(
+						function.FullPath,
+						std::pair{typePosition, functionIndex}).second)
 				{
 					return Failure(TypeSnapshotPublishError::FunctionInvalid, typeErrorIndex, memberIndex);
 				}
+				++published->m_FunctionCount;
 				switch (function.Implementation)
 				{
 				case ReflectedFunctionImplementation::Unavailable:
@@ -1243,6 +1274,8 @@ TypeSnapshotPublishResult TypeSnapshotStore::Publish(
 					TypeSnapshotPublishError::RelationshipInvalid,
 					static_cast<std::int32_t>(index));
 			}
+			published->m_DirectChildrenBySuperIndex[type.Super->Index].push_back(index);
+			++published->m_DirectChildCount;
 		}
 
 		for (std::size_t index = 0; index < published->m_Types.size(); ++index)

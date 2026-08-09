@@ -229,36 +229,134 @@ export interface ClassItem {
   address: string;
 }
 
+export interface StableObjectHandle {
+  session_id: string;
+  context_generation: number;
+  index: number;
+  serial: number;
+  address: string;
+  class_fingerprint: string;
+}
+
+export type ReflectedTypeKind = 'class' | 'struct' | 'enum';
+export type ReflectedMemberState = 'supported' | 'unsupported' | 'unavailable';
+export type TypeMemberScope = 'direct' | 'include_inherited';
+
+export interface TypeQueryCursor {
+  generation: number;
+  after_ordinal: number;
+  query_fingerprint: string;
+}
+
+export interface TypeReference {
+  handle: StableObjectHandle;
+  kind: ReflectedTypeKind;
+  name: string;
+  full_path: string;
+}
+
 export interface ClassProperty {
   name: string;
-  type: string;
+  type_name: string;
+  kind: string;
   offset: number;
   size: number;
   array_dim: number;
   flags: string;
+  state: ReflectedMemberState;
+  reason_code: string | null;
+  reason: string | null;
+  descriptor_available: boolean;
+  declaring_type: TypeReference;
+  inheritance_depth: number;
+}
+
+export interface ClassFunctionParameter {
+  name: string;
+  type_name: string;
+  kind: string;
+  offset: number;
+  size: number;
+  array_dim: number;
+  flags: string;
+  state: ReflectedMemberState;
+  reason_code: string | null;
+  reason: string | null;
+  descriptor_available: boolean;
+  direction: 'input' | 'output' | 'inout' | 'return';
+}
+
+export interface StableFunctionHandle {
+  function: StableObjectHandle;
+  owner: StableObjectHandle;
+  full_path: string;
+  signature_fingerprint: string;
 }
 
 export interface ClassFunction {
+  handle: StableFunctionHandle;
   name: string;
-  full_name: string;
+  full_path: string;
   flags: string;
-  param_size: number;
-  has_script: boolean;
-  address: string;
-  params: ClassProperty[];
+  parameter_size: number;
+  parameter_count: number;
+  native_address: string | null;
+  implementation: 'unavailable' | 'native' | 'bytecode' | 'native_and_bytecode';
+  reason_code: string | null;
+  reason: string | null;
+  parameters: ClassFunctionParameter[];
+  declaring_type: TypeReference;
+  inheritance_depth: number;
 }
 
-export interface ClassDetail {
+export interface TypeDefaultObjectMetadata {
+  state: 'not_applicable' | 'present' | 'not_constructed' | 'unavailable';
+  handle: StableObjectHandle | null;
+  reason_code: string | null;
+  reason: string | null;
+}
+
+export interface TypeEnumMetadata {
+  state: ReflectedMemberState;
+  underlying_kind: string | null;
+  reason_code: string | null;
+  reason: string | null;
+  value_count: number;
+}
+
+export interface TypeDetail {
+  type_snapshot_generation: number;
+  object_snapshot_generation: number;
+  context_generation: number;
+  handle: StableObjectHandle;
+  kind: ReflectedTypeKind;
   name: string;
-  full_name: string;
-  cpp_name: string;
-  size: number;
-  alignment: number;
-  index: number;
-  address: string;
-  super: string;
-  fields: ClassProperty[];
-  functions: ClassFunction[];
+  full_path: string;
+  package_path: string;
+  properties_size: number;
+  min_alignment: number;
+  super: TypeReference | null;
+  direct_property_count: number;
+  direct_function_count: number;
+  default_object: TypeDefaultObjectMetadata | null;
+  enum: TypeEnumMetadata | null;
+}
+
+export type ClassDetail = TypeDetail;
+
+export interface TypeMemberPageResponse<T> {
+  type_snapshot_generation: number;
+  object_snapshot_generation: number;
+  context_generation: number;
+  path: string;
+  kind: ReflectedTypeKind;
+  scope: TypeMemberScope;
+  items: T[];
+  total: number;
+  matched: number;
+  limit: number;
+  has_more: boolean;
+  next_cursor: TypeQueryCursor | null;
 }
 
 export type PaginatedResponse<T> = SnapshotPageResponse<T>;
@@ -272,14 +370,7 @@ export interface StructItem {
   address: string;
 }
 
-export interface StructDetail {
-  name: string;
-  full_name: string;
-  size: number;
-  alignment: number;
-  super: string;
-  fields: ClassProperty[];
-}
+export type StructDetail = TypeDetail;
 
 export interface EnumItem {
   index: number;
@@ -289,10 +380,43 @@ export interface EnumItem {
 }
 
 export interface EnumDetail {
+  type_snapshot_generation: number;
+  object_snapshot_generation: number;
+  context_generation: number;
+  handle: StableObjectHandle;
+  kind: 'enum';
   name: string;
-  full_name: string;
-  underlying_type: string;
-  values: Array<{ name: string; value: number }>;
+  full_path: string;
+  package_path: string;
+  properties_size: 0;
+  min_alignment: 0;
+  super: null;
+  direct_property_count: 0;
+  direct_function_count: 0;
+  default_object: null;
+  enum: TypeEnumMetadata;
+}
+
+export interface EnumValue {
+  name: string;
+  value: string;
+}
+
+export interface EnumValuePageResponse {
+  type_snapshot_generation: number;
+  object_snapshot_generation: number;
+  context_generation: number;
+  path: string;
+  state: ReflectedMemberState;
+  underlying_kind: string | null;
+  reason_code: string | null;
+  reason: string | null;
+  items: EnumValue[];
+  total: number;
+  matched: number;
+  limit: number;
+  has_more: boolean;
+  next_cursor: TypeQueryCursor | null;
 }
 
 export interface PackageItem {
@@ -308,9 +432,17 @@ export interface PackageContentsResponse extends SnapshotPageResponse<ObjectItem
 }
 
 export interface ClassHierarchy {
-  name: string;
-  parents: string[];
-  children: string[];
+  type_snapshot_generation: number;
+  object_snapshot_generation: number;
+  context_generation: number;
+  path: string;
+  parents: Array<TypeReference & { inheritance_depth: number }>;
+  children: TypeReference[];
+  total: number;
+  matched: number;
+  limit: number;
+  has_more: boolean;
+  next_cursor: TypeQueryCursor | null;
 }
 
 export interface ClassInstancesResponse
@@ -319,9 +451,14 @@ export interface ClassInstancesResponse
 }
 
 export interface ClassCDOResponse {
-  class: string;
-  cdo_address: string;
-  properties: ObjectProperty[];
+  type_snapshot_generation: number;
+  object_snapshot_generation: number;
+  context_generation: number;
+  class_path: string;
+  state: Exclude<TypeDefaultObjectMetadata['state'], 'not_applicable'>;
+  handle: StableObjectHandle | null;
+  reason_code: string | null;
+  reason: string | null;
 }
 
 export interface WorldData {

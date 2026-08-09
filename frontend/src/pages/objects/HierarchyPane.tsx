@@ -19,7 +19,7 @@ interface ExpandedChild {
     name: string;
     type?: string;
     offset?: number;
-    value?: number;
+    value?: string;
 }
 
 interface HierarchyPaneProps {
@@ -119,19 +119,22 @@ export default function HierarchyPane({ onSelectClass }: HierarchyPaneProps) {
         try {
             if (subTab === 'Class') {
                 const res = await api.getClassFields(item.fullName);
-                if (res.success && res.data) {
-                    setExpandedItems(prev => ({ ...prev, [item.fullName]: { loading: false, data: res.data! } }));
-                }
+                if (!res.success || !res.data) throw new Error(res.error || 'Class fields failed');
+                const data = res.data.items.map((field) => ({ name: field.name, type: field.type_name, offset: field.offset }));
+                if (res.data.has_more) data.push({ name: '[More fields available in inspector]', type: 'paged', offset: 0 });
+                setExpandedItems(prev => ({ ...prev, [item.fullName]: { loading: false, data } }));
             } else if (subTab === 'Struct') {
-                const res = await api.getStructByName(item.fullName);
-                if (res.success && res.data) {
-                    setExpandedItems(prev => ({ ...prev, [item.fullName]: { loading: false, data: res.data!.fields } }));
-                }
+                const res = await api.getStructFields(item.fullName);
+                if (!res.success || !res.data) throw new Error(res.error || 'Struct fields failed');
+                const data = res.data.items.map((field) => ({ name: field.name, type: field.type_name, offset: field.offset }));
+                if (res.data.has_more) data.push({ name: '[More fields available in inspector]', type: 'paged', offset: 0 });
+                setExpandedItems(prev => ({ ...prev, [item.fullName]: { loading: false, data } }));
             } else if (subTab === 'Enum') {
-                const res = await api.getEnumByName(item.fullName);
-                if (res.success && res.data) {
-                    setExpandedItems(prev => ({ ...prev, [item.fullName]: { loading: false, data: res.data!.values } }));
-                }
+                const res = await api.getEnumValues(item.fullName);
+                if (!res.success || !res.data) throw new Error(res.error || 'Enum values failed');
+                const data = res.data.items.map((value) => ({ name: value.name, value: value.value }));
+                if (res.data.has_more) data.push({ name: '[More values available in inspector]', value: '' });
+                setExpandedItems(prev => ({ ...prev, [item.fullName]: { loading: false, data } }));
             }
         } catch {
             setExpandedItems(prev => ({ ...prev, [item.fullName]: { loading: false, data: [] } }));
