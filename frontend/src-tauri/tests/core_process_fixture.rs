@@ -1,14 +1,16 @@
 #![cfg(windows)]
 
+use app_lib::services::domain_service::{DomainRequest, DomainService};
 use app_lib::session::event_hub::EventFilter;
 use app_lib::session::session_manager::{SessionManager, SessionPhase, TargetProcessIdentity};
 use app_lib::session::snapshot_cache::{SnapshotObjectKind, SnapshotQuery};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read};
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdout, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver};
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 use windows::Win32::Foundation::{CloseHandle, FILETIME};
@@ -168,7 +170,7 @@ fn session_manager_consumes_real_cpp_core_snapshot_event_and_shutdown() {
         executable.to_string_lossy().into_owned(),
     )
     .expect("C++ Core fixture identity was rejected");
-    let manager = SessionManager::new();
+    let manager = Arc::new(SessionManager::new());
     let session = manager
         .connect(
             target,
@@ -229,6 +231,55 @@ fn session_manager_consumes_real_cpp_core_snapshot_event_and_shutdown() {
     assert_eq!(page.items.len(), 1);
     assert_eq!(page.items[0].kind, SnapshotObjectKind::Class);
     assert_eq!(page.items[0].full_path, "/Script/Fixture.Object1");
+
+    let domain = DomainService::new(Arc::clone(&manager));
+    let status_response = domain.execute(DomainRequest {
+        target_pid: Some(pid),
+        operation: "status.inspect".to_string(),
+        ..DomainRequest::default()
+    });
+    assert!(status_response.success, "{:?}", status_response.error);
+
+    let count_response = domain.execute(DomainRequest {
+        target_pid: Some(pid),
+        operation: "objects.count".to_string(),
+        ..DomainRequest::default()
+    });
+    assert!(count_response.success, "{:?}", count_response.error);
+    assert_eq!(count_response.data["total"], 3);
+
+    let search_response = domain.execute(DomainRequest {
+        target_pid: Some(pid),
+        operation: "objects.search".to_string(),
+        data: json!({"q": "object1", "offset": 0, "limit": 8}),
+        ..DomainRequest::default()
+    });
+    assert!(search_response.success, "{:?}", search_response.error);
+    assert_eq!(search_response.data["matched"], 1);
+    assert_eq!(search_response.data["items"][0]["index"], 1);
+
+    let unavailable = domain.execute(DomainRequest {
+        target_pid: Some(pid),
+        operation: "memory.raw.read".to_string(),
+        data: json!({"address": "0x1000", "size": 4}),
+        ..DomainRequest::default()
+    });
+    assert!(!unavailable.success);
+    assert_eq!(
+        unavailable.error_code.as_deref(),
+        Some("CAPABILITY_UNAVAILABLE")
+    );
+
+    let unknown = domain.execute(DomainRequest {
+        target_pid: Some(pid),
+        operation: "core.raw_passthrough".to_string(),
+        ..DomainRequest::default()
+    });
+    assert!(!unknown.success);
+    assert_eq!(
+        unknown.error_code.as_deref(),
+        Some("OPERATION_NOT_SUPPORTED")
+    );
 
     let diagnostics = session.diagnostics().expect("session diagnostics failed");
     assert_eq!(diagnostics.phase, SessionPhase::Ready);

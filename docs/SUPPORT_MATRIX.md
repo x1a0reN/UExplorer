@@ -31,3 +31,19 @@ Each fixture must record:
 
 Until a fixture exists, the corresponding profile remains `Not supported`; offset or
 layout heuristics must not upgrade that status.
+
+## Generic boundary evidence (not an engine support claim)
+
+The R4 desktop transport boundary is verified independently of an Unreal profile:
+
+- the release Core project contains only the PID-scoped Named Pipe transport and its
+  binary has no WinSock/WinHTTP/WinINet import or legacy HTTP marker;
+- the real C++ Core/Rust Host process fixture reaches Core status and immutable
+  snapshot queries through `DomainService`, and verifies explicit unavailable and
+  unknown-operation errors;
+- the injection fixture covers real x64/x86 process identity, load, timeout, duplicate
+  load, rejection, Pipe handshake, and Core Ready stages.
+
+These fixtures prove the process and transport boundary only. They do not validate UE
+object layouts, GC behavior, ProcessEvent, Watch/Hook producers, generator semantics,
+or clean unload in a supported engine, so every engine row above remains `Not supported`.

@@ -25,7 +25,7 @@ UExplorer 是一个面向 Unreal Engine 的 **SDK Dump + 实时游戏内省工�
 └──────────────────────────────────────────────┘
 ```
 
-当前分支已完成 R3 实现并准备进入 R4 原子通信切换：`CoreRuntime`、不可变 `EngineContext`/名称布局、`EngineFacade`、稳定 Handle、不可变 Snapshot/Host 索引、安全关闭边界和有界 x64 PE/pattern/版本探测已经建立。共享严格 payload/limit、transport-independent `CoreRpcSession`、真实 Core `NamedPipeRpcServer`、真实 Rust `CoreRpcClient`、EventHub、多 PID `SessionManager` 与 Tauri Channel bridge 均具备有界队列、严格 PID/session/correlation/deadline/cancel 和可 join 生命周期。C++/Rust decoder、真实 NPFS 断连矩阵及独立 C++ Core/Rust Host 进程 fixture 已证明 Welcome/Event/Snapshot/Host 索引/精确 Shutdown 全链路；额外的真实注入矩阵以 x64/x86 target 和 Ready/慢加载/拒绝加载 DLL 直接执行生产 `CreateRemoteThread + LoadLibraryW + SessionManager` 路径，覆盖成功/Core Ready、重复加载、错误架构、过期进程身份、NULL load result、超时及安全 reconnect，不使用脚本或替代注入法。UE 版本、GC、PostRender/Hook、目标规模与卸载证据仍属于 R7，不由通用 target fixture 代替。`Dumper/Server` 和 `Dumper/API` 仍是 R4 前的 legacy HTTP 兼容层；React 领域请求尚未切至 Tauri/Named Pipe，因此当前产品仍存在临时双栈，功能真实性与未完成项以 `DESIGN.md` 和 `docs/issue-status.json` 为准。
+当前分支已完成 R4 原子通信切换。`CoreRuntime`、不可变 `EngineContext`/名称布局、`EngineFacade`、稳定 Handle、不可变 Snapshot/Host 索引、安全关闭边界、Named Pipe RPC、Rust `CoreRpcClient`、EventHub、多 PID `SessionManager`、`DomainService` 与 Tauri Channel bridge 已形成唯一桌面主链路。React 不再直接使用 HTTP/SSE/WebSocket；Core release project 不编译 `Dumper/Server` 或 `Dumper/API`，也不链接 WinSock。旧网络/API 源文件按“不删除”约束保留为历史证据，不能从其推断当前行为。当前 Host 仅实现 status 与 snapshot-backed Object/Type 查询；Memory/Call/World/Watch/Hook/Blueprint/Dump 等命令明确返回 capability unavailable，进入 R5 领域正确性阶段。UE 版本、GC、PostRender/Hook、目标规模与卸载证据仍属于 R7，不由通用进程 fixture 代替。功能真实性与未完成项以 `DESIGN.md` 和 `docs/issue-status.json` 为准。
 
 ---
 
@@ -33,8 +33,8 @@ UExplorer 是一个面向 Unreal Engine 的 **SDK Dump + 实时游戏内省工�
 
 ```
 UExplorer/
-├── CLAUDE.md                           # Agent 规则
-├── DESIGN.md                           # 功能设计文档（727 行）
+├── AGENTS.md                           # 当前 Agent 规则和验证契约
+├── DESIGN.md                           # 当前事实、设计与历史记录
 ├── PROJECT_MAP.md                      # 本文档
 ├── UExplorerCore.slnx                  # VS2026 解决方案
 │
@@ -66,6 +66,7 @@ UExplorer/
 │   │   ├── ObjectArrayIdentitySource.*    # 生产 FUObjectItem/Handle identity source
 │   │   ├── ObjectArraySnapshotSource.*    # 生产 name/full/class/package/kind metadata source
 │   │   ├── GameThreadExecutor.h/.cpp #   有界 owned work、deadline、cancel、frame client、drain
+│   │   ├── PostRenderHook.h/.cpp     #   生产 game-thread pump Hook owner 与 quiet drain
 │   │   ├── ObjectHandle*.h/.cpp      #   serial-backed Object/FunctionHandle
 │   │   ├── SafeMemory.h/.cpp         #   范围、SEH、保护恢复与代码写策略
 │   │   └── VTableHook.h/.cpp         #   RAII patch owner
@@ -76,11 +77,11 @@ UExplorer/
 │   │   ├── Protocol.h                #   24-byte framing/有界协商 decoder/limits
 │   │   └── NamedPipeRpcServer.*      #   DACL/PID、overlapped I/O、request workers 与有界 Event writer
 │   │
-│   ├── Server/                        ★ legacy HTTP 服务器层（R4 移除可达路径）
+│   ├── Server/                        ★ legacy HTTP 源码（不在 release project，无运行入口）
 │   │   ├── HttpServer.h              #   PIMPL 接口（HttpRequest/HttpResponse/RouteHandler/SSE/WS）
 │   │   └── HttpServer.cpp            #   WinSock2 实现（路由匹配/Token/CORS/SSE/WebSocket）
 │   │
-│   ├── API/                           ★ legacy REST 适配层（13 模块，R4 退役）
+│   ├── API/                           ★ legacy REST 适配层（13 模块，不在 release project）
 │   │   ├── ApiCommon.h               #   JSON 响应信封 (MakeResponse/MakeError/ParseQuery)
 │   │   ├── Router.h / .cpp           #   路由注册中心 (RegisterAllRoutes)
 │   │   ├── GameThreadQueue.h         #   游戏线程调度队列 (Submit/ProcessQueue)
@@ -177,7 +178,8 @@ UExplorer/
     │   ├── main.tsx                  #   React 入口
     │   ├── App.tsx                   #   主布局 (侧栏导航 + 6 页路由)
     │   ├── index.css                 #   全局样式
-    │   ├── api/index.ts              #   UExplorerApi 类 (~1150 行，覆盖全部 50+ API 端点)
+    │   ├── api/index.ts              #   领域类型与公开 client export
+    │   ├── api/client.ts             #   仅 Tauri invoke/Channel 的 typed desktop client
     │   ├── types/index.ts            #   TypeScript 类型定义 (~40 接口)
     │   ├── i18n/
     │   │   ├── index.ts              #   国际化入口
@@ -210,6 +212,8 @@ UExplorer/
             ├── ipc/
             │   ├── rpc_session.rs   #   严格握手/关联/deadline/cancel/event/shutdown 状态机
             │   └── named_pipe_client.rs # 真实 Win32 overlapped client、PID 核验、bounded queues 与 join
+            ├── services/
+            │   └── domain_service.rs #   显式 operation registry、session 绑定与 capability gate
             ├── session/
             │   ├── event_bridge.rs   #   EventHub -> 调用方 Tauri Channel 的有界 owned bridge
             │   ├── event_hub.rs      #   有界事件过滤、精确 replay、fan-out 与 drop 诊断
@@ -225,37 +229,24 @@ UExplorer/
 ### 3.1 顶层模块依赖（宏观）
 
 ```
-                            ┌─────────────┐
-                            │  Main.cpp   │  DLL 入口
-                            │  (DllMain)  │
-                            └──────┬──────┘
-                   ┌───────────────┼───────────────┐
-                   ▼               ▼               ▼
-            ┌────────────┐  ┌───────────┐  ┌────────────┐
-            │ Generator  │  │ HttpServer│  │  Settings  │
-            │ (引擎初始化) │  │ (HTTP层)  │  │  (配置)    │
-            └──────┬─────┘  └─────┬─────┘  └────────────┘
-                   │              │
-                   │        ┌─────┴─────┐
-                   │        │  Router   │  路由注册中心
-                   │        └─────┬─────┘
-                   │              │ 注册 13 个 API 模块
-            ┌──────┼──────────────┼──────────────────────┐
-            ▼      ▼              ▼                      ▼
-     ┌──────────┐ ┌──────────┐ ┌──────────┐      ┌──────────┐
-     │StatusApi │ │ObjectsApi│ │ClassesApi│ ...  │EventsApi │
-     │DumpApi   │ │MemoryApi │ │WorldApi  │      │HookApi   │
-     └────┬─────┘ └────┬─────┘ └────┬─────┘      └────┬─────┘
-          │            │            │                   │
-          └────────────┴────────────┴───────────────────┘
-                              │
-                  ┌───────────┼───────────┐
-                  ▼           ▼           ▼
-           ┌───────────┐ ┌────────┐ ┌──────────┐
-           │  Engine   │ │Generator│ │ Platform │
-           │(UE 内省)  │ │(SDK生成)│ │(系统抽象) │
-           └───────────┘ └────────┘ └──────────┘
+React pages -> api/client.ts -> Tauri invoke / Channel
+                                  |
+                                  v
+                        Rust DomainService
+                    / SessionManager / EventHub
+                                  |
+                         Named Pipe RPC v1
+                                  |
+                                  v
+Main.cpp -> NamedPipeRpcServer -> CoreCommandService -> EngineFacade
+    |                                      |               |
+    +-> PostRenderHook -> GameThreadExecutor              Snapshot
+    +-> CoreRuntime / CapabilityRegistry                  SafeMemory
+    +-> Generator / Engine / Platform
 ```
+
+`Server/` 与 `API/` 不在上述依赖图中，因为 release Core 不编译它们。它们只供
+历史审计和旧 API contract 对照；不得重新接入 Main 或前端。
 
 ### 3.2 DLL 启动流程（Main.cpp）
 
@@ -263,7 +254,7 @@ UExplorer/
 DllMain(DLL_PROCESS_ATTACH)
   └→ CreateThread(MainThread)
        │
-       ├─ LoadConnectionConfig()          从 connection.ini 读取端口/Token
+       ├─ Settings::Config::Load()         读取 Dumper 引擎/生成配置
        ├─ PrimeGameVersionBeforeOffsetInit()   探测 UE 版本
        ├─ Generator::InitEngineCore()     ★ 引擎核心初始化
        │   ├─ ObjectArray::Init()          定位 GObjects
@@ -283,14 +274,19 @@ DllMain(DLL_PROCESS_ATTACH)
        │   ├─ MemberManager::Init()
        │   └─ PackageManager::PostInit()
        │
-       ├─ HttpServer(port, token)          创建 HTTP 服务器
-       ├─ RegisterAllRoutes(server)        注册全部 API 路由 + InitHooks
-       ├─ server.Start()                   开始监听
+       ├─ Publish EngineContext / EngineFacade / CoreCommandService
+       ├─ NamedPipeRpcServer::Start()      绑定 PID-scoped Pipe，尚未开放 admission
+       ├─ PostRenderHook::Install()        安装生产 game-thread pump
+       ├─ AttachFrameClient()              接入 snapshot producer
+       ├─ Publish capabilities / Ready
+       └─ OpenAdmissions()                 仅在事实 Ready 后接收 Host
        │
-       └─ [F6 退出循环]
-            ├─ ShutdownHooks()
-            ├─ server.Stop()
-            └─ FreeLibraryAndExitThread()
+       └─ [Host Shutdown RPC 或当前 legacy F6 触发退出]
+            ├─ Stop Named Pipe / settle requests
+            ├─ Restore PostRender Hook
+            ├─ Detach snapshot producer / stop facade
+            ├─ Drain CoreRuntime request leases
+            └─ 安全性可证明时 FreeLibraryAndExitThread()
 ```
 
 ### 3.3 Engine 层内部依赖
@@ -417,7 +413,7 @@ UEObject                              所有 UE 对象基类
 └────────────────────────────────────────────────────────────┘
 ```
 
-### 3.5 API 层 → Engine/Generator 依赖矩阵
+### 3.5 Legacy API 层 → Engine/Generator 依赖矩阵（非 release）
 
 ```
 ┌─────────────┬──────────────────────────────────────────────────────────┐
@@ -445,7 +441,7 @@ UEObject                              所有 UE 对象基类
 └─────────────┴──────────────────────────────────────────────────────────┘
 ```
 
-### 3.6 API 间交叉依赖
+### 3.6 Legacy API 间交叉依赖（非 release）
 
 ```
 ObjectsApi ──────► 导出 ReadPropertyValueUnified, SerializePropertyUnified,
@@ -461,7 +457,7 @@ Router.cpp ───────► SetServer(&server) 注入 HttpServer 到 Eve
                   ► InitHooks() 安装 VTable 钩子
 ```
 
-### 3.7 Hook 机制的调用链
+### 3.7 Legacy HookApi 调用链（历史实现）
 
 ```
 HookApi::InitHooks()
@@ -516,94 +512,79 @@ Arch_x86 核心函数:
 
 ---
 
-## 四、前端 → 后端通信矩阵
+## 四、当前前端 → Host → Core 通信矩阵
 
 ### 4.1 通信架构
 
 ```
-┌──────────────────┐    HTTP REST     ┌──────────────────┐
-│                  │◄────────────────►│                  │
-│    Frontend      │    SSE (单向)     │   Core DLL       │
-│  (Tauri + React) │◄─────────────────│  (注入游戏进程)   │
-│                  │   WebSocket (双向) │                  │
-│                  │◄────────────────►│                  │
-└───────┬──────────┘                  └──────────────────┘
-        │
-        │ Tauri invoke (Rust ↔ JS)
-        ▼
-┌──────────────────┐
-│  Tauri Backend   │
-│  (Rust)          │
-│  - scan_ue_processes    进程扫描
-│  - inject_dll           DLL 注入
-│  - save_connection_settings  配置持久化
-│  - load_runtime_endpoint     运行时端点发现
-└──────────────────┘
+React UExplorerApi
+  ├─ invoke("domain_request", { request })
+  ├─ invoke("inject_and_connect", ...)
+  ├─ invoke("disconnect_session", ...)
+  └─ invoke("subscribe_session_events", Channel)
+                    |
+                    v
+Rust Host: DomainService / SessionManager / EventBridgeManager
+                    |
+                    v
+       \\.\pipe\UExplorer\v1\<pid>
+                    |
+                    v
+Core: NamedPipeRpcServer -> CoreCommandService -> EngineFacade
 ```
 
-### 4.2 前端页面 → API 端点映射
+无 localhost、port、Token、`runtime.ini`、HTTP、SSE 或 WebSocket 桌面运行路径。
+Vite 的开发资产 URL 不属于 React -> Core 通信。
+
+### 4.2 前端页面 → Domain operation 映射
 
 ```
 Dashboard.tsx
-  ├─ getStatus()              GET  /status
-  ├─ getObjectCounts()        GET  /objects/count
-  ├─ getWorldShortcuts()      GET  /world/shortcuts
-  └─ healthCheck()            GET  /status/health
+  ├─ getStatus()              status.inspect
+  ├─ getObjectCounts()        objects.count
+  └─ session events           Tauri Channel
 
 Objects.tsx (三面板)
-  ├─ HierarchyPane → getClasses(), getStructs(), getEnums()
-  ├─ InstancePane  → getClassInstances(name)
-  └─ InspectorPane → getObjectProperties(idx), setObjectProperty(idx, name, val)
-                     getClassByName(name), getClassCDO(name)
+  ├─ objects.list/search/get_*      immutable Host snapshot
+  ├─ types.{packages|classes|structs|enums}.list
+  ├─ types.classes.instances
+  └─ 尚未迁移的属性/完整反射命令 -> CAPABILITY_UNAVAILABLE
 
 Functions.tsx (四合一)
-  ├─ 函数列表     → getClassFunctions(name)
-  ├─ Call Tab     → callFunction(), callStaticFunction(), callFunctionBatch()
-  ├─ Hook Tab     → addHook(), listHooks(), removeHook(), setHookEnabled(), getHookLog()
-  │                 subscribeEventStream('/events/hooks')
-  └─ Decompile Tab → decompileBlueprint(idx), getBlueprintBytecode(idx)
+  ├─ hook events -> filtered Tauri Channel
+  └─ Function/Call/Hook/Blueprint operation -> R5 capability gate
 
 Memory.tsx
-  ├─ Hex 视图      → readMemory(addr, size), writeMemory(addr, bytes)
-  ├─ 类型化读写    → readTypedMemory(addr, type), writeTypedMemory(addr, type, val)
-  ├─ 指针链        → resolvePointerChain(base, offsets)
-  ├─ Console       → connectWebSocket('/ws/console')
-  └─ Watch 面板    → addWatch(), listWatches(), removeWatch(), getWatchHistory()
-                     subscribeEventStream('/events/watches')
+  ├─ watch events -> filtered Tauri Channel
+  └─ Memory/Watch operation -> R5 capability gate
 
 SDKDump.tsx
-  ├─ startDump(type)          POST /dump/{sdk|usmap|dumpspace|ida-script}
-  ├─ getDumpJobs()            GET  /dump/jobs
-  └─ getDumpJob(id)           GET  /dump/jobs/:id
+  └─ Dump operation -> R5 capability gate
 
 Settings.tsx
-  ├─ updateSettings()         本地 localStorage
-  ├─ persistConnectionSettings()  Tauri invoke
-  ├─ getEngineStatus()        GET  /status/engine
-  └─ reconnectEngine()        POST /status/reconnect
+  ├─ updateSettings()         本地 UI preference
+  ├─ getEngineStatus()        status.engine
+  └─ 无端口/Token/连接文件设置
 ```
 
 ### 4.3 实时通道
 
 ```
-SSE 端点 (服务端 → 客户端, 单向):
-  /events/stream    → 全部事件（Dashboard 全局监听）
-  /events/hooks     → Hook 命中事件（Functions 页 Hook Tab）
-  /events/watches   → Watch 变更事件（Memory 页 Watch 面板）
-
-WebSocket 端点 (双向):
-  /ws/console       → Console 命令交互（Memory 页 Console 面板）
-  /ws/events        → 统一实时事件流（SSE 的 WebSocket 替代）
-
-认证:
-  HTTP:  X-UExplorer-Token header
-  SSE:   X-UExplorer-Token header (通过 fetch stream)
-  WS:    ?token= 查询参数
+Core bounded Event writer
+  -> Named Pipe Event frame (seq/session/drop metadata)
+  -> per-session Rust EventHub (bounded replay/filter/fan-out)
+  -> caller-owned Tauri Channel
+  -> React page-local reconciliation
 ```
+
+Watch/Hook producer 尚未在 R5 开放，因此“通道存在”不等于这些领域功能可用。
 
 ---
 
 ## 五、关键数据流
+
+本章保留 R4 前的领域实现数据流，用于定位 R5 需要替换的直接 live-memory、
+旧 API 和旧 Hook 路径；它不是当前可调用面的说明。
 
 ### 5.1 对象属性读取流
 
@@ -665,40 +646,40 @@ UE 游戏调用某个 UFunction
 │                                                                     │
 │  [游戏主线程]                                                        │
 │    └─ Tick → Render → PostRender                                    │
-│        └─ HookedPostRender()                                        │
-│            ├─ GameThread::ProcessQueue()  ← 执行 HTTP 端提交的任务    │
-│            └─ 原始 PostRender                                        │
+│        └─ PostRenderHook callback                                   │
+│            ├─ GameThreadExecutor::ProcessQueue()                    │
+│            ├─ budgeted snapshot frame client                        │
+│            └─ original PostRender                                   │
 │                                                                     │
 │  [DLL 主线程] (CreateThread from DllMain)                            │
 │    └─ MainThread()                                                  │
 │        ├─ 引擎初始化                                                  │
-│        └─ F6 退出监听循环                                              │
+│        ├─ capability/readiness 刷新                                  │
+│        └─ Host Shutdown / 当前 legacy F6 退出监听                     │
 │                                                                     │
-│  [HTTP Accept 线程] (HttpServer::Start)                              │
-│    └─ AcceptLoop() → 每个连接:                                       │
-│        ├─ [HTTP Worker 线程] HandleClient()                          │
-│        │   └─ MatchAndHandle(req) → API handler                     │
-│        ├─ [SSE 长连接线程] 保持连接 + 心跳                              │
-│        └─ [WebSocket 线程] HandleWebSocketClient()                   │
+│  [Named Pipe listener]                                              │
+│    ├─ overlapped session reader                                     │
+│    ├─ 4 个有界 request worker                                        │
+│    └─ 1 个有界 Event writer                                          │
 │                                                                     │
 │  [Dump Worker 线程] (LaunchGeneratorJob)                             │
 │    └─ CppGenerator::Generate() / MappingGenerator::Generate() / ... │
 │                                                                     │
-│  [Watch 轮询线程] (WatchApi 内部)                                     │
-│    └─ 定时检查属性值变化 → BroadcastWatchEvent                         │
-│                                                                     │
 │  同步机制:                                                            │
-│    g_QueueMutex + g_QueueCV     (GameThreadQueue)                   │
-│    g_HookMutex                  (HookApi: hook 注册/查询)            │
-│    g_LogMutex                   (HookApi: 日志写入)                   │
-│    g_PEVTableMutex              (HookApi: VTable 修补)               │
-│    sScriptOffsetDiagnosticsMutex (OffsetFinder: 诊断数据)             │
+│    bounded GameThread MPSC + ticket/cancel/deadline                  │
+│    VTableHookToken + CallbackBarrier                                │
+│    bounded Pipe request/Event queues                                │
+│    CoreRuntime request lease + ShutdownCoordinator                  │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 七、完整 API 端点清单（50+ 端点）
+## 七、Legacy API v1 端点清单（历史快照，非运行路径）
+
+本章保留旧 HTTP 端点，目的是审计迁移覆盖和运行
+`tests/contracts/verify-api-v1.ps1`。Release Core 不注册这些端点；当前可调用面以
+Rust `DomainService` 的显式 operation registry 为准。
 
 ### 状态与连接
 | Method | Endpoint | 说明 |
@@ -839,13 +820,14 @@ UE 游戏调用某个 UFunction
 
 | 阶段 | 状态 | 内容 |
 |------|------|------|
-| Phase 1: 基础框架 | **已完成** | DLL + HTTP Server + 基础 API + 首次编译验证 |
-| Phase 2: SDK Dump | **已完成** | 4 种格式生成器 + 任务管理 + Dashboard/SDKDump 页面 |
-| Phase 3: Explorer 基础 | **当前阶段** | 对象浏览器 + 属性读取 + Blueprint 反编译偏移修复 |
-| Phase 4: 高级 Explorer | **已完成** | 内存读写 + 函数调用 + Watch + Hook + World Explorer |
-| Phase 5: 进阶功能 | **已完成** | Hook Manager + WebSocket + Blueprint 反编译 + IDA 脚本 |
+| R0 证据与测试地基 | **已完成** | 128 项 issue register、协议/contract/harness/CI |
+| R1 安全止血 | **实现阶段完成** | 注入、队列、Hook、内存与卸载关键风险止血；UE 环境证据进 R7 |
+| R2 CoreRuntime/能力模型 | **实现阶段完成** | Runtime、Context、Capability、Handle、Snapshot、SafeMemory |
+| R3 Named Pipe/Rust Host | **实现阶段完成** | 严格 IPC、SessionManager、EventHub、注入与跨语言 fixture |
+| R4 通信原子切换 | **已完成** | React 只走 Tauri；Core release 只走 Named Pipe，无网络栈 |
+| R5 领域正确性 | **当前阶段** | Object/Type/Memory/Call/World/Watch/Hook/Blueprint/Dump |
+| R6 前端状态重构 | **未开始** | session store、query lifecycle、BigInt 地址、能力驱动 UI |
+| R7 发布硬化 | **未开始** | UE fixture、性能/压力、卸载、发布与文档门禁 |
 
-**未完成项：**
-- [ ] Class Inspector 独立继承树页面
-- [ ] DLL 注入/劫持机制（Tauri 端完善）
-- [ ] 前端 HTTP Client 封装优化（React Query 缓存/重试）
+旧 Phase 1-5 的“功能已完成”结论已经废止；界面或 legacy handler 存在不代表能力
+正确。逐问题状态见 `docs/issue-status.json`，验收门见 `REFACTOR_PLAN.md`。

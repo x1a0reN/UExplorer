@@ -23,7 +23,8 @@ $eventBridge = Read-ProjectFile 'frontend\src-tauri\src\session\event_bridge.rs'
 $sessionManager = Read-ProjectFile 'frontend\src-tauri\src\session\session_manager.rs'
 $sessionModule = Read-ProjectFile 'frontend\src-tauri\src\session\mod.rs'
 $tauriHost = Read-ProjectFile 'frontend\src-tauri\src\lib.rs'
-$frontendApi = Read-ProjectFile 'frontend\src\api\index.ts'
+$frontendApi = (Read-ProjectFile 'frontend\src\api\index.ts') +
+    (Read-ProjectFile 'frontend\src\api\client.ts')
 $schema = Read-ProjectFile 'protocol\v1\schema\payload.schema.json' | ConvertFrom-Json
 
 foreach ($token in @(
@@ -98,14 +99,17 @@ foreach ($token in @(
         'fn event_bridge_diagnostics(', 'let bridge_result = bridges',
         'let session_result = manager', 'SESSION_DISCONNECT_MULTIPLE_FAILURES',
         'coordinator.inner()', '.reserve(pid)',
-        '.manage(Arc::new(SessionManager::new()))',
+        'let sessions = Arc::new(SessionManager::new())', '.manage(sessions)',
+        '.manage(domain_service)',
         '.manage(Arc::new(EventBridgeManager::new()))')) {
     Assert-Contains $tauriHost $token 'Tauri did not retain the managed session/event bridge boundary.'
 }
 foreach ($token in @('std::env::current_dir()', 'is_dev_server_running', 'tauri://localhost/index.html')) {
     Assert-NotContains $tauriHost $token 'Tauri Host reintroduced an implicit filesystem or UI fallback.'
 }
-Assert-Contains $tauriHost 'LOCALAPPDATA_INVALID' 'Tauri Host no longer rejects a relative configuration root.'
+foreach ($token in @('runtime.ini', 'connection.ini', 'save_connection_settings')) {
+    Assert-NotContains $tauriHost $token 'Tauri Host reintroduced legacy endpoint configuration state.'
+}
 foreach ($token in @(
         'new Channel<HostSessionEvent>()', "'subscribe_session_events'",
         "'unsubscribe_session_events'", "'event_bridge_diagnostics'",

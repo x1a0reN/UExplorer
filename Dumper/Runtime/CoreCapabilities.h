@@ -25,7 +25,6 @@ struct RuntimeProbes
 	bool ObjectSnapshotPublished = false;
 	bool FunctionCallServiceEnabled = false;
 	bool NamedPipeListening = false;
-	bool LegacyHttpListening = false;
 };
 
 inline std::shared_ptr<const CapabilitySnapshot> BuildCoreCapabilities(
@@ -119,15 +118,7 @@ inline std::shared_ptr<const CapabilitySnapshot> BuildCoreCapabilities(
 		probes.NamedPipeListening,
 		"PIPE_LISTENER_NOT_READY",
 		"The v1 named-pipe listener is not accepting sessions");
-	builder.Define(
-		"transport.legacy_http",
-		probes.LegacyHttpListening,
-		"LEGACY_HTTP_NOT_LISTENING",
-		"The temporary legacy HTTP transport is not listening");
-
 	builder.Define("status.inspect", true, {}, {}, {"engine.core"});
-	builder.Define("memory.raw_read", true, {}, {}, {"memory.safe"});
-	builder.Define("memory.raw_write", true, {}, {}, {"memory.safe"});
 	builder.Define(
 		"objects.snapshot",
 		probes.ObjectSnapshotPublished,
@@ -135,12 +126,53 @@ inline std::shared_ptr<const CapabilitySnapshot> BuildCoreCapabilities(
 		"No complete immutable object snapshot has been published",
 		{"engine.names", "objects.handles"});
 	builder.Define(
+		"objects.properties",
+		false,
+		"OBJECT_PROPERTY_COMMAND_NOT_IMPLEMENTED",
+		"Validated reflected property commands are not registered",
+		{"objects.handles"});
+	builder.Define(
+		"types.inspect",
+		false,
+		"TYPE_COMMAND_NOT_IMPLEMENTED",
+		"Validated class, struct, enum, and package commands are not registered",
+		{"objects.snapshot"});
+	builder.Define(
+		"memory.raw_read",
+		false,
+		"MEMORY_READ_COMMAND_NOT_IMPLEMENTED",
+		"The bounded raw-memory read command is not registered",
+		{"memory.safe"});
+	builder.Define(
+		"memory.raw_write",
+		false,
+		"MEMORY_WRITE_COMMAND_NOT_IMPLEMENTED",
+		"The bounded raw-memory write command is not registered",
+		{"memory.safe"});
+	builder.Define(
+		"memory.typed",
+		false,
+		"MEMORY_TYPED_COMMAND_NOT_IMPLEMENTED",
+		"Validated typed-memory commands are not registered",
+		{"memory.safe"});
+	builder.Define(
+		"memory.pointer_chain",
+		false,
+		"POINTER_CHAIN_COMMAND_NOT_IMPLEMENTED",
+		"The bounded pointer-chain command is not registered",
+		{"memory.safe"});
+	builder.Define(
 		"call.invoke",
 		probes.FunctionCallServiceEnabled,
 		"FUNCTION_CALL_SERVICE_NOT_READY",
 		"No validated function-call domain command is registered",
 		{"game_thread.executor", "functions.handles"});
-	builder.Define("world.inspect", true, {}, {}, {"engine.world_global", "objects.handles"});
+	builder.Define(
+		"world.inspect",
+		false,
+		"WORLD_COMMAND_NOT_IMPLEMENTED",
+		"Validated world inspection commands are not registered",
+		{"engine.world_global", "objects.handles"});
 	builder.Define(
 		"world.mutate",
 		false,
@@ -176,6 +208,18 @@ inline std::shared_ptr<const CapabilitySnapshot> BuildCoreCapabilities(
 		false,
 		"TARGET_FIXTURE_REQUIRED",
 		"A complete target-generated mapping has not passed semantic validation",
+		{"engine.core"});
+	builder.Define(
+		"dump.dumpspace",
+		false,
+		"TARGET_FIXTURE_REQUIRED",
+		"A target-generated Dumpspace artifact has not passed semantic validation",
+		{"engine.core"});
+	builder.Define(
+		"dump.ida",
+		false,
+		"TARGET_FIXTURE_REQUIRED",
+		"A target-generated IDA mapping has not passed semantic validation",
 		{"engine.core"});
 
 	return builder.Build(context.Generation());

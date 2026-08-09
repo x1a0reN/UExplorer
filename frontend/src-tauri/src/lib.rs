@@ -7,10 +7,14 @@ use tauri::command;
 use tauri::ipc::Channel;
 
 pub mod ipc;
+pub mod services;
 pub mod session;
 
 #[cfg(windows)]
 use crate::ipc::named_pipe_client::CoreRpcClientError;
+#[cfg(windows)]
+use crate::services::domain_service::DomainService;
+use crate::services::domain_service::{DomainRequest, DomainResponse};
 use crate::session::event_bridge::{EventBridgeDiagnostics, EventBridgeManager, EventSink};
 use crate::session::event_hub::{EventFilter, HostEvent};
 #[cfg(windows)]
@@ -141,39 +145,6 @@ fn injection_failure(
         #[cfg(windows)]
         session: None,
     }
-}
-
-fn uexplorer_data_dir() -> Result<PathBuf, String> {
-    let base = std::env::var_os("LOCALAPPDATA")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .ok_or_else(|| {
-            "LOCALAPPDATA_UNAVAILABLE: the Host configuration directory is unavailable".to_string()
-        })?;
-    if !base.is_absolute() {
-        return Err(
-            "LOCALAPPDATA_INVALID: the Host configuration directory must be absolute".to_string(),
-        );
-    }
-    let dir = base.join("UExplorer");
-    fs::create_dir_all(&dir).map_err(|e| format!("Create data dir failed: {e}"))?;
-    Ok(dir)
-}
-
-fn connection_ini_path() -> Result<PathBuf, String> {
-    Ok(uexplorer_data_dir()?.join("connection.ini"))
-}
-
-#[command]
-fn save_connection_settings(port: u16, token: String) -> Result<bool, String> {
-    let path = connection_ini_path()?;
-    let port_mode = if port == 0 { "auto" } else { "fixed" };
-    let content = format!(
-        "[Connection]\nPreferredPort={}\nToken={}\nPortMode={}\n",
-        port, token, port_mode
-    );
-    fs::write(&path, content).map_err(|e| format!("Write connection settings failed: {e}"))?;
-    Ok(true)
 }
 
 // Scan all running processes via Windows API and filter likely Unreal/game processes.
@@ -628,6 +599,25 @@ async fn inject_and_connect(
         PipeConnectionState::NotAttempted,
         CoreReadinessState::NotChecked,
     ))
+}
+
+#[cfg(windows)]
+#[command]
+async fn domain_request(
+    service: State<'_, Arc<DomainService>>,
+    request: DomainRequest,
+) -> Result<DomainResponse, String> {
+    let service = Arc::clone(service.inner());
+    tauri::async_runtime::spawn_blocking(move || service.execute(request))
+        .await
+        .map_err(|error| format!("HOST_TASK_FAILED: {error}"))
+}
+
+#[cfg(not(windows))]
+#[command]
+async fn domain_request(request: DomainRequest) -> Result<DomainResponse, String> {
+    let _ = request;
+    Err("PLATFORM_UNSUPPORTED: Core domain commands are only supported on Windows".to_string())
 }
 
 #[cfg(windows)]
@@ -1958,8 +1948,13 @@ mod tests {
 pub fn run() {
     let builder = tauri::Builder::default();
     #[cfg(windows)]
+    let sessions = Arc::new(SessionManager::new());
+    #[cfg(windows)]
+    let domain_service = Arc::new(DomainService::new(Arc::clone(&sessions)));
+    #[cfg(windows)]
     let builder = builder
-        .manage(Arc::new(SessionManager::new()))
+        .manage(sessions)
+        .manage(domain_service)
         .manage(Arc::new(TargetOperationCoordinator::default()))
         .manage(Arc::new(EventBridgeManager::new()));
 
@@ -1967,13 +1962,13 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             scan_ue_processes,
             inject_and_connect,
+            domain_request,
             session_diagnostics,
             activate_session,
             subscribe_session_events,
             unsubscribe_session_events,
             event_bridge_diagnostics,
             disconnect_session,
-            save_connection_settings,
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {

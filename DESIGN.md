@@ -12,22 +12,22 @@
 React -> Tauri invoke/event -> Rust Host -> Windows Named Pipe RPC -> Core DLL -> Unreal Engine
 ```
 
-- Core DLL 将移除可达的 HTTP、SSE 和 WebSocket 运行路径。
-- 外部 HTTP/WebSocket 若启用，只能位于 Rust Host，并复用同一 DomainService。
+- Core DLL 发布构建已移除可达的 HTTP、SSE 和 WebSocket 运行路径；旧源文件只作历史证据保留。
+- 当前未提供外部 HTTP/WebSocket Gateway；未来若显式启用，只能位于 Rust Host，并复用同一 DomainService。
 - 不保留 HTTP/IPC 双运行栈，不做端口、Offset、执行线程、协议或压缩算法的静默 fallback。
 
 | 重构阶段 | 当前状态 | 已有证据 | 未完成门槛 |
 |---|---|---|---|
 | R0 证据与测试地基 | 已完成 | 128 项问题可跟踪；65 条 API v1 路由快照；IPC v1 契约；C++ framing/queue/backpressure/shutdown harness；Rust protocol/Fake Core 测试；前端 lint/test/build 通过；Windows CI 三个 job 通过 | 目标 UE fixture 属于 R7 发布门，不再阻塞测试地基本身 |
-| R1 安全止血 | 进行中 | 注入路径已止血；GameThread 使用拥有参数的 128 项有界 MPSC、单调 deadline、终态、显式取消与 drain；ProcessEvent SEH 转结构化失败；Hook restore/in-flight/unload refusal；HTTP worker 全部 join、socket timeout、精确 bind、SendAll；危险 reconnect/raw transform/legacy Watch/假 WS Console 已禁用；已移除已定位的 property/DataTable/FFieldClass 猜值路径；USMAP 容器通过 C++/Rust golden consumer | Hook/注入目标进程 fixture；剩余硬编码布局与 offset capability 验证、目标生成 USMAP 语义验证与 dump 关闭边界 |
-| R2 CoreRuntime/能力模型 | 进行中 | CoreRuntime 状态机、加密随机 session 与 request lease；一次性发布的 immutable EngineContext/identity/name-layout context；带 candidate/confidence 的 offset validation report；GWorld/GEngine 唯一稳定 typed data-slot 解析；只依赖冻结 profile 与 SafeMemory 的 NamePool/Chunked NameArray 严格名称 codec；依赖式 CapabilityRegistry；Runtime-owned GameThreadExecutor、IGameThreadPump/PostRender backend 与 thread/tick/stall 诊断；ShutdownCoordinator；集中式 SafeMemory 与可执行页写策略；受边界校验的 x64 PE/LDR、pattern 与可读节版本探测；稳定 Object/FunctionHandle 契约、生产 identity source 与执行点重验证；`EngineFacade` 单一引擎边界、原子 immutable Snapshot store、生产 object/path metadata source 与 capture/validate/publish 三阶段有界 producer；Snapshot producer 已通过独占且可排空的 frame client 接入 PostRender；transport-neutral CoreCommandService 已承载 status、handle issue 和 generation-bound object snapshot paging；Rust Host 具备严格 page assembler、原子 SnapshotCache 与 kind/path/package/address/token-prefix 索引；VTable Hook RAII owner 与 callback quiet drain；危险 UObject 属性写及 index-only 调用入口已关闭 | identity/name/snapshot/global pointer 的真实目标与 GC churn fixture、目标进程 LDR/版本 fixture、SnapshotCache 真实目标规模/GC fixture、其余领域 command、剩余 Off/Settings 迁移 |
-| R3 Named Pipe/Rust Host | 进行中 | 共享严格 RPC payload/limit 契约；Core 已接入安全、可 join 的 overlapped Named Pipe server 与 1024 项有界 Event writer；Rust `CoreRpcClient` 已通过真实 NPFS 完成服务端 PID 核验、1-byte 分片、请求/并发 Ping、deadline/cancel、事件背压、全阶段断线、显式重连与精确 Shutdown；C++/Rust deterministic frame fuzz 覆盖 1-byte/粘连/任意截断/4096 组 mutation；真实跨语言进程 fixture 已证明 `SessionManager -> C++ Core` 的 Welcome/Event/Snapshot/Host 索引/Shutdown；Host `EventHub` 已实现有界 fan-out、过滤、精确 replay、Core/Host drop 诊断；multi-PID `SessionManager`、PID-scoped `TargetOperationCoordinator` 与 `EventBridgeManager` 已注册为 Tauri managed state；注入结果已严格串联 DLL load、Pipe connected 与 Core Ready；Tauri `Channel` 事件桥有界、可诊断且拥有全部 worker 生命周期 | 成功/超时/错误架构/PID 复用/重复加载的真实注入与 UE 目标进程 fixture |
-| R4 通信原子切换 | 未开始 | ADR 已接受 | React 只走 Tauri，Core 发布构建不含可达网络栈 |
+| R1 安全止血 | 实现阶段完成；R7 验证待办 | 注入路径已止血；GameThread 使用拥有参数的 128 项有界 MPSC、单调 deadline、终态、显式取消与 drain；ProcessEvent SEH 转结构化失败；Hook restore/in-flight/unload refusal；危险 reconnect/raw transform/legacy Watch/假 WS Console 已禁用；已移除已定位的 property/DataTable/FFieldClass 猜值路径；USMAP 容器通过 C++/Rust golden consumer | Hook/注入 UE 目标 fixture；剩余硬编码布局与 offset capability 验证、目标生成 USMAP 语义验证与 dump 关闭边界 |
+| R2 CoreRuntime/能力模型 | 实现阶段完成；R5/R7 验证待办 | CoreRuntime 状态机、加密随机 session 与 request lease；一次性发布的 immutable EngineContext/identity/name-layout context；带 candidate/confidence 的 offset validation report；依赖式 CapabilityRegistry；Runtime-owned GameThreadExecutor/PostRender backend；ShutdownCoordinator；SafeMemory；稳定 Handle；`EngineFacade`、immutable Snapshot store、生产 snapshot source；transport-neutral CoreCommandService；Rust Host SnapshotCache/索引；VTable Hook RAII owner 与 callback quiet drain | 其余领域 command 属于 R5；真实 identity/name/snapshot/global-pointer、GC churn、LDR/版本与目标规模证据属于 R7 |
+| R3 Named Pipe/Rust Host | 实现阶段完成；R7 验证待办 | 共享严格 RPC 契约；安全且可 join 的 overlapped Named Pipe server/client；PID 核验、deadline/cancel、背压、断线、显式重连和精确 Shutdown；C++/Rust framing fuzz；真实跨语言 Core/Host 进程 fixture；EventHub、multi-PID SessionManager、PID-scoped 操作协调器与 Tauri Channel bridge；真实 x64/x86 注入矩阵 | UE 目标进程连接、Hook/GC/卸载环境矩阵属于 R7 |
+| R4 通信原子切换 | 已完成 | React 领域调用只经 Tauri `domain_request`，事件只经 Tauri Channel；Rust `DomainService` 使用显式 operation registry、PID/session 绑定和稳定错误；Core release project 不编译 `Server/`/`API/` 且不链接 `ws2_32`；二进制契约确认无网络 import/legacy marker；跨语言 fixture 覆盖 DomainService -> SessionManager -> C++ Core | 无；未实现领域按 capability 明确失败，功能实现进入 R5 |
 | R5 领域正确性 | 未开始 | 问题清单与验收矩阵已建立 | Object/Memory/Call/World/Watch/Hook/Blueprint/Dump 逐项验证 |
 | R6 前端状态重构 | 未开始 | UI lint 已清零，基础 Vitest 已建立 | session store、查询取消、BigInt 地址、真实能力 UI |
 | R7 发布硬化 | 未开始 | 无 | 性能、压力、目标 fixture、文档和发布门全部通过 |
 
-当前不能宣称“可用”的既有功能包括：Watch（旧 polling/SSE 路径已返回 unavailable）、WebSocket Console（端点已禁用）、Actor Transform 写入（已返回 unavailable）、未生效 Dump option、尚未由目标进程生成并完成语义验证的完整 USMAP、未完成 capability 报告的 Offset，以及未经过真实目标进程卸载 fixture 的 Hook。旧 HTTP 仅作为 R4 切换前的临时兼容层，不是目标架构。
+当前不能宣称“可用”的既有功能包括：Watch/Hook producer、Console、Actor Transform 写入、属性读写、Memory/Call/World/Blueprint/Dump 等尚未迁移的领域命令、尚未由目标进程生成并完成语义验证的完整 USMAP、未完成 capability 报告的 Offset，以及未经过真实目标进程卸载 fixture 的 Hook。Host 对这些命令返回稳定的 capability 错误，不会退回旧 HTTP。旧 HTTP/SSE/WS 源码未删除，但已从 release project 和运行入口隔离。
 
 ### 0.1 R1 注入止血状态
 
@@ -52,7 +52,7 @@ React -> Tauri invoke/event -> Rust Host -> Windows Named Pipe RPC -> Core DLL -
 - 旧 Hook monitoring 仍含锁、JSON 和网络热路径，因此当前 capability 被硬关闭，前端无可达入口；只有无监控逻辑的 PostRender game-thread pump 保留。它必须等 R5 的预分配有界 collector、drop 指标和 Host EventHub 完成后才能重新开放。
 - `CoreHarness` 已覆盖 framing、1-byte 分片、合并输入的单残帧缓存、协商 payload 上限、256 帧 × 8 种分片宽度、所有截断位置和 4096 组 deterministic header/payload mutation、加密随机 Core session、真实 Windows Named Pipe 名称/DACL/双方 PID、Hello 前空断连/残 header/残 payload/坏 magic/major/kind/flags/length、Hello/Welcome、Ready 后空闲断连、transport-neutral status/handle commands、Pipe request/ticket cancel/Ping/Pong/Shutdown drain、1024 项非阻塞 Core Event queue/writer/sequence/drop 诊断、三页 immutable snapshot 拉取、严格 cursor/limit、generation 漂移拒绝、Handle 输入拒绝/取消/lease drain、USMAP production writer/golden/独立解析、pattern 首个/跳过/末尾匹配、AMD64 PE 头与节边界、跨 64 KiB 窗口的可读节版本探测、GWorld/GEngine 唯一/重复/歧义/错误节/不稳定候选、跨页 no-access 范围、队列背压、GameThread owned work/ticket/超时/显式取消/C++ exception/SEH、生产 object/path snapshot metadata、空槽/读取失败区分、outer cycle、slot/count 变化拒绝、PostRender frame client 撤销与在途 drain、128 生产者容量、1000 次 HTTP connect/disconnect、占用端口无 fallback 和慢客户端 shutdown；Rust protocol 测试从同一 fixture 独立验证 USMAP 容器。`tests/contracts/verify-core-safety.ps1`、`tests/contracts/verify-core-runtime.ps1`、`tests/contracts/verify-host-snapshot.ps1`、`tests/contracts/verify-host-session.ps1`、`tests/contracts/verify-rpc-session.ps1`、`tests/contracts/verify-named-pipe.ps1`、`tests/contracts/verify-platform-safety.ps1` 与 `tests/contracts/verify-offset-discovery.ps1` 固化静态不变量。
 
-本阶段最新本地证据：VS2026 `Release|x64` Core 与 `/W4 /WX` harness 构建通过；Core harness 已通过真实本机 NPFS fixture，验证规范 PID 管道名、current-user-only DACL、服务端读取后客户端 SID 校验、客户端查询服务端 PID、严格握手、全阶段断连/坏 header、领域调用、reader/worker 并行取消、Core Event、heartbeat、完整 Shutdown payload flush 与 listener/request/event writer 的 joinable stop，同时覆盖稳定 Handle、严格 snapshot page、SafeMemory、PE/pattern/offset、生产 snapshot source 与 PostRender drain。Rust protocol 10 项、Tauri Host 52 项、C++ Core/Rust SessionManager 跨语言进程 fixture 1 项、真实注入进程矩阵 1 项、FakeCore 5 项测试及三者 Clippy `-D warnings` 通过；Host 的真实 Windows Pipe fixture 额外覆盖服务端 PID 在 Hello 前核验、1-byte 响应分片、Welcome header/payload 中断、Welcome 后紧随事件、Ready 空闲断连、malformed frame、并发 Ping 关联、请求、deadline/Cancel 单终态、1024 项事件队列溢出计数、溢出后的 transport drop 快照且 RPC 不阻塞、请求中断、Shutdown ack 丢失、同 PID 显式重连和 worker join。跨语言 fixture 使用真实 C++ Core event/snapshot store，通过 Host EventHub/SnapshotCache 查询后精确关闭并要求子进程 0 退出。注入矩阵使用真实 x64/x86 子进程、真实 `CreateRemoteThread + LoadLibraryW` 和被注入的 Named Pipe DLL，覆盖成功/Core Ready、重复加载、错误 DLL/目标架构、过期 start-time 身份、`DllMain` 返回 FALSE、远程线程超时以及超时加载完成后的安全 reconnect；不使用脚本或替代注入法。Host 单元测试还覆盖 EventHub 过滤/replay/Core+transport+subscriber drop、多 PID 会话隔离、连接 reservation、PID 级注入 admission 及 RAII 释放、不可变目标进程身份、Welcome target identity、无 Shutdown 的身份失配 transport abort、异常事件隔离、snapshot 拉取/查询、generation 变化重拉，以及 Tauri event bridge 的精确退订、失败诊断、PID 隔离、ID 边界和 panic 后全量 join。9 项 SessionManager 单元测试此前连续执行 20 轮无失败。11 项静态契约、`npm run lint`、4 项 Vitest 与 `npm run build` 通过。UE 目标的 FUObjectItem serial/name/snapshot、GWorld/GEngine candidate、GC churn、模块 LDR 遍历、最小化/加载期间 PostRender、Hook 恢复、受限安全描述符下的 access-denied、内存保护失败和完整目标生成 USMAP 语义验证仍是明确未执行项，不能用通用注入 fixture 代替。
+本阶段最新本地证据：VS2026 `Release|x64` Core 与 `/W4 /WX` harness 构建通过；Core harness 已通过真实本机 NPFS fixture，验证规范 PID 管道名、current-user-only DACL、服务端读取后客户端 SID 校验、客户端查询服务端 PID、严格握手、全阶段断连/坏 header、领域调用、reader/worker 并行取消、Core Event、heartbeat、完整 Shutdown payload flush 与 listener/request/event writer 的 joinable stop，同时覆盖稳定 Handle、严格 snapshot page、SafeMemory、PE/pattern/offset、生产 snapshot source 与 PostRender drain。Rust protocol 10 项、Tauri Host 56 项、C++ Core/Rust SessionManager/DomainService 跨语言进程 fixture 1 项、真实注入进程矩阵 1 项、FakeCore 5 项测试及 Clippy `-D warnings` 通过；Host 的真实 Windows Pipe fixture 额外覆盖服务端 PID 在 Hello 前核验、1-byte 响应分片、Welcome header/payload 中断、Welcome 后紧随事件、Ready 空闲断连、malformed frame、并发 Ping 关联、请求、deadline/Cancel 单终态、1024 项事件队列溢出计数、溢出后的 transport drop 快照且 RPC 不阻塞、请求中断、Shutdown ack 丢失、同 PID 显式重连和 worker join。跨语言 fixture 使用真实 C++ Core event/snapshot store，通过 Host DomainService/EventHub/SnapshotCache 查询后精确关闭并要求子进程 0 退出。注入矩阵使用真实 x64/x86 子进程、真实 `CreateRemoteThread + LoadLibraryW` 和被注入的 Named Pipe DLL，覆盖成功/Core Ready、重复加载、错误 DLL/目标架构、过期 start-time 身份、`DllMain` 返回 FALSE、远程线程超时以及超时加载完成后的安全 reconnect；不使用脚本或替代注入法。12 项静态契约、release DLL 网络 import/marker 检查、`npm run lint`、7 项 Vitest 与 `npm run build` 通过。UE 目标的 FUObjectItem serial/name/snapshot、GWorld/GEngine candidate、GC churn、模块 LDR 遍历、最小化/加载期间 PostRender、Hook 恢复、受限安全描述符下的 access-denied、内存保护失败和完整目标生成 USMAP 语义验证仍是明确未执行项，不能用通用注入 fixture 代替。
 
 ### 0.3 R2 CoreRuntime 与能力模型状态
 
@@ -86,7 +86,7 @@ R2 尚未完成：`FUObjectItem` identity/name/snapshot 与 GWorld/GEngine 唯�
 
 - Core `NamedPipeRpcServer` 已绑定 `\\.\pipe\UExplorer\v1\<pid>`，使用 `FILE_FLAG_OVERLAPPED`、`FILE_FLAG_FIRST_PIPE_INSTANCE`、`PIPE_REJECT_REMOTE_CLIENTS` 与仅当前用户 SID 的保护 DACL；读取 Hello 后再通过 `ImpersonateNamedPipeClient`/`EqualSid` 验证客户端 SID，并记录 `GetNamedPipeClientProcessId`。真实 harness 客户端同时用 `GetNamedPipeServerProcessId` 验证服务端 PID。协议 reader 每次只按已验证 header 分配 payload，并把单次 I/O 限制在 64 KiB。
 - listener、4 个 request worker 和独立 Event writer 均由 `std::thread` 显式持有；每 session 最多 256 个 pending request。reader 独立于同步领域 worker，因此可在 `objects.handle.issue` 等待 PostRender 时接收 Cancel，并用同一 request ID 映射到 `GameThreadTicket`。Event producer 只进入 1024 项有界 DropOldest 队列，writer 才执行 JSON/frame/overlapped write；事件使用 uint53 sequence、64 KiB payload 上限和累计 `dropped_before`，慢 Host 不会阻塞 producer/game thread，Stop 会唤醒并 join writer。这里是 R5 Watch/Hook collector 的生产 transport adapter，不代表尚未实现的 Watch/Hook producer 已开放。worker deadline 从 frame 收到时开始计算，进入领域服务前扣除 transport queue 时间；慢 Host 只会占住有界 worker/pending 配额，不在 Hook/game thread 上执行写入。
-- Main 在安装 Hook 前先完成 Pipe bind；capability 只根据真实 listener 发布，Runtime 与 PostRender readiness 同时满足后才 `OpenAdmissions`。关闭顺序先停止 Pipe、取消 ticket、唤醒 overlapped I/O 并 join listener/worker，再拆除旧 HTTP、Hook、snapshot/facade 和 request lease。Host Shutdown 必须先收到 request ID/session/reason 完全一致的回执，随后触发主关闭；未读回执通过受控 flush 保持完整，Stop 会中断同步 flush，无法排空则拒绝卸载。
+- Main 在安装 Hook 前先完成 Pipe bind；capability 只根据真实 listener 发布，Runtime 与 PostRender readiness 同时满足后才 `OpenAdmissions`。关闭顺序先停止 Pipe、取消 ticket、唤醒 overlapped I/O 并 join listener/worker，再恢复 PostRender Hook、排空 snapshot/facade 和 request lease。Host Shutdown 必须先收到 request ID/session/reason 完全一致的回执，随后触发主关闭；未读回执通过受控 flush 保持完整，Stop 会中断同步 flush，无法排空则拒绝卸载。
 - Rust `CoreRpcClient` 只打开规范 PID Pipe，使用 overlapped read/write 与 `SECURITY_IDENTIFICATION`，并在发送 Hello 前要求 `GetNamedPipeServerProcessId` 与选中 PID 精确相等；没有 TCP、`runtime.ini`、Token 或备用 Pipe 路径。一个 owned/joinable I/O worker 独占 `CoreRpcSession`，串行化状态迁移和写入；命令队列固定 256 项，transport read 固定 64 KiB，事件入口固定 1024 项，慢消费者只增加 Host drop 计数而不阻塞 reader/Core。
 - Host request completion 由 request ID 精确关联，调用 deadline 从进入有界 Host command queue 时开始，worker 只把剩余毫秒数发给 Core；deadline 通过同一 session 状态机生成 Cancel，显式取消与超时都只完成调用方一次。断线会完成所有 pending 而不是悬挂；任何 worker 退出路径都会先取消并 settle 在途 overlapped read/write，再释放固定地址的 `OVERLAPPED`/buffer 并 join。精确 Shutdown 回执、服务端 PID 错配、Welcome header/payload 中断、Ready 空闲断连、malformed frame、请求中断线、Shutdown ack 丢失、Welcome 后粘连事件、1-byte 分片、并发 Ping、事件溢出以及关闭后同 PID 新连接均由真实 Windows Pipe fixture 验证。
 - Host `EventHub` 每个 Core session 独立存在，最多 64 个订阅者、每订阅 1..1024 个事件、保留最近 1024 个事件；单事件序列化上限为 64 KiB，历史和订阅队列共享 `Arc<EventPayload>`，避免按订阅者复制大型 JSON。生产侧只使用 `try_send`；`CoreRpcClient` 把 transport 入口累计 drop 快照随下一个成功入队的事件传递，慢订阅者再独立累计 subscriber drop，二者合并为 `host_dropped_before`，不会阻塞 Pipe reader 或其他订阅者。事件必须满足 session、uint53 sequence/timestamp/drop、严格递增 sequence、非回退 Core/transport drop，且 sequence gap 必须由新增 Core 或 transport drop 解释；按 kind、`watch_id`、`hook_name` 精确过滤，replay 保留对应 transport drop 快照，缺失或容量不足返回明确错误而不静默截断。
@@ -95,20 +95,32 @@ R2 尚未完成：`FUObjectItem` identity/name/snapshot 与 GWorld/GEngine 唯�
 - `core_process_fixture` 启动独立的真实 C++ `CoreHarness.exe --host-session-fixture` 进程，以其真实 PID 命名 NPFS endpoint；Rust `SessionManager` 完成 peer PID/Welcome/Core Ready，消费 Core Event，分页拉取 C++ `EngineSnapshotStore` 并建立 Host 查询索引，再发送精确 Shutdown 并要求 C++ listener/request/event 线程全部 join 后进程以 0 退出。CI Rust job 必须先构建该 C++ fixture；fixture 缺失、超时或任一跨语言字段不匹配均硬失败，不 skip、不替换为 FakeCore。
 - `injection_process_fixture` 构建真实 x64/x86 target EXE，以及 Ready、750 ms 慢加载、拒绝加载三种 DLL；测试直接调用生产 `inject_and_connect_target`，因此实际执行 canonical PE/identity/module 检查、最小进程权限、目标地址解析、`VirtualAllocEx`/`WriteProcessMemory`/`CreateRemoteThread`/`GetExitCodeThread`、module re-enumeration 和 `SessionManager` Welcome。矩阵要求成功后 Pipe/Core Ready，第二次调用明确 `AlreadyLoaded`，错误架构与过期 start-time 在远程写入前失败，拒绝 DLL 返回 `LOAD_LIBRARY_RETURNED_NULL`；100 ms wait 超时会返回 `dll=indeterminate` 而不谎报加载失败，资源转交 deferred cleanup，并在 750 ms load 完成后可明确 reconnect。CI 缺少任一二进制即硬失败，不执行 legacy PowerShell 注入器或其他 fallback。
 
-R3 的协议、Core/Host transport、SessionManager、EventHub、真实跨语言 snapshot/event fixture、frame/断线矩阵与通用目标进程真实注入矩阵均已落地，R3 实现阶段完成。UE 4.26/4.27/5.x 的引擎行为、受限进程权限和完整卸载仍是 R7 目标环境门禁，不能由通用 target EXE 代替；React 领域查询仍走 R4 前的旧 HTTP 临时兼容层，因此产品主链路尚未完成原子切换。
+R3 的协议、Core/Host transport、SessionManager、EventHub、真实跨语言 snapshot/event fixture、frame/断线矩阵与通用目标进程真实注入矩阵均已落地，R3 实现阶段完成。UE 4.26/4.27/5.x 的引擎行为、受限进程权限和完整卸载仍是 R7 目标环境门禁，不能由通用 target EXE 代替。
+
+### 0.5 R4 通信原子切换状态
+
+- `Dumper/Main.cpp` 只创建 PID-scoped `NamedPipeRpcServer` 和生产 `PostRenderHook`；`UExplorerCore.vcxproj` 不再编译 `Server/HttpServer.cpp` 或任何 `API/*.cpp`，也不链接 `ws2_32`。旧源文件按“不删除”约束保留，并由 `Dumper/legacy/README.md` 明确标为非运行归档。
+- `frontend/src-tauri/src/services/domain_service.rs` 是桌面领域入口：先用显式白名单拒绝未知 operation，再解析显式 PID 或 active session；status 与 immutable snapshot 查询走真实 SessionManager/Core，未实现领域只返回 `CAPABILITY_UNAVAILABLE`。若 Core 错误宣称 capability 可用而 Host 无命令，则返回 `DOMAIN_COMMAND_NOT_REGISTERED`，不伪造数据。
+- `frontend/src/api/client.ts` 只调用 Tauri `domain_request`/注入/session 命令；实时事件只使用 `tauri::ipc::Channel`。React 源码中已无 `fetch`、`EventSource`、`WebSocket`、localhost、Token、端口恢复、SSE polling fallback 或 `runtime.ini` 依赖。
+- `verify-transport-cutover.ps1` 同时审计 Main/project/Host/React 静态边界和 release DLL import/marker；跨语言 `core_process_fixture` 通过 Rust DomainService 调用真实 C++ Core，覆盖 status、对象计数/搜索、capability unavailable 与未知 operation。Core harness 仍编译 legacy HttpServer 仅用于回归其历史生命周期，不代表 release Core 可达。
+- R4 不把未实现功能包装为成功。Object/Type 仅返回 immutable snapshot 中真实存在的字段；Memory/Call/World/Watch/Hook/Blueprint/Dump 等进入 R5。当前没有外部 Gateway，也没有 HTTP/IPC 双栈兼容期。
 
 ## Context
 
 基于 Dumper-7 的实现原理，设计一个桌面端 Unreal Engine SDK Dump + 实时探索工具。
 - 主要功能：SDK Dump（类似 Dumper7）
 - 辅助功能：Live Explorer（类似 UE4SS / UnityExplorer，但更强大）
-- 当前实现：Tauri 2 + React + TS + Vite 前端，C++ DLL 核心（注入/劫持），DLL 内 HTTP 通信
-- 重构目标：React/Tauri -> Rust Host -> Named Pipe -> Core DLL；DLL 不再承担网络协议
+- 当前实现：Tauri 2 + React + TS + Vite 前端，Rust Host 领域/session 层，C++ DLL 核心（注入/劫持），Windows Named Pipe RPC 通信
+- 当前边界：React/Tauri -> Rust Host -> Named Pipe -> Core DLL；DLL 不承担 HTTP/SSE/WebSocket
 - 第一阶段：功能设计 + 页面功能设计（用户负责 UI 设计）
 
 ---
 
-## 一、系统架构
+## 一、历史系统架构（R4 前，非当前运行路径）
+
+> 从本节到旧 Phase 规划主要保留最初产品设计和迁移对照，其中 HTTP、SSE、
+> WebSocket、Token、port 以及“已完成”描述均不是当前事实。当前边界、能力和
+> 进度只以第 0 节、`REFACTOR_PLAN.md` 与 issue register 为准。
 
 ```
 ┌─────────────────────────────────────────────┐
@@ -519,7 +531,11 @@ R3 的协议、Core/Host transport、SessionManager、EventHub、真实跨语言
 
 ---
 
-## 四、HTTP API 设计
+## 四、Legacy HTTP API 设计（历史快照，非当前运行路径）
+
+> 本章记录 R4 前的 API v1 表面，供迁移对照和 contract drift 检查。
+> Release Core 不编译这些适配器；当前桌面调用以 `DomainService` operation registry
+> 和 `protocol/v1` 为准，不得从本章恢复 HTTP/SSE/WebSocket 或 Token/port 配置。
 
 ### 4.1 协议约定
 
@@ -737,7 +753,10 @@ D:\Projects\UExplorer\
 
 ---
 
-## 六、开发阶段规划
+## 六、历史开发阶段规划（R0-R7 之前的记录）
+
+> 本章的“已完成”只表示旧实现曾存在。当前进度只以第 0 节、
+> `REFACTOR_PLAN.md` 和 `docs/issue-status.json` 的验证状态为准。
 
 ### Phase 1: 基础框架（已完成）
 

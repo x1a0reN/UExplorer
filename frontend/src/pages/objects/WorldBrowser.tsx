@@ -62,7 +62,7 @@ export default function WorldBrowser({ onSwitchMode }: BrowserPageProps) {
 
     const loadActors = useCallback(async () => {
         try {
-            const res = await api.getWorldActors(0, 200, search, classFilter);
+            const res = await api.getWorldActors(0, 128, search, classFilter);
             if (res.success && res.data) setActors(res.data.items);
         } catch { /* ignore */ }
     }, [classFilter, search]);

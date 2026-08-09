@@ -54,8 +54,8 @@
 	  "status": "in_progress",
 	  "verification": [
 		"2026-08-09: DESIGN uses evidence-driven R0-R7 status and explicitly lists disabled/unverified capabilities",
-		"2026-08-09: PROJECT_MAP now leads with the target React -> Rust Host -> Named Pipe -> Core boundary and labels in-DLL HTTP/API code as legacy",
-		"Remaining historical sections still require R4/R7 reconciliation against the final runtime"
+		"2026-08-09: DESIGN, README, PROJECT_MAP, and AGENTS now describe the completed R4 Tauri/Named-Pipe-only desktop boundary and label retained HTTP/API material as non-release history",
+		"R5 domain behavior and final R7 target evidence still require documentation reconciliation"
 	  ]
 	},
     "ENG-005": {
@@ -72,12 +72,13 @@
         "2026-08-09: SafeMemory centralizes guarded range validation, SEH copy, protection restoration, executable-write policy, and atomic hook pointer exchange",
         "2026-08-09: VTableHookToken and CallbackBarrier replace manual Hook ownership flags and callback counters; ownership is allocated before CAS and status reads use atomic projections",
         "2026-08-09: ObjectArrayIdentitySource establishes a production SafeMemory/game-thread identity boundary for the explicit Epic 64-bit FUObjectItem profile",
-        "2026-08-09: transport-neutral CoreCommandService now owns status and handle-issue business logic; StatusApi is only a legacy HTTP adapter",
+		"2026-08-09: transport-neutral CoreCommandService owns status, handle, and snapshot business logic; legacy HTTP adapters are excluded from the release project",
         "2026-08-09: production handle validation captures its offsets from one immutable EngineContext and no longer reads mutable Off globals or a reconfigurable identity singleton",
 		"2026-08-09: EngineNameCodec isolates NamePool/chunked-array decoding behind immutable layout data and SafeMemory without runtime Off/Settings reads",
 		"2026-08-09: EngineFacade now binds one session/context/identity generation and owns the immutable EngineSnapshotStore used by future domain services",
 		"2026-08-09: EngineFacade uniquely owns the optional budgeted snapshot producer and refuses teardown until its pump callback barrier drains",
 		"2026-08-09: ObjectArraySnapshotSource is a production metadata boundary built only from stable handles, immutable context offsets, EngineNameCodec, and SafeMemory; Main owns and drains its PostRender frame-client attachment",
+		"2026-08-09: Rust DomainService and the split TypeScript Tauri client replace the frontend REST/SSE/WebSocket/configuration monolith at the process boundary",
         "Remaining legacy domain/API monoliths and direct Off/Settings consumers still require migration"
       ]
     },
@@ -171,9 +172,9 @@
     "LIFE-009": {
       "status": "in_progress",
       "verification": [
-        "2026-08-09: Rust Host now requires a non-empty LOCALAPPDATA and returns LOCALAPPDATA_UNAVAILABLE instead of writing configuration under the current directory/temp",
+        "2026-08-09: runtime.ini and connection.ini transport persistence were removed entirely; Pipe session discovery is live and PID scoped",
         "2026-08-09: the debug app no longer probes Vite and silently navigates to embedded assets when the configured devUrl is unavailable",
-        "Core configuration directory creation and write-result propagation remain pending"
+        "Dumper Settings::Config still searches/writes current-directory, DLL-directory, and global paths without typed write-result propagation"
       ]
     },
     "PROC-001": {
@@ -186,8 +187,8 @@
     "LIFE-001": {
       "status": "verified",
       "verification": [
-        "2026-08-09: HTTP client workers are owned joinable threads and all active sockets are interrupted before join",
-        "Core harness completes 1000 connect/disconnect cycles plus a slow-client Stop and asserts zero retained workers"
+        "2026-08-09: release Core no longer compiles or reaches HttpServer; the production transport owns and joins every Named Pipe listener/request/event worker",
+        "Core harness retains the legacy 1000 connect/disconnect and slow-client Stop regression solely to prove archived code cannot outlive its owner"
       ]
     },
     "LIFE-002": {
@@ -201,7 +202,7 @@
     "LIFE-003": {
       "status": "verified",
       "verification": [
-        "2026-08-09: route registration has no hook side effect; the required PID-scoped Named Pipe bind succeeds before InitHooks",
+        "2026-08-09: Main has no route registration; the required PID-scoped Named Pipe bind succeeds before production PostRenderHook::Install and admissions open only after factual Ready",
         "Startup failure follows the common drain path and refuses FreeLibraryAndExitThread when worker/hook drain cannot be proven"
       ]
     },
@@ -217,7 +218,14 @@
         "2026-08-09: Host can request shutdown through the authenticated Pipe session and Core sends an exact correlated acknowledgement before triggering its owned shutdown path",
         "2026-08-09: Rust CoreRpcClient waits for that exact acknowledgement, cancels/settles overlapped I/O, and joins its owned worker; disconnect completes pending callers",
         "2026-08-09: Named Pipe listener/workers and pending GameThread tickets are cancelled and joined before Hook/facade teardown",
-        "F6 and the default AllocConsole path remain until the R4 lifecycle cutover"
+        "Default AllocConsole and the legacy F6 trigger remain and must be removed before this issue can be verified"
+      ]
+    },
+    "LIFE-006": {
+      "status": "verified",
+      "verification": [
+        "2026-08-09: release Core, Rust Host, and React no longer read or write runtime.ini/connection.ini; runtime identity is obtained only from the live PID-scoped Pipe Welcome/session",
+        "2026-08-09: transport cutover contract forbids runtime endpoint persistence, port/token settings, and endpoint recovery in the release path"
       ]
     },
     "LIFE-007": {
@@ -233,6 +241,13 @@
 		"2026-08-09: startup version detection now inspects a validated AMD64 PE image and scans only PE sections marked readable",
 		"2026-08-09: bounded 64 KiB SafeMemory windows with overlap replace the raw SizeOfImage pointer walk and return layered probe/PE/memory/native errors",
 		"Core harness covers a marker crossing a read-window boundary, malformed markers, invalid PE bounds, and a no-access readable-section failure"
+	  ]
+	},
+	"LIFE-010": {
+	  "status": "verified",
+	  "verification": [
+		"2026-08-09: the desktop Core/Host Pipe uses OS peer identity and negotiated session IDs rather than a shared API token",
+		"2026-08-09: release DLL binary verification rejects uexplorer-dev, X-UExplorer-Token, HTTP, SSE, WebSocket, and network-library markers; no external Gateway is shipped"
 	  ]
 	},
 	"PLATFORM-001": {
@@ -440,7 +455,7 @@
 		"2026-08-09: ObjectArray rejects index == Num(), uses checked module-offset conversion, and applies configured pointer decryption consistently in manual fixed/chunked paths",
 		"2026-08-09: objects.snapshot.page enforces an exact cursor/limit object, rejects unknown filter fields and non-integral/out-of-range values, caps limit at 128, and reports exact snapshot-wide source/record/skipped totals",
 		"2026-08-09: Host SnapshotIndex queries cap limit at 128, validate typed/canonical filters, bind cursor to generation and normalized query fingerprint, and report separate exact snapshot_record_count/matched_count",
-		"Legacy routes still require retirement and Tauri command adapters remain pending"
+		"2026-08-09: legacy routes are excluded from release and Tauri DomainService exposes only strict snapshot-backed object queries; remaining non-snapshot domain schemas keep this issue in progress"
       ]
     },
 	"OBJ-009": {
@@ -451,7 +466,8 @@
 		"2026-08-09: Rust Host SnapshotAssembler rejects missing/mixed/out-of-order pages and becomes terminal on rejection; SnapshotCache atomically publishes only complete increasing generations",
 		"2026-08-09: bounded indexes cover kind, case-insensitive full/class/package paths, unique address, and token-prefix search without rescanning live GObjects",
 		"2026-08-09: each ManagedSession owns its SnapshotCache, pulls pages through CoreRpcClient with a total deadline, restarts a changing generation at most three times, and returns the already-published Arc for an unchanged generation",
-		"Real target-scale refresh/GC/reconnect fixtures and Tauri query adapters remain pending"
+		"2026-08-09: Tauri DomainService queries the already-published immutable Host snapshot for object/type list, search, identity, and basic instance operations",
+		"Real target-scale refresh/GC/reconnect fixtures and query-index performance evidence remain pending"
 	  ]
 	},
 	"OBJ-011": {
@@ -460,7 +476,8 @@
 		"2026-08-09: the Core snapshot collection command requires cursor/limit and caps each page at 128 records; the final page returns a null cursor",
 		"2026-08-09: Host indexed collection queries also require a query-bound cursor and 1..128 limit; incomplete page chains cannot be published",
 		"2026-08-09: C++ Pipe decoder validates the 8 MiB header limit before allocation and the encoder rejects oversized serialized payloads",
-		"Legacy package contents remains reachable until R4, so the issue is not yet closed"
+		"2026-08-09: legacy package contents is no longer reachable; Host package contents rejects a result above 128 instead of returning an unbounded response",
+		"Stable pagination for package contents remains pending before this issue can be verified"
 	  ]
 	},
     "CALL-001": {
@@ -588,67 +605,128 @@
     "WATCH-002": {
       "status": "verified",
       "verification": [
-        "2026-08-09: frontend SSE/polling loop removed and legacy watch routes explicitly return WATCH_UNAVAILABLE"
+        "2026-08-09: frontend SSE/polling fallback was removed; Watch calls now return Host capability unavailable and no legacy route is reachable"
+      ]
+    },
+    "NET-001": {
+      "status": "verified",
+      "verification": [
+        "2026-08-09: UExplorerCore release project excludes HttpServer and every legacy API translation unit; Main has no network/router entry point",
+        "2026-08-09: binary transport contract finds no WinSock/WinHTTP/WinINet import or HTTP/SSE/WebSocket marker"
       ]
     },
     "NET-002": {
       "status": "verified",
       "verification": [
-        "2026-08-09: temporary HTTP authentication uses case-insensitive GetHeaderValue"
+        "2026-08-09: desktop transport has no HTTP headers or shared token; OS Pipe peer identity and negotiated session identity replace this boundary"
       ]
     },
     "NET-003": {
       "status": "verified",
       "verification": [
-        "2026-08-09: admission uses atomic reservation before thread creation and every accepted socket has receive/send timeouts",
-        "Core harness verifies slow-client shutdown"
+        "2026-08-09: release Core has no HTTP socket worker; bounded Named Pipe listener/request/event workers are owned, cancellable, and joined"
+      ]
+    },
+    "NET-004": {
+      "status": "verified",
+      "verification": [
+        "2026-08-09: the self-written HTTP parser is outside the release graph; strict frame and JSON limits are enforced by the shared IPC protocol"
       ]
     },
     "NET-005": {
       "status": "verified",
       "verification": [
-        "2026-08-09: all temporary HTTP writes use SendAll; static contract permits only its internal send call"
+        "2026-08-09: release Core performs no socket send; overlapped Pipe writes use bounded full-frame completion and explicit failure"
       ]
     },
     "NET-006": {
       "status": "verified",
       "verification": [
-        "2026-08-09: only the three registered event paths enter the temporary SSE branch"
+        "2026-08-09: SSE routing is absent from release; event subscriptions are explicit PID/session-scoped Tauri Channel commands"
+      ]
+    },
+    "NET-007": {
+      "status": "verified",
+      "verification": [
+        "2026-08-09: Core owns one serialized bounded Event writer per Pipe session; no SSE/WS socket can receive concurrent writers"
+      ]
+    },
+    "NET-008": {
+      "status": "verified",
+      "verification": [
+        "2026-08-09: Event producers use bounded nonblocking queues and Host EventHub try_send fan-out; there is no blocking socket broadcast mutex"
+      ]
+    },
+    "NET-009": {
+      "status": "verified",
+      "verification": [
+        "2026-08-09: shared EventPayload carries data as a JSON value through Core Pipe, EventHub, Tauri Channel, and React without WS string re-encoding"
+      ]
+    },
+    "NET-010": {
+      "status": "verified",
+      "verification": [
+        "2026-08-09: no WebSocket implementation is compiled or reachable in the release Core and no external Gateway is shipped"
+      ]
+    },
+    "NET-011": {
+      "status": "verified",
+      "verification": [
+        "2026-08-09: desktop UI has no browser network origin, CORS policy, URL token, or strong-capability HTTP surface"
       ]
     },
     "NET-012": {
       "status": "verified",
       "verification": [
-        "2026-08-09: Bind attempts exactly the configured port; port zero is accepted only when explicitly configured",
-        "Core harness proves an occupied exact port fails instead of changing ports"
+        "2026-08-09: canonical Pipe name is derived only from the explicit PID; there is no port selection or alternate endpoint fallback"
       ]
     },
     "NET-013": {
       "status": "verified",
       "verification": [
-        "2026-08-09: Stop is the single listener/WSA cleanup owner and joins the accept thread and every client worker"
+        "2026-08-09: WinSock/WSA lifecycle is absent from release; NamedPipeRpcServer is the single owner and joins listener/request/event workers before teardown"
+      ]
+    },
+    "UI-001": {
+      "status": "in_progress",
+      "verification": [
+        "2026-08-09: the former monolith is split into api/index.ts types/exports and api/client.ts Tauri-only transport; Rust DomainService owns the explicit domain registry",
+        "Generated contracts and the R6 frontend session store remain pending"
+      ]
+    },
+    "UI-002": {
+      "status": "in_progress",
+      "verification": [
+        "2026-08-09: unbounded fetch/JSON handling was removed; DomainService and CoreRpcClient enforce total bounded deadlines and preserve stable transport/protocol/domain errors",
+        "React query cancellation and generation guards remain pending in R6"
       ]
     },
     "UI-003": {
-      "status": "in_progress",
+      "status": "verified",
       "verification": [
         "2026-08-09: runtime.ini loading, endpoint recovery, automatic endpoint replacement, and retry-after-network/auth-error were removed from the frontend",
         "2026-08-09: inject_and_connect and event subscriptions are explicitly PID/session scoped",
-        "Remaining desktop domain requests still use the legacy HTTP adapter until the atomic R4 cutover"
+        "2026-08-09: every desktop domain request enters the selected SessionManager session through Tauri domain_request; transport contract forbids legacy endpoint recovery"
       ]
     },
     "UI-004": {
-      "status": "in_progress",
+      "status": "verified",
       "verification": [
         "2026-08-09: SessionManager and EventBridgeManager are Tauri managed state and caller-owned Channels subscribe only after a Ready session exists",
         "2026-08-09: disconnect stops and joins every bridge for the selected PID before closing the Core session",
-        "Legacy page-level SSE/WebSocket consumers remain until the R4/R6 frontend cutover"
+        "2026-08-09: Dashboard and Functions consume Tauri Channel subscriptions; React contains no EventSource/WebSocket consumer"
+      ]
+    },
+    "UI-005": {
+      "status": "verified",
+      "verification": [
+        "2026-08-09: the desktop SSE parser and page polling fallback are removed; React event delivery is exclusively Tauri Channel based"
       ]
     },
     "UI-006": {
       "status": "verified",
       "verification": [
-        "2026-08-09: fake WS console endpoint returns WS_CONSOLE_DISABLED; UI no longer connects to it or bypasses real local commands"
+        "2026-08-09: release Core has no WS console and UI no longer connects to one or bypasses its local disabled-state behavior"
       ]
     },
     "UI-008": {
@@ -656,6 +734,20 @@
       "verification": [
         "2026-08-09: instance/static/batch execution buttons and console call command are disabled while stable handles are unavailable",
         "Backend metadata classification, owner handles, and real instance selection remain pending"
+      ]
+    },
+    "UI-011": {
+      "status": "in_progress",
+      "verification": [
+        "2026-08-09: Settings removed port, token, auto reconnect, DLL proxy, manual offset, and other fake transport controls",
+        "Remaining DLL path, dump, output, theme, address, and numeric preferences require end-to-end behavior tests or removal in R6"
+      ]
+    },
+    "UI-012": {
+      "status": "verified",
+      "verification": [
+        "2026-08-09: Settings and API types contain no port/token controls; Core IPC has no token or network listener and no Gateway is shipped",
+        "2026-08-09: transport cutover tests forbid localhost, endpoint files, token headers, and automatic endpoint replacement in React"
       ]
     },
     "UI-013": {

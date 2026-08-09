@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Search, Filter, TerminalSquare, Play, Info, List, History, RefreshCw, Cpu } from 'lucide-react';
 import { t } from '../i18n';
 import api, { type ClassFunction, type HookItem, type HookLogEntry, type ObjectDetail, type ObjectItem } from '../api';
@@ -7,7 +7,6 @@ type FunctionTab = 'Info' | 'Parameters' | 'Call' | 'Hook' | 'Decompile';
 type FlagTab = 'All' | 'Native' | 'Blueprint';
 type FunctionsViewMode = 'function' | 'hookManager';
 type CallMode = 'instance' | 'static' | 'batch';
-const HOOK_MONITORING_AVAILABLE = false;
 
 interface FunctionsProps {
   viewMode?: FunctionsViewMode;
@@ -92,10 +91,6 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
   const [hookPage, setHookPage] = useState(1);
   const [managerSelectedHookId, setManagerSelectedHookId] = useState<number | null>(null);
   const [hookLogPage, setHookLogPage] = useState(1);
-  const hookPollTimerRef = useRef<number | null>(null);
-  const hookPollInFlightRef = useRef(false);
-  const hookReconnectTimerRef = useRef<number | null>(null);
-  const hookReconnectDelayRef = useRef(800);
 
   const [bytecode, setBytecode] = useState('');
   const [decompiled, setDecompiled] = useState('');
@@ -193,105 +188,33 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
     }
   }, [activeHookId, refreshHookLog]);
 
-  const stopHookPolling = useCallback(() => {
-    if (hookPollTimerRef.current !== null) {
-      window.clearInterval(hookPollTimerRef.current);
-      hookPollTimerRef.current = null;
-    }
-  }, []);
-
-  const runHookFallbackTick = useCallback(async () => {
-    if (hookPollInFlightRef.current) return;
-    hookPollInFlightRef.current = true;
-    try {
-      await refreshHooks();
-      await refreshHookLog();
-    } finally {
-      hookPollInFlightRef.current = false;
-    }
-  }, [refreshHookLog, refreshHooks]);
-
-  const startHookPolling = useCallback(
-    (immediate = true) => {
-      if (hookPollTimerRef.current !== null) return;
-      if (immediate) {
-        void runHookFallbackTick();
-      }
-      hookPollTimerRef.current = window.setInterval(() => {
-        void runHookFallbackTick();
-      }, 300);
-    },
-    [runHookFallbackTick]
-  );
-
-  const clearHookReconnectTimer = useCallback(() => {
-    if (hookReconnectTimerRef.current !== null) {
-      window.clearTimeout(hookReconnectTimerRef.current);
-      hookReconnectTimerRef.current = null;
-    }
-  }, []);
-
   useEffect(() => {
-    if (!HOOK_MONITORING_AVAILABLE) {
-      clearHookReconnectTimer();
-      stopHookPolling();
-      return;
-    }
     if (activeTab !== 'Hook' && viewMode !== 'hookManager') {
-      clearHookReconnectTimer();
-      hookReconnectDelayRef.current = 800;
-      stopHookPolling();
       return;
     }
 
     let disposed = false;
-    let unsubscribe: (() => void) | null = null;
-
-    const connect = () => {
-      if (disposed) return;
-      unsubscribe = api.subscribeEventStream(
-        '/events/hooks',
-        () => {
+    let unsubscribe: (() => Promise<boolean>) | null = null;
+    void Promise.all([api.getStatus(), refreshHooks(), refreshHookLog()]).then(async ([status]) => {
+      if (disposed || !status.success || !status.data) return;
+      const subscription = await api.subscribeSessionEvents(status.data.pid, {
+        onEvent: ({ event }) => {
+          if (!event.kind.startsWith('hook.')) return;
           void refreshHookLog();
           void refreshHooks();
         },
-        {
-          onOpen: () => {
-            clearHookReconnectTimer();
-            hookReconnectDelayRef.current = 800;
-            stopHookPolling();
-            void refreshHookLog();
-            void refreshHooks();
-          },
-          onError: () => {
-            if (disposed) return;
-            startHookPolling(true);
-          },
-          onClose: (reason) => {
-            if (disposed || reason === 'abort') return;
-            startHookPolling(true);
-
-            if (hookReconnectTimerRef.current !== null) return;
-            const delay = hookReconnectDelayRef.current;
-            hookReconnectTimerRef.current = window.setTimeout(() => {
-              hookReconnectTimerRef.current = null;
-              connect();
-            }, delay);
-            hookReconnectDelayRef.current = Math.min(hookReconnectDelayRef.current * 2, 5000);
-          },
-        }
-      );
-    };
-
-    connect();
+      });
+      if (disposed) {
+        void subscription.unsubscribe();
+        return;
+      }
+      unsubscribe = subscription.unsubscribe;
+    }).catch(() => undefined);
     return () => {
       disposed = true;
-      unsubscribe?.();
-      clearHookReconnectTimer();
-      hookReconnectDelayRef.current = 800;
-      stopHookPolling();
+      if (unsubscribe) void unsubscribe();
     };
-  }, [activeTab, clearHookReconnectTimer, refreshHookLog, refreshHooks, startHookPolling, stopHookPolling, viewMode]);
+  }, [activeTab, refreshHookLog, refreshHooks, viewMode]);
 
   const loadFunctions = useCallback(async () => {
     setListLoading(true);
@@ -301,7 +224,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
         class: 'Function',
         package: classFilter.trim() || undefined,
         offset: 0,
-        limit: 300,
+        limit: 128,
       });
       if (!res.success || !res.data) throw new Error(res.error || t('Failed to load functions'));
 

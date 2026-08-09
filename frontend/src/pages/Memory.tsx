@@ -377,7 +377,7 @@ export default function Memory() {
           </div>
           <div className="flex-1 p-4">
             <div className="rounded-lg border border-accent-yellow/20 bg-accent-yellow/5 p-3 text-xs text-text-mid font-display leading-relaxed">
-              {t('Unavailable: legacy polling/SSE watches are disabled until the IPC WatchScheduler is active.')}
+              {t('Unavailable: property watches are disabled until the IPC WatchScheduler is active.')}
             </div>
           </div>
         </div>

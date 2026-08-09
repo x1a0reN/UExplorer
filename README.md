@@ -3,9 +3,11 @@
 UExplorer is a Windows desktop tool for Unreal Engine SDK generation and live runtime
 inspection. It combines an injected C++ Core with a Tauri/React desktop application.
 
-The project is undergoing a safety and architecture refactor. The current HTTP-based
-prototype still exists, but it is not the target architecture and must not be treated
-as release-ready.
+The project is undergoing a safety and architecture refactor. The desktop transport
+cutover is complete: React reaches the injected Core only through the Tauri/Rust Host
+and a PID-scoped Windows Named Pipe. The old in-DLL HTTP/SSE/WebSocket sources are
+retained as historical evidence, but they are excluded from the release Core project
+and have no runtime entry point.
 
 ## Target architecture
 
@@ -18,10 +20,10 @@ Core DLL inside the selected game process
   -> Unreal Engine reflection and game-thread capabilities
 ```
 
-The Core DLL will not expose HTTP, SSE, or WebSocket. Optional external HTTP access
-belongs to the Rust Host and uses the same domain services as the desktop UI. Protocol
-or capability failures are explicit; there is no silent transport, offset, thread, or
-compression fallback.
+The Core DLL does not expose HTTP, SSE, or WebSocket. No external gateway is currently
+shipped. If one is added later, it belongs to the Rust Host and must use the same
+`DomainService` as the desktop UI. Protocol or capability failures are explicit; there
+is no silent transport, offset, thread, or compression fallback.
 
 ## Current status
 
@@ -32,14 +34,18 @@ compression fallback.
 - Issue workflow state: `docs/issue-status.json`
 - Legacy API snapshot: `tests/contracts/api-v1-routes.tsv`
 
-The C++ Core now owns a real PID-scoped Windows Named Pipe server with current-user
+The C++ Core owns a real PID-scoped Windows Named Pipe server with current-user
 ACL/PID verification, bounded RPC workers, cancellation, and joinable shutdown. The
-Rust Host now has a real overlapped `CoreRpcClient` with pre-Hello server-PID checks,
+Rust Host has a real overlapped `CoreRpcClient` with pre-Hello server-PID checks,
 bounded request/event queues, deadlines, cancellation, disconnect completion,
 explicit reconnect, and joinable shutdown. EventHub, multi-PID SessionManager, strict
 injection-to-Core-Ready gating, cross-language Core/Host fixtures, and a live x64/x86
-injection matrix are implemented. The React/Tauri domain cutover is still in progress,
-so the legacy in-DLL HTTP path remains temporarily reachable until R4.
+injection matrix are implemented. React domain calls now use one Tauri
+`domain_request` command and event consumers use caller-owned Tauri channels. The Host
+operation registry serves status and immutable-snapshot object/type queries; domains
+not yet implemented return a stable capability error instead of reaching legacy code.
+The release DLL has no WinSock/WinHTTP/WinINet import or legacy HTTP marker according
+to the transport cutover contract.
 
 No Unreal Engine version is currently claimed as verified because the required target
 fixtures have not yet been added. A successful build does not establish runtime safety.
@@ -48,7 +54,7 @@ fixtures have not yet been added. A successful build does not establish runtime 
 
 | Path | Purpose |
 |---|---|
-| `Dumper/` | Injected C++ Core, Unreal Engine reflection, generators, and legacy API |
+| `Dumper/` | Injected C++ Core, Unreal Engine reflection, generators, and retained non-release legacy sources |
 | `frontend/` | React UI and Tauri Rust Host |
 | `protocol/` | Versioned IPC contract and shared Rust framing crate |
 | `tests/core-harness/` | Standalone C++ protocol, queue, backpressure, and shutdown tests |
@@ -134,6 +140,8 @@ cargo test --manifest-path D:\Projects\UExplorer\frontend\src-tauri\Cargo.toml -
 & 'D:\Projects\UExplorer\tests\contracts\verify-named-pipe.ps1'
 & 'D:\Projects\UExplorer\tests\contracts\verify-platform-safety.ps1'
 & 'D:\Projects\UExplorer\tests\contracts\verify-offset-discovery.ps1'
+& 'D:\Projects\UExplorer\tests\contracts\verify-transport-cutover.ps1' `
+  -DllPath 'D:\Projects\UExplorer\Dumper\x64\Release\UExplorerCore.dll'
 ```
 
 GitHub Actions runs the same quality gates with the Visual Studio 2022 `v143`

@@ -490,6 +490,11 @@ impl ManagedSession {
         Err(SessionManagerError::SnapshotRestartLimitReached)
     }
 
+    pub fn current_snapshot(&self) -> Result<Option<Arc<SnapshotIndex>>, SessionManagerError> {
+        self.require_ready()?;
+        Ok(self.snapshot_cache.current()?)
+    }
+
     pub fn query_snapshot(
         &self,
         query: &SnapshotQuery,

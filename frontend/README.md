@@ -2,15 +2,18 @@
 
 This directory contains the React 19 UI and the Tauri 2 Rust Host.
 
-The current UI still calls the legacy Core HTTP API. During R3-R4 it will be switched
-atomically to Tauri commands and events backed by the Rust session manager and Named
-Pipe RPC. New frontend code must not add direct Core HTTP, SSE, or WebSocket access.
+R4 transport cutover is complete. React domain calls enter
+`src/api/client.ts -> Tauri domain_request -> Rust DomainService`; session events use
+caller-owned Tauri channels. The Host then reaches the selected Core only through its
+PID-scoped Windows Named Pipe session. Frontend code must not add direct Core HTTP,
+SSE, WebSocket, endpoint-file, port, or token access.
 
-R3 has started: `src-tauri/src/ipc/rpc_session.rs` implements the strict,
-transport-independent RPC lifecycle and is exercised end-to-end against the shared
-typed FakeCore. The actual Windows Named Pipe client, peer ACL/PID validation,
-EventHub, and multi-PID SessionManager are not connected yet, so DLL load is still
-not equivalent to Core ready.
+The Windows Host owns strict peer PID/session validation, bounded request/event queues,
+deadline/cancel behavior, EventHub, immutable snapshot indexes, multi-PID
+SessionManager, injection-to-Core-Ready gating, and joinable shutdown. Status and basic
+snapshot-backed Object/Type queries are currently implemented. Other domains return
+explicit capability errors until their R5 services and fixtures exist; the UI must not
+replace them with placeholders or transport fallback.
 
 ## Commands
 

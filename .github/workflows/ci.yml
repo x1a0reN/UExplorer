@@ -27,6 +27,7 @@ jobs:
           ./tests/contracts/verify-named-pipe.ps1
           ./tests/contracts/verify-platform-safety.ps1
           ./tests/contracts/verify-offset-discovery.ps1
+          ./tests/contracts/verify-transport-cutover.ps1
           Get-Content ./protocol/v1/protocol.json -Raw -Encoding UTF8 | ConvertFrom-Json | Out-Null
           Get-Content ./protocol/v1/schema/payload.schema.json -Raw -Encoding UTF8 | ConvertFrom-Json | Out-Null
 
@@ -39,6 +40,10 @@ jobs:
           msbuild ./Dumper/UExplorerCore.vcxproj
           /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143
           /m:1 /v:minimal
+
+      - name: Verify release Core transport imports
+        shell: pwsh
+        run: ./tests/contracts/verify-transport-cutover.ps1 -DllPath ./Dumper/x64/Release/UExplorerCore.dll
 
       - name: Build Core harness
         shell: pwsh

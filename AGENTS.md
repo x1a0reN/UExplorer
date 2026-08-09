@@ -1,156 +1,158 @@
 # UExplorer Agent Guide
 
-## 目标与适用范围
+## 1. 项目与目标
 
-UExplorer 是 Windows x64 上的 Unreal Engine SDK Dump 与运行时探索工具。代理的目标是在不破坏目标游戏进程、不掩盖失败、不覆盖用户改动的前提下，交付可复现、可验证的修改。
-
-本文件是仓库级工作约束；`DESIGN.md` 和 `PROJECT_MAP.md` 是设计及历史记录，不保证与当前实现完全同步。
-
-## 不可违反的规则
-
-1. 默认使用简体中文；代码标识符、命令、日志和错误信息保持原文。
-2. 先检查 `git status --short --branch`，再读取相关代码并确认真实运行链路。不能验证的内容必须标为推断。
-3. 只修改用户授权范围。不得恢复、覆盖、格式化或提交无关改动。
-4. 禁止执行删除、清空、重建目录或等价操作。需要移除内容时保留原件并先说明方案。
-5. Windows 环境使用 PowerShell；文本搜索优先 `rg`，手工修改一律使用 `apply_patch`。
-6. API 验证默认只使用 `curl.exe`；只有用户明确要求时才使用浏览器自动化。
-7. **禁止 fallback。** 能力不可用时必须返回明确失败及根因，不得静默切换端口、地址、算法、占位实现、默认凭据、空回调或启发式猜测。若产品确实需要多策略，必须由用户显式选择并在响应中暴露实际策略。
-8. 不得把“代码存在”“编译通过”或“接口返回 200”写成“功能验证通过”。涉及注入、目标进程、UE 版本、Dump 文件或 Hook 的结论必须有真实运行证据。
-9. 源码修改后必须说明：修改内容、动机、解决的问题、根因、验证结果及未执行项。
-
-## 事实优先级
-
-发生冲突时按以下顺序判断：
-
-1. 目标进程中的实时行为和崩溃/调用栈
-2. `curl.exe` 请求响应、SSE/WS 数据和运行日志
-3. 当前构建产物及实际加载模块
-4. `%LOCALAPPDATA%\UExplorer\connection.ini` 与 `runtime.ini`
-5. 当前源代码和项目配置
-6. `DESIGN.md`、`PROJECT_MAP.md`、注释和历史提交
-
-不要用设计文档覆盖运行事实。确认文档过期后，在任务授权范围内更新相应状态，而不是继续复制旧描述。
-
-## 当前架构
+UExplorer 是 Windows x64 上的 Unreal Engine SDK 生成与运行时内省桌面工具。系统跨越两个信任与生命周期边界：
 
 ```text
 React 19 + TypeScript + Vite
-        |
-        | Tauri invoke / HTTP / SSE / WebSocket
-        v
-Tauri 2 Rust Host
-  - 扫描候选进程
-  - CreateRemoteThread + LoadLibraryW 注入
-  - 读写连接配置和运行时端点
-        |
-        | 注入 UExplorerCore.dll
-        v
-目标 UE 游戏进程
-  - Main.cpp: 初始化、服务启动、F6 卸载
-  - Engine/: GObjects、FName、反射、偏移发现、蓝图字节码
-  - Generator/: C++ SDK、USMAP、Dumpspace、IDA 映射
-  - API/: 12 个 API 模块、当前注册 65 个 HTTP 路由
-  - Server/: WinSock2 HTTP、SSE、WebSocket
-  - HookApi + GameThreadQueue: ProcessEvent 监控与 PostRender 调度
+  -> Tauri invoke / tauri::ipc::Channel
+Rust Host
+  -> versioned Windows Named Pipe RPC
+UExplorerCore.dll（目标进程内）
+  -> 经验证的 UE 内存、反射与游戏线程能力
 ```
 
-### 主要文件
+本仓库正在按 `REFACTOR_PLAN.md` 执行 R0-R7 重构。问题是否关闭只以 `docs/issue-status.json` 的可复现证据为准；代码存在、编译成功或 UI 存在都不等于功能可用。
 
-- `Dumper/Main.cpp`：DLL 生命周期、连接配置、引擎初始化、HTTP 服务启动。
-- `Dumper/Engine/`：从 Dumper-7 派生的 UE 内存模型与偏移发现。
-- `Dumper/Generator/`：四类 Dump 生成器及其共享管理器。
-- `Dumper/API/Router.cpp`：路由注册与 Hook 初始化入口。
-- `Dumper/API/GameThreadQueue.h`：HTTP Worker 到游戏线程的同步调用槽。
-- `Dumper/API/HookApi.cpp`：ProcessEvent VTable 监控、PostRender VTable 调度。
-- `Dumper/Server/HttpServer.cpp`：自研 WinSock2 协议层和连接生命周期。
-- `frontend/src/api/index.ts`：前端类型、连接恢复、REST/SSE/WS 客户端；当前体积较大。
-- `frontend/src/pages/`：Dashboard、Objects、Functions、Memory、SDKDump、Settings 六个主页面。
-- `frontend/src-tauri/src/lib.rs`：Tauri 命令、进程扫描、DLL 注入和端点配置。
+## 2. 不可违反的规则
 
-## 运行与连接约定
+1. 默认使用简体中文；代码标识符、命令、日志和错误保持原文。
+2. 开始工作先检查 `git status --short --branch`，再沿当前运行入口确认事实。无法验证的内容必须标为推断。
+3. 只修改用户授权范围。不得恢复、覆盖、格式化、暂存或提交无关改动。
+4. **禁止删除文件、清空目录、重建目录或执行等价破坏性操作。** 需要退役代码时保留原件，切断编译/运行入口并记录归档原因。
+5. Windows 环境使用 PowerShell；文本搜索优先 `rg`；手工修改一律使用 `apply_patch`。
+6. **禁止 fallback。** 不得静默切换 transport、endpoint、PID/session、Offset、执行线程、协议版本、压缩算法、凭据、占位数据或替代实现。能力不可用必须返回稳定错误码和根因。
+7. 不得把“静态检查通过”“能编译”“接口返回成功”写成目标 UE 行为已验证。涉及注入、GC、Hook、Dump、UE profile 或卸载的结论必须有对应目标进程 fixture。
+8. 每个源码修改检查点必须说明：修改内容、动机、解决的问题、根因、验证结果及未执行项。
+9. 每个源码修改检查点必须更新 `DESIGN.md` 的当前进度，明确暂存本次文件，提交并推送当前分支；**推送成功后**运行第 9.1 节的精确 Core Release 构建命令。
+10. 当前桌面主链路没有 HTTP API。若未来显式实现 Host Gateway，API 手工验证默认只用 `curl.exe`；除非用户明确要求，不使用浏览器自动化。
 
-- Core 只监听 `127.0.0.1`。默认首选端口为 `27015`。
-- 除 `/api/v1/status/health` 外，HTTP/SSE 请求使用 `X-UExplorer-Token`。
-- WebSocket 当前通过 `?token=` 传递 Token。
-- `connection.ini` 保存下一次注入使用的端口和 Token；`runtime.ini` 发布 DLL 实际 PID、端口、Token 和运行状态。
-- `uexplorer-dev` 只是前后端启动默认值；Core 首次加载时会将其替换为随机 Token。验证时应读取当前 `runtime.ini`，不得假定固定 Token。
-- 当前 `runtime.ini` 是单实例文件；在支持多目标进程之前，不得宣称支持并行连接多个游戏。
+## 3. 当前运行事实（R4 完成后）
 
-## 线程与生命周期硬约束
+- React 领域调用只进入 `frontend/src/api/client.ts`，并调用 Tauri `domain_request`；事件只通过调用方持有的 Tauri Channel。
+- Rust `DomainService` 使用显式 operation 白名单，绑定明确 target PID 或 active session。未知 operation 在接触 session 前返回 `OPERATION_NOT_SUPPORTED`。
+- 当前 Host 已实现 status 和 immutable snapshot-backed Object/Type 基础查询。Property、Memory、Call、World、Watch、Hook、Blueprint、Dump 等未迁移领域返回 `CAPABILITY_UNAVAILABLE`；不得伪造字段或回退旧实现。
+- Core release project 只运行 PID-scoped Named Pipe；不编译 `Dumper/Server/HttpServer.cpp` 和 `Dumper/API/*.cpp`，不链接 `ws2_32`。旧 HTTP/SSE/WebSocket/API 源码保留为历史证据，不是兼容层。
+- Core 在 Pipe bind 后安装生产 `PostRenderHook`，发布事实 capability/Ready 后才开放 admissions。
+- 当前没有外部 HTTP/WebSocket Gateway，也没有 `connection.ini`、`runtime.ini`、port 或 Token 运行依赖。
+- 未有任何 UE 4.26、4.27 或 UE5 profile 达到发布支持门；准确范围见 `docs/SUPPORT_MATRIX.md`。
+- 已知仍未关闭的事实包括：默认 `AllocConsole` 与 F6 路径、Dumper 配置的 current-directory/global-path 行为、剩余 `Off::*/Settings::*` 和 legacy domain monolith、未实现领域命令、Hook/Watch producer、前端 session/query/BigInt 状态重构以及真实 UE/GC/卸载/性能 fixture。
 
-1. HTTP Handler、Dump Worker、SSE/WS 连接线程都不是 UE 游戏线程。
-2. 会触发 UE 行为或依赖 UE 线程亲和性的操作必须经过明确的游戏线程调度；不得因调度器不可用而直接在 HTTP 线程调用 `ProcessEvent`。
-3. 对象索引不是稳定身份。跨请求保存对象时必须重新校验索引、地址及可用的 serial/generation，防止 GC 后索引复用。
-4. Hook 热路径不得执行 socket I/O、JSON 序列化、无界分配或长时间持锁。热路径只允许写入有界队列，由非游戏线程发送事件。
-5. DLL 卸载前必须先停止接收新工作、唤醒等待者、关闭所有连接、等待 Worker 退出、恢复 Hook，最后才能 `FreeLibraryAndExitThread`。不得依赖 detached thread 自行结束。
-6. Dump 生成器共享大量全局状态。在完成上下文隔离前，必须显式限制为单任务，不得伪装成可并行执行。
-7. 所有超时都要定义所有权：调用超时后，目标线程不得继续访问调用方栈或临时缓冲区。
+## 4. 事实优先级
 
-## 已确认的技术债基线（2026-08-09）
+证据冲突时按以下顺序判断：
 
-以下项目不能按“已完成”处理，修改相关模块时应优先建立最小复现：
+1. 目标进程实时行为、崩溃/调用栈和可重复 trace。
+2. 实际 Named Pipe frame、Host session/event 诊断和注入阶段结果。
+3. 当前加载的 DLL、release project 输入、import table 与二进制 marker。
+4. 当前进程配置和已发布的 immutable EngineContext/capability/snapshot。
+5. 当前源码与测试。
+6. `DESIGN.md`、`PROJECT_MAP.md`、注释、legacy 源码和历史提交。
 
-- `HttpServer` 为每个客户端创建 detached thread；`Stop()` 最多等待约 3 秒，仍存在卸载期悬挂线程和 `Impl` 生命周期风险。
-- `GameThreadQueue` 只有一个同步槽；调用超时与参数缓冲区生命周期仍可能竞争。
-- Hook 命中路径会同步构造 JSON 并广播到 SSE/WS，慢客户端可能阻塞游戏线程。
-- `WatchApi` 没有独立轮询线程；`interval_ms` 未用于调度，变化检测实际由 `GET /watch/list` 驱动。
-- `/ws/console` 目前只返回连接占位消息，不是实际 UE Console 桥。
-- SDK Dump 页面会提交筛选/生成选项，但 `DumpApi` 当前未解析请求体，选项不生效。
-- `DumpApi` 用 `joinable()` 判断“已完成”线程；启动后续任务时可能同步等待前一个任务。
-- `MappingGenerator` 声明 ZStandard 压缩但写入未压缩 payload，当前 USMAP 产物格式存在不一致风险。
-- Tauri 注入器仅等待远程线程结束，未校验 `LoadLibraryW` 返回值；超时后释放远程参数内存存在目标线程仍在使用的风险，也未验证目标架构与 DLL 架构一致。
-- 运行时端点文件可能在异常退出后残留；采用端点前需要验证 PID、进程存活和 health，而不是只相信 `Running=1`。
-- 仓库当前没有自动化测试或 CI。前端 `npm run build` 可通过，但 `npm run lint` 基线为 15 errors / 16 warnings；不得表述为“前端检查全绿”。
+使用源码解释运行行为，不得用历史文档覆盖当前二进制事实。
 
-## 修改流程
+## 5. 关键代码边界
 
-1. 确认工作树和用户现有改动，记录本任务允许修改的文件。
-2. 从入口沿真实调用链定位问题；优先复现一个最窄的端到端路径。
-3. 先写清楚失败条件和预期行为，再做小而可审查的修改。
-4. 只运行与改动直接相关的最小充分验证。涉及目标游戏的行为若当前无法运行，明确写“未做目标进程验证”。
-5. 源码修改后检查 `DESIGN.md`；只有项目进度或架构事实改变时才更新，禁止为了勾选进度而改文档。
-6. 验证通过后只暂存本任务文件，提交并推送当前分支；不得把用户的无关删除或未跟踪文件带入提交。文档/审查任务默认不自动提交或推送，除非用户明确要求。
+### Core DLL
 
-## 验证命令
+- `Dumper/Main.cpp`：唯一 DLL 生命周期装配入口；负责 Runtime、Facade、Pipe、PostRender 和有序关闭。
+- `Dumper/Runtime/`：CoreRuntime、EngineContext、Capability、SafeMemory、Handle、Snapshot、GameThread、Hook owner。
+- `Dumper/Services/CoreCommandService.*`：transport-neutral Core command 边界。
+- `Dumper/IPC/NamedPipeRpcServer.*`：唯一 release transport。
+- `Dumper/Engine/` 与 `Dumper/Generator/`：Dumper-7 派生的 UE 模型和生成器；仍含待迁移的版本/布局假设。
+- `Dumper/API/` 与 `Dumper/Server/`：非 release legacy archive。不得从 Main、Host 或 React 恢复可达性。
 
-### Core DLL（修改 C++ 后必须运行）
+### Rust Host
+
+- `frontend/src-tauri/src/services/domain_service.rs`：桌面领域 operation registry、schema/capability/session gate。
+- `frontend/src-tauri/src/session/`：多 PID SessionManager、SnapshotCache、EventHub、Tauri event bridge。
+- `frontend/src-tauri/src/ipc/`：严格 RPC session 和 overlapped Named Pipe client。
+- `frontend/src-tauri/src/lib.rs`：Tauri commands、进程扫描、注入和 managed state 装配。
+- `frontend/src-tauri/src/inject_dll.ps1`：已禁用历史脚本，不是 fallback。
+
+### React
+
+- `frontend/src/api/index.ts`：共享 API/domain 类型和 client export。
+- `frontend/src/api/client.ts`：唯一 Tauri transport adapter。
+- `frontend/src/pages/`：页面；只能消费 typed client，不得直接创建网络连接或读取运行 endpoint。
+- `frontend/src/types/`：页面模型；x64 地址必须保持规范 hex string 或 BigInt，不得转成 JS `Number` 计算。
+
+## 6. 线程、身份与生命周期硬约束
+
+1. Pipe worker、Host worker 和前端线程都不是 UE 游戏线程。依赖 UE 线程亲和性的命令必须进入已验证的 `GameThreadExecutor`。
+2. 同步请求不得从已观测 pump thread 等待自身；队列满、deadline、取消和 shutdown 都必须产生唯一终态。
+3. 跨请求对象身份必须使用 session/context generation/serial/address/class fingerprint 组成的 Handle；裸 index 或短名只能用于搜索，不得用于危险执行。
+4. Hook 热路径只允许有界、非阻塞、低分配采集；不得执行 JSON、Pipe I/O、长时间持锁或等待 Host。
+5. 关闭顺序必须先拒绝新工作并完成 Pipe pending，再恢复 Hook、排空 snapshot/facade/request lease，最后才可 `FreeLibraryAndExitThread`。任一 restore/drain 失败都必须拒绝卸载。
+6. Dump/Generator 共享大量全局状态；在隔离完成前一次只允许一个 owned job，不能伪装并发。
+7. 每个 timeout 都必须定义 buffer、ticket、OVERLAPPED、远程参数和 worker 的所有权；调用方返回后后台不得访问调用方栈或临时缓冲。
+8. 配置、协议、capability 和 snapshot 都按 session/generation 绑定；不得相信陈旧磁盘运行态或跨 PID 复用状态。
+
+## 7. 修改流程
+
+1. 记录工作树现状和本次允许修改的文件。
+2. 从真实入口证明一条最窄端到端路径，再扩展修改范围。
+3. 先定义稳定成功/失败条件和所有权，再做小而可审查的变更。
+4. 同步增加最小回归测试或 contract；对故障路径至少验证一个确定性失败。
+5. 运行与改动直接相关的最小充分检查；修改跨层契约时运行完整相关矩阵。
+6. 更新 `DESIGN.md`；架构/文件职责变化时同步更新 `README.md`、`PROJECT_MAP.md`、`AGENTS.md` 和 issue register。
+7. 用显式路径暂存本次文件，检查 staged diff，提交并推送；不得使用 `git add -A` 或 `git add .`。
+8. 推送后执行精确 Core Release 构建并记录结果。失败就明确报告，不能宣称检查点完成。
+
+## 8. Issue 与阶段口径
+
+- `REFACTOR_PLAN.md`：128 项问题、R0-R7 顺序和 Definition of Done。
+- `docs/issue-status.json`：机器可读状态；只有带复现命令/fixture 的问题可标 `verified`。
+- `DESIGN.md` 第 0 节：当前事实和阶段证据。
+- `PROJECT_MAP.md`：当前文件/调用边界；标为 legacy 的章节只用于历史审计。
+- `docs/SUPPORT_MATRIX.md`：UE profile 支持声明；没有 target fixture 就保持 `Not supported`。
+- `protocol/v1/`：IPC v1 唯一契约源。major 不兼容立即失败；minor 能力只经显式协商开放。
+
+## 9. 验证命令
+
+### 9.1 Core Release（每个源码检查点推送后必须原样运行）
 
 ```powershell
 powershell -Command "& 'D:\Program Files\Visual Studio 2026\MSBuild\Current\Bin\MSBuild.exe' 'D:\Projects\UExplorer\Dumper\UExplorerCore.vcxproj' /p:Configuration=Release /p:Platform=x64 /m:1 /v:minimal 2>&1"
 ```
 
-输出：`D:\Projects\UExplorer\Dumper\x64\Release\UExplorerCore.dll`
+输出：`D:\Projects\UExplorer\Dumper\x64\Release\UExplorerCore.dll`。
 
-### React/Vite（修改前端后按相关性运行）
+### 9.2 Frontend
 
 ```powershell
 Set-Location D:\Projects\UExplorer\frontend
-npm run build
 npm run lint
+npm run test
+npm run build
 ```
 
-### Tauri/Rust（修改 `src-tauri` 后必须运行）
+### 9.3 Rust Host
 
 ```powershell
-cargo check --manifest-path D:\Projects\UExplorer\frontend\src-tauri\Cargo.toml
+cargo fmt --manifest-path D:\Projects\UExplorer\frontend\src-tauri\Cargo.toml --all -- --check
+cargo clippy --manifest-path D:\Projects\UExplorer\frontend\src-tauri\Cargo.toml --all-targets --all-features -- -D warnings
+cargo test --manifest-path D:\Projects\UExplorer\frontend\src-tauri\Cargo.toml
 ```
 
-涉及打包配置、图标、权限或安装器时，再运行：
+修改跨语言 transport/session/injection 时还要运行：
 
 ```powershell
-Set-Location D:\Projects\UExplorer\frontend
-npm run tauri:build
+cargo test --manifest-path D:\Projects\UExplorer\frontend\src-tauri\Cargo.toml --features cross-language-fixture --test core_process_fixture
+cargo test --manifest-path D:\Projects\UExplorer\frontend\src-tauri\Cargo.toml --features cross-language-fixture --test injection_process_fixture
 ```
 
-### API（DLL 已注入且 runtime.ini 有效时）
-
-先读取当前运行端点，再使用 `curl.exe`；不要复制旧 Token：
+### 9.4 Core harness 与 contracts
 
 ```powershell
-Get-Content -LiteralPath "$env:LOCALAPPDATA\UExplorer\runtime.ini"
-curl.exe -H "X-UExplorer-Token: <runtime-token>" "http://127.0.0.1:<runtime-port>/api/v1/status"
+& 'D:\Program Files\Visual Studio 2026\MSBuild\Current\Bin\MSBuild.exe' 'D:\Projects\UExplorer\tests\core-harness\CoreHarness.vcxproj' /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v145 /m:1 /v:minimal
+& 'D:\Projects\UExplorer\tests\core-harness\x64\Release\CoreHarness.exe' 'D:\Projects\UExplorer\protocol\v1\fixtures'
+& 'D:\Projects\UExplorer\tests\contracts\verify-transport-cutover.ps1' -DllPath 'D:\Projects\UExplorer\Dumper\x64\Release\UExplorerCore.dll'
 ```
 
-## 交付说明
+其余 contract 按 `README.md` 列表运行；阶段检查点应运行全部 contract，不能只跑新增脚本。
 
-最终答复按“结果 -> 关键改动 -> 验证 -> 未完成/风险”组织。不得隐瞒失败，不得把 fallback 描述成兼容性，不得声称未运行的检查已经通过。
+## 10. 交付格式
+
+按“结果 -> 关键改动 -> 根因/解决的问题 -> 验证 -> 未完成/风险”报告。只摘录决定性输出；不得隐藏失败、把未运行项写成通过，或把 capability unavailable 描述为兼容性。

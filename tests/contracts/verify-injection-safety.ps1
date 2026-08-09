@@ -2,7 +2,7 @@ $ErrorActionPreference = 'Stop'
 
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $rustPath = Join-Path $root 'frontend\src-tauri\src\lib.rs'
-$apiPath = Join-Path $root 'frontend\src\api\index.ts'
+$apiPath = Join-Path $root 'frontend\src\api\client.ts'
 $selectorPath = Join-Path $root 'frontend\src\components\ProcessSelector.tsx'
 $fixtureSourcePath = Join-Path $root 'tests\injection-fixture\InjectionCoreFixture.cpp'
 $fixtureTestPath = Join-Path $root 'frontend\src-tauri\tests\injection_process_fixture.rs'
@@ -53,7 +53,8 @@ $requiredRust = @(
     'manager.connect(',
     'PipeConnectionState',
     'CoreReadinessState',
-    '.manage(Arc::new(SessionManager::new()))',
+    'let sessions = Arc::new(SessionManager::new())',
+    '.manage(sessions)',
     '.manage(Arc::new(TargetOperationCoordinator::default()))',
     'injection_result_serializes_independent_stage_states',
     'injection_admission_is_pid_scoped_and_released_by_raii',

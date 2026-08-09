@@ -57,7 +57,7 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>ws2_32.lib;bcrypt.lib;advapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>bcrypt.lib;advapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -80,7 +80,7 @@
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>ws2_32.lib;bcrypt.lib;advapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>bcrypt.lib;advapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <!-- Source Files -->
@@ -132,6 +132,7 @@
 	<ClCompile Include="Runtime\ObjectArrayIdentitySource.cpp" />
 	<ClCompile Include="Runtime\ObjectArraySnapshotSource.cpp" />
     <ClCompile Include="Runtime\ObjectHandle.cpp" />
+	<ClCompile Include="Runtime\PostRenderHook.cpp" />
     <ClCompile Include="Runtime\SafeMemory.cpp" />
     <ClCompile Include="Runtime\VTableHook.cpp" />
 	<!-- Domain services -->
@@ -140,24 +141,8 @@
     <!-- Temporarily exclude zstd.c due to VS2026 STL compatibility issue -->
     <!-- <ClCompile Include="Utils\Compression\zstd.c" /> -->
     <ClCompile Include="Utils\Dumpspace\DSGen.cpp" />
-    <!-- New: Entry Point -->
+    <!-- Entry Point -->
     <ClCompile Include="Main.cpp" />
-    <!-- New: HTTP Server -->
-    <ClCompile Include="Server\HttpServer.cpp" />
-    <!-- New: API Routes -->
-    <ClCompile Include="API\Router.cpp" />
-    <ClCompile Include="API\StatusApi.cpp" />
-    <ClCompile Include="API\ObjectsApi.cpp" />
-    <ClCompile Include="API\ClassesApi.cpp" />
-    <ClCompile Include="API\EnumsApi.cpp" />
-    <ClCompile Include="API\DumpApi.cpp" />
-    <ClCompile Include="API\MemoryApi.cpp" />
-    <ClCompile Include="API\WorldApi.cpp" />
-    <ClCompile Include="API\CallApi.cpp" />
-    <ClCompile Include="API\BlueprintApi.cpp" />
-    <ClCompile Include="API\WatchApi.cpp" />
-    <ClCompile Include="API\HookApi.cpp" />
-    <ClCompile Include="API\EventsApi.cpp" />
   </ItemGroup>
   <!-- Header Files -->
   <ItemGroup>
@@ -231,29 +216,13 @@
     <ClInclude Include="Runtime\ObjectHandle.h" />
 	<ClInclude Include="Runtime\ObjectIdentityContext.h" />
 	<ClInclude Include="Runtime\ObjectSnapshotIdentitySource.h" />
+	<ClInclude Include="Runtime\PostRenderHook.h" />
     <ClInclude Include="Runtime\SafeMemory.h" />
     <ClInclude Include="Runtime\ShutdownCoordinator.h" />
     <ClInclude Include="Runtime\VTableHook.h" />
 	<ClInclude Include="Services\CoreCommandService.h" />
 	<ClInclude Include="Services\CoreCommandServiceAccess.h" />
 	<ClInclude Include="Services\CoreStatusDiagnostics.h" />
-    <!-- New: Server Headers -->
-    <ClInclude Include="Server\HttpServer.h" />
-    <!-- New: API Headers -->
-    <ClInclude Include="API\Router.h" />
-    <ClInclude Include="API\StatusApi.h" />
-    <ClInclude Include="API\ObjectsApi.h" />
-    <ClInclude Include="API\ClassesApi.h" />
-    <ClInclude Include="API\EnumsApi.h" />
-    <ClInclude Include="API\DumpApi.h" />
-    <ClInclude Include="API\MemoryApi.h" />
-    <ClInclude Include="API\WorldApi.h" />
-    <ClInclude Include="API\CallApi.h" />
-    <ClInclude Include="API\BlueprintApi.h" />
-    <ClInclude Include="API\WatchApi.h" />
-    <ClInclude Include="API\HookApi.h" />
-    <ClInclude Include="API\EventsApi.h" />
-    <ClInclude Include="API\ApiCommon.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />

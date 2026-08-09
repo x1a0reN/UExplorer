@@ -25,6 +25,7 @@ $gameThread = $gameThreadHeader + $gameThreadImplementation
 $commandService = Read-ProjectFile 'Dumper\Services\CoreCommandService.cpp'
 $callApi = Read-ProjectFile 'Dumper\API\CallApi.cpp'
 $hookApi = Read-ProjectFile 'Dumper\API\HookApi.cpp'
+$postRenderHook = Read-ProjectFile 'Dumper\Runtime\PostRenderHook.cpp'
 $callbackBarrier = Read-ProjectFile 'Dumper\Runtime\CallbackBarrier.h'
 $vtableHook = Read-ProjectFile 'Dumper\Runtime\VTableHook.cpp'
 $dumpApi = Read-ProjectFile 'Dumper\API\DumpApi.cpp'
@@ -37,6 +38,7 @@ $statusApi = Read-ProjectFile 'Dumper\API\StatusApi.cpp'
 $worldApi = Read-ProjectFile 'Dumper\API\WorldApi.cpp'
 $memoryPage = Read-ProjectFile 'frontend\src\pages\Memory.tsx'
 $functionsPage = Read-ProjectFile 'frontend\src\pages\Functions.tsx'
+$domainService = Read-ProjectFile 'frontend\src-tauri\src\services\domain_service.rs'
 $dumpPage = Read-ProjectFile 'frontend\src\pages\SDKDump.tsx'
 
 foreach ($token in @('std::deque<std::shared_ptr<GameThreadTaskControl>>', 'kCapacity = 128',
@@ -59,6 +61,12 @@ foreach ($token in @('CallbackBarrier', 'BeginStopping', 'WaitForDrain', 'Disabl
         'unload is unsafe', 'ProcessEvent monitoring is installed lazily',
         'kLegacyHookMonitoringEnabled = false')) {
     Assert-Contains $hookApi $token 'Hook lifecycle contract regressed.'
+}
+foreach ($token in @('PostRenderHook::Install', 'PostRenderHook::Stop',
+        'VTableHookToken::Install', 'm_CallbackBarrier.BeginStopping()',
+        'm_CallbackBarrier.WaitForDrain(timeout)', 'DisableAndDrain',
+        's_Active.compare_exchange_strong', 'unload is unsafe')) {
+    Assert-Contains $postRenderHook $token 'Production PostRender pump ownership or drain contract regressed.'
 }
 foreach ($token in @('OwnedWorkAllowed', 'm_InFlight.fetch_add', 'm_InFlight.fetch_sub',
         'quietPeriod', 'm_ActivitySequence')) {
@@ -85,7 +93,13 @@ if ($sendCalls -ne 1) {
 }
 
 Assert-Contains $main 'if (!unloadSafe)' 'Unsafe shutdown must refuse DLL unload.'
-Assert-Contains $main 'SetServer(nullptr)' 'Event publication must be detached before server destruction.'
+foreach ($token in @('g_PostRenderHook->Install()', 'shutdown.AddStage("post_render_hook"',
+        'g_PostRenderHook->Stop(std::chrono::milliseconds(5000))')) {
+    Assert-Contains $main $token 'Production PostRender lifecycle is not explicitly owned by Main.'
+}
+foreach ($token in @('HttpServer', 'RegisterAllRoutes', 'SetServer(', 'runtime.ini', 'connection.ini')) {
+    Assert-NotContains $main $token 'Core entrypoint reintroduced a legacy transport/configuration path.'
+}
 Assert-NotContains $main 'Kismet.ProcessEvent' 'Startup worker must not invoke ProcessEvent directly.'
 
 Assert-Contains $settings 'EUsmapCompressionMethod::None' 'USMAP compression header must match its payload.'
@@ -102,7 +116,9 @@ Assert-NotContains $commandService 'ProcessEvent(' 'Domain command handlers must
 Assert-Contains $worldApi 'ACTOR_TRANSFORM_WRITE_DISABLED' 'Raw actor transform writes must remain disabled.'
 Assert-NotContains $memoryPage "connectWebSocket('/ws/console'" 'The fake WebSocket console must not be reachable from the UI.'
 Assert-NotContains $memoryPage "subscribeEventStream('/events/watches'" 'Polling-driven watches must not claim SSE real-time behavior.'
-Assert-Contains $functionsPage 'HOOK_MONITORING_AVAILABLE = false' 'Unsafe legacy Hook monitoring must remain capability-gated.'
+Assert-Contains $functionsPage 'subscribeSessionEvents' 'Hook events must use the owned Tauri Channel bridge.'
+Assert-NotContains $functionsPage 'subscribeEventStream' 'Functions UI reintroduced the legacy event transport.'
+Assert-Contains $domainService 'DomainRoute::Unavailable("hook.monitor")' 'Unsafe Hook monitoring must remain capability-gated.'
 
 foreach ($token in @('DUMP_EXECUTOR_BUSY', 'DUMP_OPTIONS_UNAVAILABLE', 'g_DumpThread',
         'g_DumpStoppedCV.wait_for')) {
@@ -112,4 +128,4 @@ Assert-NotContains $dumpApi 'g_DumpThreads' 'Dump jobs must have one explicit ex
 Assert-NotContains $dumpPage "'60%'" 'The UI must not report synthetic dump progress.'
 Assert-NotContains $dumpPage 'include_packages' 'Unsupported dump options must not remain interactive.'
 
-Write-Host 'Core safety contract verified: owned tasks, hook/server drain, exact bind, truthful unavailable features, and USMAP framing.'
+Write-Host 'Core safety contract verified: owned tasks, production PostRender drain, archived server safety, truthful unavailable features, and USMAP framing.'

@@ -70,7 +70,7 @@ foreach ($token in @(
     Assert-Contains $main $token 'Core entrypoint lost factual Pipe readiness or owned shutdown.'
 }
 $pipeStart = $main.IndexOf('g_PipeServer->Start()', [StringComparison]::Ordinal)
-$hookStart = $main.IndexOf('UExplorer::API::InitHooks()', [StringComparison]::Ordinal)
+$hookStart = $main.IndexOf('g_PostRenderHook->Install()', [StringComparison]::Ordinal)
 if ($pipeStart -lt 0 -or $hookStart -lt 0 -or $pipeStart -ge $hookStart) {
     throw 'Core must bind the required Named Pipe before installing game-process hooks.'
 }

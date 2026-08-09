@@ -30,12 +30,11 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
   const [engineStatus, setEngineStatus] = useState<EngineStatusData | null>(null);
   const [counts, setCounts] = useState<ObjectCountData | null>(null);
   const [actorCount, setActorCount] = useState<number>(0);
-  const [eventWsConnected, setEventWsConnected] = useState(false);
-  const [eventWsCount, setEventWsCount] = useState(0);
+  const [eventChannelConnected, setEventChannelConnected] = useState(false);
+  const [eventCount, setEventCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showProcessSelector, setShowProcessSelector] = useState(false);
-  const [port, setPort] = useState<number>(api.getSettings().port);
 
   const loadStatus = useCallback(async () => {
     const [statusResponse, countsResponse, worldResponse, engineResponse] = await Promise.all([
@@ -56,7 +55,6 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
     setCounts(countsResponse.success && countsResponse.data ? countsResponse.data : null);
     setActorCount(worldResponse.success && worldResponse.data ? worldResponse.data.actor_count : 0);
     setEngineStatus(engineResponse.success && engineResponse.data ? engineResponse.data : null);
-    setPort(api.getSettings().port);
     setLoading(false);
   }, []);
 
@@ -70,16 +68,29 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
   }, [loadStatus]);
 
   useEffect(() => {
-    const conn = api.connectWebSocket('/ws/events', {
-      onOpen: () => setEventWsConnected(true),
-      onClose: () => setEventWsConnected(false),
-      onError: () => setEventWsConnected(false),
-      onMessage: () => {
-        setEventWsCount((v) => v + 1);
-      },
+    if (!status?.pid) {
+      return;
+    }
+    let disposed = false;
+    let unsubscribe: (() => Promise<boolean>) | null = null;
+    void api.subscribeSessionEvents(status.pid, {
+      onEvent: () => setEventCount((value) => value + 1),
+    }).then((subscription) => {
+      if (disposed) {
+        void subscription.unsubscribe();
+        return;
+      }
+      unsubscribe = subscription.unsubscribe;
+      setEventChannelConnected(true);
+    }).catch(() => {
+      if (!disposed) setEventChannelConnected(false);
     });
-    return () => conn.close();
-  }, []);
+    return () => {
+      disposed = true;
+      setEventChannelConnected(false);
+      if (unsubscribe) void unsubscribe();
+    };
+  }, [status?.pid]);
 
   if (loading) {
     return (
@@ -93,15 +104,6 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
   }
 
   const isConnected = !error && !!status;
-
-  const reconnectEngine = async () => {
-    const res = await api.reconnectEngine();
-    if (!res.success) {
-      setError(res.error || t('Engine reconnect failed'));
-      return;
-    }
-    await loadStatus();
-  };
 
   return (
     <div className="flex-1 overflow-y-auto overflow-x-hidden relative scroll-smooth bg-background-base">
@@ -127,13 +129,6 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
             >
               <RefreshCw className="w-3.5 h-3.5 text-text-low" />
               {t('Refresh')}
-            </button>
-            <button
-              onClick={() => void reconnectEngine()}
-              className="px-3 py-1.5 rounded-lg bg-accent-yellow/10 hover:bg-accent-yellow/20 border border-accent-yellow/20 text-xs font-medium text-accent-yellow transition-all flex items-center gap-1.5 cursor-pointer active:scale-95 font-display"
-            >
-              <Zap className="w-3.5 h-3.5" />
-              {t('Reconnect Engine')}
             </button>
             <button
               onClick={() => onNavigate('sdkdump')}
@@ -163,7 +158,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
                 </div>
               </div>
               <div className="px-2 py-0.5 rounded bg-surface-stripe border border-border-subtle text-[10px] font-mono font-medium text-text-low">
-                {t('PORT')} {port}
+                PIPE {status?.pid ?? '-'}
               </div>
             </div>
 
@@ -291,7 +286,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
               <OffsetRow label={t('UWorld')} value={engineStatus?.addresses?.gworld_ptr ? String(engineStatus.addresses.gworld_ptr) : t('Not Resolving')} dimmed={!engineStatus?.addresses?.gworld_ptr} />
               <OffsetRow label={t('ScriptOff')} value={engineStatus?.script_offset_diagnostics ? `0x${engineStatus.script_offset_diagnostics.selected_offset.toString(16)}` : '-'} />
               <OffsetRow label={t('ScriptConf')} value={engineStatus?.script_offset_diagnostics?.confidence || '-'} />
-              <OffsetRow label={t('WS Events')} value={eventWsConnected ? `${t('CONNECTED')} (${eventWsCount})` : t('DISCONNECTED')} dimmed={!eventWsConnected} />
+              <OffsetRow label="Host Events" value={eventChannelConnected ? `${t('CONNECTED')} (${eventCount})` : t('DISCONNECTED')} dimmed={!eventChannelConnected} />
             </div>
           </div>
 
@@ -304,6 +299,8 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
         onClose={() => setShowProcessSelector(false)}
         onCoreReady={(pid) => {
           console.log('PID-scoped Pipe connected and Core Ready validated, PID:', pid);
+          setShowProcessSelector(false);
+          void loadStatus();
         }}
       />
     </div>
