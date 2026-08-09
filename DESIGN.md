@@ -18,7 +18,7 @@ React -> Tauri invoke/event -> Rust Host -> Windows Named Pipe RPC -> Core DLL -
 
 | 重构阶段 | 当前状态 | 已有证据 | 未完成门槛 |
 |---|---|---|---|
-| R0 证据与测试地基 | 进行中 | 128 项问题可跟踪；65 条 API v1 路由快照；IPC v1 契约；C++ framing/queue/backpressure/shutdown harness；Rust protocol/Fake Core 测试；前端 lint 与 build 通过 | CI 首次远端运行、三类 UE fixture、每个 P0 的回归测试 |
+| R0 证据与测试地基 | 进行中 | 128 项问题可跟踪；65 条 API v1 路由快照；IPC v1 契约；C++ framing/queue/backpressure/shutdown harness；Rust protocol/Fake Core 测试；前端 lint/test/build 通过；Windows CI 三个 job 首次通过 | 三类 UE fixture、每个 P0 的回归测试 |
 | R1 安全止血 | 未开始 | P0 静态证据已登记 | 注入、GameThread、Hook、HTTP worker、USMAP、reconnect、critical offset 全部修复并验证 |
 | R2 CoreRuntime/能力模型 | 未开始 | 目标状态机已在重构计划定义 | CoreRuntime、EngineContext、CapabilityRegistry 实装 |
 | R3 Named Pipe/Rust Host | 未开始 | IPC v1 framing 与 Fake Core 地基已建立 | 真实 Pipe、PID/ACL 校验、SessionManager、deadline/cancel |
