@@ -64,6 +64,7 @@ const char* ToString(const SnapshotPublishError error) noexcept
 	case SnapshotPublishError::SourceLimitExceeded: return "SNAPSHOT_SOURCE_LIMIT_EXCEEDED";
 	case SnapshotPublishError::RecordInvalid: return "SNAPSHOT_RECORD_INVALID";
 	case SnapshotPublishError::RecordsNotOrdered: return "SNAPSHOT_RECORDS_NOT_ORDERED";
+	case SnapshotPublishError::RetirementBackpressure: return "SNAPSHOT_RETIREMENT_BACKPRESSURE";
 	case SnapshotPublishError::PublishFailed: return "SNAPSHOT_PUBLISH_FAILED";
 	}
 	return "SNAPSHOT_UNKNOWN_ERROR";
@@ -91,6 +92,56 @@ SnapshotPublishResult EngineSnapshotStore::Publish(EngineSnapshot snapshot) noex
 		return {.Error = SnapshotPublishError::StoreInvalid};
 	if (IsStopped())
 		return {.Error = SnapshotPublishError::StoreStopped};
+	const SnapshotPublishResult envelope = ValidateEnvelope(snapshot);
+	if (!envelope.Ok())
+		return envelope;
+
+	std::int32_t previousIndex = -1;
+	for (std::size_t recordIndex = 0; recordIndex < snapshot.Objects.size(); ++recordIndex)
+	{
+		const SnapshotPublishResult validated = ValidateRecordForPublication(
+			snapshot.Objects[recordIndex],
+			m_SessionId,
+			m_ContextGeneration,
+			snapshot.SourceObjectCount,
+			previousIndex,
+			static_cast<std::int32_t>(recordIndex));
+		if (!validated.Ok())
+			return validated;
+		previousIndex = snapshot.Objects[recordIndex].Handle.Index;
+	}
+	return PublishValidatedSnapshot(std::move(snapshot), false);
+}
+
+SnapshotPublishResult EngineSnapshotStore::ValidateRecordForPublication(
+	const EngineSnapshotObject& record,
+	const std::string& sessionId,
+	const std::uint64_t contextGeneration,
+	const std::int32_t sourceObjectCount,
+	const std::int32_t previousObjectIndex,
+	const std::int32_t recordIndex) noexcept
+{
+	if (!IsValidHandleEnvelope(record.Handle, sessionId, contextGeneration, sourceObjectCount)
+		|| !IsValidMetadata(record))
+	{
+		return {
+			.Error = SnapshotPublishError::RecordInvalid,
+			.RecordIndex = recordIndex
+		};
+	}
+	if (record.Handle.Index <= previousObjectIndex)
+	{
+		return {
+			.Error = SnapshotPublishError::RecordsNotOrdered,
+			.RecordIndex = recordIndex
+		};
+	}
+	return {};
+}
+
+SnapshotPublishResult EngineSnapshotStore::ValidateEnvelope(
+	const EngineSnapshot& snapshot) const noexcept
+{
 	if (snapshot.SessionId != m_SessionId
 		|| snapshot.ContextGeneration != m_ContextGeneration
 		|| snapshot.Generation == 0
@@ -112,48 +163,103 @@ SnapshotPublishResult EngineSnapshotStore::Publish(EngineSnapshot snapshot) noex
 	{
 		return {.Error = SnapshotPublishError::EnvelopeInvalid};
 	}
+	return {};
+}
 
-	std::int32_t previousIndex = -1;
-	for (std::size_t recordIndex = 0; recordIndex < snapshot.Objects.size(); ++recordIndex)
+SnapshotPublishResult EngineSnapshotStore::PublishValidated(
+	ValidatedEngineSnapshot snapshot) noexcept
+{
+	EngineSnapshot prepared = std::move(snapshot.m_Snapshot);
+	if (!IsConfigured())
 	{
-		const EngineSnapshotObject& record = snapshot.Objects[recordIndex];
-		if (!IsValidHandleEnvelope(
-			record.Handle,
-			m_SessionId,
-			m_ContextGeneration,
-			snapshot.SourceObjectCount)
-			|| !IsValidMetadata(record))
-		{
-			return {
-				.Error = SnapshotPublishError::RecordInvalid,
-				.RecordIndex = static_cast<std::int32_t>(recordIndex)
-			};
-		}
-		if (record.Handle.Index <= previousIndex)
-		{
-			return {
-				.Error = SnapshotPublishError::RecordsNotOrdered,
-				.RecordIndex = static_cast<std::int32_t>(recordIndex)
-			};
-		}
-		previousIndex = record.Handle.Index;
+		(void)RetireRejectedSnapshot(std::move(prepared));
+		return {.Error = SnapshotPublishError::StoreInvalid};
 	}
+	if (IsStopped())
+	{
+		(void)RetireRejectedSnapshot(std::move(prepared));
+		return {.Error = SnapshotPublishError::StoreStopped};
+	}
+	const SnapshotPublishResult envelope = ValidateEnvelope(prepared);
+	if (!envelope.Ok())
+	{
+		(void)RetireRejectedSnapshot(std::move(prepared));
+		return envelope;
+	}
+	return PublishValidatedSnapshot(std::move(prepared), true);
+}
 
+bool EngineSnapshotStore::RetireRejectedSnapshot(EngineSnapshot snapshot) noexcept
+{
+	try
+	{
+		std::lock_guard<std::mutex> lock(m_PublishMutex);
+		return RetireRejectedSnapshotLocked(std::move(snapshot));
+	}
+	catch (...)
+	{
+		return false;
+	}
+}
+
+bool EngineSnapshotStore::RetireRejectedSnapshotLocked(EngineSnapshot snapshot) noexcept
+{
+	try
+	{
+		if (m_RejectedSnapshotCount >= kMaxRetiredSnapshots)
+			return false;
+		m_RejectedSnapshots[m_RejectedSnapshotCount].emplace(std::move(snapshot));
+		++m_RejectedSnapshotCount;
+		return true;
+	}
+	catch (...)
+	{
+		return false;
+	}
+}
+
+SnapshotPublishResult EngineSnapshotStore::PublishValidatedSnapshot(
+	EngineSnapshot snapshot,
+	const bool deferPreviousSnapshot) noexcept
+{
 	try
 	{
 		std::lock_guard<std::mutex> lock(m_PublishMutex);
 		if (IsStopped())
+		{
+			if (deferPreviousSnapshot)
+				(void)RetireRejectedSnapshotLocked(std::move(snapshot));
 			return {.Error = SnapshotPublishError::StoreStopped};
+		}
 		const std::shared_ptr<const EngineSnapshot> current = Current();
 		if (current && snapshot.Generation <= current->Generation)
+		{
+			if (deferPreviousSnapshot)
+				(void)RetireRejectedSnapshotLocked(std::move(snapshot));
 			return {.Error = SnapshotPublishError::GenerationNotMonotonic};
+		}
+		if (deferPreviousSnapshot
+			&& current
+			&& m_RetiredSnapshotCount >= kMaxRetiredSnapshots)
+		{
+			(void)RetireRejectedSnapshotLocked(std::move(snapshot));
+			return {.Error = SnapshotPublishError::RetirementBackpressure};
+		}
 
 		auto published = std::make_shared<const EngineSnapshot>(std::move(snapshot));
-		m_Current.store(published, std::memory_order_release);
+		std::shared_ptr<const EngineSnapshot> replaced =
+			m_Current.exchange(published, std::memory_order_acq_rel);
+		if (deferPreviousSnapshot && replaced)
+		{
+			m_RetiredSnapshots[m_RetiredSnapshotCount] = std::move(replaced);
+			++m_RetiredSnapshotCount;
+		}
 		return {.Snapshot = std::move(published)};
 	}
 	catch (...)
 	{
+		if (deferPreviousSnapshot)
+			(void)RetireRejectedSnapshot(std::move(snapshot));
 		return {.Error = SnapshotPublishError::PublishFailed};
 	}
 }
@@ -169,10 +275,42 @@ std::uint64_t EngineSnapshotStore::CurrentGeneration() const noexcept
 	return current ? current->Generation : 0;
 }
 
-void EngineSnapshotStore::Stop() noexcept
+std::size_t EngineSnapshotStore::ReclaimRetired() noexcept
+{
+	std::array<std::shared_ptr<const EngineSnapshot>, kMaxRetiredSnapshots> retired;
+	std::array<std::optional<EngineSnapshot>, kMaxRetiredSnapshots> rejected;
+	std::size_t retiredCount = 0;
+	std::size_t rejectedCount = 0;
+	{
+		std::lock_guard<std::mutex> lock(m_PublishMutex);
+		retiredCount = m_RetiredSnapshotCount;
+		for (std::size_t index = 0; index < retiredCount; ++index)
+			retired[index] = std::move(m_RetiredSnapshots[index]);
+		rejectedCount = m_RejectedSnapshotCount;
+		for (std::size_t index = 0; index < rejectedCount; ++index)
+		{
+			rejected[index].emplace(std::move(*m_RejectedSnapshots[index]));
+			m_RejectedSnapshots[index].reset();
+		}
+		m_RetiredSnapshotCount = 0;
+		m_RejectedSnapshotCount = 0;
+	}
+	return retiredCount + rejectedCount;
+}
+
+std::size_t EngineSnapshotStore::RetiredSnapshotCount() const noexcept
 {
 	std::lock_guard<std::mutex> lock(m_PublishMutex);
-	m_Stopped.store(true, std::memory_order_release);
+	return m_RetiredSnapshotCount + m_RejectedSnapshotCount;
+}
+
+void EngineSnapshotStore::Stop() noexcept
+{
+	{
+		std::lock_guard<std::mutex> lock(m_PublishMutex);
+		m_Stopped.store(true, std::memory_order_release);
+	}
+	(void)ReclaimRetired();
 }
 
 } // namespace UExplorer::Runtime

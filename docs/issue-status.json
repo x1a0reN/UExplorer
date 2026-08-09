@@ -80,6 +80,7 @@
 		"2026-08-09: ObjectArraySnapshotSource is a production metadata boundary built only from stable handles, immutable context offsets, EngineNameCodec, and SafeMemory; Main owns and drains its PostRender frame-client attachment",
 		"2026-08-10: EngineFacade now owns a generation/layout-bound immutable TypeSnapshotStore; publication retains exact object/reflection dependencies, deep-freezes descriptors, and refuses partial type/function coverage",
 		"2026-08-10: GameThreadFrameScheduler replaces the exclusive domain frame slot with one backend-owned, eight-client bounded scheduler; per-client pointer withdrawal and callback barriers preserve explicit lifetime ownership",
+		"2026-08-10: production EngineSnapshot publication now uses an unforgeable validated token, segmented records, atomic ownership transfer, and fixed-capacity worker reclamation instead of a final game-thread O(N) scan/allocation/destruction",
 		"2026-08-09: Rust DomainService and the split TypeScript Tauri client replace the frontend REST/SSE/WebSocket/configuration monolith at the process boundary",
         "Remaining legacy domain/API monoliths and direct Off/Settings consumers still require migration"
       ]
@@ -408,6 +409,7 @@
 		"Core harness proves mutation between capture and validation leaves the previous generation published",
 		"2026-08-09: production ObjectArraySnapshotSource builds stable name/full/class/package/kind metadata on the verified PostRender thread and atomically publishes only after a full validation sweep and final count check",
 		"2026-08-10: Main attaches the producer through the shared bounded GameThreadFrameScheduler, requests initial/periodic generations, and drains the producer plus scheduler before facade/source teardown on normal and failed initialization paths",
+		"2026-08-10: capture validates each record within the slot budget into std::deque storage; ValidatedEngineSnapshot removes the final O(N) Store scan/reserve, while replaced/rejected/failed generations use fixed 8-slot retirement, explicit backpressure, and Main-worker reclamation",
 		"2026-08-09: objects.snapshot.page reads only an immutable published generation under a CoreRuntime request lease; it never traverses a live UE container or enters the game-thread queue",
 		"GC-churn, large-object-table, and real target profile fixtures remain pending; the result is a validated complete sweep, not a point-in-engine-time atomic snapshot"
 	  ]
@@ -459,6 +461,7 @@
 		"2026-08-09: production object/class/package path traversal uses checked address arithmetic, bounded 128-level outer depth, metadata byte ceilings, cycle rejection, and a final source-count coherence check",
 		"2026-08-09: PropertyCodec validates full array/sparse ranges, header/content coherence, allocation bits, address/multiplication overflow, disjoint layout fields, recursion depth, exact output-node count including Map/Set wrappers, and descriptor/address cycles",
 		"2026-08-10: TypeSnapshot deep-clones descriptor DAGs with node/depth/field limits, rejects descriptor cycles, checks every property/parameter range against the witnessed owner size, and rejects hierarchy cycles/depth overflow",
+		"2026-08-10: production object snapshot completion no longer performs a contiguous vector allocation or second record scan; old and failed generations are retained under bounded retirement until worker-thread reclamation",
 		"Real reflection descriptors and target-scale container fixtures remain pending"
 	  ]
 	},

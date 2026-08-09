@@ -165,6 +165,7 @@ foreach ($token in @('kMaxClients = 8', 'kMaxFrameWorkBudget', 'kClientQuantum =
 foreach ($token in @('status.inspect', 'status.engine', 'status.health',
         'objects.snapshot.page', 'objects.handle.issue', 'functions.handle.issue',
 		'SNAPSHOT_GENERATION_MISMATCH', 'SNAPSHOT_CONTEXT_MISMATCH',
+		'retired_snapshot_count', 'retired_captures',
 		'kMaxSnapshotPageRecords = 128', 'std::upper_bound', 'SESSION_MISMATCH',
         'TryAcquireRequest', 'std::move(*lease)', 'm_GameThread.Enqueue',
         'onGameThreadQueued(ticket)', 'SerializeObjectHandle', 'SerializeFunctionHandle')) {
@@ -309,11 +310,15 @@ foreach ($token in @('ReflectionLayoutValidated', 'PropertyCodecEnabled')) {
 	Assert-NotContains $capabilities $token 'A forgeable reflection boolean probe reopened the capability path.'
 }
 foreach ($token in @('EngineSnapshotObject', 'SessionId', 'ContextGeneration', 'Generation',
-		'SourceObjectCount', 'SkippedSlots', 'std::atomic<std::shared_ptr<const EngineSnapshot>>')) {
+		'SourceObjectCount', 'SkippedSlots', 'std::deque<EngineSnapshotObject>',
+		'ValidatedEngineSnapshot', 'PublishValidated', 'kMaxRetiredSnapshots',
+		'ReclaimRetired', 'std::atomic<std::shared_ptr<const EngineSnapshot>>')) {
 	Assert-Contains $engineSnapshotHeader $token 'Immutable EngineSnapshot contract regressed.'
 }
 foreach ($token in @('SNAPSHOT_GENERATION_NOT_MONOTONIC', 'SNAPSHOT_RECORDS_NOT_ORDERED',
-		'IsValidHandleEnvelope', 'IsValidMetadata', 'm_Current.store', 'm_Current.load')) {
+		'SNAPSHOT_RETIREMENT_BACKPRESSURE', 'IsValidHandleEnvelope', 'IsValidMetadata',
+		'ValidateRecordForPublication', 'm_Current.exchange', 'm_RetiredSnapshots',
+		'm_RejectedSnapshot', 'm_Current.load')) {
 	Assert-Contains $engineSnapshot $token 'Atomic EngineSnapshot publication regressed.'
 }
 foreach ($token in @('IEngineSnapshotSource', 'IGameThreadFrameClient', 'kFramePumpBudget',
@@ -322,9 +327,11 @@ foreach ($token in @('IEngineSnapshotSource', 'IGameThreadFrameClient', 'kFrameP
 	Assert-Contains $snapshotCaptureHeader $token 'Incremental snapshot capture contract regressed.'
 }
 foreach ($token in @('m_PumpOwned.test_and_set', 'SnapshotSlotReadResult::Empty',
-		'ValidateSlot(index, expected)', 'PublishedObjects.reserve',
+		'ValidateSlot(index, expected)', 'ValidateRecordForPublication',
+		'ValidatedEngineSnapshot', 'm_Store.PublishValidated', 'RetireWorkingCapture',
+		'ReclaimRetired', 'kMaxRetiredCaptures',
+		'published.Error == SnapshotPublishError::RetirementBackpressure',
 		'SnapshotCaptureError::SourceValidationFailed', 'SnapshotCaptureError::SourceCountChanged',
-		'finalObjectCount != m_Working->SourceObjectCount',
 		'publishObjectCount != m_Working->SourceObjectCount', 'm_PumpBarrier.WaitForDrain')) {
 	Assert-Contains $snapshotCapture $token 'Budgeted snapshot capture implementation regressed.'
 }
@@ -362,7 +369,7 @@ foreach ($apiFile in Get-ChildItem -LiteralPath (Join-Path $root 'Dumper\API') -
 foreach ($token in @('CaptureEngineContext', 'RefreshRuntimeCapabilities', 'ShutdownCoordinator',
 		'ObjectArraySnapshotSource', 'ConfigureSnapshotCapture', 'GetGameThreadFrameScheduler',
 		'AttachFrameClient', 'AttachClient', 'RequestCapture', 'DetachClient',
-		'DetachFrameClient', 'snapshot_frame_client', 'frame_scheduler',
+		'DetachFrameClient', 'ReclaimSnapshotStorage', 'snapshot_frame_client', 'frame_scheduler',
 		'BeginStopping', 'MarkStopped')) {
     Assert-Contains $main $token 'Main does not use the runtime ownership path.'
 }
@@ -429,6 +436,11 @@ foreach ($token in @('TestEngineContextAndCapabilities', 'TestCoreRuntimeStateAn
 		'A slot mutation between capture and validation was published',
 		'Object-count mutation was published as a complete snapshot',
 		'Object-count mutation during publication replaced the complete snapshot',
+		'Snapshot producer deferred malformed-record validation to the final publication frame',
+		'Failed snapshot working sets were destroyed on the frame thread instead of retired',
+		'Atomic snapshot replacement did not defer prior-generation reclamation',
+		'Snapshot failure retirement exceeded its fixed capacity without backpressure',
+		'Validated publication exceeded retirement capacity without explicit backpressure',
 		'TestGameThreadFrameSchedulerBudgetFairnessAndDrain',
 		'Frame scheduler did not distribute the first round fairly',
 		'Frame scheduler detach did not withdraw and retain an in-flight owner',

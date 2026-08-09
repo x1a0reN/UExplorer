@@ -62,6 +62,12 @@ not exposed until a real target reflection/profile witness configures
 Object/type/package/instance collections now use exact full-path filters and
 generation/query-bound cursor pages capped at 128 records; the Host reuses its snapshot
 indexes instead of rescanning the snapshot or accepting legacy offset pagination.
+Production object snapshots keep records in segmented storage and validate each record
+inside the existing capture budget. The final PostRender step therefore performs no
+contiguous `reserve(N)` or second O(N) record scan. Replaced generations, rejected
+publications, and failed working sets use fixed-capacity retirement slots and are
+destroyed by the DLL worker thread; exhaustion is explicit backpressure, not synchronous
+game-thread cleanup.
 The Core also owns an immutable `TypeSnapshotStore` bound to one object generation and
 one witnessed reflection layout. It requires complete Class/Struct/Enum and Function
 coverage, freezes property descriptor graphs, stores direct members only, makes inherited

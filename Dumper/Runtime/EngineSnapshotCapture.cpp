@@ -52,6 +52,7 @@ const char* ToString(const SnapshotCaptureError error) noexcept
 	case SnapshotCaptureError::SourceReadFailed: return "SNAPSHOT_SOURCE_READ_FAILED";
 	case SnapshotCaptureError::SourceValidationFailed: return "SNAPSHOT_SOURCE_VALIDATION_FAILED";
 	case SnapshotCaptureError::PublicationRejected: return "SNAPSHOT_PUBLICATION_REJECTED";
+	case SnapshotCaptureError::RetirementBackpressure: return "SNAPSHOT_RETIREMENT_BACKPRESSURE";
 	case SnapshotCaptureError::UnexpectedException: return "SNAPSHOT_CAPTURE_EXCEPTION";
 	}
 	return "SNAPSHOT_CAPTURE_UNKNOWN_ERROR";
@@ -104,6 +105,8 @@ SnapshotCaptureRequestResult EngineSnapshotCapture::RequestCapture() noexcept
 			return {.Error = SnapshotCaptureError::Stopped};
 		if (m_Store.IsStopped())
 			return {.Error = SnapshotCaptureError::Stopped};
+		if (m_RetirementBackpressure.load(std::memory_order_acquire))
+			return {.Error = SnapshotCaptureError::RetirementBackpressure};
 		if (!IsConfigured())
 			return {.Error = m_Source.ContextGeneration() == m_ContextGeneration
 				? SnapshotCaptureError::InvalidConfiguration
@@ -200,8 +203,11 @@ SnapshotPumpResult EngineSnapshotCapture::Pump(const std::size_t workBudget) noe
 		{
 			return SnapshotPumpResult::Stopping;
 		}
+
+		std::size_t remaining = workBudget;
 		if (state == SnapshotCaptureState::Requested)
 		{
+			--remaining;
 			if (!StartRequestedCapture())
 				return SnapshotPumpResult::Failed;
 			state = SnapshotCaptureState::Capturing;
@@ -222,7 +228,6 @@ SnapshotPumpResult EngineSnapshotCapture::Pump(const std::size_t workBudget) noe
 			return SnapshotPumpResult::Failed;
 		}
 
-		std::size_t remaining = workBudget;
 		while (remaining > 0 && m_Working->CaptureIndex < m_Working->SourceObjectCount)
 		{
 			const std::int32_t index = m_Working->CaptureIndex;
@@ -242,6 +247,20 @@ SnapshotPumpResult EngineSnapshotCapture::Pump(const std::size_t workBudget) noe
 					Fail(SnapshotCaptureError::SourceReadFailed, index);
 					return SnapshotPumpResult::Failed;
 				}
+				const SnapshotPublishResult validated =
+					EngineSnapshotStore::ValidateRecordForPublication(
+						object,
+						m_SessionId,
+						m_ContextGeneration,
+						m_Working->SourceObjectCount,
+						m_Working->PreviousCapturedObjectIndex,
+						static_cast<std::int32_t>(m_Working->CapturedObjects.size()));
+				if (!validated.Ok())
+				{
+					Fail(SnapshotCaptureError::PublicationRejected, index);
+					return SnapshotPumpResult::Failed;
+				}
+				m_Working->PreviousCapturedObjectIndex = object.Handle.Index;
 				m_Working->CapturedObjects.push_back(std::move(object));
 			}
 			else if (read == SnapshotSlotReadResult::Empty)
@@ -261,6 +280,7 @@ SnapshotPumpResult EngineSnapshotCapture::Pump(const std::size_t workBudget) noe
 			&& m_State.load(std::memory_order_acquire) == SnapshotCaptureState::Capturing)
 		{
 			m_State.store(SnapshotCaptureState::Validating, std::memory_order_release);
+			state = SnapshotCaptureState::Validating;
 		}
 
 		while (remaining > 0 && m_Working->ValidationIndex < m_Working->SourceObjectCount)
@@ -288,34 +308,21 @@ SnapshotPumpResult EngineSnapshotCapture::Pump(const std::size_t workBudget) noe
 		if (m_Working->ValidationIndex == m_Working->SourceObjectCount
 			&& m_State.load(std::memory_order_acquire) == SnapshotCaptureState::Validating)
 		{
-			std::int32_t finalObjectCount = -1;
-			if (!m_Source.TryGetObjectCount(finalObjectCount)
-				|| finalObjectCount != m_Working->SourceObjectCount)
-			{
-				Fail(SnapshotCaptureError::SourceCountChanged, -1);
-				return SnapshotPumpResult::Failed;
-			}
-			m_Working->PublishedObjects.reserve(m_Working->CapturedObjects.size());
 			m_State.store(SnapshotCaptureState::Publishing, std::memory_order_release);
-		}
-
-		while (remaining > 0
-			&& m_Working->PublishRecordIndex < m_Working->CapturedObjects.size())
-		{
-			m_Working->PublishedObjects.push_back(std::move(
-				m_Working->CapturedObjects[m_Working->PublishRecordIndex]));
-			++m_Working->PublishRecordIndex;
-			--remaining;
-			if (StopRequested())
-				return SnapshotPumpResult::Stopping;
+			state = SnapshotCaptureState::Publishing;
 		}
 
 		PublishDiagnostics(*m_Working);
 		if (m_Working->ValidationIndex < m_Working->SourceObjectCount
-			|| m_Working->PublishRecordIndex < m_Working->CapturedObjects.size())
+			|| state != SnapshotCaptureState::Publishing
+			|| remaining == 0)
+		{
 			return SnapshotPumpResult::Progress;
+		}
 		if (StopRequested())
 			return SnapshotPumpResult::Stopping;
+
+		--remaining;
 		std::int32_t publishObjectCount = -1;
 		if (!m_Source.TryGetObjectCount(publishObjectCount)
 			|| publishObjectCount != m_Working->SourceObjectCount)
@@ -335,12 +342,20 @@ SnapshotPumpResult EngineSnapshotCapture::Pump(const std::size_t workBudget) noe
 				: 0,
 			.SourceObjectCount = m_Working->SourceObjectCount,
 			.SkippedSlots = m_Working->SkippedSlots,
-			.Objects = std::move(m_Working->PublishedObjects)
+			.Objects = std::move(m_Working->CapturedObjects)
 		};
-		const SnapshotPublishResult published = m_Store.Publish(std::move(snapshot));
+		ValidatedEngineSnapshot validatedSnapshot(std::move(snapshot));
+		const SnapshotPublishResult published =
+			m_Store.PublishValidated(std::move(validatedSnapshot));
 		if (!published.Ok())
 		{
-			Fail(SnapshotCaptureError::PublicationRejected, published.RecordIndex);
+			const SnapshotCaptureError captureError =
+				published.Error == SnapshotPublishError::RetirementBackpressure
+				? SnapshotCaptureError::RetirementBackpressure
+				: SnapshotCaptureError::PublicationRejected;
+			if (captureError == SnapshotCaptureError::RetirementBackpressure)
+				m_RetirementBackpressure.store(true, std::memory_order_release);
+			Fail(captureError, published.RecordIndex);
 			return SnapshotPumpResult::Failed;
 		}
 
@@ -384,10 +399,35 @@ void EngineSnapshotCapture::Fail(
 {
 	if (m_Working)
 		PublishDiagnostics(*m_Working);
-	m_Working.reset();
+	if (!RetireWorkingCapture())
+		m_RetirementBackpressure.store(true, std::memory_order_release);
 	m_Error.store(error, std::memory_order_release);
 	m_ErrorIndex.store(index, std::memory_order_release);
 	m_State.store(SnapshotCaptureState::Failed, std::memory_order_release);
+}
+
+bool EngineSnapshotCapture::RetireWorkingCapture() noexcept
+{
+	if (!m_Working)
+		return true;
+	try
+	{
+		std::lock_guard<std::mutex> lock(m_RetirementMutex);
+		for (std::optional<WorkingCapture>& retired : m_RetiredCaptures)
+		{
+			if (retired)
+				continue;
+			retired.emplace(std::move(*m_Working));
+			m_Working.reset();
+			m_RetiredCaptureCount.fetch_add(1, std::memory_order_acq_rel);
+			return true;
+		}
+	}
+	catch (...)
+	{
+		return false;
+	}
+	return false;
 }
 
 void EngineSnapshotCapture::PublishDiagnostics(const WorkingCapture& working) noexcept
@@ -422,8 +462,48 @@ SnapshotCaptureDiagnostics EngineSnapshotCapture::Diagnostics() const noexcept
 		.CapturedObjects = m_CapturedObjects.load(std::memory_order_acquire),
 		.SkippedSlots = m_SkippedSlots.load(std::memory_order_acquire),
 		.ErrorIndex = m_ErrorIndex.load(std::memory_order_acquire),
-		.PumpInFlight = m_PumpBarrier.InFlight()
+		.PumpInFlight = m_PumpBarrier.InFlight(),
+		.RetiredCaptures = m_RetiredCaptureCount.load(std::memory_order_acquire)
 	};
+}
+
+std::size_t EngineSnapshotCapture::ReclaimRetired() noexcept
+{
+	std::array<std::optional<WorkingCapture>, kMaxRetiredCaptures> retired;
+	std::optional<WorkingCapture> stalled;
+	std::size_t retiredCount = 0;
+	try
+	{
+		std::lock_guard<std::mutex> requestLock(m_RequestMutex);
+		std::lock_guard<std::mutex> retirementLock(m_RetirementMutex);
+		for (std::optional<WorkingCapture>& entry : m_RetiredCaptures)
+		{
+			if (!entry)
+				continue;
+			retired[retiredCount].emplace(std::move(*entry));
+			entry.reset();
+			++retiredCount;
+		}
+		m_RetiredCaptureCount.store(0, std::memory_order_release);
+		if (m_RetirementBackpressure.load(std::memory_order_acquire)
+			&& m_State.load(std::memory_order_acquire) == SnapshotCaptureState::Failed
+			&& m_PumpBarrier.InFlight() == 0)
+		{
+			if (m_Working)
+			{
+				stalled.emplace(std::move(*m_Working));
+				m_Working.reset();
+				++retiredCount;
+			}
+			if (m_Store.RetiredSnapshotCount() == 0)
+				m_RetirementBackpressure.store(false, std::memory_order_release);
+		}
+	}
+	catch (...)
+	{
+		return retiredCount;
+	}
+	return retiredCount;
 }
 
 bool EngineSnapshotCapture::StopAndDrain(const std::chrono::milliseconds timeout)
@@ -437,6 +517,13 @@ bool EngineSnapshotCapture::StopAndDrain(const std::chrono::milliseconds timeout
 	if (!m_PumpBarrier.WaitForDrain(timeout))
 		return false;
 	m_Working.reset();
+	{
+		std::lock_guard<std::mutex> retirementLock(m_RetirementMutex);
+		for (std::optional<WorkingCapture>& retired : m_RetiredCaptures)
+			retired.reset();
+		m_RetiredCaptureCount.store(0, std::memory_order_release);
+		m_RetirementBackpressure.store(false, std::memory_order_release);
+	}
 	m_State.store(SnapshotCaptureState::Stopped, std::memory_order_release);
 	return true;
 }

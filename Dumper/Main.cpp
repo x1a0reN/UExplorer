@@ -98,6 +98,18 @@ namespace
 		return g_PipeServer->OpenAdmissions();
 	}
 
+	void ReclaimSnapshotStorage()
+	{
+		if (!g_EngineFacade)
+			return;
+		(void)g_EngineFacade->Snapshots().ReclaimRetired();
+		if (UExplorer::Runtime::EngineSnapshotCapture* capture =
+			g_EngineFacade->SnapshotCapture())
+		{
+			(void)capture->ReclaimRetired();
+		}
+	}
+
 	bool DetachFrameScheduling(const std::chrono::milliseconds timeout)
 	{
 		if (g_SnapshotFrameClientAttached)
@@ -407,6 +419,7 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 	auto nextSnapshotRefresh = std::chrono::steady_clock::now() + std::chrono::seconds(2);
 	while (startupReady && g_Running.load())
 	{
+		ReclaimSnapshotStorage();
 		RefreshRuntimeCapabilities();
 		if (!EnsurePipeAdmissions())
 		{

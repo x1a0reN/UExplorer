@@ -112,6 +112,7 @@ json SerializeSnapshotDiagnostics(const Runtime::EngineFacade& engine)
 			{"stopped", store.IsStopped()}
 		};
 	}
+	data["retired_snapshot_count"] = store.RetiredSnapshotCount();
 
 	const Runtime::EngineSnapshotCapture* capture = engine.SnapshotCapture();
 	data["capture_configured"] = capture != nullptr;
@@ -130,7 +131,8 @@ json SerializeSnapshotDiagnostics(const Runtime::EngineFacade& engine)
 			{"captured_objects", diagnostics.CapturedObjects},
 			{"skipped_slots", diagnostics.SkippedSlots},
 			{"error_index", diagnostics.ErrorIndex},
-			{"pump_in_flight", diagnostics.PumpInFlight}
+			{"pump_in_flight", diagnostics.PumpInFlight},
+			{"retired_captures", diagnostics.RetiredCaptures}
 		};
 	}
 	else

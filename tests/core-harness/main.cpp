@@ -2867,6 +2867,10 @@ namespace
 	void TestIncrementalSnapshotCapture()
 	{
 		using namespace UExplorer::Runtime;
+		static_assert(std::is_same_v<
+			decltype(EngineSnapshot{}.Objects),
+			std::deque<EngineSnapshotObject>>);
+		static_assert(!std::is_default_constructible_v<ValidatedEngineSnapshot>);
 
 		FakeSnapshotSource source;
 		source.Slots.resize(10);
@@ -2930,23 +2934,23 @@ namespace
 
 		Require(capture.RequestCapture().Ok(), "Object-count mutation capture was not requested");
 		Require(
-			capture.Pump(10) == SnapshotPumpResult::Progress,
+			capture.Pump(11) == SnapshotPumpResult::Progress,
 			"Object-count mutation fixture did not finish its capture phase");
 		source.Slots.resize(11);
 		Require(
-			capture.Pump(10) == SnapshotPumpResult::Failed
+			capture.Pump(11) == SnapshotPumpResult::Failed
 				&& capture.Diagnostics().Error == SnapshotCaptureError::SourceCountChanged
 				&& store.CurrentGeneration() == 1,
 			"Object-count mutation was published as a complete snapshot");
 		source.Slots.resize(10);
 		Require(capture.RequestCapture().Ok(), "Publication-count mutation capture was not requested");
 		Require(
-			capture.Pump(20) == SnapshotPumpResult::Progress
+			capture.Pump(21) == SnapshotPumpResult::Progress
 				&& capture.Diagnostics().State == SnapshotCaptureState::Publishing,
 			"Publication-count mutation fixture did not reach its publishing phase");
 		source.Slots.resize(11);
 		Require(
-			capture.Pump(5) == SnapshotPumpResult::Failed
+			capture.Pump(1) == SnapshotPumpResult::Failed
 				&& capture.Diagnostics().Error == SnapshotCaptureError::SourceCountChanged
 				&& store.CurrentGeneration() == 1,
 			"Object-count mutation during publication replaced the complete snapshot");
@@ -2979,6 +2983,27 @@ namespace
 				&& capture.Diagnostics().Error == SnapshotCaptureError::SourceContextMismatch,
 			"Snapshot producer crossed an identity-source context generation");
 		source.Generation = 42;
+		const std::string classPath = source.Slots[2]->ClassPath;
+		source.Slots[2]->ClassPath.clear();
+		Require(capture.RequestCapture().Ok(), "Invalid-record capture was not requested");
+		Require(
+			capture.Pump(4) == SnapshotPumpResult::Failed
+				&& capture.Diagnostics().Error == SnapshotCaptureError::PublicationRejected
+				&& capture.Diagnostics().ErrorIndex == 2,
+			"Snapshot producer deferred malformed-record validation to the final publication frame");
+		source.Slots[2]->ClassPath = classPath;
+		Require(
+			capture.Diagnostics().RetiredCaptures >= 5
+				&& capture.ReclaimRetired() >= 5
+				&& capture.Diagnostics().RetiredCaptures == 0,
+			"Failed snapshot working sets were destroyed on the frame thread instead of retired");
+		Require(
+			capture.RequestCapture().Ok()
+				&& capture.Pump(64) == SnapshotPumpResult::Published
+				&& store.RetiredSnapshotCount() == 1
+				&& store.ReclaimRetired() == 1
+				&& store.RetiredSnapshotCount() == 0,
+			"Atomic snapshot replacement did not defer prior-generation reclamation");
 
 		EngineSnapshotStore blockingStore("fixture-capture-session", 42);
 		EngineSnapshotCapture blockingCapture(
@@ -2990,7 +3015,7 @@ namespace
 		source.CaptureEntered.store(false, std::memory_order_release);
 		source.BlockCapture.store(true, std::memory_order_release);
 		auto pumping = std::async(std::launch::async, [&blockingCapture] {
-			return blockingCapture.Pump(1);
+			return blockingCapture.Pump(2);
 		});
 		WaitUntil(
 			[&source] { return source.CaptureEntered.load(std::memory_order_acquire); },
@@ -3013,6 +3038,95 @@ namespace
 		Require(
 			capture.StopAndDrain(std::chrono::milliseconds(100)),
 			"Completed/failed snapshot capture did not stop cleanly");
+
+		FakeSnapshotSource retirementSource;
+		retirementSource.Slots.resize(1);
+		retirementSource.Slots[0] = MakeSnapshotObject(
+			"fixture-retirement-session",
+			99,
+			0,
+			EngineObjectKind::Object);
+		retirementSource.Generation = 99;
+		retirementSource.FailReadIndex.store(0, std::memory_order_release);
+		EngineSnapshotStore retirementStore("fixture-retirement-session", 99);
+		EngineSnapshotCapture retirementCapture(
+			"fixture-retirement-session",
+			99,
+			retirementSource,
+			retirementStore);
+		for (std::size_t index = 0; index < EngineSnapshotCapture::kMaxRetiredCaptures; ++index)
+		{
+			Require(
+				retirementCapture.RequestCapture().Ok()
+					&& retirementCapture.Pump(2) == SnapshotPumpResult::Failed,
+				"Retirement-capacity fixture did not produce a failed working set");
+		}
+		Require(
+			retirementCapture.RequestCapture().Ok()
+				&& retirementCapture.Pump(2) == SnapshotPumpResult::Failed
+				&& retirementCapture.RequestCapture().Error
+					== SnapshotCaptureError::RetirementBackpressure
+				&& retirementCapture.Diagnostics().RetiredCaptures
+					== EngineSnapshotCapture::kMaxRetiredCaptures,
+			"Snapshot failure retirement exceeded its fixed capacity without backpressure");
+		Require(
+			retirementCapture.ReclaimRetired()
+				== EngineSnapshotCapture::kMaxRetiredCaptures + 1,
+			"Snapshot retirement did not reclaim the capacity-stalled working set off-frame");
+		retirementSource.FailReadIndex.store(-1, std::memory_order_release);
+		Require(
+			retirementCapture.RequestCapture().Ok()
+				&& retirementCapture.Pump(4) == SnapshotPumpResult::Published,
+			"Snapshot retirement backpressure did not clear after explicit reclamation");
+		Require(retirementCapture.StopAndDrain(), "Retirement capture did not stop");
+
+		FakeSnapshotSource publicationSource;
+		publicationSource.Slots.resize(1);
+		publicationSource.Slots[0] = MakeSnapshotObject(
+			"fixture-publication-session",
+			100,
+			0,
+			EngineObjectKind::Object);
+		publicationSource.Generation = 100;
+		EngineSnapshotStore publicationStore("fixture-publication-session", 100);
+		EngineSnapshotCapture publicationCapture(
+			"fixture-publication-session",
+			100,
+			publicationSource,
+			publicationStore);
+		for (std::size_t generation = 0;
+			generation <= EngineSnapshotStore::kMaxRetiredSnapshots;
+			++generation)
+		{
+			Require(
+				publicationCapture.RequestCapture().Ok()
+					&& publicationCapture.Pump(4) == SnapshotPumpResult::Published,
+				"Validated publication retirement fixture rejected an in-capacity generation");
+		}
+		Require(
+			publicationStore.RetiredSnapshotCount()
+				== EngineSnapshotStore::kMaxRetiredSnapshots,
+			"Validated publication did not retain every replaced generation");
+		Require(
+			publicationCapture.RequestCapture().Ok()
+				&& publicationCapture.Pump(4) == SnapshotPumpResult::Failed
+				&& publicationCapture.Diagnostics().Error
+					== SnapshotCaptureError::RetirementBackpressure
+				&& publicationCapture.RequestCapture().Error
+					== SnapshotCaptureError::RetirementBackpressure
+				&& publicationStore.RetiredSnapshotCount()
+					== EngineSnapshotStore::kMaxRetiredSnapshots + 1,
+			"Validated publication exceeded retirement capacity without explicit backpressure");
+		Require(
+			publicationStore.ReclaimRetired()
+				== EngineSnapshotStore::kMaxRetiredSnapshots + 1
+				&& publicationCapture.ReclaimRetired() == 1,
+			"Publication backpressure did not preserve rejected ownership for worker reclamation");
+		Require(
+			publicationCapture.RequestCapture().Ok()
+				&& publicationCapture.Pump(4) == SnapshotPumpResult::Published,
+			"Validated publication did not resume after worker reclamation");
+		Require(publicationCapture.StopAndDrain(), "Publication retirement capture did not stop");
 
 		FakeHandleIdentitySource identitySource;
 		EngineFacade owner(
@@ -3101,7 +3215,8 @@ namespace
 				&& status.Data.at("name_profile").at("validated").get<bool>()
 				&& status.Data.at("name_profile").at("storage") == "name_pool"
 				&& !status.Data.at("object_snapshot").at("published").get<bool>()
-				&& !status.Data.at("object_snapshot").at("capture_configured").get<bool>(),
+				&& !status.Data.at("object_snapshot").at("capture_configured").get<bool>()
+				&& status.Data.at("object_snapshot").at("retired_snapshot_count") == 0,
 			"Status domain command did not serialize the immutable runtime/name profile");
 
 		CoreCommandRequest objectRequest{
@@ -3168,7 +3283,6 @@ namespace
 				.SourceObjectCount = 300,
 				.SkippedSlots = 40
 			};
-			snapshot.Objects.reserve(260);
 			for (std::int32_t index = 0; index < 260; ++index)
 			{
 				const std::string suffix = std::to_string(index);

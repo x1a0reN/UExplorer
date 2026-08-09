@@ -4,6 +4,7 @@
 #include "EngineSnapshot.h"
 #include "GameThreadExecutor.h"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -12,7 +13,6 @@
 #include <mutex>
 #include <optional>
 #include <string>
-#include <vector>
 
 namespace UExplorer::Runtime
 {
@@ -69,6 +69,7 @@ enum class SnapshotCaptureError : std::uint8_t
 	SourceReadFailed,
 	SourceValidationFailed,
 	PublicationRejected,
+	RetirementBackpressure,
 	UnexpectedException
 };
 
@@ -105,6 +106,7 @@ struct SnapshotCaptureDiagnostics
 	std::uint32_t SkippedSlots = 0;
 	std::int32_t ErrorIndex = -1;
 	std::uint32_t PumpInFlight = 0;
+	std::size_t RetiredCaptures = 0;
 };
 
 class EngineSnapshotCapture final : public IGameThreadFrameClient
@@ -114,6 +116,7 @@ public:
 		PostRenderPumpBackend::kFrameWorkBudget;
 	static constexpr std::size_t kDefaultPumpBudget = 256;
 	static constexpr std::size_t kMaxPumpBudget = 4096;
+	static constexpr std::size_t kMaxRetiredCaptures = 8;
 
 	EngineSnapshotCapture(
 		std::string sessionId,
@@ -128,6 +131,7 @@ public:
 	SnapshotPumpResult Pump(std::size_t workBudget = kDefaultPumpBudget) noexcept;
 	IGameThreadFrameClient::PumpResult PumpFrame(std::size_t workBudget) noexcept override;
 	SnapshotCaptureDiagnostics Diagnostics() const noexcept;
+	std::size_t ReclaimRetired() noexcept;
 	bool StopAndDrain(std::chrono::milliseconds timeout = std::chrono::milliseconds(5000));
 
 private:
@@ -139,15 +143,15 @@ private:
 		std::int32_t CaptureIndex = 0;
 		std::int32_t ValidationIndex = 0;
 		std::size_t ValidationRecordIndex = 0;
-		std::size_t PublishRecordIndex = 0;
+		std::int32_t PreviousCapturedObjectIndex = -1;
 		std::uint32_t SkippedSlots = 0;
 		std::deque<EngineSnapshotObject> CapturedObjects;
-		std::vector<EngineSnapshotObject> PublishedObjects;
 	};
 
 	std::uint64_t AllocateGenerationLocked() noexcept;
 	bool StartRequestedCapture();
 	void Fail(SnapshotCaptureError error, std::int32_t index) noexcept;
+	bool RetireWorkingCapture() noexcept;
 	void PublishDiagnostics(const WorkingCapture& working) noexcept;
 	bool StopRequested() const noexcept;
 
@@ -157,9 +161,13 @@ private:
 	EngineSnapshotStore& m_Store;
 	CallbackBarrier m_PumpBarrier;
 	mutable std::mutex m_RequestMutex;
+	mutable std::mutex m_RetirementMutex;
 	std::optional<WorkingCapture> m_Working;
+	std::array<std::optional<WorkingCapture>, kMaxRetiredCaptures> m_RetiredCaptures;
 	std::uint64_t m_NextGeneration = 1;
 	std::atomic<bool> m_StopRequested{false};
+	std::atomic<bool> m_RetirementBackpressure{false};
+	std::atomic<std::size_t> m_RetiredCaptureCount{0};
 	std::atomic_flag m_PumpOwned = ATOMIC_FLAG_INIT;
 	std::atomic<SnapshotCaptureState> m_State{SnapshotCaptureState::Idle};
 	std::atomic<SnapshotCaptureError> m_Error{SnapshotCaptureError::None};

@@ -25,7 +25,7 @@ UExplorer 是一个面向 Unreal Engine 的 **SDK Dump + 实时游戏内省工�
 └──────────────────────────────────────────────┘
 ```
 
-当前分支已完成 R4 原子通信切换并进入 R5.1。`CoreRuntime`、不可变 `EngineContext`/名称布局、`EngineFacade`、稳定 Handle、不可变 Snapshot/Host 索引、安全关闭边界、Named Pipe RPC、Rust `CoreRpcClient`、EventHub、多 PID `SessionManager`、`DomainService` 与 Tauri Channel bridge 已形成唯一桌面主链路。React 不再直接使用 HTTP/SSE/WebSocket；Core release project 不编译 `Dumper/Server` 或 `Dumper/API`，也不链接 WinSock。旧网络/API 源文件按“不删除”约束保留为历史证据，不能从其推断当前行为。当前 Host 实现 status 与 snapshot-backed Object/Type 列表查询；集合查询复用 Host 索引，使用 full path 和 generation/query-bound cursor，单页上限 128。Core 的 `ReflectionLayout` 已验证完整字段集与 `UStruct` 尺寸/对齐，layout 与 codec 分阶段原子发布并分别驱动 capability。新增的 immutable `TypeSnapshotStore` 绑定 exact object generation + layout fingerprint，要求完整 type/function 覆盖、deep-frozen descriptor、direct/inherited 显式语义、真实 CDO handle 和有界无环 super graph。PostRender 只挂一个长期存活的 `GameThreadFrameScheduler`，Snapshot 及后续 reflection/type/watch collector 通过 8-client、32-unit、4-unit quantum、2ms 截止的公平调度层接入；错误 pump thread 不再派发领域工作。production 尚无 reflection/type capture source，详细 type command 也未注册，因此相关 capability 仍关闭。Memory/Call/World/Watch/Hook/Blueprint/Dump 等命令明确返回 capability unavailable，继续进入 R5 领域正确性阶段。UE 版本、GC、PostRender/Hook、目标规模与卸载证据仍属于 R7，不由通用进程 fixture 代替。功能真实性与未完成项以 `DESIGN.md` 和 `docs/issue-status.json` 为准。
+当前分支已完成 R4 原子通信切换并进入 R5.1。`CoreRuntime`、不可变 `EngineContext`/名称布局、`EngineFacade`、稳定 Handle、不可变 Snapshot/Host 索引、安全关闭边界、Named Pipe RPC、Rust `CoreRpcClient`、EventHub、多 PID `SessionManager`、`DomainService` 与 Tauri Channel bridge 已形成唯一桌面主链路。React 不再直接使用 HTTP/SSE/WebSocket；Core release project 不编译 `Dumper/Server` 或 `Dumper/API`，也不链接 WinSock。旧网络/API 源文件按“不删除”约束保留为历史证据，不能从其推断当前行为。当前 Host 实现 status 与 snapshot-backed Object/Type 列表查询；集合查询复用 Host 索引，使用 full path 和 generation/query-bound cursor，单页上限 128。Core 的 `ReflectionLayout` 已验证完整字段集与 `UStruct` 尺寸/对齐，layout 与 codec 分阶段原子发布并分别驱动 capability。新增的 immutable `TypeSnapshotStore` 绑定 exact object generation + layout fingerprint，要求完整 type/function 覆盖、deep-frozen descriptor、direct/inherited 显式语义、真实 CDO handle 和有界无环 super graph。PostRender 只挂一个长期存活的 `GameThreadFrameScheduler`，Snapshot 及后续 reflection/type/watch collector 通过 8-client、32-unit、4-unit quantum、2ms 截止的公平调度层接入；错误 pump thread 不再派发领域工作。Object Snapshot 使用分段记录、逐条 publication validation 和固定容量 Worker retirement，最终帧不再连续分配/扫描/析构整代记录。production 尚无 reflection/type capture source，详细 type command 也未注册，因此相关 capability 仍关闭。Memory/Call/World/Watch/Hook/Blueprint/Dump 等命令明确返回 capability unavailable，继续进入 R5 领域正确性阶段。UE 版本、GC、PostRender/Hook、目标规模与卸载证据仍属于 R7，不由通用进程 fixture 代替。功能真实性与未完成项以 `DESIGN.md` 和 `docs/issue-status.json` 为准。
 
 ---
 
@@ -63,8 +63,8 @@ UExplorer/
 │   │   ├── ReflectionLayout.h/.cpp   #   U/FProperty 字段 witness、尺寸边界与分阶段原子 snapshot
 │   │   ├── TypeSnapshot.h/.cpp       #   完整类型覆盖、冻结 descriptor、继承/CDO 语义
 │   │   ├── EngineVersionProbe.h/.cpp #   只扫描已验证 PE 可读节的版本标记探测
-│   │   ├── EngineSnapshot.h/.cpp     #   严格校验并原子发布的不可变快照 store
-│   │   ├── EngineSnapshotCapture.*   #   budgeted capture/validate/publish producer
+│   │   ├── EngineSnapshot.h/.cpp     #   分段记录、validated publish、旧代 Worker retirement
+│   │   ├── EngineSnapshotCapture.*   #   budgeted capture/validate/publish + failed-set retirement
 │   │   ├── ObjectSnapshotIdentitySource.h # snapshot 所需的 typed slot identity 边界
 │   │   ├── ObjectArrayIdentitySource.*    # 生产 FUObjectItem/Handle identity source
 │   │   ├── ObjectArraySnapshotSource.*    # 生产 name/full/class/package/kind metadata source

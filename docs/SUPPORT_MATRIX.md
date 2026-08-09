@@ -41,8 +41,10 @@ transport/runtime profile.
 PostRender domain work is accepted only on the executor's witnessed pump thread and is
 routed through the bounded `GameThreadFrameScheduler` (8 clients, 32 aggregate work
 units, 4-unit quantum, 2 ms dispatch deadline). This scheduling contract is covered by
-synthetic fixtures; minimized/loading behavior and target-scale tail latency remain
-unverified until the R7 UE fixtures exist.
+synthetic fixtures. Object snapshot record validation and storage are also incremental;
+old/rejected/failed generations are reclaimed off-frame under fixed backpressure.
+Minimized/loading behavior, per-record worst-case time, and target-scale memory/tail
+latency remain unverified until the R7 UE fixtures exist.
 
 The generic Core harness now exercises a synthetic, explicitly validated x64 property
 profile for scalar, FName/FString/FText, object/weak/soft reference, enum, struct,
