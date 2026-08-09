@@ -18,6 +18,7 @@
 #include "API/HookApi.h"
 #include "API/EventsApi.h"
 #include "API/DumpApi.h"
+#include "IPC/NamedPipeRpcServer.h"
 #include "Runtime/CoreCapabilities.h"
 #include "Runtime/CoreRuntimeAccess.h"
 #include "Runtime/CoreSession.h"
@@ -38,6 +39,7 @@ static std::atomic<bool> g_Running{ true };
 static std::unique_ptr<UExplorer::HttpServer> g_Server;
 static UExplorer::Runtime::CoreRuntime g_Runtime;
 static UExplorer::Services::EngineCoreStatusDiagnosticsSource g_StatusDiagnostics;
+static std::unique_ptr<UExplorer::IPC::NamedPipeRpcServer> g_PipeServer;
 static std::unique_ptr<UExplorer::Runtime::ObjectArrayIdentitySource> g_IdentitySource;
 static std::unique_ptr<UExplorer::Runtime::EngineFacade> g_EngineFacade;
 static std::unique_ptr<UExplorer::Runtime::ObjectArraySnapshotSource> g_SnapshotSource;
@@ -202,6 +204,7 @@ namespace
 		probes.ObjectSnapshotPublished = g_EngineFacade
 			&& g_EngineFacade->Snapshots().CurrentGeneration() != 0;
 		probes.FunctionCallServiceEnabled = false;
+		probes.NamedPipeListening = g_PipeServer && g_PipeServer->IsListening();
 		probes.LegacyHttpListening = legacyHttpListening;
 		const auto capabilities = UExplorer::Runtime::BuildCoreCapabilities(*snapshot.Context, probes);
 		if (!g_Runtime.PublishCapabilities(capabilities))
@@ -211,8 +214,32 @@ namespace
 		g_Runtime.TryMarkReady(UExplorer::Runtime::RequiredReadyCapabilities(), &blockers);
 	}
 
+	bool EnsurePipeAdmissions()
+	{
+		if (!g_PipeServer || !g_PipeServer->IsListening())
+			return false;
+		if (g_PipeServer->Diagnostics().AdmissionsOpen)
+			return true;
+		if (!g_Runtime.Snapshot().IsReady())
+			return true;
+		return g_PipeServer->OpenAdmissions();
+	}
+
 	void StopFailedInitialization(HMODULE module, FILE* consoleFile, const char* code, const std::string& message)
 	{
+		if (g_PipeServer
+			&& !g_PipeServer->Stop(std::chrono::milliseconds(5000)))
+		{
+			g_Runtime.RecordShutdownFailure(
+				"PIPE_INITIALIZATION_STOP_TIMEOUT",
+				"Named-pipe threads did not drain after initialization failed");
+			std::cerr << "[UExplorer] Named-pipe threads did not drain; DLL remains loaded.\n";
+			if (consoleFile)
+				fclose(consoleFile);
+			FreeConsole();
+			ExitThread(1);
+		}
+		g_PipeServer.reset();
 		UExplorer::Services::SetCoreCommandService(nullptr);
 		g_CommandService.reset();
 		g_EngineFacade.reset();
@@ -364,6 +391,30 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 		return 1;
 	}
 
+	try
+	{
+		g_PipeServer = std::make_unique<UExplorer::IPC::NamedPipeRpcServer>(
+			g_Runtime,
+			*g_CommandService,
+			UExplorer::Runtime::GetGameThreadExecutor(),
+			[] { g_Running.store(false, std::memory_order_release); });
+		if (!g_PipeServer->Start())
+		{
+			const UExplorer::IPC::NamedPipeServerDiagnostics diagnostics =
+				g_PipeServer->Diagnostics();
+			throw std::runtime_error(
+				diagnostics.LastErrorCode + ": " + diagnostics.LastErrorMessage
+				+ " (native=" + std::to_string(diagnostics.LastNativeError) + ")");
+		}
+		std::wcerr << L"[UExplorer] Named Pipe bound: " << g_PipeServer->PipeName() << L"\n";
+	}
+	catch (const std::exception& e)
+	{
+		std::cerr << "[UExplorer] FATAL: Named Pipe startup failed: " << e.what() << "\n";
+		StopFailedInitialization(Module, Dummy, "PIPE_INITIALIZATION_FAILED", e.what());
+		return 1;
+	}
+
 	// Startup runs on an owned worker thread. Do not call ProcessEvent here;
 	// unresolved metadata remains unavailable until a verified game-thread command exists.
 
@@ -423,7 +474,9 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 				const uint16_t actualPort = g_Server->GetPort();
 				WriteRuntimeState(actualPort, token, true);
 				RefreshRuntimeCapabilities(true);
-				startupReady = true;
+				startupReady = EnsurePipeAdmissions();
+				if (!startupReady)
+					std::cerr << "[UExplorer] Named Pipe lost readiness before admissions opened.\n";
 			}
 		}
 	}
@@ -437,6 +490,12 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 	while (startupReady && g_Running.load())
 	{
 		RefreshRuntimeCapabilities(true);
+		if (!EnsurePipeAdmissions())
+		{
+			std::cerr << "[UExplorer] Named Pipe listener/admission contract failed.\n";
+			g_Running.store(false, std::memory_order_release);
+			break;
+		}
 		const auto now = std::chrono::steady_clock::now();
 		if (g_SnapshotPumpAttached && now >= nextSnapshotRefresh)
 		{
@@ -472,11 +531,17 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 	g_Runtime.BeginStopping();
 	UExplorer::Services::SetCoreCommandService(nullptr);
 	UExplorer::API::SetServer(nullptr);
+	bool pipeStopped = true;
 	bool serverStopped = true;
 	bool dumpStopped = true;
 	bool hooksStopped = true;
 	bool snapshotPumpStopped = true;
 	UExplorer::Runtime::ShutdownCoordinator shutdown;
+	shutdown.AddStage("named_pipe", [&] {
+		pipeStopped = !g_PipeServer
+			|| g_PipeServer->Stop(std::chrono::milliseconds(5000));
+		return pipeStopped;
+	});
 	shutdown.AddStage("legacy_http", [&] {
 		serverStopped = !g_Server || g_Server->Stop();
 		return serverStopped;
@@ -513,6 +578,8 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 	});
 	const UExplorer::Runtime::ShutdownReport shutdownReport = shutdown.Run();
 	unloadSafe = unloadSafe && shutdownReport.SafeToUnload;
+	if (pipeStopped)
+		g_PipeServer.reset();
 	if (serverStopped)
 		g_Server.reset();
 	WriteRuntimeState(0, token, false);

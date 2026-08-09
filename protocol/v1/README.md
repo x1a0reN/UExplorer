@@ -75,9 +75,16 @@ Created -> HelloSent -> Ready -> Closing -> Closed
 
 `tests/fake-core` consumes the same strict Rust payload types. The Host/FakeCore test
 executes Hello/Welcome, Request/Response, Ping/Pong, Cancel/late Response, and
-Shutdown acknowledgement without a private fixture-only envelope. The real Windows
-Named Pipe reader/writer, peer ACL validation, and multi-PID SessionManager are still
-R3 work; this state machine is not evidence that a live Pipe is connected.
+Shutdown acknowledgement without a private fixture-only envelope.
+
+The Core adapter is implemented by `Dumper/IPC/NamedPipeRpcServer.*`. It binds the
+canonical target-PID name before game hooks are installed, applies a protected DACL
+for the current user, rejects remote clients, verifies the client PID and SID, and
+uses overlapped reads/writes plus owned listener/request threads. The Windows Core
+harness uses a real NPFS client to verify the server PID, handshake, domain request,
+queued game-thread cancellation, heartbeat, exact shutdown acknowledgement, and
+thread drain. The Rust `CoreRpcClient`, EventHub, and multi-PID SessionManager remain
+R3 work, so the desktop application is not yet connected to this live endpoint.
 
 ## Identity and errors
 

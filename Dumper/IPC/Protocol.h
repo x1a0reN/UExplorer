@@ -38,6 +38,8 @@ namespace UExplorer::IPC
 		UnknownKind,
 		UnsupportedFlags,
 		PayloadTooLarge,
+		InvalidPayloadLimit,
+		DecoderFailed,
 	};
 
 	struct FrameHeader
@@ -182,46 +184,82 @@ namespace UExplorer::IPC
 	class FrameDecoder
 	{
 	public:
+		ProtocolError SetPayloadLimit(const std::uint32_t limit)
+		{
+			if (m_Error != ProtocolError::None)
+				return ProtocolError::DecoderFailed;
+			if (limit == 0 || limit > MaxPayloadSize)
+				return ProtocolError::InvalidPayloadLimit;
+
+			m_MaxPayloadSize = limit;
+			if (m_Buffer.size() >= HeaderSize)
+			{
+				FrameHeader header;
+				const ProtocolError error = DecodeHeader(
+					std::span<const std::uint8_t>(m_Buffer).first(HeaderSize),
+					header);
+				if (error != ProtocolError::None || header.PayloadLength > m_MaxPayloadSize)
+				{
+					m_Error = error == ProtocolError::None
+						? ProtocolError::PayloadTooLarge
+						: error;
+					m_Buffer.clear();
+					return m_Error;
+				}
+			}
+			return ProtocolError::None;
+		}
+
 		DecodeBatch Push(const std::span<const std::uint8_t> bytes)
 		{
 			DecodeBatch result;
 			if (m_Error != ProtocolError::None)
 			{
-				result.Error = m_Error;
+				result.Error = ProtocolError::DecoderFailed;
 				return result;
 			}
 
-			m_Buffer.insert(m_Buffer.end(), bytes.begin(), bytes.end());
-			std::size_t consumed = 0;
-			while (m_Buffer.size() - consumed >= HeaderSize)
+			std::span<const std::uint8_t> remaining = bytes;
+			while (!remaining.empty())
 			{
-				FrameHeader header;
-				const auto headerBytes = std::span<const std::uint8_t>(m_Buffer).subspan(consumed, HeaderSize);
-				const auto error = DecodeHeader(headerBytes, header);
-				if (error != ProtocolError::None)
+				if (m_Buffer.size() < HeaderSize)
 				{
-					m_Error = error;
+					const std::size_t take = (std::min)(HeaderSize - m_Buffer.size(), remaining.size());
+					m_Buffer.insert(m_Buffer.end(), remaining.begin(), remaining.begin() + static_cast<std::ptrdiff_t>(take));
+					remaining = remaining.subspan(take);
+					if (m_Buffer.size() < HeaderSize)
+						break;
+				}
+
+				FrameHeader header;
+				const auto headerBytes = std::span<const std::uint8_t>(m_Buffer).first(HeaderSize);
+				const auto error = DecodeHeader(headerBytes, header);
+				if (error != ProtocolError::None || header.PayloadLength > m_MaxPayloadSize)
+				{
+					m_Error = error == ProtocolError::None
+						? ProtocolError::PayloadTooLarge
+						: error;
 					m_Buffer.clear();
 					result.Frames.clear();
-					result.Error = error;
+					result.Error = m_Error;
 					return result;
 				}
 
 				const auto frameSize = HeaderSize + static_cast<std::size_t>(header.PayloadLength);
-				if (m_Buffer.size() - consumed < frameSize)
+				const std::size_t take = (std::min)(frameSize - m_Buffer.size(), remaining.size());
+				m_Buffer.insert(m_Buffer.end(), remaining.begin(), remaining.begin() + static_cast<std::ptrdiff_t>(take));
+				remaining = remaining.subspan(take);
+				if (m_Buffer.size() < frameSize)
 					break;
 
 				Frame frame;
 				frame.Header = header;
-				const auto payloadStart = m_Buffer.begin() + static_cast<std::ptrdiff_t>(consumed + HeaderSize);
+				const auto payloadStart = m_Buffer.begin() + static_cast<std::ptrdiff_t>(HeaderSize);
 				const auto payloadEnd = payloadStart + static_cast<std::ptrdiff_t>(header.PayloadLength);
 				frame.Payload.assign(payloadStart, payloadEnd);
 				result.Frames.push_back(std::move(frame));
-				consumed += frameSize;
+				m_Buffer.clear();
 			}
-
-			if (consumed > 0)
-				m_Buffer.erase(m_Buffer.begin(), m_Buffer.begin() + static_cast<std::ptrdiff_t>(consumed));
 			return result;
 		}
 
@@ -231,5 +269,6 @@ namespace UExplorer::IPC
 	private:
 		std::vector<std::uint8_t> m_Buffer;
 		ProtocolError m_Error = ProtocolError::None;
+		std::uint32_t m_MaxPayloadSize = MaxPayloadSize;
 	};
 }

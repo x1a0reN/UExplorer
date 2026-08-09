@@ -47,11 +47,12 @@
       <AdditionalIncludeDirectories>$(ProjectDir)..\..\Dumper;$(ProjectDir)..\..\Dumper\Engine\Public;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>bcrypt.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>bcrypt.lib;advapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp" />
+	<ClCompile Include="..\..\Dumper\IPC\NamedPipeRpcServer.cpp" />
 	<ClCompile Include="..\..\Dumper\Engine\Private\OffsetFinder\OffsetDiscovery.cpp" />
 	<ClCompile Include="..\..\Dumper\Platform\Private\PeImage.cpp" />
 	<ClCompile Include="..\..\Dumper\Runtime\CoreSession.cpp" />
@@ -70,6 +71,7 @@
     <ClCompile Include="..\..\Dumper\Server\HttpServer.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\..\Dumper\IPC\NamedPipeRpcServer.h" />
     <ClInclude Include="..\..\Dumper\IPC\Protocol.h" />
 	<ClInclude Include="..\..\Dumper\Engine\Public\OffsetFinder\OffsetDiscovery.h" />
 	<ClInclude Include="..\..\Dumper\Platform\Public\BytePattern.h" />

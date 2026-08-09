@@ -32,6 +32,11 @@ compression fallback.
 - Issue workflow state: `docs/issue-status.json`
 - Legacy API snapshot: `tests/contracts/api-v1-routes.tsv`
 
+The C++ Core now owns a real PID-scoped Windows Named Pipe server with current-user
+ACL/PID verification, bounded RPC workers, cancellation, and joinable shutdown. The
+Rust `CoreRpcClient`, EventHub, SessionManager, and React/Tauri cutover are still in
+progress, so the legacy in-DLL HTTP path remains temporarily reachable until R4.
+
 No Unreal Engine version is currently claimed as verified because the required target
 fixtures have not yet been added. A successful build does not establish runtime safety.
 
@@ -97,6 +102,8 @@ Core harness and contract checks:
 & 'D:\Projects\UExplorer\tests\contracts\verify-core-safety.ps1'
 & 'D:\Projects\UExplorer\tests\contracts\verify-core-runtime.ps1'
 & 'D:\Projects\UExplorer\tests\contracts\verify-host-snapshot.ps1'
+& 'D:\Projects\UExplorer\tests\contracts\verify-rpc-session.ps1'
+& 'D:\Projects\UExplorer\tests\contracts\verify-named-pipe.ps1'
 & 'D:\Projects\UExplorer\tests\contracts\verify-platform-safety.ps1'
 & 'D:\Projects\UExplorer\tests\contracts\verify-offset-discovery.ps1'
 ```

@@ -57,7 +57,7 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>ws2_32.lib;bcrypt.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>ws2_32.lib;bcrypt.lib;advapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -80,7 +80,7 @@
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>ws2_32.lib;bcrypt.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>ws2_32.lib;bcrypt.lib;advapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <!-- Source Files -->
@@ -119,6 +119,7 @@
     <!-- Utils -->
     <ClCompile Include="Settings.cpp" />
     <!-- Runtime -->
+	<ClCompile Include="IPC\NamedPipeRpcServer.cpp" />
 	<ClCompile Include="Runtime\CoreSession.cpp" />
 	<ClCompile Include="Runtime\EngineFacade.cpp" />
 	<ClCompile Include="Runtime\EngineNameCodec.cpp" />
@@ -207,6 +208,7 @@
     <ClInclude Include="Utils\Encoding\UtfN.hpp" />
     <ClInclude Include="Utils\Json\json.hpp" />
     <ClInclude Include="Utils\Utils.h" />
+    <ClInclude Include="IPC\NamedPipeRpcServer.h" />
     <ClInclude Include="IPC\Protocol.h" />
     <ClInclude Include="Runtime\BoundedQueue.h" />
     <ClInclude Include="Runtime\CapabilityRegistry.h" />

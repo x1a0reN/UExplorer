@@ -6,6 +6,7 @@
 #include <Windows.h>
 
 #include "IPC/Protocol.h"
+#include "IPC/NamedPipeRpcServer.h"
 #include "OffsetFinder/OffsetDiscovery.h"
 #include "Platform/Public/BytePattern.h"
 #include "Platform/Public/PeImage.h"
@@ -89,6 +90,84 @@ namespace
 				throw std::runtime_error(message);
 			std::this_thread::yield();
 		}
+	}
+
+	void WritePipeBytes(const HANDLE pipe, const std::vector<std::uint8_t>& bytes)
+	{
+		std::size_t offset = 0;
+		while (offset < bytes.size())
+		{
+			DWORD written = 0;
+			const DWORD chunk = static_cast<DWORD>((std::min)(
+				bytes.size() - offset,
+				UExplorer::IPC::NamedPipeRpcServer::kIoChunkBytes));
+			Require(
+				WriteFile(pipe, bytes.data() + offset, chunk, &written, nullptr) != FALSE
+					&& written > 0,
+				"Named-pipe fixture write failed");
+			offset += written;
+		}
+	}
+
+	void ReadPipeBytes(const HANDLE pipe, std::uint8_t* output, const std::size_t size)
+	{
+		std::size_t offset = 0;
+		while (offset < size)
+		{
+			DWORD read = 0;
+			const DWORD chunk = static_cast<DWORD>((std::min)(
+				size - offset,
+				UExplorer::IPC::NamedPipeRpcServer::kIoChunkBytes));
+			if (ReadFile(pipe, output + offset, chunk, &read, nullptr) == FALSE || read == 0)
+			{
+				throw std::runtime_error(
+					"Named-pipe fixture read failed: native=" + std::to_string(GetLastError())
+					+ " offset=" + std::to_string(offset)
+					+ " expected=" + std::to_string(size));
+			}
+			offset += read;
+		}
+	}
+
+	void WriteJsonPipeFrame(
+		const HANDLE pipe,
+		const UExplorer::IPC::FrameKind kind,
+		const std::uint64_t requestId,
+		const nlohmann::json& payload)
+	{
+		const std::string serialized = payload.dump();
+		const auto payloadBytes = std::span<const std::uint8_t>(
+			reinterpret_cast<const std::uint8_t*>(serialized.data()),
+			serialized.size());
+		std::vector<std::uint8_t> encoded;
+		Require(
+			UExplorer::IPC::EncodeFrame(kind, requestId, payloadBytes, encoded)
+				== UExplorer::IPC::ProtocolError::None,
+			"Named-pipe fixture frame encode failed");
+		WritePipeBytes(pipe, encoded);
+	}
+
+	UExplorer::IPC::Frame ReadPipeFrame(const HANDLE pipe)
+	{
+		using namespace UExplorer::IPC;
+		std::array<std::uint8_t, HeaderSize> headerBytes{};
+		ReadPipeBytes(pipe, headerBytes.data(), headerBytes.size());
+		Frame frame;
+		Require(
+			DecodeHeader(headerBytes, frame.Header) == ProtocolError::None,
+			"Named-pipe fixture received an invalid frame header");
+		frame.Payload.resize(frame.Header.PayloadLength);
+		if (!frame.Payload.empty())
+			ReadPipeBytes(pipe, frame.Payload.data(), frame.Payload.size());
+		return frame;
+	}
+
+	nlohmann::json ParseFrameJson(const UExplorer::IPC::Frame& frame)
+	{
+		const nlohmann::json payload = nlohmann::json::parse(
+			frame.Payload.begin(), frame.Payload.end(), nullptr, false);
+		Require(!payload.is_discarded(), "Named-pipe fixture received invalid JSON");
+		return payload;
 	}
 
 	void FakeProcessEvent(void*, void*, void* params)
@@ -237,6 +316,33 @@ namespace
 		Detail::WriteU32(oversized.data() + 12, MaxPayloadSize + 1);
 		FrameDecoder sizeDecoder;
 		Require(sizeDecoder.Push(oversized).Error == ProtocolError::PayloadTooLarge, "Oversized payload was accepted");
+		Require(
+			sizeDecoder.Push({}).Error == ProtocolError::DecoderFailed,
+			"Terminal framing error did not poison the decoder");
+
+		FrameDecoder negotiatedDecoder;
+		Require(
+			negotiatedDecoder.SetPayloadLimit(32) == ProtocolError::None,
+			"Valid negotiated decoder limit was rejected");
+		auto negotiatedOversized = frame;
+		Detail::WriteU32(negotiatedOversized.data() + 12, 33);
+		Require(
+			negotiatedDecoder.Push(negotiatedOversized).Error == ProtocolError::PayloadTooLarge
+				&& negotiatedDecoder.BufferedBytes() == 0,
+			"Negotiated decoder limit was not enforced before body buffering");
+
+		std::vector<std::uint8_t> coalesced;
+		coalesced.reserve(frame.size() * 1024 + HeaderSize - 1);
+		for (std::size_t index = 0; index < 1024; ++index)
+			coalesced.insert(coalesced.end(), frame.begin(), frame.end());
+		coalesced.insert(coalesced.end(), frame.begin(), frame.begin() + HeaderSize - 1);
+		FrameDecoder streamingDecoder;
+		const DecodeBatch streamed = streamingDecoder.Push(coalesced);
+		Require(
+			streamed.Error == ProtocolError::None
+				&& streamed.Frames.size() == 1024
+				&& streamingDecoder.BufferedBytes() == HeaderSize - 1,
+			"Coalesced input was duplicated into an unbounded decoder buffer");
 	}
 
 	std::uint32_t ReadU32LittleEndian(const std::vector<std::uint8_t>& bytes, const std::size_t offset)
@@ -289,10 +395,11 @@ namespace
 		const std::uint64_t generation = 1,
 		const bool includeFunctionIdentity = true,
 		const bool includeNameProfile = true,
-		const UExplorer::Runtime::EngineNameProfile* nameProfileOverride = nullptr)
+		const UExplorer::Runtime::EngineNameProfile* nameProfileOverride = nullptr,
+		const std::uint32_t processId = 4242)
 	{
 		UExplorer::Runtime::EngineContextBuilder builder(generation);
-		builder.SetIdentity(0x140000000, 0x140100000, 4242, 100, "FixtureGame", "5.4");
+		builder.SetIdentity(0x140000000, 0x140100000, processId, 100, "FixtureGame", "5.4");
 		builder.SetProfile({.UsesFProperty = true, .UsesLargeWorldCoordinates = true});
 		if (nameProfileOverride)
 		{
@@ -1823,6 +1930,236 @@ namespace
 		Require(runtime.MarkStopped(), "Command runtime did not stop");
 	}
 
+	void TestNamedPipeRpcServerLifecycle()
+	{
+		using namespace UExplorer::IPC;
+		using namespace UExplorer::Runtime;
+		using namespace UExplorer::Services;
+
+		const std::uint32_t processId = GetCurrentProcessId();
+		CoreRuntime runtime;
+		Require(runtime.BeginInitialize("fixture-pipe-session"), "Pipe runtime did not initialize");
+		const auto context = MakeEngineContext(88, true, true, nullptr, processId);
+		Require(runtime.PublishContext(context), "Pipe runtime rejected its EngineContext");
+
+		GameThreadExecutor executor;
+		Require(executor.Enable(&FakeProcessEvent), "Pipe game-thread executor did not enable");
+		FakeHandleIdentitySource source;
+		source.Generation = 88;
+		source.Objects.emplace(7, ObjectIdentity{
+			.Index = 7,
+			.SerialNumber = 501,
+			.Address = 0x7100,
+			.ClassFingerprint = 0xCAFE
+		});
+		EngineFacade engine(context, "fixture-pipe-session", source);
+		FakeCoreStatusDiagnostics diagnostics;
+		CoreCommandService service(runtime, executor, engine, diagnostics);
+		Require(service.IsConfigured(), "Pipe command service was not configured");
+
+		std::atomic<bool> shutdownObserved{false};
+		NamedPipeRpcServer server(
+			runtime,
+			service,
+			executor,
+			[&shutdownObserved] { shutdownObserved.store(true, std::memory_order_release); });
+		Require(server.Start(), "Real Windows named-pipe server did not bind");
+		Require(
+			!server.OpenAdmissions(),
+			"Named-pipe server admitted a handshake before CoreRuntime was Ready");
+		Require(
+			server.PipeName() == L"\\\\.\\pipe\\UExplorer\\v1\\" + std::to_wstring(processId)
+				&& server.IsListening(),
+			"Named-pipe server did not expose the canonical target-PID endpoint");
+
+		RuntimeProbes probes;
+		probes.GameThreadExecutorEnabled = true;
+		probes.GameThreadPumpObserved = true;
+		probes.GameThreadPumpThreadStable = true;
+		probes.GameThreadPumpActive = true;
+		probes.SafeMemoryEnabled = true;
+		probes.ObjectIdentitySourceEnabled = true;
+		probes.ObjectHandleValidationEnabled = true;
+		probes.FunctionHandleValidationEnabled = true;
+		probes.NamedPipeListening = server.IsListening();
+		Require(
+			runtime.PublishCapabilities(BuildCoreCapabilities(*context, probes))
+				&& runtime.TryMarkReady(RequiredReadyCapabilities())
+				&& server.OpenAdmissions(),
+			"Pipe admissions opened before the runtime readiness contract was satisfied");
+
+		Require(
+			WaitNamedPipeW(server.PipeName().c_str(), 5000) != FALSE,
+			"Named-pipe client could not observe the bound endpoint");
+		const HANDLE client = CreateFileW(
+			server.PipeName().c_str(),
+			GENERIC_READ | GENERIC_WRITE,
+			0,
+			nullptr,
+			OPEN_EXISTING,
+			0,
+			nullptr);
+		Require(client != INVALID_HANDLE_VALUE, "Named-pipe client connection failed");
+		ULONG serverProcessId = 0;
+		Require(
+			GetNamedPipeServerProcessId(client, &serverProcessId) != FALSE
+				&& serverProcessId == processId,
+			"Named-pipe client did not prove the server PID");
+
+		WriteJsonPipeFrame(client, FrameKind::Hello, 1, {
+			{"host_version", "core-harness-0.1.0"},
+			{"protocol", {{"major", ProtocolMajor}, {"minor", ProtocolMinor}}},
+			{"target_pid", processId}
+		});
+		Frame welcomeFrame;
+		try
+		{
+			welcomeFrame = ReadPipeFrame(client);
+		}
+		catch (const std::exception& error)
+		{
+			const NamedPipeServerDiagnostics state = server.Diagnostics();
+			throw std::runtime_error(
+				std::string(error.what()) + " server=" + state.LastErrorCode
+				+ " native=" + std::to_string(state.LastNativeError)
+				+ " message=" + state.LastErrorMessage);
+		}
+		const nlohmann::json welcome = ParseFrameJson(welcomeFrame);
+		Require(
+			welcomeFrame.Header.Kind == FrameKind::Welcome
+				&& welcomeFrame.Header.RequestId == 1
+				&& welcome.at("session_id") == "fixture-pipe-session"
+				&& welcome.at("target_pid") == processId
+				&& welcome.at("capabilities").at("engine.core").get<bool>()
+				&& welcome.at("capabilities").at("transport.named_pipe").get<bool>()
+				&& welcome.at("limits").at("pending_rpc_per_session") == 256
+				&& welcome.at("limits").at("max_payload_bytes") == MaxPayloadSize,
+			"Hello/Welcome did not negotiate the strict shared v1 contract");
+
+		WriteJsonPipeFrame(client, FrameKind::Request, 2, {
+			{"operation", "status.inspect"},
+			{"session_id", "fixture-pipe-session"},
+			{"timeout_ms", 5000},
+			{"data", nlohmann::json::object()}
+		});
+		const Frame statusFrame = ReadPipeFrame(client);
+		const nlohmann::json status = ParseFrameJson(statusFrame);
+		Require(
+			statusFrame.Header.Kind == FrameKind::Response
+				&& statusFrame.Header.RequestId == 2
+				&& status.at("ok").get<bool>()
+				&& status.at("request_id") == 2
+				&& status.at("session_id") == "fixture-pipe-session"
+				&& status.at("error").is_null()
+				&& status.at("data").at("pid") == processId,
+			"Named-pipe request did not reach the Core domain service");
+
+		const nlohmann::json heartbeat = {
+			{"session_id", "fixture-pipe-session"},
+			{"nonce", 7},
+			{"sent_at_monotonic_us", 1'000'000}
+		};
+		WriteJsonPipeFrame(client, FrameKind::Ping, 3, heartbeat);
+		const Frame pongFrame = ReadPipeFrame(client);
+		Require(
+			pongFrame.Header.Kind == FrameKind::Pong
+				&& pongFrame.Header.RequestId == 3
+				&& ParseFrameJson(pongFrame) == heartbeat,
+			"Named-pipe Ping/Pong lost correlation or heartbeat identity");
+
+		WriteJsonPipeFrame(client, FrameKind::Request, 4, {
+			{"operation", "objects.handle.issue"},
+			{"session_id", "fixture-pipe-session"},
+			{"timeout_ms", 5000},
+			{"data", {{"index", 7}}}
+		});
+		WaitUntil([&executor] { return executor.HasPending(); }, "Pipe request did not enter the game-thread queue");
+		WriteJsonPipeFrame(client, FrameKind::Cancel, 4, {
+			{"session_id", "fixture-pipe-session"},
+			{"reason", "fixture_cancel"}
+		});
+		const Frame cancelledFrame = ReadPipeFrame(client);
+		const nlohmann::json cancelled = ParseFrameJson(cancelledFrame);
+		Require(
+			cancelledFrame.Header.Kind == FrameKind::Response
+				&& cancelledFrame.Header.RequestId == 4
+				&& !cancelled.at("ok").get<bool>()
+				&& cancelled.at("data").is_null()
+				&& cancelled.at("error").at("code") == "REQUEST_CANCELLED",
+			"Pipe reader did not remain responsive enough to cancel queued game-thread work");
+
+		const nlohmann::json shutdown = {
+			{"session_id", "fixture-pipe-session"},
+			{"reason", "host_exit"}
+		};
+		WriteJsonPipeFrame(client, FrameKind::Shutdown, 5, shutdown);
+		const Frame shutdownFrame = ReadPipeFrame(client);
+		Require(
+			shutdownFrame.Header.Kind == FrameKind::Shutdown
+				&& shutdownFrame.Header.RequestId == 5
+				&& ParseFrameJson(shutdownFrame) == shutdown,
+			"Named-pipe shutdown acknowledgement was not exact");
+		WaitUntil(
+			[&shutdownObserved] { return shutdownObserved.load(std::memory_order_acquire); },
+			"Host-controlled shutdown callback was not invoked");
+		CloseHandle(client);
+
+		WaitUntil(
+			[&server] { return WaitNamedPipeW(server.PipeName().c_str(), 50) != FALSE; },
+			"Named-pipe listener did not return after a graceful Host session ended");
+		const HANDLE reconnectClient = CreateFileW(
+			server.PipeName().c_str(),
+			GENERIC_READ | GENERIC_WRITE,
+			0,
+			nullptr,
+			OPEN_EXISTING,
+			0,
+			nullptr);
+		Require(reconnectClient != INVALID_HANDLE_VALUE, "Named-pipe Host restart could not reconnect");
+		WriteJsonPipeFrame(reconnectClient, FrameKind::Hello, 10, {
+			{"host_version", "core-harness-reconnect-0.1.0"},
+			{"protocol", {{"major", ProtocolMajor}, {"minor", ProtocolMinor}}},
+			{"target_pid", processId}
+		});
+		const Frame reconnectWelcome = ReadPipeFrame(reconnectClient);
+		Require(
+			reconnectWelcome.Header.Kind == FrameKind::Welcome
+				&& reconnectWelcome.Header.RequestId == 10
+				&& ParseFrameJson(reconnectWelcome).at("session_id") == "fixture-pipe-session",
+			"Reconnected Host did not receive a correlated Welcome for the active Core session");
+		WriteJsonPipeFrame(reconnectClient, FrameKind::Request, 11, {
+			{"operation", "objects.handle.issue"},
+			{"session_id", "fixture-pipe-session"},
+			{"timeout_ms", 5000},
+			{"data", {{"index", 7}}}
+		});
+		WaitUntil(
+			[&executor] { return executor.HasPending(); },
+			"Reconnected Host request did not enter the game-thread queue");
+		CloseHandle(reconnectClient);
+		WaitUntil(
+			[&server] { return server.Diagnostics().PendingRequests == 0; },
+			"Mid-request Host disconnect did not cancel and retire pending work");
+		Require(!executor.HasPending(), "Disconnected Host retained queued game-thread work");
+
+		Require(server.Stop(std::chrono::milliseconds(5000)), "Named-pipe workers did not join on stop");
+		const NamedPipeServerDiagnostics pipeDiagnostics = server.Diagnostics();
+		Require(
+			!pipeDiagnostics.Listening
+				&& pipeDiagnostics.WorkerCount == 0
+				&& pipeDiagnostics.AcceptedConnections == 2
+				&& pipeDiagnostics.CompletedRequests >= 3
+				&& pipeDiagnostics.CancelledRequests >= 2,
+			"Named-pipe diagnostics did not account for lifecycle, request, and cancellation state");
+		Require(executor.DisableAndDrain(), "Pipe game-thread executor did not drain");
+		Require(engine.Stop(), "Pipe EngineFacade did not stop");
+		Require(
+			runtime.BeginStopping()
+				&& runtime.WaitForRequests(std::chrono::milliseconds(100))
+				&& runtime.MarkStopped(),
+			"Pipe runtime did not reach Stopped after transport drain");
+	}
+
 	void TestHookOwnershipAndCallbackDrain()
 	{
 		using namespace UExplorer::Runtime;
@@ -2695,6 +3032,7 @@ int main(const int argc, char** argv)
 		TestEngineFacadeAndImmutableSnapshots();
 		TestIncrementalSnapshotCapture();
 		TestCoreDomainCommandsAndHandleExecution();
+		TestNamedPipeRpcServerLifecycle();
 		TestFUObjectItemIdentityLayout();
 		TestBytePatternScanner();
 		TestPeImageInspectionAndEngineVersionProbe();
@@ -2708,7 +3046,7 @@ int main(const int argc, char** argv)
 		TestPostRenderFrameClientOwnershipAndDrain();
 		TestGameThreadMpscCapacity();
 		TestHttpServerLifecycle();
-		std::cout << "Core harness passed: framing, secure sessions, runtime/capabilities, EngineFacade/immutable budgeted snapshots, domain commands, stable handles/FUObjectItem layout, bounded PE/version/global-pointer probing, pattern scanning, Hook RAII/drain, SafeMemory, USMAP consumer, bounded queues, cancellable owned game-thread/frame-client work, SEH, HTTP lifecycle, and shutdown.\n";
+		std::cout << "Core harness passed: bounded framing, secure sessions, real current-user Windows Named Pipe RPC lifecycle, runtime/capabilities, EngineFacade/immutable budgeted snapshots, domain commands, stable handles/FUObjectItem layout, bounded PE/version/global-pointer probing, pattern scanning, Hook RAII/drain, SafeMemory, USMAP consumer, bounded queues, cancellable owned game-thread/frame-client work, SEH, HTTP lifecycle, and shutdown.\n";
 		return 0;
 	}
 	catch (const std::exception& error)
