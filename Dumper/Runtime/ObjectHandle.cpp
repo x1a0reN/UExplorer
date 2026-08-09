@@ -1,6 +1,7 @@
 #include "ObjectHandle.h"
 
 #include <cstddef>
+#include <string_view>
 #include <utility>
 
 namespace UExplorer::Runtime
@@ -11,6 +12,42 @@ namespace
 
 constexpr std::size_t kMaxSessionIdLength = 128;
 constexpr std::size_t kMaxFunctionPathLength = 4096;
+
+bool IsCanonicalFunctionIdentityPath(const std::string_view path) noexcept
+{
+	constexpr std::string_view prefix = "Function ";
+	constexpr std::string_view tokenPrefix = "fname:";
+	if (!path.starts_with(prefix) || path.size() > kMaxFunctionPathLength)
+		return false;
+
+	std::size_t cursor = prefix.size();
+	std::size_t tokenCount = 0;
+	for (;;)
+	{
+		if (!path.substr(cursor).starts_with(tokenPrefix))
+			return false;
+		cursor += tokenPrefix.size();
+		const std::size_t hexBegin = cursor;
+		while (cursor < path.size()
+			&& ((path[cursor] >= '0' && path[cursor] <= '9')
+				|| (path[cursor] >= 'a' && path[cursor] <= 'f')))
+		{
+			++cursor;
+		}
+		if (cursor == hexBegin || cursor >= path.size() || path[cursor++] != ':')
+			return false;
+		const std::size_t numberBegin = cursor;
+		while (cursor < path.size() && path[cursor] >= '0' && path[cursor] <= '9')
+			++cursor;
+		if (cursor == numberBegin)
+			return false;
+		++tokenCount;
+		if (cursor == path.size())
+			return tokenCount >= 2;
+		if (path[cursor++] != '.')
+			return false;
+	}
+}
 
 } // namespace
 
@@ -175,7 +212,7 @@ FunctionHandleResult ObjectHandleService::IssueFunction(const std::int32_t index
 	identityError = ValidateIdentity(identity.Owner, identity.Owner.Index);
 	if (identityError != HandleError::None)
 		return {.Error = HandleError::FunctionOwnerMismatch};
-	if (identity.FullPath.empty() || identity.FullPath.size() > kMaxFunctionPathLength)
+	if (!IsCanonicalFunctionIdentityPath(identity.FullPath))
 		return {.Error = HandleError::FunctionPathMismatch};
 	if (identity.SignatureFingerprint == 0)
 		return {.Error = HandleError::FunctionSignatureMismatch};
@@ -198,7 +235,7 @@ FunctionValidationResult ObjectHandleService::ValidateFunction(const FunctionHan
 	error = ValidateEnvelope(handle.Owner);
 	if (error != HandleError::None)
 		return {.Error = HandleError::FunctionOwnerMismatch};
-	if (handle.FullPath.empty() || handle.FullPath.size() > kMaxFunctionPathLength
+	if (!IsCanonicalFunctionIdentityPath(handle.FullPath)
 		|| handle.SignatureFingerprint == 0)
 	{
 		return {.Error = HandleError::InvalidHandle};

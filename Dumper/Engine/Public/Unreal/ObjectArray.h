@@ -9,6 +9,26 @@
 
 namespace fs = std::filesystem;
 
+struct FUObjectItemIdentity
+{
+	int32 Index = -1;
+	int32 SerialNumber = 0;
+	uintptr_t ObjectAddress = 0;
+};
+
+struct FUObjectItemIdentityLayout
+{
+	bool Validated = false;
+	uint32 ItemSize = 0;
+	uint32 ObjectOffset = 0;
+	int32 SerialOffset = -1;
+	uint32 CoherentSamples = 0;
+	uint32 PositiveSerialSamples = 0;
+	std::string Profile;
+	std::string ReasonCode;
+	std::vector<std::string> Checks;
+};
+
 class ObjectArray
 {
 private:
@@ -24,6 +44,7 @@ private:
 	static inline uint32 NumElementsPerChunk = 0x10000;
 	static inline uint32 SizeOfFUObjectItem = sizeof(void*) + sizeof(int32) + sizeof(int32);
 	static inline uint32 FUObjectItemInitialOffset = 0x0;
+	static inline FUObjectItemIdentityLayout IdentityLayout;
 
 public:
 	static inline std::string DecryptionLambdaStr;
@@ -35,6 +56,12 @@ private:
 
 private:
 	static void InitializeFUObjectItem(uint8_t* FirstItemPtr);
+	static bool TryResolveItemAddress(int32 Index, uintptr_t& ItemAddress);
+	static bool TryReadIdentityCandidate(
+		int32 Index,
+		int32 SerialOffset,
+		FUObjectItemIdentity& Identity,
+		int32* ClusterRootIndex = nullptr);
 
 public:
 	static void InitDecryption(uint8_t* (*DecryptionFunction)(void* ObjPtr), const char* DecryptionLambdaAsStr);
@@ -51,6 +78,9 @@ public:
 	static int32 Max();
 	static int32 NumChunks();
 	static int32 MaxChunks();
+	static bool ValidateIdentityLayout();
+	static const FUObjectItemIdentityLayout& GetIdentityLayout();
+	static bool TryReadIdentity(int32 Index, FUObjectItemIdentity& Identity);
 
 	template<typename UEType = UEObject>
 	static UEType GetByIndex(int32 Index);

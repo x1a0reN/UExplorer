@@ -49,7 +49,11 @@ not a wall-clock timestamp shared between processes.
   object-array index, positive serial, canonical hex address, and class fingerprint.
   Core re-reads and compares every field at the game-thread execution point.
 - UFunction operations use `functionHandle`, which binds a function object handle to
-  its serial-backed owner, full path, and signature fingerprint. An index, address,
+  its serial-backed owner, canonical identity path, and signature fingerprint. The
+  canonical path is built from the complete outer chain and raw FName comparison
+  index/number tokens (`Function fname:<hex>:<number>...`), so execution identity does
+  not depend on an unsafe display-name decoder. Human-readable paths are separate
+  metadata and are never accepted as the sole execution identity. An index, address,
   or short name alone is never an execution identity.
 - Domain failures use a Response payload with `ok=false`; framing failures terminate
   the connection.

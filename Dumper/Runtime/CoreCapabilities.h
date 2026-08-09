@@ -18,6 +18,7 @@ struct RuntimeProbes
 	bool GameThreadPumpThreadStable = false;
 	bool GameThreadPumpActive = false;
 	bool SafeMemoryEnabled = false;
+	bool ObjectIdentitySourceEnabled = false;
 	bool ObjectHandleValidationEnabled = false;
 	bool NamedPipeListening = false;
 	bool LegacyHttpListening = false;
@@ -81,11 +82,17 @@ inline std::shared_ptr<const CapabilitySnapshot> BuildCoreCapabilities(
 		"Centralized checked memory access is not active",
 		{"engine.core"});
 	builder.Define(
+		"objects.identity_source",
+		probes.ObjectIdentitySourceEnabled,
+		"OBJECT_IDENTITY_SOURCE_NOT_READY",
+		"No validated FUObjectItem serial identity source is active",
+		{"engine.core"});
+	builder.Define(
 		"objects.handles",
 		probes.ObjectHandleValidationEnabled,
 		"OBJECT_HANDLE_VALIDATION_NOT_READY",
 		"Index and serial validation is not active",
-		{"engine.core"});
+		{"objects.identity_source"});
 	builder.Define(
 		"transport.named_pipe",
 		probes.NamedPipeListening,

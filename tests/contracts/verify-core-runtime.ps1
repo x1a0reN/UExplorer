@@ -25,6 +25,9 @@ $capabilities = Read-ProjectFile 'Dumper\Runtime\CoreCapabilities.h'
 $shutdown = Read-ProjectFile 'Dumper\Runtime\ShutdownCoordinator.h'
 $handleHeader = Read-ProjectFile 'Dumper\Runtime\ObjectHandle.h'
 $handleImplementation = Read-ProjectFile 'Dumper\Runtime\ObjectHandle.cpp'
+$identityLayout = Read-ProjectFile 'Dumper\Runtime\FUObjectItemLayout.cpp'
+$identitySource = Read-ProjectFile 'Dumper\Runtime\ObjectArrayIdentitySource.cpp'
+$objectArray = Read-ProjectFile 'Dumper\Engine\Private\Unreal\ObjectArray.cpp'
 $callbackBarrier = Read-ProjectFile 'Dumper\Runtime\CallbackBarrier.h'
 $safeMemoryHeader = Read-ProjectFile 'Dumper\Runtime\SafeMemory.h'
 $safeMemory = Read-ProjectFile 'Dumper\Runtime\SafeMemory.cpp'
@@ -50,11 +53,11 @@ foreach ($token in @('Generation()', 'OffsetReport', 'Required engine offsets ar
 }
 
 foreach ($token in @('gobjects', 'process_event.index', 'positive_member_offset',
-        'count_within_capacity', 'validated_ini_override')) {
+        'count_within_capacity', 'validated_ini_override', 'fuobjectitem.serial_number')) {
     Assert-Contains $capture $token 'Offset validation report regressed.'
 }
 
-foreach ($token in @('transport.named_pipe', 'PIPE_LISTENER_NOT_READY',
+foreach ($token in @('transport.named_pipe', 'PIPE_LISTENER_NOT_READY', 'objects.identity_source',
         'GAME_THREAD_PUMP_NOT_OBSERVED', 'GAME_THREAD_PUMP_STALLED', 'RequiredReadyCapabilities')) {
     Assert-Contains $capabilities $token 'Capability dependency/readiness contract regressed.'
 }
@@ -74,8 +77,24 @@ foreach ($token in @('SessionId', 'ContextGeneration', 'SerialNumber', 'Address'
 }
 foreach ($token in @('HANDLE_SESSION_MISMATCH', 'HANDLE_CONTEXT_GENERATION_MISMATCH',
         'HANDLE_SERIAL_MISMATCH', 'FUNCTION_HANDLE_OWNER_MISMATCH',
-        'CompareIdentity(handle.Function', 'CompareIdentity(handle.Owner')) {
+        'IsCanonicalFunctionIdentityPath', 'CompareIdentity(handle.Function',
+        'CompareIdentity(handle.Owner')) {
     Assert-Contains $handleImplementation $token 'Execution-point handle validation regressed.'
+}
+foreach ($token in @('epic_fuobjectitem_64_v1', 'exact_epic_object_offset',
+        'supported_epic_item_size', 'positive_serial_witness',
+        'FUOBJECTITEM_POSITIVE_SERIAL_NOT_OBSERVED')) {
+    Assert-Contains $identityLayout $token 'FUObjectItem serial profile validation regressed.'
+}
+foreach ($token in @('TryReadIdentityCandidate', 'objectFirst != objectSecond', 'internalIndex != Index',
+		'FUObjectItemSerialNumberOffset', 'count > capacity', 'Index >= count',
+		'internalIndexOffset > (std::numeric_limits<uintptr_t>::max)() - objectAddress')) {
+    Assert-Contains $objectArray $token 'Production FUObjectItem identity reads regressed.'
+}
+foreach ($token in @('IsCurrentExecutionThreadValid', 'PumpThreadId == GetCurrentThreadId',
+        'TryReadObjectCore', 'TryReadCanonicalFNameToken', 'TryBuildCanonicalFunctionPath',
+        'finalPath != fullPath', 'SignatureFingerprint')) {
+    Assert-Contains $identitySource $token 'Production object/function identity source regressed.'
 }
 foreach ($token in @('CALL_HANDLE_REQUIRED', 'SESSION_SERIAL_OBJECT_AND_FUNCTION_HANDLES_REQUIRED',
         'server.Post("/api/v1/call/function"',
@@ -122,6 +141,9 @@ Assert-NotContains $statusApi 'ObjectArray::' 'Status handlers must not query th
 foreach ($token in @('TestEngineContextAndCapabilities', 'TestCoreRuntimeStateAndShutdown',
         'TestStableObjectAndFunctionHandles', 'Object handle crossed a session boundary',
         'Recycled object slot retained a valid handle', 'Function handle ignored owner recycling',
+        'Non-canonical display path became a function execution identity',
+        'TestFUObjectItemIdentityLayout', 'Custom FUObjectItem object offset was guessed',
+        'Zero-only serial candidate was accepted',
         'TestHookOwnershipAndCallbackDrain', 'Failed VTable restore discarded hook ownership',
         'Post-stop callback was allowed to run owned work',
         'TestSafeMemory', 'ExecutableWriteDenied', 'InstructionCacheFlushRequired',
@@ -142,6 +164,9 @@ if ($objectHandleFixture.serial -le 0 -or $objectHandleFixture.context_generatio
 if ($functionHandleFixture.function.session_id -ne $functionHandleFixture.owner.session_id -or
         $functionHandleFixture.function.context_generation -ne $functionHandleFixture.owner.context_generation) {
     throw 'Function handle fixture crosses a session or context generation.'
+}
+if ($functionHandleFixture.full_path -notmatch '^Function fname:[0-9a-f]+:[0-9]+(?:\.fname:[0-9a-f]+:[0-9]+)+$') {
+    throw 'Function handle fixture does not use the canonical raw-FName identity path.'
 }
 
 Write-Host 'Core runtime contract verified: immutable context, stable handles, capability readiness, SafeMemory, request drain, and coordinated shutdown.'

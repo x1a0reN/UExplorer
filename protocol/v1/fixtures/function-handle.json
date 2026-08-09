@@ -15,6 +15,6 @@
     "address": "0x00007FF612340000",
     "class_fingerprint": "FEDCBA9876543210"
   },
-  "full_path": "/Script/Fixture.Owner:Function",
+  "full_path": "Function fname:10:0.fname:20:0.fname:30:0",
   "signature_fingerprint": "1122334455667788"
 }

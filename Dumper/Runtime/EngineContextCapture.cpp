@@ -92,6 +92,8 @@ std::shared_ptr<const EngineContext> CaptureEngineContext(const std::uint64_t ge
 	const auto objectArrayAddress = reinterpret_cast<std::uintptr_t>(ObjectArray::DEBUGGetGObjects());
 	const std::int32_t objectCount = ObjectArray::Num();
 	const std::int32_t objectCapacity = ObjectArray::Max();
+	const bool objectIdentityLayoutValidated = ObjectArray::ValidateIdentityLayout();
+	const FUObjectItemIdentityLayout& objectIdentityLayout = ObjectArray::GetIdentityLayout();
 
 	EngineContextBuilder builder(generation);
 	builder.SetIdentity(
@@ -122,6 +124,27 @@ std::shared_ptr<const EngineContext> CaptureEngineContext(const std::uint64_t ge
 		objectArrayValidated,
 		"object_array_scan",
 		{"positive_module_relative_offset", "object_array_address_readable", "count_within_capacity"}));
+	OffsetReport serialOffsetReport{
+		.Name = "fuobjectitem.serial_number",
+		.Value = objectIdentityLayout.SerialOffset,
+		.Required = false,
+		.State = objectIdentityLayoutValidated
+			? ValidationState::Validated
+			: ValidationState::Missing,
+		.Source = objectIdentityLayout.Profile.empty()
+			? "unsupported_fuobjectitem_profile"
+			: objectIdentityLayout.Profile,
+		.Checks = objectIdentityLayout.Checks
+	};
+	if (!objectIdentityLayoutValidated)
+	{
+		serialOffsetReport.ReasonCode = objectIdentityLayout.ReasonCode.empty()
+			? "FUOBJECTITEM_LAYOUT_NOT_VALIDATED"
+			: objectIdentityLayout.ReasonCode;
+		serialOffsetReport.Reason =
+			"No supported FUObjectItem profile produced a stable positive serial witness";
+	}
+	builder.AddOffset(std::move(serialOffsetReport));
 	builder.AddOffset(ModuleOffset("gnames", Off::InSDK::NameArray::GNames, false, "name_array_scan"));
 	builder.AddOffset(ModuleOffset("gworld", Off::InSDK::World::GWorld, false, "reference_scan"));
 	builder.AddOffset(ModuleOffset("gengine", Off::InSDK::Engine::GEngine, false, "reference_scan"));

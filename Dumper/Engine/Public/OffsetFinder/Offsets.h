@@ -58,6 +58,7 @@ namespace Off
 			inline int32 ChunkSize;
 			inline int32 FUObjectItemSize;
 			inline int32 FUObjectItemInitialOffset;
+			inline int32 FUObjectItemSerialNumberOffset = -1;
 		}
 
 		namespace Name

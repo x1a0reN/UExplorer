@@ -124,6 +124,7 @@ void RegisterStatusRoutes(HttpServer& server)
 		offsets["gengine"] = OffsetValue(context, "gengine");
 		offsets["process_event_index"] = OffsetValue(context, "process_event.index");
 		offsets["process_event_offset"] = OffsetValue(context, "process_event.offset");
+		offsets["fuobjectitem_serial"] = OffsetValue(context, "fuobjectitem.serial_number");
 		offsets["ulevel_actors"] = OffsetValue(context, "ulevel.actors");
 		offsets["ufunction_script"] = OffsetValue(context, "ufunction.script");
 

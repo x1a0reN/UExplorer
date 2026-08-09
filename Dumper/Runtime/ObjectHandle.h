@@ -38,6 +38,7 @@ struct FunctionIdentity
 {
 	ObjectIdentity Function;
 	ObjectIdentity Owner;
+	// Complete outer chain encoded as canonical raw FName identity tokens.
 	std::string FullPath;
 	std::uint64_t SignatureFingerprint = 0;
 };
@@ -64,6 +65,7 @@ struct FunctionHandle
 {
 	ObjectHandle Function;
 	ObjectHandle Owner;
+	// Display names are metadata; only this canonical identity path is executable.
 	std::string FullPath;
 	std::uint64_t SignatureFingerprint = 0;
 };

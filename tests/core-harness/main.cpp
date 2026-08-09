@@ -10,6 +10,7 @@
 #include "Runtime/CallbackBarrier.h"
 #include "Runtime/CoreCapabilities.h"
 #include "Runtime/CoreRuntime.h"
+#include "Runtime/FUObjectItemLayout.h"
 #include "Runtime/ObjectHandle.h"
 #include "Runtime/SafeMemory.h"
 #include "Runtime/ShutdownCoordinator.h"
@@ -261,10 +262,18 @@ namespace
 		probes.GameThreadPumpThreadStable = true;
 		probes.GameThreadPumpActive = true;
 		probes.SafeMemoryEnabled = true;
+		probes.ObjectIdentitySourceEnabled = true;
 		probes.ObjectHandleValidationEnabled = true;
 		const auto withoutPipe = BuildCoreCapabilities(*context, probes);
 		Require(!withoutPipe->IsAvailable("transport.named_pipe"), "Missing pipe listener was advertised");
 		Require(withoutPipe->IsAvailable("call.invoke"), "Validated call dependencies were rejected");
+		RuntimeProbes missingIdentitySource = probes;
+		missingIdentitySource.ObjectIdentitySourceEnabled = false;
+		const auto withoutIdentitySource = BuildCoreCapabilities(*context, missingIdentitySource);
+		Require(
+			!withoutIdentitySource->IsAvailable("objects.handles")
+				&& !withoutIdentitySource->IsAvailable("call.invoke"),
+			"Handle/call capability ignored the production identity source dependency");
 		RuntimeProbes stalledProbes = probes;
 		stalledProbes.GameThreadPumpActive = false;
 		const auto stalled = BuildCoreCapabilities(*context, stalledProbes);
@@ -308,6 +317,7 @@ namespace
 		probes.GameThreadPumpThreadStable = true;
 		probes.GameThreadPumpActive = true;
 		probes.SafeMemoryEnabled = true;
+		probes.ObjectIdentitySourceEnabled = true;
 		probes.ObjectHandleValidationEnabled = true;
 		Require(
 			runtime.PublishCapabilities(BuildCoreCapabilities(*context, probes)),
@@ -470,9 +480,14 @@ namespace
 				.Address = 0x6000,
 				.ClassFingerprint = 0xC001
 			},
-			.FullPath = "/Script/Fixture.Owner:Function",
+			.FullPath = "Function fname:10:0.fname:20:0",
 			.SignatureFingerprint = 0x5151
 		});
+		source.Functions.at(100).FullPath = "/Script/Fixture.Owner:Function";
+		Require(
+			service.IssueFunction(100).Error == HandleError::FunctionPathMismatch,
+			"Non-canonical display path became a function execution identity");
+		source.Functions.at(100).FullPath = "Function fname:10:0.fname:20:0";
 		const FunctionHandleResult function = service.IssueFunction(100);
 		Require(function.Ok(), "Stable function handle was not issued");
 		Require(service.ValidateFunction(function.Value).Ok(), "Fresh function handle did not validate");
@@ -482,11 +497,11 @@ namespace
 			service.ValidateFunction(function.Value).Error == HandleError::FunctionOwnerMismatch,
 			"Function handle ignored owner recycling");
 		source.Functions.at(100).Owner.SerialNumber = 401;
-		source.Functions.at(100).FullPath = "/Script/Fixture.Other:Function";
+		source.Functions.at(100).FullPath = "Function fname:10:0.fname:21:0";
 		Require(
 			service.ValidateFunction(function.Value).Error == HandleError::FunctionPathMismatch,
 			"Function handle ignored a path change");
-		source.Functions.at(100).FullPath = "/Script/Fixture.Owner:Function";
+		source.Functions.at(100).FullPath = "Function fname:10:0.fname:20:0";
 		source.Functions.at(100).SignatureFingerprint = 0x5252;
 		Require(
 			service.ValidateFunction(function.Value).Error == HandleError::FunctionSignatureMismatch,
@@ -595,6 +610,53 @@ namespace
 		Require(callbacks.Reset(), "Drained callback barrier did not reset");
 		auto restarted = callbacks.Enter();
 		Require(restarted.OwnedWorkAllowed(), "Reset callback barrier remained stopped");
+	}
+
+	void TestFUObjectItemIdentityLayout()
+	{
+		using namespace UExplorer::Runtime;
+
+		std::vector<ObjectItemLayoutSample> samples;
+		for (std::int32_t index = 0; index < 16; ++index)
+		{
+			samples.push_back({
+				.SlotIndex = index,
+				.InternalIndex = index,
+				.ObjectAddress = 0x100000 + static_cast<std::uintptr_t>(index) * 0x100,
+				.ClusterRootIndex = -1,
+				.SerialNumber = index + 1,
+				.Stable = true
+			});
+		}
+
+		const ObjectItemLayoutValidation valid =
+			ValidateEpic64ObjectItemLayoutV1(0x18, 0, 1024, samples);
+		Require(valid.Ok(), "Supported FUObjectItem identity layout was rejected");
+		Require(
+			valid.SerialOffset == 0x10 && valid.CoherentSamples == 16
+				&& valid.PositiveSerialSamples == 16,
+			"FUObjectItem identity layout evidence changed");
+		Require(
+			ValidateEpic64ObjectItemLayoutV1(0x18, 4, 1024, samples).Error
+				== ObjectItemLayoutError::UnsupportedObjectOffset,
+			"Custom FUObjectItem object offset was guessed");
+		Require(
+			ValidateEpic64ObjectItemLayoutV1(0x28, 0, 1024, samples).Error
+				== ObjectItemLayoutError::UnsupportedItemSize,
+			"Unknown FUObjectItem size was guessed");
+
+		for (ObjectItemLayoutSample& sample : samples)
+			sample.SerialNumber = 0;
+		Require(
+			ValidateEpic64ObjectItemLayoutV1(0x18, 0, 1024, samples).Error
+				== ObjectItemLayoutError::NoPositiveSerialWitness,
+			"Zero-only serial candidate was accepted");
+		for (ObjectItemLayoutSample& sample : samples)
+			sample.InternalIndex = sample.SlotIndex + 1;
+		Require(
+			ValidateEpic64ObjectItemLayoutV1(0x18, 0, 1024, samples).Error
+				== ObjectItemLayoutError::InsufficientCoherentSamples,
+			"Slot/InternalIndex mismatch was accepted");
 	}
 
 	void TestSafeMemory()
@@ -928,6 +990,7 @@ int main(const int argc, char** argv)
 		TestEngineContextAndCapabilities();
 		TestCoreRuntimeStateAndShutdown();
 		TestStableObjectAndFunctionHandles();
+		TestFUObjectItemIdentityLayout();
 		TestHookOwnershipAndCallbackDrain();
 		TestSafeMemory();
 		TestQueueOwnershipAndBackpressure();
@@ -935,7 +998,7 @@ int main(const int argc, char** argv)
 		TestGameThreadTaskOwnershipAndTimeouts();
 		TestGameThreadMpscCapacity();
 		TestHttpServerLifecycle();
-		std::cout << "Core harness passed: framing, runtime/capabilities, stable handles, Hook RAII/drain, SafeMemory, USMAP consumer, bounded queues, owned game-thread tasks, SEH, HTTP lifecycle, and shutdown.\n";
+		std::cout << "Core harness passed: framing, runtime/capabilities, stable handles/FUObjectItem layout, Hook RAII/drain, SafeMemory, USMAP consumer, bounded queues, owned game-thread tasks, SEH, HTTP lifecycle, and shutdown.\n";
 		return 0;
 	}
 	catch (const std::exception& error)

@@ -22,6 +22,7 @@
 #include "Runtime/CoreCapabilities.h"
 #include "Runtime/CoreRuntimeAccess.h"
 #include "Runtime/EngineContextCapture.h"
+#include "Runtime/ObjectArrayIdentitySource.h"
 #include "Runtime/ShutdownCoordinator.h"
 #include "Settings.h"
 #include "OffsetFinder/Offsets.h"
@@ -178,6 +179,8 @@ namespace
 		probes.GameThreadPumpThreadStable = gameThread.PumpThreadStable;
 		probes.GameThreadPumpActive = pumpActive;
 		probes.SafeMemoryEnabled = true;
+		probes.ObjectIdentitySourceEnabled =
+			UExplorer::Runtime::GetObjectArrayIdentitySource().IsLayoutAvailable();
 		probes.LegacyHttpListening = legacyHttpListening;
 		const auto capabilities = UExplorer::Runtime::BuildCoreCapabilities(*snapshot.Context, probes);
 		if (!g_Runtime.PublishCapabilities(capabilities))

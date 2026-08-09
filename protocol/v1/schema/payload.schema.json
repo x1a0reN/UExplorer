@@ -40,7 +40,12 @@
       "properties": {
         "function": { "$ref": "#/$defs/objectHandle" },
         "owner": { "$ref": "#/$defs/objectHandle" },
-        "full_path": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "full_path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "pattern": "^Function fname:[0-9a-f]+:[0-9]+(?:\\.fname:[0-9a-f]+:[0-9]+)+$"
+        },
         "signature_fingerprint": { "type": "string", "pattern": "^[0-9A-F]{16}$" }
       }
     },
