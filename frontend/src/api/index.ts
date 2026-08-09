@@ -34,7 +34,7 @@ export interface InjectionCommandResult {
   stage: string;
   code: string;
   message: string;
-  dll: 'not_attempted' | 'loaded' | 'already_loaded' | 'failed';
+  dll: 'not_attempted' | 'loaded' | 'already_loaded' | 'indeterminate' | 'failed';
   pipe: 'not_attempted' | 'connected' | 'failed' | 'rejected';
   core: 'not_checked' | 'ready' | 'failed';
   session?: {

@@ -101,10 +101,21 @@ jobs:
           /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143
           /m:1 /v:minimal
 
+      - name: Build live injection fixtures
+        shell: pwsh
+        run: |
+          msbuild ./tests/injection-fixture/InjectionTarget.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /m:1 /v:minimal
+          msbuild ./tests/injection-fixture/InjectionTarget.vcxproj /p:Configuration=Release /p:Platform=Win32 /p:PlatformToolset=v143 /m:1 /v:minimal
+          msbuild ./tests/injection-fixture/InjectionCoreFixture.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /m:1 /v:minimal
+          msbuild ./tests/injection-fixture/InjectionCoreFixture.vcxproj /p:Configuration=Release /p:Platform=Win32 /p:PlatformToolset=v143 /m:1 /v:minimal
+          msbuild ./tests/injection-fixture/InjectionCoreFixture.vcxproj /p:Configuration=Slow /p:Platform=x64 /p:PlatformToolset=v143 /m:1 /v:minimal
+          msbuild ./tests/injection-fixture/InjectionCoreFixture.vcxproj /p:Configuration=Reject /p:Platform=x64 /p:PlatformToolset=v143 /m:1 /v:minimal
+
       - name: Run Rust tests
         shell: pwsh
         run: |
           cargo test --manifest-path ./frontend/src-tauri/Cargo.toml
           cargo test --manifest-path ./frontend/src-tauri/Cargo.toml --features cross-language-fixture --test core_process_fixture
+          cargo test --manifest-path ./frontend/src-tauri/Cargo.toml --features cross-language-fixture --test injection_process_fixture
           cargo test --manifest-path ./protocol/rust/Cargo.toml
           cargo test --manifest-path ./tests/fake-core/Cargo.toml

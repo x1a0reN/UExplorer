@@ -4,10 +4,16 @@ $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $rustPath = Join-Path $root 'frontend\src-tauri\src\lib.rs'
 $apiPath = Join-Path $root 'frontend\src\api\index.ts'
 $selectorPath = Join-Path $root 'frontend\src\components\ProcessSelector.tsx'
+$fixtureSourcePath = Join-Path $root 'tests\injection-fixture\InjectionCoreFixture.cpp'
+$fixtureTestPath = Join-Path $root 'frontend\src-tauri\tests\injection_process_fixture.rs'
+$workflowPath = Join-Path $root '.github\workflows\ci.yml'
 
 $rust = Get-Content -LiteralPath $rustPath -Raw -Encoding UTF8
 $api = Get-Content -LiteralPath $apiPath -Raw -Encoding UTF8
 $selector = Get-Content -LiteralPath $selectorPath -Raw -Encoding UTF8
+$fixtureSource = Get-Content -LiteralPath $fixtureSourcePath -Raw -Encoding UTF8
+$fixtureTest = Get-Content -LiteralPath $fixtureTestPath -Raw -Encoding UTF8
+$workflow = Get-Content -LiteralPath $workflowPath -Raw -Encoding UTF8
 
 $forbiddenRust = @(
     'PROCESS_ALL_ACCESS',
@@ -31,6 +37,7 @@ $requiredRust = @(
     'resolve_remote_load_library',
     'defer_injection_cleanup',
     'WAIT_TIMEOUT',
+    'DllLoadState::Indeterminate',
     'DLL_MODULE_NOT_FOUND',
     'PROCESS_IDENTITY_MISMATCH',
     'TARGET_ARCH_MISMATCH',
@@ -99,4 +106,29 @@ foreach ($token in @('onInjectSuccess', 'onDllLoaded')) {
     }
 }
 
-Write-Host 'Injection safety contract verified: identity, architecture, permissions, wait/exit, cleanup, managed Pipe/Core readiness, and UI gating are explicit.'
+foreach ($token in @(
+        'RunFixtureServer', 'FrameKind::Hello', 'FrameKind::Welcome',
+        'FrameKind::Shutdown', 'UEXPLORER_FIXTURE_DELAY_MS',
+        'UEXPLORER_FIXTURE_REJECT_LOAD')) {
+    if (-not $fixtureSource.Contains($token)) {
+        throw "Live injection Core fixture is missing '$token'"
+    }
+}
+foreach ($token in @(
+        'inject_and_connect_target', 'CORE_READY', 'CORE_ALREADY_READY',
+        'PROCESS_IDENTITY_MISMATCH', 'DLL_PE_INVALID', 'TARGET_ARCH_MISMATCH',
+        'LOAD_LIBRARY_RETURNED_NULL', 'REMOTE_THREAD_TIMEOUT',
+        'DllLoadState::Indeterminate')) {
+    if (-not $fixtureTest.Contains($token)) {
+        throw "Live injection matrix is missing '$token'"
+    }
+}
+foreach ($token in @(
+        'Build live injection fixtures',
+        '--test injection_process_fixture')) {
+    if (-not $workflow.Contains($token)) {
+        throw "CI does not enforce the live injection fixture token '$token'"
+    }
+}
+
+Write-Host 'Injection safety contract verified: identity, architecture, permissions, wait/exit, cleanup, managed Pipe/Core readiness, UI gating, and live process fixtures are explicit.'

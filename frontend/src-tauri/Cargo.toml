@@ -50,3 +50,8 @@ cross-language-fixture = []
 name = "core_process_fixture"
 path = "tests/core_process_fixture.rs"
 required-features = ["cross-language-fixture"]
+
+[[test]]
+name = "injection_process_fixture"
+path = "tests/injection_process_fixture.rs"
+required-features = ["cross-language-fixture"]

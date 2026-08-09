@@ -6,6 +6,8 @@ frontend/node_modules/
 frontend/src-tauri/target/
 protocol/rust/target/
 tests/core-harness/x64/
+tests/injection-fixture/x64/
+tests/injection-fixture/Win32/
 tests/fake-core/target/
 frontend/lint-report.json
 *.obj

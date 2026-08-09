@@ -42,6 +42,7 @@
         "2026-08-09: C++ and Rust deterministic frame matrices cover 256 mixed frames, 8 chunk widths, every truncation point, and 4096 mutations without decoder amplification",
         "2026-08-09: real NPFS tests cover pre-Hello, partial header/payload, invalid header fields, Ready-idle, request, malformed-session, and missing-Shutdown-ack disconnects",
         "2026-08-09: feature-gated process fixture proves Rust SessionManager against the real C++ Core server for Welcome, Event, Snapshot/Host query, exact Shutdown, and joined process exit; CI builds and runs both languages",
+        "2026-08-09: live x64/x86 process fixture executes the production CreateRemoteThread/LoadLibraryW/inject-and-connect path for success, duplicate load, stale identity, wrong architecture, NULL load result, timeout, and post-timeout reconnect",
         "Live UE injection, Hook/GC/target-scale snapshot, dump, and unload fixtures remain pending"
       ]
     },
@@ -117,26 +118,27 @@
       ]
     },
     "INJ-001": {
-      "status": "in_progress",
+      "status": "verified",
       "verification": [
         "2026-08-09: timeout and failed-wait paths transfer process/thread/allocation ownership to deferred cleanup",
         "tests/contracts/verify-injection-safety.ps1 enforces the no-early-free invariant",
-        "Live timeout fixture remains pending"
+        "2026-08-09: timeout/wait/exit-query uncertainty is reported as dll=indeterminate rather than the false fact dll=failed; a post-load cleanup failure reports dll=loaded",
+        "2026-08-09: live slow-DllMain fixture forces REMOTE_THREAD_TIMEOUT at 100 ms, exercises deferred cleanup, completes LoadLibraryW at 750 ms, and then reconnects to the loaded module"
       ]
     },
     "INJ-002": {
-      "status": "in_progress",
+      "status": "verified",
       "verification": [
         "2026-08-09: success requires WAIT_OBJECT_0, GetExitCodeThread != 0, and canonical module-path verification",
-        "Live LoadLibraryW failure fixture remains pending"
+        "2026-08-09: live Ready DLL reaches Core Ready while a DllMain-FALSE DLL deterministically returns LOAD_LIBRARY_RETURNED_NULL and is not reported loaded"
       ]
     },
     "INJ-003": {
-      "status": "in_progress",
+      "status": "verified",
       "verification": [
         "2026-08-09: canonical path, regular file, AMD64 PE32+, target architecture, PID/start-time/path, and already-loaded checks added",
         "Four Rust unit tests cover PE validation, path normalization, and candidate evidence",
-        "Live wrong-architecture/PID-reuse/already-loaded fixtures remain pending"
+        "2026-08-09: live matrix rejects an x86 DLL and x86 target before remote write, rejects stale start-time evidence as PID reuse, and reports a second real DLL request as AlreadyLoaded without loading another copy"
       ]
     },
     "INJ-004": {
@@ -148,7 +150,7 @@
       ]
     },
     "INJ-005": {
-      "status": "in_progress",
+      "status": "verified",
       "verification": [
         "2026-08-09: inject_and_connect returns independent dll/pipe/core stages and only publishes ready after a validated managed session; already_loaded is not success by itself",
         "2026-08-09: Core now binds its PID-scoped Pipe and opens admissions only after factual CoreRuntime/PostRender readiness",
@@ -156,7 +158,7 @@
         "2026-08-09: SessionManager is Tauri managed state; injection uses a bounded 15-second connected/Ready wait and validates PID/start-time/path after DLL load and again after Ready",
         "2026-08-09: a PID-scoped RAII TargetOperationCoordinator rejects concurrent duplicate LoadLibrary operations before preflight, serializes disconnect against readiness publication, and bounds global target work at 16 operations",
         "2026-08-09: React calls onCoreReady only for exact ready + connected + matching-PID session diagnostics and no longer reads runtime.ini or performs endpoint recovery",
-        "Live successful, timeout, PID-reuse, wrong-architecture, and already-loaded fixtures remain pending before closure"
+        "2026-08-09: live process matrix proves successful injection is not returned until target-PID Pipe Welcome/Core Ready, and covers timeout, stale identity, wrong architecture, and already-loaded outcomes"
       ]
     },
     "INJ-006": {

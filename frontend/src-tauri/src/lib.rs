@@ -85,6 +85,7 @@ pub enum DllLoadState {
     NotAttempted,
     Loaded,
     AlreadyLoaded,
+    Indeterminate,
     Failed,
 }
 
@@ -794,6 +795,23 @@ const PE_MACHINE_AMD64: u16 = 0x8664;
 const PE32_PLUS_MAGIC: u16 = 0x020B;
 
 #[cfg(windows)]
+#[derive(Clone, Copy, Debug)]
+pub struct InjectionTimeouts {
+    pub remote_thread_ms: u32,
+    pub core_connect: Duration,
+}
+
+#[cfg(windows)]
+impl InjectionTimeouts {
+    pub const fn production() -> Self {
+        Self {
+            remote_thread_ms: INJECTION_TIMEOUT_MS,
+            core_connect: CORE_CONNECT_TIMEOUT,
+        }
+    }
+}
+
+#[cfg(windows)]
 #[derive(Debug)]
 struct InjectionError {
     code: &'static str,
@@ -826,6 +844,27 @@ impl InjectionError {
         self.status == "already_loaded"
     }
 
+    fn dll_state_on_failure(&self) -> DllLoadState {
+        if self.stage == "preflight" || self.stage == "admission" {
+            return DllLoadState::NotAttempted;
+        }
+        match (self.stage, self.code) {
+            (
+                "remote_wait",
+                "REMOTE_THREAD_TIMEOUT"
+                | "REMOTE_THREAD_WAIT_FAILED"
+                | "REMOTE_THREAD_WAIT_UNEXPECTED",
+            )
+            | (
+                "verify_load",
+                "REMOTE_EXIT_CODE_FAILED" | "MODULE_SNAPSHOT_FAILED" | "MODULE_ENUMERATION_FAILED",
+            )
+            | ("cleanup", "CLEANUP_THREAD_CREATE_FAILED") => DllLoadState::Indeterminate,
+            ("cleanup", "REMOTE_FREE_FAILED") => DllLoadState::Loaded,
+            _ => DllLoadState::Failed,
+        }
+    }
+
     fn into_failure(self, dll: DllLoadState) -> InjectionResult {
         injection_failure(
             self.stage,
@@ -851,20 +890,46 @@ fn inject_and_connect_internal(
     expected_start_time_100ns: &str,
     expected_process_path: &str,
 ) -> InjectionResult {
+    inject_and_connect_target(
+        manager,
+        pid,
+        dll_path,
+        expected_start_time_100ns,
+        expected_process_path,
+        InjectionTimeouts::production(),
+    )
+}
+
+#[cfg(windows)]
+pub fn inject_and_connect_target(
+    manager: &SessionManager,
+    pid: u32,
+    dll_path: &str,
+    expected_start_time_100ns: &str,
+    expected_process_path: &str,
+    timeouts: InjectionTimeouts,
+) -> InjectionResult {
+    if timeouts.remote_thread_ms == 0 || timeouts.core_connect.is_zero() {
+        return injection_failure(
+            "preflight",
+            "INJECTION_TIMEOUT_INVALID",
+            "remote thread and Core connect timeouts must be positive",
+            DllLoadState::NotAttempted,
+            PipeConnectionState::NotAttempted,
+            CoreReadinessState::NotChecked,
+        );
+    }
     let (dll_state, dll_message) = match perform_injection(
         pid,
         dll_path,
         expected_start_time_100ns,
         expected_process_path,
+        timeouts.remote_thread_ms,
     ) {
         Ok(outcome) => (DllLoadState::Loaded, outcome.message),
         Err(error) if error.is_already_loaded() => (DllLoadState::AlreadyLoaded, error.detail),
         Err(error) => {
-            let dll = if error.stage == "preflight" {
-                DllLoadState::NotAttempted
-            } else {
-                DllLoadState::Failed
-            };
+            let dll = error.dll_state_on_failure();
             return error.into_failure(dll);
         }
     };
@@ -924,7 +989,7 @@ fn inject_and_connect_internal(
     let session = match manager.connect(
         target.clone(),
         concat!("uexplorer-host/", env!("CARGO_PKG_VERSION")),
-        CORE_CONNECT_TIMEOUT,
+        timeouts.core_connect,
     ) {
         Ok(session) => session,
         Err(error) => return session_failure_result(error, dll_state),
@@ -1190,6 +1255,7 @@ fn perform_injection(
     dll_path: &str,
     expected_start_time_100ns: &str,
     expected_process_path: &str,
+    remote_thread_timeout_ms: u32,
 ) -> Result<DllLoadOutcome, InjectionError> {
     if !cfg!(target_pointer_width = "64") {
         return Err(InjectionError::failed(
@@ -1363,14 +1429,14 @@ fn perform_injection(
         })?,
     );
 
-    let wait_result = unsafe { WaitForSingleObject(remote_thread.raw(), INJECTION_TIMEOUT_MS) };
+    let wait_result = unsafe { WaitForSingleObject(remote_thread.raw(), remote_thread_timeout_ms) };
     if wait_result == WAIT_TIMEOUT {
         defer_injection_cleanup(process, remote_thread, remote)?;
         return Err(InjectionError::failed(
             "REMOTE_THREAD_TIMEOUT",
             "remote_wait",
             format!(
-                "LoadLibraryW did not finish within {INJECTION_TIMEOUT_MS} ms; cleanup will occur only after the thread exits"
+                "LoadLibraryW did not finish within {remote_thread_timeout_ms} ms; cleanup will occur only after the thread exits"
             ),
         ));
     }
@@ -1809,6 +1875,21 @@ mod tests {
         assert_eq!(value["pipe"], "failed");
         assert_eq!(value["core"], "not_checked");
         assert!(value["session"].is_null());
+    }
+
+    #[test]
+    fn uncertain_remote_thread_outcomes_do_not_claim_the_dll_failed() {
+        let timeout =
+            InjectionError::failed("REMOTE_THREAD_TIMEOUT", "remote_wait", "fixture timeout");
+        assert_eq!(timeout.dll_state_on_failure(), DllLoadState::Indeterminate);
+        let cleanup = InjectionError::failed("REMOTE_FREE_FAILED", "cleanup", "fixture cleanup");
+        assert_eq!(cleanup.dll_state_on_failure(), DllLoadState::Loaded);
+        let rejected = InjectionError::failed(
+            "LOAD_LIBRARY_RETURNED_NULL",
+            "verify_load",
+            "fixture rejection",
+        );
+        assert_eq!(rejected.dll_state_on_failure(), DllLoadState::Failed);
     }
 
     #[test]

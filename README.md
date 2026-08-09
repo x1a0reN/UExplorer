@@ -36,9 +36,10 @@ The C++ Core now owns a real PID-scoped Windows Named Pipe server with current-u
 ACL/PID verification, bounded RPC workers, cancellation, and joinable shutdown. The
 Rust Host now has a real overlapped `CoreRpcClient` with pre-Hello server-PID checks,
 bounded request/event queues, deadlines, cancellation, disconnect completion,
-explicit reconnect, and joinable shutdown. EventHub, SessionManager, injection
-readiness, and the React/Tauri cutover are still in progress, so the legacy in-DLL
-HTTP path remains temporarily reachable until R4.
+explicit reconnect, and joinable shutdown. EventHub, multi-PID SessionManager, strict
+injection-to-Core-Ready gating, cross-language Core/Host fixtures, and a live x64/x86
+injection matrix are implemented. The React/Tauri domain cutover is still in progress,
+so the legacy in-DLL HTTP path remains temporarily reachable until R4.
 
 No Unreal Engine version is currently claimed as verified because the required target
 fixtures have not yet been added. A successful build does not establish runtime safety.
@@ -51,6 +52,7 @@ fixtures have not yet been added. A successful build does not establish runtime 
 | `frontend/` | React UI and Tauri Rust Host |
 | `protocol/` | Versioned IPC contract and shared Rust framing crate |
 | `tests/core-harness/` | Standalone C++ protocol, queue, backpressure, and shutdown tests |
+| `tests/injection-fixture/` | Real x64/x86 target and injectable Ready/slow/reject DLL matrix |
 | `tests/fake-core/` | Rust Fake Core for Host protocol tests |
 | `tests/contracts/` | Issue register and legacy API drift checks |
 
@@ -98,6 +100,28 @@ Core harness and contract checks:
 
 & 'D:\Projects\UExplorer\tests\core-harness\x64\Release\CoreHarness.exe' `
   'D:\Projects\UExplorer\protocol\v1\fixtures'
+
+& 'D:\Program Files\Visual Studio 2026\MSBuild\Current\Bin\MSBuild.exe' `
+  'D:\Projects\UExplorer\tests\injection-fixture\InjectionTarget.vcxproj' `
+  /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v145 /m:1 /v:minimal
+& 'D:\Program Files\Visual Studio 2026\MSBuild\Current\Bin\MSBuild.exe' `
+  'D:\Projects\UExplorer\tests\injection-fixture\InjectionTarget.vcxproj' `
+  /p:Configuration=Release /p:Platform=Win32 /p:PlatformToolset=v145 /m:1 /v:minimal
+& 'D:\Program Files\Visual Studio 2026\MSBuild\Current\Bin\MSBuild.exe' `
+  'D:\Projects\UExplorer\tests\injection-fixture\InjectionCoreFixture.vcxproj' `
+  /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v145 /m:1 /v:minimal
+& 'D:\Program Files\Visual Studio 2026\MSBuild\Current\Bin\MSBuild.exe' `
+  'D:\Projects\UExplorer\tests\injection-fixture\InjectionCoreFixture.vcxproj' `
+  /p:Configuration=Release /p:Platform=Win32 /p:PlatformToolset=v145 /m:1 /v:minimal
+& 'D:\Program Files\Visual Studio 2026\MSBuild\Current\Bin\MSBuild.exe' `
+  'D:\Projects\UExplorer\tests\injection-fixture\InjectionCoreFixture.vcxproj' `
+  /p:Configuration=Slow /p:Platform=x64 /p:PlatformToolset=v145 /m:1 /v:minimal
+& 'D:\Program Files\Visual Studio 2026\MSBuild\Current\Bin\MSBuild.exe' `
+  'D:\Projects\UExplorer\tests\injection-fixture\InjectionCoreFixture.vcxproj' `
+  /p:Configuration=Reject /p:Platform=x64 /p:PlatformToolset=v145 /m:1 /v:minimal
+
+cargo test --manifest-path D:\Projects\UExplorer\frontend\src-tauri\Cargo.toml --features cross-language-fixture --test core_process_fixture
+cargo test --manifest-path D:\Projects\UExplorer\frontend\src-tauri\Cargo.toml --features cross-language-fixture --test injection_process_fixture
 
 & 'D:\Projects\UExplorer\tests\contracts\verify-issue-register.ps1'
 & 'D:\Projects\UExplorer\tests\contracts\verify-api-v1.ps1'
