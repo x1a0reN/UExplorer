@@ -62,6 +62,79 @@
         "index": { "type": "integer", "minimum": 0, "maximum": 2147483647 }
       }
     },
+    "snapshotCursor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["generation", "after_index"],
+      "properties": {
+        "generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "after_index": { "type": "integer", "minimum": 0, "maximum": 2147483647 }
+      }
+    },
+    "snapshotPageData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cursor", "limit"],
+      "properties": {
+        "cursor": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/snapshotCursor" }
+          ]
+        },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 128 }
+      }
+    },
+    "snapshotRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["handle", "name", "full_path", "class_path", "package_path", "kind"],
+      "properties": {
+        "handle": { "$ref": "#/$defs/objectHandle" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "full_path": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "class_path": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "package_path": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "kind": { "enum": ["object", "package", "class", "struct", "enum", "function"] }
+      }
+    },
+    "snapshotPageResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "generation",
+        "context_generation",
+        "captured_at_monotonic_us",
+        "capture_duration_us",
+        "source_object_count",
+        "record_count",
+        "skipped_slots",
+        "items",
+        "has_more",
+        "next_cursor"
+      ],
+      "properties": {
+        "generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "context_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "captured_at_monotonic_us": { "type": "integer", "minimum": 1 },
+        "capture_duration_us": { "type": "integer", "minimum": 0 },
+        "source_object_count": { "type": "integer", "minimum": 0, "maximum": 8000000 },
+        "record_count": { "type": "integer", "minimum": 0, "maximum": 8000000 },
+        "skipped_slots": { "type": "integer", "minimum": 0, "maximum": 8000000 },
+        "items": {
+          "type": "array",
+          "maxItems": 128,
+          "items": { "$ref": "#/$defs/snapshotRecord" }
+        },
+        "has_more": { "type": "boolean" },
+        "next_cursor": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/snapshotCursor" }
+          ]
+        }
+      }
+    },
     "hello": {
       "type": "object",
       "additionalProperties": false,
@@ -118,6 +191,15 @@
             "required": ["operation"]
           },
           "then": { "properties": { "data": { "$ref": "#/$defs/handleIssueData" } } }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation": { "const": "objects.snapshot.page" }
+            },
+            "required": ["operation"]
+          },
+          "then": { "properties": { "data": { "$ref": "#/$defs/snapshotPageData" } } }
         }
       ]
     },

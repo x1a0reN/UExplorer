@@ -121,7 +121,9 @@ foreach ($token in @('IGameThreadFrameClient', 'AttachFrameClient', 'DetachFrame
 }
 
 foreach ($token in @('status.inspect', 'status.engine', 'status.health',
-        'objects.handle.issue', 'functions.handle.issue', 'SESSION_MISMATCH',
+        'objects.snapshot.page', 'objects.handle.issue', 'functions.handle.issue',
+		'SNAPSHOT_GENERATION_MISMATCH', 'SNAPSHOT_CONTEXT_MISMATCH',
+		'kMaxSnapshotPageRecords = 128', 'std::upper_bound', 'SESSION_MISMATCH',
         'TryAcquireRequest', 'std::move(*lease)', 'm_GameThread.Enqueue',
         'onGameThreadQueued(ticket)', 'SerializeObjectHandle', 'SerializeFunctionHandle')) {
     Assert-Contains $commandService $token 'Transport-neutral Core command boundary regressed.'
@@ -284,7 +286,11 @@ foreach ($token in @('TestEngineContextAndCapabilities', 'TestCoreRuntimeStateAn
 		'Snapshot source exception escaped the guarded pump boundary',
 		'Snapshot producer crossed an identity-source context generation',
 		'Snapshot shutdown ignored an in-flight pump',
-        'TestCoreDomainCommandsAndHandleExecution', 'Handle command accepted transport-supplied identity fields',
+		'TestCoreDomainCommandsAndHandleExecution', 'Handle command accepted transport-supplied identity fields',
+		'Snapshot first page did not preserve immutable generation and exact totals',
+		'Snapshot continuation page skipped or repeated an object index',
+		'Snapshot cursor silently crossed an immutable generation boundary',
+		'Worker-safe snapshot paging entered the game-thread command queue',
 		'Missing function metadata did not disable only function handles',
 		'Function handle command ignored its dedicated capability',
         'Domain command ticket did not cancel queued work',
@@ -310,9 +316,13 @@ $objectHandleFixture = Get-Content -LiteralPath (Join-Path $root 'protocol\v1\fi
 $functionHandleFixture = Get-Content -LiteralPath (Join-Path $root 'protocol\v1\fixtures\function-handle.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 $objectHandleRequestFixture = Get-Content -LiteralPath (Join-Path $root 'protocol\v1\fixtures\object-handle-request.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 $objectHandleResponseFixture = Get-Content -LiteralPath (Join-Path $root 'protocol\v1\fixtures\object-handle-response.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+$snapshotPageRequestFixture = Get-Content -LiteralPath (Join-Path $root 'protocol\v1\fixtures\object-snapshot-page-request.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+$snapshotPageResponseFixture = Get-Content -LiteralPath (Join-Path $root 'protocol\v1\fixtures\object-snapshot-page-response.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 if ($null -eq $payloadSchema.'$defs'.objectHandle -or $null -eq $payloadSchema.'$defs'.functionHandle -or
-        $null -eq $payloadSchema.'$defs'.handleIssueData -or $null -eq $payloadSchema.'$defs'.emptyCommandData) {
-    throw 'IPC payload schema does not define stable object/function handles.'
+        $null -eq $payloadSchema.'$defs'.handleIssueData -or $null -eq $payloadSchema.'$defs'.emptyCommandData -or
+		$null -eq $payloadSchema.'$defs'.snapshotCursor -or $null -eq $payloadSchema.'$defs'.snapshotPageData -or
+		$null -eq $payloadSchema.'$defs'.snapshotRecord -or $null -eq $payloadSchema.'$defs'.snapshotPageResult) {
+	throw 'IPC payload schema does not define stable handles and snapshot paging.'
 }
 if ($objectHandleFixture.serial -le 0 -or $objectHandleFixture.context_generation -le 0) {
     throw 'Object handle fixture lacks a positive serial or context generation.'
@@ -330,5 +340,32 @@ if ($objectHandleRequestFixture.operation -ne 'objects.handle.issue' -or
         $objectHandleRequestFixture.session_id -ne $objectHandleResponseFixture.session_id) {
     throw 'Object handle command fixtures do not preserve strict discovery input/session identity.'
 }
+if ($snapshotPageRequestFixture.operation -ne 'objects.snapshot.page' -or
+		$snapshotPageRequestFixture.data.PSObject.Properties.Name.Count -ne 2 -or
+		$null -ne $snapshotPageRequestFixture.data.cursor -or
+		$snapshotPageRequestFixture.data.limit -lt 1 -or
+		$snapshotPageRequestFixture.data.limit -gt 128) {
+	throw 'Snapshot page request fixture does not preserve the strict null-cursor/limit contract.'
+}
+if (-not $snapshotPageResponseFixture.ok -or
+		$snapshotPageResponseFixture.session_id -ne $snapshotPageRequestFixture.session_id -or
+		$snapshotPageResponseFixture.data.items.Count -ne $snapshotPageRequestFixture.data.limit -or
+		$snapshotPageResponseFixture.data.source_object_count -ne
+			($snapshotPageResponseFixture.data.record_count + $snapshotPageResponseFixture.data.skipped_slots) -or
+		-not $snapshotPageResponseFixture.data.has_more -or
+		$snapshotPageResponseFixture.data.next_cursor.generation -ne $snapshotPageResponseFixture.data.generation -or
+		$snapshotPageResponseFixture.data.next_cursor.after_index -ne
+			$snapshotPageResponseFixture.data.items[-1].handle.index) {
+	throw 'Snapshot page response fixture lost exact totals or its generation-bound cursor.'
+}
+$previousSnapshotIndex = -1
+foreach ($record in $snapshotPageResponseFixture.data.items) {
+	if ($record.handle.session_id -ne $snapshotPageResponseFixture.session_id -or
+			$record.handle.context_generation -ne $snapshotPageResponseFixture.data.context_generation -or
+			$record.handle.index -le $previousSnapshotIndex) {
+		throw 'Snapshot page response fixture contains a crossed envelope or unordered record.'
+	}
+	$previousSnapshotIndex = $record.handle.index
+}
 
-Write-Host 'Core runtime contract verified: immutable context, stable handles, capability readiness, SafeMemory, request drain, and coordinated shutdown.'
+Write-Host 'Core runtime contract verified: immutable context, stable handles, generation-bound snapshot paging, capability readiness, SafeMemory, request drain, and coordinated shutdown.'

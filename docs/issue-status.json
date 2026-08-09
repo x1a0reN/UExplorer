@@ -334,6 +334,7 @@
 		"Core harness proves mutation between capture and validation leaves the previous generation published",
 		"2026-08-09: production ObjectArraySnapshotSource builds stable name/full/class/package/kind metadata on the verified PostRender thread and atomically publishes only after a full validation sweep and final count check",
 		"2026-08-09: Main attaches the producer as an exclusive 32-work-unit PostRender frame client, requests initial/periodic generations, and detaches/drains it before facade/source teardown",
+		"2026-08-09: objects.snapshot.page reads only an immutable published generation under a CoreRuntime request lease; it never traverses a live UE container or enters the game-thread queue",
 		"GC-churn, large-object-table, and real target profile fixtures remain pending; the result is a validated complete sweep, not a point-in-engine-time atomic snapshot"
 	  ]
 	},
@@ -387,14 +388,23 @@
       "status": "in_progress",
       "verification": [
         "2026-08-09: ObjectArray rejects index == Num(), uses checked module-offset conversion, and applies configured pointer decryption consistently in manual fixed/chunked paths",
-        "Unified command-schema validation, pagination bounds, and matched/total semantics remain pending"
+		"2026-08-09: objects.snapshot.page enforces an exact cursor/limit object, rejects unknown filter fields and non-integral/out-of-range values, caps limit at 128, and reports exact snapshot-wide source/record/skipped totals",
+		"Legacy routes and future Host query commands still require the same unified validator and explicit matched/total semantics"
       ]
     },
 	"OBJ-009": {
 	  "status": "in_progress",
 	  "verification": [
 		"2026-08-09: EngineSnapshotStore publishes strictly monotonic immutable generations suitable for stable Host indexing",
-		"Host SnapshotCache, cursor protocol, and indexed query commands remain pending"
+		"2026-08-09: snapshot continuation cursors bind generation plus the last returned object index; a newly published generation returns SNAPSHOT_GENERATION_MISMATCH instead of mixing pages",
+		"Host SnapshotCache and atomic type/path/package/address/search indexes remain pending"
+	  ]
+	},
+	"OBJ-011": {
+	  "status": "in_progress",
+	  "verification": [
+		"2026-08-09: the Core snapshot collection command requires cursor/limit and caps each page at 128 records; the final page returns a null cursor",
+		"The R3 Named Pipe encoder must still enforce the 8 MiB serialized frame ceiling, and legacy package contents remains reachable until R4"
 	  ]
 	},
     "CALL-001": {

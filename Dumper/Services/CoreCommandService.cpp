@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstddef>
 #include <format>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <string_view>
@@ -17,8 +19,10 @@ constexpr std::string_view kStatusInspect = "status.inspect";
 constexpr std::string_view kStatusEngine = "status.engine";
 constexpr std::string_view kStatusHealth = "status.health";
 constexpr std::string_view kStatusReconnect = "status.reconnect";
+constexpr std::string_view kObjectSnapshotPage = "objects.snapshot.page";
 constexpr std::string_view kObjectHandleIssue = "objects.handle.issue";
 constexpr std::string_view kFunctionHandleIssue = "functions.handle.issue";
+constexpr std::size_t kMaxSnapshotPageRecords = 128;
 
 std::uint64_t ElapsedMicroseconds(const std::chrono::steady_clock::time_point started) noexcept
 {
@@ -272,6 +276,90 @@ bool TryParseStrictIndex(const json& data, std::int32_t& index)
 	return true;
 }
 
+struct SnapshotPageInput
+{
+	std::optional<std::uint64_t> Generation;
+	std::optional<std::int32_t> AfterIndex;
+	std::size_t Limit = 0;
+};
+
+bool TryParseBoundedUnsigned(
+	const json& value,
+	const std::uint64_t minimum,
+	const std::uint64_t maximum,
+	std::uint64_t& parsed)
+{
+	parsed = 0;
+	if (!value.is_number_integer())
+		return false;
+
+	if (value.is_number_unsigned())
+	{
+		const std::uint64_t candidate = value.get<std::uint64_t>();
+		if (candidate < minimum || candidate > maximum)
+			return false;
+		parsed = candidate;
+		return true;
+	}
+
+	const std::int64_t candidate = value.get<std::int64_t>();
+	if (candidate < 0)
+		return false;
+	const auto unsignedCandidate = static_cast<std::uint64_t>(candidate);
+	if (unsignedCandidate < minimum || unsignedCandidate > maximum)
+		return false;
+	parsed = unsignedCandidate;
+	return true;
+}
+
+bool TryParseSnapshotPageInput(const json& data, SnapshotPageInput& input)
+{
+	input = {};
+	if (!data.is_object()
+		|| data.size() != 2
+		|| !data.contains("cursor")
+		|| !data.contains("limit"))
+	{
+		return false;
+	}
+
+	std::uint64_t limit = 0;
+	if (!TryParseBoundedUnsigned(data.at("limit"), 1, kMaxSnapshotPageRecords, limit))
+		return false;
+	input.Limit = static_cast<std::size_t>(limit);
+
+	const json& cursor = data.at("cursor");
+	if (cursor.is_null())
+		return true;
+	if (!cursor.is_object()
+		|| cursor.size() != 2
+		|| !cursor.contains("generation")
+		|| !cursor.contains("after_index"))
+	{
+		return false;
+	}
+
+	std::uint64_t generation = 0;
+	std::uint64_t afterIndex = 0;
+	if (!TryParseBoundedUnsigned(
+		cursor.at("generation"),
+		1,
+		Runtime::EngineSnapshotStore::kMaxProtocolGeneration,
+		generation)
+		|| !TryParseBoundedUnsigned(
+			cursor.at("after_index"),
+			0,
+			static_cast<std::uint64_t>((std::numeric_limits<std::int32_t>::max)()),
+			afterIndex))
+	{
+		return false;
+	}
+
+	input.Generation = generation;
+	input.AfterIndex = static_cast<std::int32_t>(afterIndex);
+	return true;
+}
+
 class IssueObjectHandleWork final : public Runtime::IGameThreadWork
 {
 public:
@@ -422,6 +510,8 @@ CoreCommandResponse CoreCommandService::Execute(
 		{
 			return ExecuteStatus(request);
 		}
+		if (request.Operation == kObjectSnapshotPage)
+			return ExecuteSnapshotPage(request);
 		if (request.Operation == kObjectHandleIssue)
 			return ExecuteHandleIssue(request, false, onGameThreadQueued);
 		if (request.Operation == kFunctionHandleIssue)
@@ -440,6 +530,147 @@ CoreCommandResponse CoreCommandService::Execute(
 	{
 		return Failure(request, "COMMAND_INTERNAL_ERROR", "Core command raised an unknown exception");
 	}
+}
+
+CoreCommandResponse CoreCommandService::ExecuteSnapshotPage(const CoreCommandRequest& request)
+{
+	const auto started = std::chrono::steady_clock::now();
+	const auto timing = [&started]() noexcept {
+		return CoreCommandTiming{.ExecuteUs = ElapsedMicroseconds(started)};
+	};
+
+	SnapshotPageInput input;
+	if (!TryParseSnapshotPageInput(request.Data, input))
+	{
+		return Failure(
+			request,
+			"INVALID_ARGUMENT",
+			"Snapshot page data must contain exactly cursor and limit; limit must be 1..128 and a non-null cursor must contain a valid generation and after_index",
+			json::object(),
+			timing());
+	}
+
+	std::string admissionError;
+	auto lease = m_Runtime.TryAcquireRequest(&admissionError);
+	if (!lease)
+	{
+		return Failure(
+			request,
+			admissionError.empty() ? "CORE_NOT_READY" : admissionError,
+			"CoreRuntime is not accepting domain commands",
+			json::object(),
+			timing());
+	}
+
+	constexpr const char* capabilityName = "objects.snapshot";
+	const Runtime::CapabilityStatus* capability = lease->Capabilities()
+		? lease->Capabilities()->Find(capabilityName)
+		: nullptr;
+	if (!capability || !capability->Available)
+	{
+		return Failure(
+			request,
+			capability && !capability->ReasonCode.empty()
+				? capability->ReasonCode
+				: "OBJECT_SNAPSHOT_UNAVAILABLE",
+			capability && !capability->Reason.empty()
+				? capability->Reason
+				: "No complete immutable object snapshot is available",
+			{{"capability", capabilityName}},
+			timing());
+	}
+
+	const std::shared_ptr<const Runtime::EngineSnapshot> snapshot = m_Engine.Snapshots().Current();
+	if (!snapshot)
+	{
+		return Failure(
+			request,
+			"OBJECT_SNAPSHOT_UNAVAILABLE",
+			"The snapshot capability is available but no immutable snapshot is published",
+			{{"capability", capabilityName}},
+			timing());
+	}
+	if (!lease->Context()
+		|| snapshot->SessionId != m_SessionId
+		|| snapshot->SessionId != request.SessionId
+		|| snapshot->ContextGeneration != lease->Context()->Generation()
+		|| snapshot->ContextGeneration != m_ContextGeneration)
+	{
+		return Failure(
+			request,
+			"SNAPSHOT_CONTEXT_MISMATCH",
+			"Published snapshot does not belong to the active Core session and context generation",
+			{
+				{"snapshot_session_id", snapshot->SessionId},
+				{"snapshot_context_generation", snapshot->ContextGeneration},
+				{"active_session_id", m_SessionId},
+				{"active_context_generation", m_ContextGeneration}
+			},
+			timing());
+	}
+	if (input.Generation && *input.Generation != snapshot->Generation)
+	{
+		return Failure(
+			request,
+			"SNAPSHOT_GENERATION_MISMATCH",
+			"Snapshot generation changed; restart paging with a null cursor",
+			{
+				{"requested_generation", *input.Generation},
+				{"current_generation", snapshot->Generation}
+			},
+			timing());
+	}
+
+	const std::int32_t afterIndex = input.AfterIndex.value_or(-1);
+	const auto first = std::upper_bound(
+		snapshot->Objects.begin(),
+		snapshot->Objects.end(),
+		afterIndex,
+		[](const std::int32_t index, const Runtime::EngineSnapshotObject& record) {
+			return index < record.Handle.Index;
+		});
+	const std::size_t remaining = static_cast<std::size_t>(
+		std::distance(first, snapshot->Objects.end()));
+	const std::size_t pageSize = (std::min)(remaining, input.Limit);
+	const auto last = first + static_cast<std::ptrdiff_t>(pageSize);
+
+	json items = json::array();
+	items.get_ref<json::array_t&>().reserve(pageSize);
+	for (auto current = first; current != last; ++current)
+	{
+		items.push_back({
+			{"handle", SerializeObjectHandle(current->Handle)},
+			{"name", current->Name},
+			{"full_path", current->FullPath},
+			{"class_path", current->ClassPath},
+			{"package_path", current->PackagePath},
+			{"kind", Runtime::ToString(current->Kind)}
+		});
+	}
+
+	const bool hasMore = last != snapshot->Objects.end();
+	json nextCursor = nullptr;
+	if (hasMore)
+	{
+		nextCursor = {
+			{"generation", snapshot->Generation},
+			{"after_index", (last - 1)->Handle.Index}
+		};
+	}
+
+	json data = {
+		{"generation", snapshot->Generation},
+		{"context_generation", snapshot->ContextGeneration},
+		{"captured_at_monotonic_us", snapshot->CapturedAtMonotonicUs},
+		{"capture_duration_us", snapshot->CaptureDurationUs},
+		{"source_object_count", snapshot->SourceObjectCount},
+		{"record_count", snapshot->Objects.size()},
+		{"skipped_slots", snapshot->SkippedSlots},
+		{"items", std::move(items)},
+		{"has_more", hasMore},
+		{"next_cursor", std::move(nextCursor)}
+	};
+	return Success(request, std::move(data), timing());
 }
 
 CoreCommandResponse CoreCommandService::ExecuteStatus(const CoreCommandRequest& request)

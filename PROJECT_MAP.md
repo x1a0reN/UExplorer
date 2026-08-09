@@ -25,7 +25,7 @@ UExplorer 是一个面向 Unreal Engine 的 **SDK Dump + 实时游戏内省工�
 └──────────────────────────────────────────────┘
 ```
 
-当前分支处于 R2：`CoreRuntime`、不可变 `EngineContext`/名称布局、`EngineFacade`、严格名称 codec、稳定 Handle、原子 `EngineSnapshotStore`、生产 object/path snapshot source、PostRender 有界帧泵、安全关闭边界，以及有界 x64 PE/pattern/版本探测已经建立；Named Pipe 与 Rust Session Host 尚属 R3。`Dumper/Server` 和 `Dumper/API` 是 R4 前的 legacy HTTP 兼容层，不是目标架构，且不会与 IPC 形成长期双栈。Snapshot 目前是经二次验证后发布的完整 sweep，而非 UE 引擎时钟上的瞬时原子快照；功能真实性与未完成项以 `DESIGN.md` 和 `docs/issue-status.json` 为准。
+当前分支处于 R2：`CoreRuntime`、不可变 `EngineContext`/名称布局、`EngineFacade`、严格名称 codec、稳定 Handle、原子 `EngineSnapshotStore`、生产 object/path snapshot source、PostRender 有界帧泵、generation-bound snapshot page command、安全关闭边界，以及有界 x64 PE/pattern/版本探测已经建立；Named Pipe 与 Rust Session Host/SnapshotCache 尚属 R3。`Dumper/Server` 和 `Dumper/API` 是 R4 前的 legacy HTTP 兼容层，不是目标架构，且不会与 IPC 形成长期双栈。Snapshot 目前是经二次验证后发布的完整 sweep，而非 UE 引擎时钟上的瞬时原子快照；功能真实性与未完成项以 `DESIGN.md` 和 `docs/issue-status.json` 为准。
 
 ---
 
@@ -60,7 +60,7 @@ UExplorer/
 │   │   ├── SafeMemory.h/.cpp         #   范围、SEH、保护恢复与代码写策略
 │   │   └── VTableHook.h/.cpp         #   RAII patch owner
 │   ├── Services/                      ★ transport-neutral Core 领域服务
-│   │   ├── CoreCommandService.h/.cpp #   status/handle command 与稳定错误 envelope
+│   │   ├── CoreCommandService.h/.cpp #   status/handle/snapshot page command 与稳定错误 envelope
 │   │   └── CoreStatusDiagnostics.*   #   只读诊断源
 │   ├── IPC/                           ★ Named Pipe RPC 契约基础（R3 接入 listener）
 │   │   └── Protocol.h                #   24-byte framing/decoder/limits

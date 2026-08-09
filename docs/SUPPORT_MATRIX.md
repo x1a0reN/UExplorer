@@ -20,7 +20,8 @@ Each fixture must record:
 2. Expected GObjects, GNames/FNamePool, ProcessEvent, and critical offsets; GWorld/GEngine
    must also prove one unique writable data-slot candidate with stable typed object-array witnesses.
 3. Stable object/function handles including session, context generation, index,
-   serial, address, class/owner, path, and signature validation.
+   serial, address, class/owner, path, and signature validation; complete snapshot
+   paging must preserve one generation under representative GC churn.
 4. Representative scalar, string, object, struct, array, map, set, delegate, soft
    object, FVector, and FRotator properties.
 5. Native and Blueprint functions with input, output, in-out, and return parameters.

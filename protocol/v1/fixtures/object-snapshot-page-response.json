@@ -1,0 +1,56 @@
+{
+  "ok": true,
+  "request_id": 43,
+  "session_id": "fixture-session-4242",
+  "error": null,
+  "data": {
+    "generation": 9,
+    "context_generation": 42,
+    "captured_at_monotonic_us": 1000000,
+    "capture_duration_us": 2500,
+    "source_object_count": 3,
+    "record_count": 3,
+    "skipped_slots": 0,
+    "items": [
+      {
+        "handle": {
+          "session_id": "fixture-session-4242",
+          "context_generation": 42,
+          "index": 0,
+          "serial": 101,
+          "address": "0x0000000140100000",
+          "class_fingerprint": "A1B2C3D4E5F60708"
+        },
+        "name": "FixtureObject0",
+        "full_path": "Object /Game/Fixture.FixtureObject0",
+        "class_path": "Class /Script/CoreUObject.Object",
+        "package_path": "Package /Game/Fixture",
+        "kind": "object"
+      },
+      {
+        "handle": {
+          "session_id": "fixture-session-4242",
+          "context_generation": 42,
+          "index": 1,
+          "serial": 102,
+          "address": "0x0000000140100100",
+          "class_fingerprint": "A1B2C3D4E5F60709"
+        },
+        "name": "FixtureClass",
+        "full_path": "Class /Game/Fixture.FixtureClass",
+        "class_path": "Class /Script/CoreUObject.Class",
+        "package_path": "Package /Game/Fixture",
+        "kind": "class"
+      }
+    ],
+    "has_more": true,
+    "next_cursor": {
+      "generation": 9,
+      "after_index": 1
+    }
+  },
+  "timing": {
+    "queued_us": 0,
+    "execute_us": 42
+  }
+}

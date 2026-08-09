@@ -70,6 +70,7 @@ public:
 
 private:
 	CoreCommandResponse ExecuteStatus(const CoreCommandRequest& request);
+	CoreCommandResponse ExecuteSnapshotPage(const CoreCommandRequest& request);
 	CoreCommandResponse ExecuteHandleIssue(
 		const CoreCommandRequest& request,
 		bool functionHandle,

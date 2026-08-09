@@ -1615,12 +1615,149 @@ namespace
 					== "Function fname:10:0.fname:20:0"
 				&& functionResponse.Data.at("owner").at("serial") == 401,
 			"Function handle domain command did not bind its owner/path identity");
+
+		CoreCommandRequest pageRequest{
+			.RequestId = 4,
+			.Operation = "objects.snapshot.page",
+			.SessionId = service.SessionId(),
+			.TimeoutMs = 1000,
+			.Data = {{"cursor", nullptr}, {"limit", 128}}
+		};
+		const CoreCommandResponse unavailablePage = service.Execute(pageRequest);
+		Require(
+			!unavailablePage.Ok && unavailablePage.Error
+				&& unavailablePage.Error->Code == "OBJECT_SNAPSHOT_UNAVAILABLE",
+			"Snapshot page command ignored its publication capability");
+
+		const auto makeSnapshot = [](const std::uint64_t generation) {
+			EngineSnapshot snapshot{
+				.SessionId = "fixture-command-session",
+				.ContextGeneration = 77,
+				.Generation = generation,
+				.CapturedAtMonotonicUs = 1'000'000 + generation,
+				.CaptureDurationUs = 2'500,
+				.SourceObjectCount = 300,
+				.SkippedSlots = 40
+			};
+			snapshot.Objects.reserve(260);
+			for (std::int32_t index = 0; index < 260; ++index)
+			{
+				const std::string suffix = std::to_string(index);
+				EngineSnapshotObject record;
+				record.Handle = {
+					.SessionId = "fixture-command-session",
+					.ContextGeneration = 77,
+					.Index = index,
+					.SerialNumber = index + 1,
+					.Address = static_cast<std::uintptr_t>(0x100000)
+						+ static_cast<std::uintptr_t>(index) * 0x100,
+					.ClassFingerprint = 0xA000ULL + static_cast<std::uint64_t>(index)
+				};
+				record.Name = "FixtureObject" + suffix;
+				record.FullPath = "Object /Game/Fixture.FixtureObject" + suffix;
+				record.ClassPath = "Class /Script/CoreUObject.Object";
+				record.PackagePath = "Package /Game/Fixture";
+				record.Kind = index == 1 ? EngineObjectKind::Class : EngineObjectKind::Object;
+				snapshot.Objects.push_back(std::move(record));
+			}
+			return snapshot;
+		};
+		Require(
+			engine.Snapshots().Publish(makeSnapshot(1)).Ok(),
+			"Snapshot page fixture generation did not publish");
+		probes.ObjectSnapshotPublished = true;
+		Require(
+			runtime.PublishCapabilities(BuildCoreCapabilities(*context, probes)),
+			"Command runtime rejected the published snapshot capability");
+
+		pageRequest.RequestId = 5;
+		const CoreCommandResponse firstPage = service.Execute(pageRequest);
+		Require(
+			firstPage.Ok
+				&& firstPage.Timing.QueuedUs == 0
+				&& firstPage.Data.at("generation") == 1
+				&& firstPage.Data.at("context_generation") == 77
+				&& firstPage.Data.at("source_object_count") == 300
+				&& firstPage.Data.at("record_count") == 260
+				&& firstPage.Data.at("skipped_slots") == 40
+				&& firstPage.Data.at("items").size() == 128
+				&& firstPage.Data.at("items").front().at("handle").at("index") == 0
+				&& firstPage.Data.at("items").back().at("handle").at("index") == 127
+				&& firstPage.Data.at("has_more").get<bool>()
+				&& firstPage.Data.at("next_cursor").at("generation") == 1
+				&& firstPage.Data.at("next_cursor").at("after_index") == 127,
+			"Snapshot first page did not preserve immutable generation and exact totals");
+
+		pageRequest.RequestId = 6;
+		pageRequest.Data = {
+			{"cursor", firstPage.Data.at("next_cursor")},
+			{"limit", 128}
+		};
+		const CoreCommandResponse secondPage = service.Execute(pageRequest);
+		Require(
+			secondPage.Ok
+				&& secondPage.Data.at("items").size() == 128
+				&& secondPage.Data.at("items").front().at("handle").at("index") == 128
+				&& secondPage.Data.at("items").back().at("handle").at("index") == 255
+				&& secondPage.Data.at("has_more").get<bool>()
+				&& secondPage.Data.at("next_cursor").at("after_index") == 255,
+			"Snapshot continuation page skipped or repeated an object index");
+
+		pageRequest.RequestId = 7;
+		pageRequest.Data = {
+			{"cursor", secondPage.Data.at("next_cursor")},
+			{"limit", 128}
+		};
+		const CoreCommandResponse finalPage = service.Execute(pageRequest);
+		Require(
+			finalPage.Ok
+				&& finalPage.Data.at("items").size() == 4
+				&& finalPage.Data.at("items").front().at("handle").at("index") == 256
+				&& finalPage.Data.at("items").back().at("handle").at("index") == 259
+				&& !finalPage.Data.at("has_more").get<bool>()
+				&& finalPage.Data.at("next_cursor").is_null(),
+			"Snapshot final page did not terminate its generation cursor");
+
+		pageRequest.RequestId = 8;
+		pageRequest.Data = {{"cursor", nullptr}, {"limit", 129}};
+		const CoreCommandResponse rejectedPageLimit = service.Execute(pageRequest);
+		Require(
+			!rejectedPageLimit.Ok && rejectedPageLimit.Error
+				&& rejectedPageLimit.Error->Code == "INVALID_ARGUMENT",
+			"Snapshot page command accepted an out-of-range limit");
+		pageRequest.RequestId = 9;
+		pageRequest.Data = {{"cursor", nullptr}, {"limit", 128}, {"query", "Object"}};
+		const CoreCommandResponse rejectedPageFilter = service.Execute(pageRequest);
+		Require(
+			!rejectedPageFilter.Ok && rejectedPageFilter.Error
+				&& rejectedPageFilter.Error->Code == "INVALID_ARGUMENT",
+			"Snapshot page command accepted a Core-side search filter");
+
+		Require(
+			engine.Snapshots().Publish(makeSnapshot(2)).Ok(),
+			"New snapshot generation did not publish");
+		pageRequest.RequestId = 10;
+		pageRequest.Data = {
+			{"cursor", firstPage.Data.at("next_cursor")},
+			{"limit", 128}
+		};
+		const CoreCommandResponse stalePage = service.Execute(pageRequest);
+		Require(
+			!stalePage.Ok && stalePage.Error
+				&& stalePage.Error->Code == "SNAPSHOT_GENERATION_MISMATCH"
+				&& stalePage.Error->Details.at("requested_generation") == 1
+				&& stalePage.Error->Details.at("current_generation") == 2,
+			"Snapshot cursor silently crossed an immutable generation boundary");
+		Require(
+			!executor.HasPending(),
+			"Worker-safe snapshot paging entered the game-thread command queue");
+
 		RuntimeProbes objectOnlyProbes = probes;
 		objectOnlyProbes.FunctionHandleValidationEnabled = false;
 		Require(
 			runtime.PublishCapabilities(BuildCoreCapabilities(*context, objectOnlyProbes)),
 			"Command runtime rejected a truthful function-handle capability downgrade");
-		functionRequest.RequestId = 4;
+		functionRequest.RequestId = 11;
 		const CoreCommandResponse unavailableFunction = service.Execute(functionRequest);
 		Require(
 			!unavailableFunction.Ok && unavailableFunction.Error
@@ -1628,7 +1765,7 @@ namespace
 			"Function handle command ignored its dedicated capability");
 
 		CoreCommandRequest wrongSession = objectRequest;
-		wrongSession.RequestId = 5;
+		wrongSession.RequestId = 12;
 		wrongSession.SessionId = "stale-session";
 		const CoreCommandResponse rejectedSession = service.Execute(wrongSession);
 		Require(
@@ -1637,14 +1774,14 @@ namespace
 			"Domain command crossed a Core session boundary");
 
 		CoreCommandRequest invalidData = objectRequest;
-		invalidData.RequestId = 6;
+		invalidData.RequestId = 13;
 		invalidData.Data = {{"index", 7}, {"address", "0x1000"}};
 		const CoreCommandResponse rejectedData = service.Execute(invalidData);
 		Require(
 			!rejectedData.Ok && rejectedData.Error
 				&& rejectedData.Error->Code == "INVALID_ARGUMENT",
 			"Handle command accepted transport-supplied identity fields");
-		invalidData.RequestId = 7;
+		invalidData.RequestId = 14;
 		invalidData.Data = {{"index", (std::numeric_limits<std::uint64_t>::max)()}};
 		const CoreCommandResponse rejectedUnsignedIndex = service.Execute(invalidData);
 		Require(
@@ -1655,7 +1792,7 @@ namespace
 		std::promise<GameThreadTicket> publishedTicket;
 		auto ticketFuture = publishedTicket.get_future();
 		CoreCommandRequest cancelledRequest = objectRequest;
-		cancelledRequest.RequestId = 8;
+		cancelledRequest.RequestId = 15;
 		auto cancelledResponseFuture = std::async(
 			std::launch::async,
 			[&service, cancelledRequest, &publishedTicket] {

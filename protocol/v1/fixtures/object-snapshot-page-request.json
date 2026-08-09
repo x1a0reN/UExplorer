@@ -1,0 +1,9 @@
+{
+  "operation": "objects.snapshot.page",
+  "session_id": "fixture-session-4242",
+  "timeout_ms": 5000,
+  "data": {
+    "cursor": null,
+    "limit": 2
+  }
+}

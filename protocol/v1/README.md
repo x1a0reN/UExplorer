@@ -69,6 +69,7 @@ The v1 command registry is explicit. Unknown operations return
 | `status.engine` | `{}` | Worker-safe immutable engine/offset report |
 | `status.health` | `{}` | Worker-safe liveness/readiness snapshot |
 | `status.reconnect` | `{}` | Always `RECONNECT_DISABLED` until an exclusive generation transition exists |
+| `objects.snapshot.page` | `{"cursor": null \| {"generation": uint53, "after_index": int32}, "limit": 1..128}` | Worker-safe immutable snapshot page |
 | `objects.handle.issue` | `{"index": int32}` | PostRender game-thread identity re-read |
 | `functions.handle.issue` | `{"index": int32}` | PostRender game-thread function/owner/path re-read |
 
@@ -78,6 +79,17 @@ trusted. The response contains the complete handle produced at the execution poi
 `objects.handle.issue` requires `objects.handles`; `functions.handle.issue` requires
 the stricter `functions.handles` capability. A valid object-handle profile therefore
 cannot accidentally advertise function identity or function invocation support.
+
+`objects.snapshot.page` returns records from one atomically published immutable
+generation in ascending object-array index order. The first request uses a null
+cursor. Every continuation cursor binds the generation and last returned index; if
+Core has published a newer generation, it returns `SNAPSHOT_GENERATION_MISMATCH` and
+the Host must discard the partial generation and restart with a null cursor. Core
+does not search, filter, group, or cache these records. The Rust Host must consume a
+complete generation before publishing its type, path, package, address, and search
+indexes. Snapshot pages never enter the game-thread queue and are capped at 128
+records; snapshot-wide `source_object_count`, `record_count`, and `skipped_slots` are
+exact rather than page-relative estimates.
 
 See `protocol.json`, `schema/payload.schema.json`, and `fixtures/` for the
 machine-readable contract and golden data.
