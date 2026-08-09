@@ -120,11 +120,18 @@ pub enum RpcInbound {
     Ready(WelcomePayload),
     Response(ResponsePayload),
     Event(EventPayload),
-    Pong(HeartbeatPayload),
+    Pong {
+        request_id: u64,
+        payload: HeartbeatPayload,
+    },
     Reply(OutboundFrame),
     Shutdown(ShutdownPayload),
-    LateResponse { request_id: u64 },
-    LatePong { request_id: u64 },
+    LateResponse {
+        request_id: u64,
+    },
+    LatePong {
+        request_id: u64,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -621,7 +628,10 @@ impl CoreRpcSession {
                 }
             }
             self.pending.remove(&frame.header.request_id);
-            return Ok(RpcInbound::Pong(heartbeat));
+            return Ok(RpcInbound::Pong {
+                request_id: frame.header.request_id,
+                payload: heartbeat,
+            });
         }
         if self.remove_retired(frame.header.request_id, RetiredKind::Ping) {
             return Ok(RpcInbound::LatePong {
@@ -1115,7 +1125,7 @@ mod tests {
         .unwrap();
         assert!(matches!(
             session.receive(&pong).unwrap().as_slice(),
-            [RpcInbound::Pong(value)] if value.nonce == 7
+            [RpcInbound::Pong { request_id, payload }] if *request_id == ping.request_id && payload.nonce == 7
         ));
 
         let peer_ping = encode_frame(
@@ -1261,7 +1271,7 @@ mod tests {
         let pong = core.accept(&ping.bytes).unwrap();
         assert!(matches!(
             session.receive(&pong[0]).unwrap().as_slice(),
-            [RpcInbound::Pong(value)] if value.nonce == 7
+            [RpcInbound::Pong { request_id, payload }] if *request_id == ping.request_id && payload.nonce == 7
         ));
 
         let cancellable = session

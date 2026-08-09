@@ -25,7 +25,7 @@ UExplorer 是一个面向 Unreal Engine 的 **SDK Dump + 实时游戏内省工�
 └──────────────────────────────────────────────┘
 ```
 
-当前分支处于 R2 收尾与 R3 实施阶段：`CoreRuntime`、不可变 `EngineContext`/名称布局、`EngineFacade`、严格名称 codec、稳定 Handle、原子 `EngineSnapshotStore`、生产 object/path snapshot source、PostRender 有界帧泵、generation-bound snapshot page command、Rust Host 原子 SnapshotCache/索引、安全关闭边界，以及有界 x64 PE/pattern/版本探测已经建立。R3 已具备共享严格 payload/limit 类型、transport-independent `CoreRpcSession` 和真实 Core `NamedPipeRpcServer`；后者完成 current-user DACL、双方 PID 证据、overlapped I/O、4 个 joinable worker、256 pending 上限、deadline/ticket cancel、Ping/Pong 与 Host Shutdown drain。Rust `CoreRpcClient`、EventHub 与多 PID SessionManager 尚未实现。`Dumper/Server` 和 `Dumper/API` 是 R4 前的 legacy HTTP 兼容层，不是目标架构，且不会与 IPC 形成长期双栈。Snapshot 目前是经二次验证后发布的完整 sweep，而非 UE 引擎时钟上的瞬时原子快照；Host cache 当前有独立测试但尚未接入真实 Pipe，功能真实性与未完成项以 `DESIGN.md` 和 `docs/issue-status.json` 为准。
+当前分支处于 R2 收尾与 R3 实施阶段：`CoreRuntime`、不可变 `EngineContext`/名称布局、`EngineFacade`、严格名称 codec、稳定 Handle、原子 `EngineSnapshotStore`、生产 object/path snapshot source、PostRender 有界帧泵、generation-bound snapshot page command、Rust Host 原子 SnapshotCache/索引、安全关闭边界，以及有界 x64 PE/pattern/版本探测已经建立。R3 已具备共享严格 payload/limit 类型、transport-independent `CoreRpcSession`、真实 Core `NamedPipeRpcServer` 与真实 Rust `CoreRpcClient`；双方均使用 overlapped I/O、严格 PID/session/correlation/deadline/cancel 边界和可 join 生命周期，Host fixture 已覆盖分片、事件背压、断线与显式重连。EventHub、多 PID SessionManager、SnapshotCache 拉取及注入 readiness 尚未实现。`Dumper/Server` 和 `Dumper/API` 是 R4 前的 legacy HTTP 兼容层，不是目标架构，且不会与 IPC 形成长期双栈。Snapshot 目前是经二次验证后发布的完整 sweep，而非 UE 引擎时钟上的瞬时原子快照；Host cache 当前有独立测试但尚未接入 SessionManager，功能真实性与未完成项以 `DESIGN.md` 和 `docs/issue-status.json` 为准。
 
 ---
 
@@ -202,7 +202,8 @@ UExplorer/
             ├── main.rs               #   Tauri 主入口
             ├── lib.rs                #   Tauri 命令；进程身份扫描与受校验的 x64 DLL 注入
             ├── ipc/
-            │   └── rpc_session.rs   #   严格握手/关联/deadline/cancel/event/shutdown 状态机
+            │   ├── rpc_session.rs   #   严格握手/关联/deadline/cancel/event/shutdown 状态机
+            │   └── named_pipe_client.rs # 真实 Win32 overlapped client、PID 核验、bounded queues 与 join
             ├── session/
             │   └── snapshot_cache.rs #   terminal page assembly、原子发布与有界 Host 查询索引
             └── inject_dll.ps1        #   已禁用的 legacy 注入脚本，仅保留历史证据，不是 fallback

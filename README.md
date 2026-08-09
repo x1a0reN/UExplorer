@@ -34,8 +34,11 @@ compression fallback.
 
 The C++ Core now owns a real PID-scoped Windows Named Pipe server with current-user
 ACL/PID verification, bounded RPC workers, cancellation, and joinable shutdown. The
-Rust `CoreRpcClient`, EventHub, SessionManager, and React/Tauri cutover are still in
-progress, so the legacy in-DLL HTTP path remains temporarily reachable until R4.
+Rust Host now has a real overlapped `CoreRpcClient` with pre-Hello server-PID checks,
+bounded request/event queues, deadlines, cancellation, disconnect completion,
+explicit reconnect, and joinable shutdown. EventHub, SessionManager, injection
+readiness, and the React/Tauri cutover are still in progress, so the legacy in-DLL
+HTTP path remains temporarily reachable until R4.
 
 No Unreal Engine version is currently claimed as verified because the required target
 fixtures have not yet been added. A successful build does not establish runtime safety.

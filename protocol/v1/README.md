@@ -83,8 +83,24 @@ for the current user, rejects remote clients, verifies the client PID and SID, a
 uses overlapped reads/writes plus owned listener/request threads. The Windows Core
 harness uses a real NPFS client to verify the server PID, handshake, domain request,
 queued game-thread cancellation, heartbeat, exact shutdown acknowledgement, and
-thread drain. The Rust `CoreRpcClient`, EventHub, and multi-PID SessionManager remain
-R3 work, so the desktop application is not yet connected to this live endpoint.
+thread drain.
+
+The Windows Host adapter is implemented by
+`frontend/src-tauri/src/ipc/named_pipe_client.rs`. It opens only the canonical PID
+pipe with overlapped I/O and identification-level SQOS, verifies
+`GetNamedPipeServerProcessId` before Hello, and gives one joinable worker exclusive
+ownership of `CoreRpcSession`. It bounds commands at 256, each read at 64 KiB, and
+the transport event inbox at 1024; overflow increments a diagnostic counter instead
+of blocking the reader. A Host deadline starts at command admission, and only its
+remaining duration is sent to Core. Deadline and explicit cancellation emit Cancel
+and complete each caller once. Every exit path cancels and settles pending overlapped
+I/O before its stable buffer is released. Disconnect completes every pending call, while Shutdown
+requires the exact protocol acknowledgement before the worker joins. Real NPFS tests
+cover 1-byte response fragmentation, a Welcome followed immediately by Event,
+concurrent Ping correlation, cancellation/deadline, event overflow without RPC
+starvation, mid-request disconnect, peer-PID rejection before Hello, and a fresh
+connection to the same PID-scoped name. EventHub and multi-PID SessionManager remain
+R3 work, so the desktop application is not yet connected to this endpoint.
 
 ## Identity and errors
 

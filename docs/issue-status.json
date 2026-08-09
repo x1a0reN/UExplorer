@@ -91,7 +91,8 @@
         "2026-08-09: CoreCommandResponse defines request/session identity, stable structured errors, and queued/execute microsecond timing",
         "2026-08-09: command validation rejects invalid request IDs, sessions, operations, and deadlines with stable error codes",
         "2026-08-09: Host CoreRpcSession enforces exact handshake/request correlation, response success/error/data invariants, negotiated limits, bounded late-response tombstones, and terminal malformed-envelope handling",
-        "2026-08-09: real Windows Named Pipe fixture validates v1 serialization, correlated domain responses, stable error envelopes, and transport/game-thread queue timing"
+        "2026-08-09: real Windows Named Pipe fixture validates v1 serialization, correlated domain responses, stable error envelopes, and transport/game-thread queue timing",
+        "2026-08-09: real Rust CoreRpcClient fixture verifies pre-Hello server PID identity, exact request/Ping correlation, fragmented/coalesced input, and terminal disconnect completion"
       ]
     },
     "NET-015": {
@@ -99,7 +100,8 @@
       "verification": [
         "2026-08-09: shared EventPayload defines seq/kind/timestamp_us/session_id/dropped_before/data and requires frame request ID zero",
         "2026-08-09: Host CoreRpcSession rejects duplicate/decreasing event sequence and decreasing drop counters",
-        "Real Pipe event reader, bounded EventHub subscriber queues, replay/filter behavior, and backpressure fixtures remain pending"
+        "2026-08-09: real Pipe event reader accepts an Event immediately after Welcome and its 1024-item nonblocking inbox records overflow while RPC remains responsive",
+        "Bounded EventHub subscriber queues plus replay/filter behavior remain pending"
       ]
     },
     "INJ-001": {
@@ -138,7 +140,8 @@
       "verification": [
         "2026-08-09: dll_loaded/already_loaded/failed are explicit; frontend no longer closes, adopts runtime.ini, or reports Core ready after DLL load",
         "2026-08-09: Core now binds its PID-scoped Pipe and opens admissions only after factual CoreRuntime/PostRender readiness",
-        "Host injection still requires the R3 CoreRpcClient/SessionManager connected + Ready wait before this issue can close"
+        "2026-08-09: CoreRpcClient now returns only after exact Welcome/Ready validation and exposes immutable peer/readiness diagnostics",
+        "Host injection still requires SessionManager to invoke that connected + Ready wait before this issue can close"
       ]
     },
     "INJ-006": {
@@ -187,6 +190,7 @@
       "status": "in_progress",
       "verification": [
         "2026-08-09: Host can request shutdown through the authenticated Pipe session and Core sends an exact correlated acknowledgement before triggering its owned shutdown path",
+        "2026-08-09: Rust CoreRpcClient waits for that exact acknowledgement, cancels/settles overlapped I/O, and joins its owned worker; disconnect completes pending callers",
         "2026-08-09: Named Pipe listener/workers and pending GameThread tickets are cancelled and joined before Hook/facade teardown",
         "F6 and the default AllocConsole path remain until the R4 lifecycle cutover"
       ]
@@ -326,7 +330,8 @@
         "2026-08-09: GameThreadTicket and Cancel provide the execution-layer primitive for queued cancellation",
         "2026-08-09: CoreCommandService exposes each accepted ticket through a worker-side callback and reports queue/execute timing",
         "2026-08-09: Host CoreRpcSession now owns a bounded request-ID map, monotonic deadlines, Cancel frames, and explicit late-terminal tombstones",
-        "2026-08-09: real Named Pipe adapter measures deadlines from frame receipt, subtracts worker queue time, maps the same request ID to GameThreadTicket, returns one terminal cancellation response, and drains on shutdown"
+        "2026-08-09: real Named Pipe adapter measures deadlines from frame receipt, subtracts worker queue time, maps the same request ID to GameThreadTicket, returns one terminal cancellation response, and drains on shutdown",
+        "2026-08-09: Rust deadline starts at Host command admission, only remaining time is sent to Core, and the real Pipe fixture proves explicit cancellation/deadline each complete the caller once, consume late terminals, and leave heartbeat usable"
       ]
     },
     "HOOK-001": {

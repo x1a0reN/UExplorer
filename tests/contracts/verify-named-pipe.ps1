@@ -25,6 +25,8 @@ $main = Read-ProjectFile 'Dumper\Main.cpp'
 $coreProject = Read-ProjectFile 'Dumper\UExplorerCore.vcxproj'
 $harnessProject = Read-ProjectFile 'tests\core-harness\CoreHarness.vcxproj'
 $harness = Read-ProjectFile 'tests\core-harness\main.cpp'
+$hostClient = Read-ProjectFile 'frontend\src-tauri\src\ipc\named_pipe_client.rs'
+$hostCargo = Read-ProjectFile 'frontend\src-tauri\Cargo.toml'
 
 foreach ($token in @(
         'kWorkerCount = 4', 'kPendingRequestLimit = 256', 'kIoChunkBytes = 64 * 1024',
@@ -80,4 +82,31 @@ foreach ($token in @(
     Assert-Contains $harness $token 'Real Windows Named Pipe lifecycle fixture regressed.'
 }
 
-Write-Host 'Named Pipe contract verified: current-user ACL, peer PIDs, strict v1 lifecycle, bounded RPC, cancellation, and joinable shutdown.'
+foreach ($token in @(
+        'pub struct CoreRpcClient', 'pub struct PendingRpc', 'canonical_pipe_name',
+        'CreateFileW', 'FILE_FLAG_OVERLAPPED', 'SECURITY_SQOS_PRESENT',
+        'SECURITY_IDENTIFICATION', 'GetNamedPipeServerProcessId', 'SetNamedPipeHandleState',
+        'CoreRpcSession', 'PendingRead', 'CancelIoEx', 'GetOverlappedResult',
+        'WaitForMultipleObjects', 'COMMAND_CAPACITY', 'EVENT_CAPACITY',
+        'expire_requests', 'RequestCancelled', 'DeadlineExpired', 'join_worker',
+        'real_named_pipe_lifecycle_verifies_peer_and_joins_worker',
+        'rejects_pipe_server_pid_mismatch_before_hello',
+        'mid_request_disconnect_completes_pending_call_and_worker',
+        'event_reader_drops_overflow_without_blocking_rpc',
+        'cancellation_and_deadline_have_one_explicit_completion',
+        'FragmentResponses')) {
+    Assert-Contains $hostClient $token 'Rust Host Named Pipe client lifecycle or safety contract regressed.'
+}
+foreach ($token in @('TcpStream', 'http://', 'runtime.ini', 'uexplorer-dev', '.detach(')) {
+    Assert-NotContains $hostClient $token 'Rust Host Core RPC client gained a legacy transport, token, or detached-thread path.'
+}
+$hostPeerCheck = $hostClient.IndexOf('server_process_id(pipe.raw())', [StringComparison]::Ordinal)
+$hostHello = $hostClient.IndexOf('session.start_handshake()', [StringComparison]::Ordinal)
+if ($hostPeerCheck -lt 0 -or $hostHello -lt 0 -or $hostPeerCheck -ge $hostHello) {
+    throw 'Rust Host must verify the named-pipe server PID before sending Hello.'
+}
+foreach ($feature in @('Win32_Storage_FileSystem', 'Win32_System_IO', 'Win32_System_Pipes')) {
+    Assert-Contains $hostCargo $feature 'Rust Host omitted a required Win32 Named Pipe feature.'
+}
+
+Write-Host 'Named Pipe contract verified: current-user ACL, mutual peer PID evidence, strict v1 lifecycle, bounded RPC/event queues, cancellation, reconnect, and joinable Core/Host shutdown.'
