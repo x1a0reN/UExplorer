@@ -1,0 +1,20 @@
+{
+  "function": {
+    "session_id": "fixture-session-4242",
+    "context_generation": 7,
+    "index": 321,
+    "serial": 654,
+    "address": "0x00007FF612345678",
+    "class_fingerprint": "0123456789ABCDEF"
+  },
+  "owner": {
+    "session_id": "fixture-session-4242",
+    "context_generation": 7,
+    "index": 111,
+    "serial": 222,
+    "address": "0x00007FF612340000",
+    "class_fingerprint": "FEDCBA9876543210"
+  },
+  "full_path": "/Script/Fixture.Owner:Function",
+  "signature_fingerprint": "1122334455667788"
+}

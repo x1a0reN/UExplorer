@@ -58,7 +58,7 @@ export default function Memory() {
   const [consoleInput, setConsoleInput] = useState('');
   const [consoleLogs, setConsoleLogs] = useState<string[]>([
     'UExplorer local command adapter',
-    'Supported: get/call/instances/mem.read/mem.write (object property set is disabled)',
+    'Supported: get/instances/mem.read/mem.write (object property set and calls are disabled)',
   ]);
 
   const rows = useMemo(() => {
@@ -208,12 +208,7 @@ export default function Memory() {
       } else if (head === 'set' && parts.length >= 3) {
         throw new Error('OBJECT_PROPERTY_WRITE_DISABLED');
       } else if (head === 'call' && parts.length >= 3) {
-        const objectIndex = Number(parts[1]);
-        const functionName = parts[2];
-        const jsonParams = parts.slice(3).join(' ');
-        const params = jsonParams ? (JSON.parse(jsonParams) as Record<string, unknown>) : {};
-        const out = await api.callFunction(objectIndex, functionName, params, true);
-        pushConsole(JSON.stringify(out, null, 2));
+        throw new Error('CALL_HANDLE_REQUIRED');
       } else if (head === 'instances' && parts[1]) {
         const out = await api.getClassInstances(parts[1], 0, 100);
         pushConsole(JSON.stringify(out, null, 2));

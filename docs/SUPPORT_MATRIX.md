@@ -15,7 +15,8 @@ Each fixture must record:
 
 1. Exact engine version and executable identity.
 2. Expected GObjects, GNames/FNamePool, GWorld, ProcessEvent, and critical offsets.
-3. Stable object handles including index and serial.
+3. Stable object/function handles including session, context generation, index,
+   serial, address, class/owner, path, and signature validation.
 4. Representative scalar, string, object, struct, array, map, set, delegate, soft
    object, FVector, and FRotator properties.
 5. Native and Blueprint functions with input, output, in-out, and return parameters.

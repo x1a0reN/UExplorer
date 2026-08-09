@@ -9,6 +9,7 @@
 #include "Runtime/BoundedQueue.h"
 #include "Runtime/CoreCapabilities.h"
 #include "Runtime/CoreRuntime.h"
+#include "Runtime/ObjectHandle.h"
 #include "Runtime/SafeMemory.h"
 #include "Runtime/ShutdownCoordinator.h"
 #include "API/GameThreadQueue.h"
@@ -30,6 +31,7 @@
 #include <string>
 #include <sstream>
 #include <thread>
+#include <unordered_map>
 
 namespace
 {
@@ -365,6 +367,148 @@ namespace
 		Require(second.Stages.size() == first.Stages.size() && order.size() == 3, "Shutdown coordinator ran twice");
 	}
 
+	class FakeHandleIdentitySource final : public UExplorer::Runtime::IHandleIdentitySource
+	{
+	public:
+		bool Available = true;
+		bool ThrowOnRead = false;
+		std::unordered_map<std::int32_t, UExplorer::Runtime::ObjectIdentity> Objects;
+		std::unordered_map<std::int32_t, UExplorer::Runtime::FunctionIdentity> Functions;
+
+		bool TryReadObject(
+			const std::int32_t index,
+			UExplorer::Runtime::ObjectIdentity& identity) override
+		{
+			if (ThrowOnRead)
+				throw std::runtime_error("fixture identity source failure");
+			const auto found = Objects.find(index);
+			if (!Available || found == Objects.end())
+				return false;
+			identity = found->second;
+			return true;
+		}
+
+		bool TryReadFunction(
+			const std::int32_t index,
+			UExplorer::Runtime::FunctionIdentity& identity) override
+		{
+			if (ThrowOnRead)
+				throw std::runtime_error("fixture identity source failure");
+			const auto found = Functions.find(index);
+			if (!Available || found == Functions.end())
+				return false;
+			identity = found->second;
+			return true;
+		}
+	};
+
+	void TestStableObjectAndFunctionHandles()
+	{
+		using namespace UExplorer::Runtime;
+
+		FakeHandleIdentitySource source;
+		source.Objects.emplace(7, ObjectIdentity{
+			.Index = 7,
+			.SerialNumber = 101,
+			.Address = 0x1000,
+			.ClassFingerprint = 0xA001
+		});
+		ObjectHandleService service("fixture-session", 42, source);
+		const ObjectHandleResult issued = service.IssueObject(7);
+		Require(issued.Ok(), "Stable object handle was not issued from a complete identity");
+		Require(service.ValidateObject(issued.Value).Ok(), "Fresh object handle did not validate");
+
+		ObjectHandle staleSession = issued.Value;
+		staleSession.SessionId = "old-session";
+		Require(
+			service.ValidateObject(staleSession).Error == HandleError::SessionMismatch,
+			"Object handle crossed a session boundary");
+		ObjectHandle staleGeneration = issued.Value;
+		staleGeneration.ContextGeneration = 41;
+		Require(
+			service.ValidateObject(staleGeneration).Error == HandleError::ContextGenerationMismatch,
+			"Object handle crossed an EngineContext generation");
+
+		source.Objects.at(7).SerialNumber = 102;
+		Require(
+			service.ValidateObject(issued.Value).Error == HandleError::SerialMismatch,
+			"Recycled object slot retained a valid handle");
+		source.Objects.at(7).SerialNumber = 101;
+		source.Objects.at(7).Address = 0x1100;
+		Require(
+			service.ValidateObject(issued.Value).Error == HandleError::AddressMismatch,
+			"Object address change retained a valid handle");
+		source.Objects.at(7).Address = 0x1000;
+		source.Objects.at(7).ClassFingerprint = 0xA002;
+		Require(
+			service.ValidateObject(issued.Value).Error == HandleError::ClassFingerprintMismatch,
+			"Object class change retained a valid handle");
+		source.Objects.at(7).ClassFingerprint = 0xA001;
+
+		source.Objects.emplace(8, ObjectIdentity{
+			.Index = 8,
+			.SerialNumber = 0,
+			.Address = 0x2000,
+			.ClassFingerprint = 0xA001
+		});
+		Require(
+			service.IssueObject(8).Error == HandleError::SerialUnavailable,
+			"Object handle silently fell back when no serial was available");
+
+		source.Functions.emplace(100, FunctionIdentity{
+			.Function = {
+				.Index = 100,
+				.SerialNumber = 301,
+				.Address = 0x5000,
+				.ClassFingerprint = 0xF001
+			},
+			.Owner = {
+				.Index = 200,
+				.SerialNumber = 401,
+				.Address = 0x6000,
+				.ClassFingerprint = 0xC001
+			},
+			.FullPath = "/Script/Fixture.Owner:Function",
+			.SignatureFingerprint = 0x5151
+		});
+		const FunctionHandleResult function = service.IssueFunction(100);
+		Require(function.Ok(), "Stable function handle was not issued");
+		Require(service.ValidateFunction(function.Value).Ok(), "Fresh function handle did not validate");
+
+		source.Functions.at(100).Owner.SerialNumber = 402;
+		Require(
+			service.ValidateFunction(function.Value).Error == HandleError::FunctionOwnerMismatch,
+			"Function handle ignored owner recycling");
+		source.Functions.at(100).Owner.SerialNumber = 401;
+		source.Functions.at(100).FullPath = "/Script/Fixture.Other:Function";
+		Require(
+			service.ValidateFunction(function.Value).Error == HandleError::FunctionPathMismatch,
+			"Function handle ignored a path change");
+		source.Functions.at(100).FullPath = "/Script/Fixture.Owner:Function";
+		source.Functions.at(100).SignatureFingerprint = 0x5252;
+		Require(
+			service.ValidateFunction(function.Value).Error == HandleError::FunctionSignatureMismatch,
+			"Function handle ignored a signature change");
+		source.Functions.at(100).SignatureFingerprint = 0x5151;
+		source.Available = false;
+		Require(
+			service.ValidateFunction(function.Value).Error == HandleError::IdentityUnavailable,
+			"Unavailable identity source was treated as a valid function");
+		source.Available = true;
+		source.ThrowOnRead = true;
+		Require(
+			service.ValidateObject(issued.Value).Error == HandleError::IdentityUnavailable,
+			"Identity source exception escaped the handle boundary");
+
+		ObjectHandleService invalidService("", 0, source);
+		Require(
+			invalidService.IssueObject(7).Error == HandleError::InvalidService,
+			"Unconfigured handle service issued a handle");
+		Require(
+			std::string(ToString(HandleError::SerialMismatch)) == "HANDLE_SERIAL_MISMATCH",
+			"Stable handle error code changed");
+	}
+
 	void TestSafeMemory()
 	{
 		using namespace UExplorer::Runtime;
@@ -695,13 +839,14 @@ int main(const int argc, char** argv)
 		TestUsmapContainer(fixtureDirectory);
 		TestEngineContextAndCapabilities();
 		TestCoreRuntimeStateAndShutdown();
+		TestStableObjectAndFunctionHandles();
 		TestSafeMemory();
 		TestQueueOwnershipAndBackpressure();
 		TestQueueShutdownWakesWaiters();
 		TestGameThreadTaskOwnershipAndTimeouts();
 		TestGameThreadMpscCapacity();
 		TestHttpServerLifecycle();
-		std::cout << "Core harness passed: framing, immutable runtime/capabilities, SafeMemory, USMAP consumer, bounded queues, owned game-thread tasks, SEH, HTTP lifecycle, and shutdown.\n";
+		std::cout << "Core harness passed: framing, runtime/capabilities, stable handles, SafeMemory, USMAP consumer, bounded queues, owned game-thread tasks, SEH, HTTP lifecycle, and shutdown.\n";
 		return 0;
 	}
 	catch (const std::exception& error)

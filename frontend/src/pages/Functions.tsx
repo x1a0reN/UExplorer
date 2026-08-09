@@ -82,7 +82,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
   const [staticClassName, setStaticClassName] = useState('');
   const [batchObjectIndices, setBatchObjectIndices] = useState('');
   const [callResult, setCallResult] = useState<string>('');
-  const [calling, setCalling] = useState(false);
+  const [, setCalling] = useState(false);
 
   const [hooks, setHooks] = useState<HookItem[]>([]);
   const [hookLog, setHookLog] = useState<HookLogEntry[]>([]);
@@ -989,17 +989,12 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
 
                             <button
                               onClick={() => void executeCall()}
-                              disabled={calling}
+                              disabled
+                              title="Stable ObjectHandle/FunctionHandle transport is not active"
                               className="w-full py-2.5 rounded-lg bg-primary hover:bg-primary/90 text-white font-semibold text-[13px] font-display tracking-tight shadow-sm active:scale-[0.98] transition-all flex items-center justify-center gap-2 mt-4 disabled:opacity-50"
                             >
                               <Play className="w-4 h-4 fill-current" />
-                              {calling
-                                ? 'Calling...'
-                                : callMode === 'instance'
-                                  ? 'Execute ProcessEvent'
-                                  : callMode === 'static'
-                                    ? 'Execute Static Call'
-                                    : 'Execute Batch Call'}
+                              Stable handles required
                             </button>
                           </div>
                         </div>
@@ -1012,7 +1007,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
                             <History className="w-4 h-4 text-text-low" />
                           </div>
                           <pre className="flex-1 bg-background-base border border-border-subtle rounded-xl p-4 font-mono text-[12px] text-accent-green overflow-y-auto whitespace-pre-wrap custom-scrollbar">
-                            {callResult || 'No execution yet'}
+                            {callResult || 'Unavailable: stable ObjectHandle/FunctionHandle transport is not active'}
                           </pre>
                         </div>
                       </div>

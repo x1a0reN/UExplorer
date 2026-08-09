@@ -45,6 +45,12 @@ not a wall-clock timestamp shared between processes.
   request IDs when correlation is required.
 - Events use request ID zero and carry their own monotonic sequence.
 - Every post-handshake command includes `session_id`.
+- UObject operations use `objectHandle`: `session_id`, immutable context generation,
+  object-array index, positive serial, canonical hex address, and class fingerprint.
+  Core re-reads and compares every field at the game-thread execution point.
+- UFunction operations use `functionHandle`, which binds a function object handle to
+  its serial-backed owner, full path, and signature fingerprint. An index, address,
+  or short name alone is never an execution identity.
 - Domain failures use a Response payload with `ok=false`; framing failures terminate
   the connection.
 

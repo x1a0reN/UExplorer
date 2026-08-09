@@ -20,6 +20,30 @@
         "minor": { "type": "integer", "minimum": 0, "maximum": 65535 }
       }
     },
+    "objectHandle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["session_id", "context_generation", "index", "serial", "address", "class_fingerprint"],
+      "properties": {
+        "session_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "context_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "index": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+        "serial": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+        "address": { "type": "string", "pattern": "^0x[0-9A-F]{1,16}$" },
+        "class_fingerprint": { "type": "string", "pattern": "^[0-9A-F]{16}$" }
+      }
+    },
+    "functionHandle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["function", "owner", "full_path", "signature_fingerprint"],
+      "properties": {
+        "function": { "$ref": "#/$defs/objectHandle" },
+        "owner": { "$ref": "#/$defs/objectHandle" },
+        "full_path": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "signature_fingerprint": { "type": "string", "pattern": "^[0-9A-F]{16}$" }
+      }
+    },
     "hello": {
       "type": "object",
       "additionalProperties": false,

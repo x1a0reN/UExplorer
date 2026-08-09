@@ -23,12 +23,15 @@ $context = Read-ProjectFile 'Dumper\Runtime\EngineContext.h'
 $capture = Read-ProjectFile 'Dumper\Runtime\EngineContextCapture.cpp'
 $capabilities = Read-ProjectFile 'Dumper\Runtime\CoreCapabilities.h'
 $shutdown = Read-ProjectFile 'Dumper\Runtime\ShutdownCoordinator.h'
+$handleHeader = Read-ProjectFile 'Dumper\Runtime\ObjectHandle.h'
+$handleImplementation = Read-ProjectFile 'Dumper\Runtime\ObjectHandle.cpp'
 $safeMemoryHeader = Read-ProjectFile 'Dumper\Runtime\SafeMemory.h'
 $safeMemory = Read-ProjectFile 'Dumper\Runtime\SafeMemory.cpp'
 $gameThread = Read-ProjectFile 'Dumper\API\GameThreadQueue.h'
 $memoryApi = Read-ProjectFile 'Dumper\API\MemoryApi.cpp'
 $objectsApi = Read-ProjectFile 'Dumper\API\ObjectsApi.cpp'
 $hookApi = Read-ProjectFile 'Dumper\API\HookApi.cpp'
+$callApi = Read-ProjectFile 'Dumper\API\CallApi.cpp'
 $statusApi = Read-ProjectFile 'Dumper\API\StatusApi.cpp'
 $main = Read-ProjectFile 'Dumper\Main.cpp'
 $harness = Read-ProjectFile 'tests\core-harness\main.cpp'
@@ -62,6 +65,26 @@ foreach ($token in @('CheckedAddressRange', 'ReadMemory', 'WriteMemory', 'Compar
         'AllowExecutableWrite', 'FlushInstructionCache')) {
     Assert-Contains $safeMemoryHeader $token 'SafeMemory public contract regressed.'
 }
+
+foreach ($token in @('SessionId', 'ContextGeneration', 'SerialNumber', 'Address',
+        'ClassFingerprint', 'FunctionHandle', 'IHandleIdentitySource', 'ValidateObject', 'ValidateFunction')) {
+    Assert-Contains $handleHeader $token 'Stable object/function handle contract regressed.'
+}
+foreach ($token in @('HANDLE_SESSION_MISMATCH', 'HANDLE_CONTEXT_GENERATION_MISMATCH',
+        'HANDLE_SERIAL_MISMATCH', 'FUNCTION_HANDLE_OWNER_MISMATCH',
+        'CompareIdentity(handle.Function', 'CompareIdentity(handle.Owner')) {
+    Assert-Contains $handleImplementation $token 'Execution-point handle validation regressed.'
+}
+foreach ($token in @('CALL_HANDLE_REQUIRED', 'SESSION_SERIAL_OBJECT_AND_FUNCTION_HANDLES_REQUIRED',
+        'server.Post("/api/v1/call/function"',
+        'server.Post("/api/v1/call/static"',
+        'server.Post("/api/v1/call/batch"')) {
+    Assert-Contains $callApi $token 'Legacy index-only call path became reachable.'
+}
+$callHandleGateCount = [regex]::Matches($callApi, 'return CallHandleRequired\(\);').Count
+if ($callHandleGateCount -ne 3) {
+    throw "Every legacy call route must return through the stable-handle gate; found $callHandleGateCount gates."
+}
 foreach ($token in @('VirtualQuery', 'CopyWithSeh', 'CompareExchangePointerWithSeh',
         'RestoreProtections', 'ExecutableWriteDenied', 'InstructionCacheFlushRequired')) {
     Assert-Contains $safeMemory $token 'SafeMemory implementation contract regressed.'
@@ -93,10 +116,26 @@ Assert-NotContains $statusApi 'Settings::' 'Status handlers must read the immuta
 Assert-NotContains $statusApi 'ObjectArray::' 'Status handlers must not query the live object array from HTTP workers.'
 
 foreach ($token in @('TestEngineContextAndCapabilities', 'TestCoreRuntimeStateAndShutdown',
+        'TestStableObjectAndFunctionHandles', 'Object handle crossed a session boundary',
+        'Recycled object slot retained a valid handle', 'Function handle ignored owner recycling',
         'TestSafeMemory', 'ExecutableWriteDenied', 'InstructionCacheFlushRequired',
         'CoreRuntime became Ready without its pipe listener', 'Required capability loss left readiness true',
         'Shutdown coordinator ran twice')) {
     Assert-Contains $harness $token 'CoreRuntime harness coverage regressed.'
 }
 
-Write-Host 'Core runtime contract verified: immutable context, capability readiness, SafeMemory, request drain, and coordinated shutdown.'
+$payloadSchema = Get-Content -LiteralPath (Join-Path $root 'protocol\v1\schema\payload.schema.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+$objectHandleFixture = Get-Content -LiteralPath (Join-Path $root 'protocol\v1\fixtures\object-handle.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+$functionHandleFixture = Get-Content -LiteralPath (Join-Path $root 'protocol\v1\fixtures\function-handle.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+if ($null -eq $payloadSchema.'$defs'.objectHandle -or $null -eq $payloadSchema.'$defs'.functionHandle) {
+    throw 'IPC payload schema does not define stable object/function handles.'
+}
+if ($objectHandleFixture.serial -le 0 -or $objectHandleFixture.context_generation -le 0) {
+    throw 'Object handle fixture lacks a positive serial or context generation.'
+}
+if ($functionHandleFixture.function.session_id -ne $functionHandleFixture.owner.session_id -or
+        $functionHandleFixture.function.context_generation -ne $functionHandleFixture.owner.context_generation) {
+    throw 'Function handle fixture crosses a session or context generation.'
+}
+
+Write-Host 'Core runtime contract verified: immutable context, stable handles, capability readiness, SafeMemory, request drain, and coordinated shutdown.'

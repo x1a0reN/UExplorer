@@ -332,10 +332,18 @@ static bool ResolveCallClass(const json& body, UEClass& outClass, std::string& o
 	return false;
 }
 
+static HttpResponse CallHandleRequired()
+{
+	return {409, "application/json", MakeError(
+			"CALL_HANDLE_REQUIRED",
+			{{"reason", "SESSION_SERIAL_OBJECT_AND_FUNCTION_HANDLES_REQUIRED"}})};
+}
+
 void RegisterCallRoutes(HttpServer& server)
 {
 	// POST /api/v1/call/function - call UFunction via ProcessEvent
 	server.Post("/api/v1/call/function", [](const HttpRequest& req) -> HttpResponse {
+		return CallHandleRequired();
 		try {
 			json body = json::parse(req.Body);
 			int32 objIdx = body.value("object_index", -1);
@@ -387,6 +395,7 @@ void RegisterCallRoutes(HttpServer& server)
 
 	// POST /api/v1/call/static - call static function via class CDO
 	server.Post("/api/v1/call/static", [](const HttpRequest& req) -> HttpResponse {
+		return CallHandleRequired();
 		try {
 			json body = json::parse(req.Body);
 			std::string funcName = body.value("function_name", "");
@@ -432,6 +441,7 @@ void RegisterCallRoutes(HttpServer& server)
 
 	// POST /api/v1/call/batch - call one function on multiple objects
 	server.Post("/api/v1/call/batch", [](const HttpRequest& req) -> HttpResponse {
+		return CallHandleRequired();
 		try {
 			json body = json::parse(req.Body);
 			std::vector<int32> objectIndices = body.value("object_indices", std::vector<int32>{});
