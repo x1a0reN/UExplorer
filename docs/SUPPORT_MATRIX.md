@@ -39,8 +39,10 @@ The R4 desktop transport boundary is verified independently of an Unreal profile
 - the release Core project contains only the PID-scoped Named Pipe transport and its
   binary has no WinSock/WinHTTP/WinINet import or legacy HTTP marker;
 - the real C++ Core/Rust Host process fixture reaches Core status and immutable
-  snapshot queries through `DomainService`, and verifies explicit unavailable and
-  unknown-operation errors;
+  snapshot queries through `DomainService`, follows two generation-bound cursor pages,
+  and verifies explicit unavailable and unknown-operation errors;
+- Host fixtures prove exact full/class/package path filters, query-fingerprint cursor
+  rejection, exact collection totals, and the strict 128-record response ceiling;
 - the injection fixture covers real x64/x86 process identity, load, timeout, duplicate
   load, rejection, Pipe handshake, and Core Ready stages.
 

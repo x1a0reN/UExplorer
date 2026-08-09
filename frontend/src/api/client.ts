@@ -39,6 +39,8 @@ import type {
   SearchResponse,
   SessionEventSubscribeOptions,
   SessionEventSubscription,
+  SnapshotObjectKind,
+  SnapshotQueryCursor,
   StatusData,
   StructDetail,
   StructItem,
@@ -149,19 +151,34 @@ class UExplorerApi {
     return this.command('objects.count');
   }
 
-  async getObjects(offset = 0, limit = 50, q = ''): Promise<ApiResponse<ObjectsResponse>> {
-    return this.command('objects.list', { offset, limit, q });
+  async getObjects(
+    cursor: SnapshotQueryCursor | null = null,
+    limit = 50,
+    search = '',
+  ): Promise<ApiResponse<ObjectsResponse>> {
+    return this.command('objects.list', {
+      cursor,
+      limit,
+      search: search.trim() || null,
+    });
   }
 
   async searchObjects(
     query: string,
-    options: { class?: string; package?: string; offset?: number; limit?: number } = {},
+    options: {
+      kind?: SnapshotObjectKind;
+      classPath?: string;
+      packagePath?: string;
+      cursor?: SnapshotQueryCursor | null;
+      limit?: number;
+    } = {},
   ): Promise<ApiResponse<SearchResponse>> {
     return this.command('objects.search', {
-      q: query,
-      class: options.class ?? '',
-      package: options.package ?? '',
-      offset: options.offset ?? 0,
+      search: query.trim() || null,
+      kind: options.kind ?? null,
+      class_path: options.classPath?.trim() || null,
+      package_path: options.packagePath?.trim() || null,
+      cursor: options.cursor ?? null,
       limit: options.limit ?? 50,
     });
   }
@@ -202,23 +219,35 @@ class UExplorerApi {
   }
 
   async getPackages(
-    offset = 0,
+    cursor: SnapshotQueryCursor | null = null,
     limit = 50,
-    q = '',
+    search = '',
   ): Promise<ApiResponse<PaginatedResponse<PackageItem>>> {
-    return this.command('types.packages.list', { offset, limit, q });
+    return this.command('types.packages.list', {
+      cursor,
+      limit,
+      search: search.trim() || null,
+    });
   }
 
-  async getPackageContents(packageName: string): Promise<ApiResponse<PackageContentsResponse>> {
-    return this.command('types.packages.contents', { package: packageName });
+  async getPackageContents(
+    packagePath: string,
+    cursor: SnapshotQueryCursor | null = null,
+    limit = 50,
+  ): Promise<ApiResponse<PackageContentsResponse>> {
+    return this.command('types.packages.contents', { package_path: packagePath, cursor, limit });
   }
 
   async getClasses(
-    offset = 0,
+    cursor: SnapshotQueryCursor | null = null,
     limit = 50,
-    q = '',
+    search = '',
   ): Promise<ApiResponse<PaginatedResponse<ClassItem>>> {
-    return this.command('types.classes.list', { offset, limit, q });
+    return this.command('types.classes.list', {
+      cursor,
+      limit,
+      search: search.trim() || null,
+    });
   }
 
   async getClassByName(name: string): Promise<ApiResponse<ClassDetail>> {
@@ -238,11 +267,17 @@ class UExplorerApi {
   }
 
   async getClassInstances(
-    name: string,
-    offset = 0,
+    classPath: string,
+    cursor: SnapshotQueryCursor | null = null,
     limit = 50,
+    search = '',
   ): Promise<ApiResponse<ClassInstancesResponse>> {
-    return this.command('types.classes.instances', { class_name: name, offset, limit });
+    return this.command('types.classes.instances', {
+      class_path: classPath,
+      search: search.trim() || null,
+      cursor,
+      limit,
+    });
   }
 
   async getClassCDO(name: string): Promise<ApiResponse<ClassCDOResponse>> {
@@ -250,11 +285,15 @@ class UExplorerApi {
   }
 
   async getStructs(
-    offset = 0,
+    cursor: SnapshotQueryCursor | null = null,
     limit = 50,
-    q = '',
+    search = '',
   ): Promise<ApiResponse<PaginatedResponse<StructItem>>> {
-    return this.command('types.structs.list', { offset, limit, q });
+    return this.command('types.structs.list', {
+      cursor,
+      limit,
+      search: search.trim() || null,
+    });
   }
 
   async getStructByName(name: string): Promise<ApiResponse<StructDetail>> {
@@ -262,11 +301,15 @@ class UExplorerApi {
   }
 
   async getEnums(
-    offset = 0,
+    cursor: SnapshotQueryCursor | null = null,
     limit = 50,
-    q = '',
+    search = '',
   ): Promise<ApiResponse<PaginatedResponse<EnumItem>>> {
-    return this.command('types.enums.list', { offset, limit, q });
+    return this.command('types.enums.list', {
+      cursor,
+      limit,
+      search: search.trim() || null,
+    });
   }
 
   async getEnumByName(name: string): Promise<ApiResponse<EnumDetail>> {

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { ArrowDown } from 'lucide-react';
 import { t } from '../../i18n';
-import api from '../../api';
+import api, { type SnapshotQueryCursor } from '../../api';
 
 interface InstanceItem {
     index: number;
@@ -21,40 +21,60 @@ export default function InstancePane({ selectedClass, onSelectInstance }: Instan
     const [search, setSearch] = useState('');
     const [items, setItems] = useState<InstanceItem[]>([]);
     const [total, setTotal] = useState(0);
+    const [nextCursor, setNextCursor] = useState<SnapshotQueryCursor | null>(null);
+    const [hasMore, setHasMore] = useState(false);
     const [listLoading, setListLoading] = useState(false);
     const [selectedIndexState, setSelectedIndexState] = useState<number | null>(null);
 
-    const PAGE_SIZE = 500;
+    const PAGE_SIZE = 128;
 
-    const loadList = useCallback(async (offset = 0) => {
-        if (!selectedClass) return; // Wait until a class is selected
+    const loadList = useCallback(async (
+        cursor: SnapshotQueryCursor | null = null,
+        append = false,
+    ) => {
+        if (!selectedClass) {
+            setItems([]);
+            setTotal(0);
+            setNextCursor(null);
+            setHasMore(false);
+            return;
+        }
+        if (!append) {
+            setItems([]);
+            setTotal(0);
+            setNextCursor(null);
+            setHasMore(false);
+        }
         setListLoading(true);
-        const append = offset > 0;
         try {
-            const res = await api.getClassInstances(selectedClass, offset, PAGE_SIZE);
-            if (res.success && res.data) {
-                // Return data format mapping
-                const mapped = res.data.items.map((i) => ({
-                    index: i.index,
-                    name: i.name,
-                    className: selectedClass, // Passed down from selection
-                    outerName: i.outer_name || 'Package',
-                    address: i.address
-                }));
-                setItems((current) => append ? [...current, ...mapped] : mapped);
-                setTotal(res.data.matched);
-            }
+            const res = await api.getClassInstances(selectedClass, cursor, PAGE_SIZE, search);
+            if (!res.success || !res.data) throw new Error(res.error || 'Class instance query failed');
+            const mapped = res.data.items.map((i) => ({
+                index: i.index,
+                name: i.name,
+                className: selectedClass,
+                outerName: i.outer_name,
+                address: i.address
+            }));
+            setItems((current) => append ? [...current, ...mapped] : mapped);
+            setTotal(res.data.matched);
+            setNextCursor(res.data.next_cursor);
+            setHasMore(res.data.has_more);
         } catch (error) {
             console.error("Failed to load instances", error);
+            setNextCursor(null);
+            setHasMore(false);
         } finally {
             setListLoading(false);
         }
-    }, [selectedClass]);
+    }, [search, selectedClass]);
 
     // Reload list when class selection or search changes
     useEffect(() => {
         const timer = window.setTimeout(() => {
-            void loadList(0);
+            setNextCursor(null);
+            setHasMore(false);
+            void loadList(null, false);
         }, 50); // slight debounce
         return () => window.clearTimeout(timer);
     }, [loadList, search]);
@@ -64,7 +84,7 @@ export default function InstancePane({ selectedClass, onSelectInstance }: Instan
     const parentRef = useRef<HTMLDivElement>(null);
 
     const rowVirtualizer = useVirtualizer({
-        count: items.length + (items.length < total && !listLoading ? 1 : 0),
+        count: items.length + (hasMore && !listLoading ? 1 : 0),
         getScrollElement: () => parentRef.current,
         estimateSize: () => 28, // Compact row height from Demo
         overscan: 20,
@@ -76,10 +96,10 @@ export default function InstancePane({ selectedClass, onSelectInstance }: Instan
         const lastItem = virtualItems[virtualItems.length - 1];
         if (!lastItem) return;
 
-        if (lastItem.index >= items.length - 150 && !listLoading && items.length < total) {
-            void loadList(items.length);
+        if (lastItem.index >= items.length - 64 && !listLoading && hasMore && nextCursor) {
+            void loadList(nextCursor, true);
         }
-    }, [items.length, listLoading, loadList, total, virtualItems]);
+    }, [hasMore, items.length, listLoading, loadList, nextCursor, virtualItems]);
 
     // ─── Render ────────────────────────────────────────────────
 

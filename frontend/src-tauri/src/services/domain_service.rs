@@ -1,11 +1,14 @@
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(windows)]
 use crate::session::session_manager::{ManagedSession, SessionManager, SessionManagerError};
 #[cfg(windows)]
-use crate::session::snapshot_cache::{SnapshotIndex, SnapshotObjectKind, SnapshotRecord};
+use crate::session::snapshot_cache::{
+    SnapshotCacheError, SnapshotIndex, SnapshotObjectKind, SnapshotQuery, SnapshotQueryCursor,
+    SnapshotQueryPage, SnapshotRecord,
+};
 #[cfg(windows)]
 use std::sync::Arc;
 #[cfg(windows)]
@@ -15,7 +18,6 @@ const DEFAULT_TIMEOUT_MS: u32 = 5_000;
 const MAX_TIMEOUT_MS: u32 = 120_000;
 const DEFAULT_PAGE_LIMIT: u32 = 50;
 const MAX_PAGE_LIMIT: u32 = 128;
-const MAX_OFFSET: u32 = 8_000_000;
 const MAX_QUERY_BYTES: usize = 4_096;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -140,13 +142,13 @@ impl DomainService {
                 })
             }
             DomainRoute::ObjectsList => self.with_snapshot(&session, request.timeout_ms, |index| {
-                let args: RecordQueryArgs = parse_data(&request.data)?;
-                query_objects(index, &args, None)
+                let args: ObjectQueryArgs = parse_data(&request.data)?;
+                query_objects(index, &args)
             }),
             DomainRoute::ObjectsSearch => {
                 self.with_snapshot(&session, request.timeout_ms, |index| {
-                    let args: RecordQueryArgs = parse_data(&request.data)?;
-                    query_objects(index, &args, None)
+                    let args: ObjectQueryArgs = parse_data(&request.data)?;
+                    query_objects(index, &args)
                 })
             }
             DomainRoute::ObjectByIndex => {
@@ -180,37 +182,26 @@ impl DomainService {
                 self.with_snapshot(&session, request.timeout_ms, |index| {
                     let args: PathArgs = parse_data(&request.data)?;
                     validate_text("path", &args.path)?;
-                    let record = index
-                        .records()
-                        .iter()
-                        .find(|record| record.full_path.eq_ignore_ascii_case(&args.path))
-                        .ok_or_else(|| {
-                            DomainFailure::new(
-                                "OBJECT_NOT_FOUND",
-                                "No snapshot object has the requested full path",
-                                json!({"path": args.path}),
-                            )
-                        })?;
-                    Ok(object_detail(record))
+                    object_by_full_path(index, &args.path)
                 })
             }
             DomainRoute::TypeList(kind) => {
                 self.with_snapshot(&session, request.timeout_ms, |index| {
-                    let args: RecordQueryArgs = parse_data(&request.data)?;
+                    let args: CollectionQueryArgs = parse_data(&request.data)?;
                     query_types(index, &args, kind)
                 })
             }
             DomainRoute::PackageContents => {
                 self.with_snapshot(&session, request.timeout_ms, |index| {
                     let args: PackageArgs = parse_data(&request.data)?;
-                    validate_text("package", &args.package)?;
-                    package_contents(index, &args.package)
+                    validate_text("package_path", &args.package_path)?;
+                    package_contents(index, &args)
                 })
             }
             DomainRoute::ClassInstances => {
                 self.with_snapshot(&session, request.timeout_ms, |index| {
                     let args: ClassInstancesArgs = parse_data(&request.data)?;
-                    validate_text("class", &args.class_name)?;
+                    validate_text("class_path", &args.class_path)?;
                     class_instances(index, &args)
                 })
             }
@@ -447,25 +438,45 @@ where
 #[cfg(windows)]
 #[derive(Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-struct RecordQueryArgs {
-    offset: u32,
+struct ObjectQueryArgs {
+    cursor: Option<SnapshotQueryCursor>,
     limit: u32,
-    q: String,
-    #[serde(rename = "class")]
-    class_filter: String,
-    #[serde(rename = "package")]
-    package_filter: String,
+    search: Option<String>,
+    kind: Option<SnapshotObjectKind>,
+    class_path: Option<String>,
+    package_path: Option<String>,
 }
 
 #[cfg(windows)]
-impl Default for RecordQueryArgs {
+impl Default for ObjectQueryArgs {
     fn default() -> Self {
         Self {
-            offset: 0,
+            cursor: None,
             limit: DEFAULT_PAGE_LIMIT,
-            q: String::new(),
-            class_filter: String::new(),
-            package_filter: String::new(),
+            search: None,
+            kind: None,
+            class_path: None,
+            package_path: None,
+        }
+    }
+}
+
+#[cfg(windows)]
+#[derive(Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct CollectionQueryArgs {
+    cursor: Option<SnapshotQueryCursor>,
+    limit: u32,
+    search: Option<String>,
+}
+
+#[cfg(windows)]
+impl Default for CollectionQueryArgs {
+    fn default() -> Self {
+        Self {
+            cursor: None,
+            limit: DEFAULT_PAGE_LIMIT,
+            search: None,
         }
     }
 }
@@ -493,17 +504,31 @@ struct PathArgs {
 
 #[cfg(windows)]
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 struct PackageArgs {
-    package: String,
+    package_path: String,
+    cursor: Option<SnapshotQueryCursor>,
+    limit: u32,
+}
+
+#[cfg(windows)]
+impl Default for PackageArgs {
+    fn default() -> Self {
+        Self {
+            package_path: String::new(),
+            cursor: None,
+            limit: DEFAULT_PAGE_LIMIT,
+        }
+    }
 }
 
 #[cfg(windows)]
 #[derive(Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct ClassInstancesArgs {
-    class_name: String,
-    offset: u32,
+    class_path: String,
+    search: Option<String>,
+    cursor: Option<SnapshotQueryCursor>,
     limit: u32,
 }
 
@@ -511,23 +536,24 @@ struct ClassInstancesArgs {
 impl Default for ClassInstancesArgs {
     fn default() -> Self {
         Self {
-            class_name: String::new(),
-            offset: 0,
+            class_path: String::new(),
+            search: None,
+            cursor: None,
             limit: DEFAULT_PAGE_LIMIT,
         }
     }
 }
 
 #[cfg(windows)]
-fn validate_page(offset: u32, limit: u32) -> Result<(), DomainFailure> {
-    if offset > MAX_OFFSET || !(1..=MAX_PAGE_LIMIT).contains(&limit) {
+fn validate_limit(limit: u32) -> Result<usize, DomainFailure> {
+    if !(1..=MAX_PAGE_LIMIT).contains(&limit) {
         return Err(DomainFailure::new(
             "PAGINATION_INVALID",
-            "offset must be in range 0..8000000 and limit in range 1..128",
-            json!({"offset": offset, "limit": limit}),
+            "limit must be in range 1..128",
+            json!({"limit": limit}),
         ));
     }
-    Ok(())
+    Ok(limit as usize)
 }
 
 #[cfg(windows)]
@@ -536,18 +562,6 @@ fn validate_text(field: &'static str, value: &str) -> Result<(), DomainFailure> 
         return Err(DomainFailure::new(
             "INVALID_ARGUMENT",
             format!("{field} must be non-empty, bounded UTF-8 without control characters"),
-            json!({"field": field}),
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(windows)]
-fn validate_optional_text(field: &'static str, value: &str) -> Result<(), DomainFailure> {
-    if value.len() > MAX_QUERY_BYTES || value.chars().any(char::is_control) {
-        return Err(DomainFailure::new(
-            "INVALID_ARGUMENT",
-            format!("{field} must be bounded UTF-8 without control characters"),
             json!({"field": field}),
         ));
     }
@@ -579,6 +593,67 @@ fn object_detail(record: &SnapshotRecord) -> Value {
 }
 
 #[cfg(windows)]
+fn snapshot_failure(error: SnapshotCacheError) -> DomainFailure {
+    DomainFailure::new(error.code(), error.to_string(), Value::Null)
+}
+
+#[cfg(windows)]
+fn object_by_full_path(index: &SnapshotIndex, path: &str) -> Result<Value, DomainFailure> {
+    let page = index
+        .query(
+            &SnapshotQuery {
+                full_path: Some(path.to_string()),
+                ..SnapshotQuery::default()
+            },
+            None,
+            2,
+        )
+        .map_err(snapshot_failure)?;
+    match page.matched_count {
+        0 => Err(DomainFailure::new(
+            "OBJECT_NOT_FOUND",
+            "No snapshot object has the requested full path",
+            json!({"path": path}),
+        )),
+        1 => Ok(object_detail(&page.items[0])),
+        count => Err(DomainFailure::new(
+            "OBJECT_IDENTITY_AMBIGUOUS",
+            "The snapshot contains more than one object with the requested full path",
+            json!({"path": path, "matched": count}),
+        )),
+    }
+}
+
+#[cfg(windows)]
+fn mapped_page<F>(page: SnapshotQueryPage, limit: u32, map: F) -> Map<String, Value>
+where
+    F: Fn(&SnapshotRecord) -> Value,
+{
+    let items = page.items.iter().map(map).collect::<Vec<_>>();
+    Map::from_iter([
+        ("items".to_string(), json!(items)),
+        ("total".to_string(), json!(page.matched_count)),
+        ("matched".to_string(), json!(page.matched_count)),
+        ("limit".to_string(), json!(limit)),
+        ("has_more".to_string(), json!(page.has_more)),
+        ("next_cursor".to_string(), json!(page.next_cursor)),
+        ("snapshot_generation".to_string(), json!(page.generation)),
+        (
+            "context_generation".to_string(),
+            json!(page.context_generation),
+        ),
+        (
+            "source_object_count".to_string(),
+            json!(page.source_object_count),
+        ),
+        (
+            "snapshot_record_count".to_string(),
+            json!(page.snapshot_record_count),
+        ),
+    ])
+}
+
+#[cfg(windows)]
 fn snapshot_metadata(index: &SnapshotIndex) -> Value {
     json!({
         "session_id": index.session_id(),
@@ -590,155 +665,81 @@ fn snapshot_metadata(index: &SnapshotIndex) -> Value {
 
 #[cfg(windows)]
 fn object_counts(index: &SnapshotIndex) -> Value {
-    let mut classes = 0u32;
-    let mut structs = 0u32;
-    let mut enums = 0u32;
-    let mut functions = 0u32;
-    let mut packages = 0u32;
-    for record in index.records() {
-        match record.kind {
-            SnapshotObjectKind::Class => classes += 1,
-            SnapshotObjectKind::Struct => structs += 1,
-            SnapshotObjectKind::Enum => enums += 1,
-            SnapshotObjectKind::Function => functions += 1,
-            SnapshotObjectKind::Package => packages += 1,
-            SnapshotObjectKind::Object => {}
-        }
-    }
     json!({
         "total": index.record_count(),
-        "classes": classes,
-        "structs": structs,
-        "enums": enums,
-        "functions": functions,
-        "packages": packages,
+        "classes": index.count_by_kind(SnapshotObjectKind::Class),
+        "structs": index.count_by_kind(SnapshotObjectKind::Struct),
+        "enums": index.count_by_kind(SnapshotObjectKind::Enum),
+        "functions": index.count_by_kind(SnapshotObjectKind::Function),
+        "packages": index.count_by_kind(SnapshotObjectKind::Package),
     })
 }
 
 #[cfg(windows)]
-fn query_objects(
-    index: &SnapshotIndex,
-    args: &RecordQueryArgs,
-    kind: Option<SnapshotObjectKind>,
-) -> Result<Value, DomainFailure> {
-    validate_page(args.offset, args.limit)?;
-    validate_optional_text("q", &args.q)?;
-    validate_optional_text("class", &args.class_filter)?;
-    validate_optional_text("package", &args.package_filter)?;
-    let query = args.q.to_lowercase();
-    let mut matched = 0u32;
-    let mut items = Vec::with_capacity(args.limit as usize);
-    for record in index.records() {
-        if kind.is_some_and(|expected| record.kind != expected)
-            || !record_matches(record, &query, &args.class_filter, &args.package_filter)
-        {
-            continue;
-        }
-        if matched >= args.offset && items.len() < args.limit as usize {
-            items.push(object_item(record));
-        }
-        matched += 1;
-    }
-    Ok(json!({
-        "items": items,
-        "total": matched,
-        "matched": matched,
-        "offset": args.offset,
-        "limit": args.limit,
-        "snapshot_generation": index.generation(),
-    }))
-}
-
-#[cfg(windows)]
-fn record_matches(
-    record: &SnapshotRecord,
-    lowercase_query: &str,
-    class_filter: &str,
-    package_filter: &str,
-) -> bool {
-    let query_matches = lowercase_query.is_empty()
-        || [
-            &record.name,
-            &record.full_path,
-            &record.class_path,
-            &record.package_path,
-        ]
-        .iter()
-        .any(|value| value.to_lowercase().contains(lowercase_query));
-    query_matches
-        && (class_filter.is_empty() || path_name_matches(&record.class_path, class_filter))
-        && (package_filter.is_empty()
-            || record.package_path.eq_ignore_ascii_case(package_filter)
-            || path_name_matches(&record.package_path, package_filter))
-}
-
-#[cfg(windows)]
-fn path_name_matches(path: &str, expected: &str) -> bool {
-    if path.eq_ignore_ascii_case(expected) {
-        return true;
-    }
-    path.rsplit(['.', '/', ' '])
-        .next()
-        .is_some_and(|name| name.eq_ignore_ascii_case(expected))
+fn query_objects(index: &SnapshotIndex, args: &ObjectQueryArgs) -> Result<Value, DomainFailure> {
+    let limit = validate_limit(args.limit)?;
+    let page = index
+        .query(
+            &SnapshotQuery {
+                kind: args.kind,
+                class_path: args.class_path.clone(),
+                package_path: args.package_path.clone(),
+                search: args.search.clone(),
+                ..SnapshotQuery::default()
+            },
+            args.cursor.as_ref(),
+            limit,
+        )
+        .map_err(snapshot_failure)?;
+    Ok(Value::Object(mapped_page(page, args.limit, object_item)))
 }
 
 #[cfg(windows)]
 fn query_types(
     index: &SnapshotIndex,
-    args: &RecordQueryArgs,
+    args: &CollectionQueryArgs,
     kind: SnapshotObjectKind,
 ) -> Result<Value, DomainFailure> {
-    validate_page(args.offset, args.limit)?;
-    validate_optional_text("q", &args.q)?;
-    validate_optional_text("class", &args.class_filter)?;
-    validate_optional_text("package", &args.package_filter)?;
-    let query = args.q.to_lowercase();
-    let mut matched = 0u32;
-    let mut items = Vec::with_capacity(args.limit as usize);
-    for record in index.records() {
-        if record.kind != kind
-            || !record_matches(record, &query, &args.class_filter, &args.package_filter)
-        {
-            continue;
-        }
-        if matched >= args.offset && items.len() < args.limit as usize {
-            items.push(json!({
-                "index": record.handle.index,
-                "name": record.name,
-                "full_name": record.full_path,
-                "address": record.handle.address,
-            }));
-        }
-        matched += 1;
-    }
-    Ok(json!({
-        "items": items,
-        "total": matched,
-        "offset": args.offset,
-        "limit": args.limit,
-        "snapshot_generation": index.generation(),
-    }))
+    let limit = validate_limit(args.limit)?;
+    let page = index
+        .query(
+            &SnapshotQuery {
+                kind: Some(kind),
+                search: args.search.clone(),
+                ..SnapshotQuery::default()
+            },
+            args.cursor.as_ref(),
+            limit,
+        )
+        .map_err(snapshot_failure)?;
+    Ok(Value::Object(mapped_page(page, args.limit, |record| {
+        json!({
+            "index": record.handle.index,
+            "name": record.name,
+            "full_name": record.full_path,
+            "address": record.handle.address,
+        })
+    })))
 }
 
 #[cfg(windows)]
-fn package_contents(index: &SnapshotIndex, package: &str) -> Result<Value, DomainFailure> {
-    let mut items = Vec::new();
-    for record in index.records() {
-        if record.package_path.eq_ignore_ascii_case(package)
-            || path_name_matches(&record.package_path, package)
-        {
-            items.push(object_item(record));
-            if items.len() > MAX_PAGE_LIMIT as usize {
-                return Err(DomainFailure::new(
-                    "RESULT_LIMIT_EXCEEDED",
-                    "Package contents exceed the bounded response limit; use object search",
-                    json!({"package": package, "limit": MAX_PAGE_LIMIT}),
-                ));
-            }
-        }
-    }
-    let count = items.len();
-    Ok(json!({"package": package, "items": items, "count": count}))
+fn package_contents(index: &SnapshotIndex, args: &PackageArgs) -> Result<Value, DomainFailure> {
+    let limit = validate_limit(args.limit)?;
+    let page = index
+        .query(
+            &SnapshotQuery {
+                package_path: Some(args.package_path.clone()),
+                ..SnapshotQuery::default()
+            },
+            args.cursor.as_ref(),
+            limit,
+        )
+        .map_err(snapshot_failure)?;
+    let count = page.matched_count;
+    let mut response = mapped_page(page, args.limit, object_item);
+    response.insert("package".to_string(), json!(args.package_path));
+    response.insert("count".to_string(), json!(count));
+    Ok(Value::Object(response))
 }
 
 #[cfg(windows)]
@@ -746,35 +747,85 @@ fn class_instances(
     index: &SnapshotIndex,
     args: &ClassInstancesArgs,
 ) -> Result<Value, DomainFailure> {
-    validate_page(args.offset, args.limit)?;
-    let mut matched = 0u32;
-    let mut items = Vec::with_capacity(args.limit as usize);
-    for record in index.records() {
-        if !path_name_matches(&record.class_path, &args.class_name) {
-            continue;
-        }
-        if matched >= args.offset && items.len() < args.limit as usize {
-            items.push(json!({
-                "index": record.handle.index,
-                "name": record.name,
-                "address": record.handle.address,
-            }));
-        }
-        matched += 1;
-    }
-    Ok(json!({
-        "class": args.class_name,
-        "items": items,
-        "matched": matched,
-        "offset": args.offset,
-        "limit": args.limit,
-    }))
+    let limit = validate_limit(args.limit)?;
+    let page = index
+        .query(
+            &SnapshotQuery {
+                class_path: Some(args.class_path.clone()),
+                search: args.search.clone(),
+                ..SnapshotQuery::default()
+            },
+            args.cursor.as_ref(),
+            limit,
+        )
+        .map_err(snapshot_failure)?;
+    let mut response = mapped_page(page, args.limit, |record| {
+        json!({
+            "index": record.handle.index,
+            "name": record.name,
+            "address": record.handle.address,
+        })
+    });
+    response.insert("class".to_string(), json!(args.class_path));
+    Ok(Value::Object(response))
 }
 
 #[cfg(test)]
 #[cfg(windows)]
 mod tests {
     use super::*;
+    use crate::session::snapshot_cache::SnapshotAssembler;
+    use uexplorer_protocol::{ObjectHandle, SnapshotPage};
+
+    const FIXTURE_SESSION: &str = "core-DOMAIN-FIXTURE";
+
+    fn snapshot_record(
+        index: i32,
+        name: &str,
+        full_path: &str,
+        class_path: &str,
+        package_path: &str,
+    ) -> SnapshotRecord {
+        SnapshotRecord {
+            handle: ObjectHandle {
+                session_id: FIXTURE_SESSION.to_string(),
+                context_generation: 1,
+                index,
+                serial: index + 100,
+                address: format!("0x{:016X}", 0x1000 + index as u64),
+                class_fingerprint: format!("{:016X}", 0x2000 + index as u64),
+            },
+            name: name.to_string(),
+            full_path: full_path.to_string(),
+            class_path: class_path.to_string(),
+            package_path: package_path.to_string(),
+            kind: SnapshotObjectKind::Object,
+        }
+    }
+
+    fn indexed_fixture(records: Vec<SnapshotRecord>) -> SnapshotIndex {
+        let record_count = records.len() as u32;
+        let source_object_count = 16;
+        let mut assembler = SnapshotAssembler::new(FIXTURE_SESSION).unwrap();
+        assembler
+            .push_page(
+                None,
+                SnapshotPage {
+                    generation: 7,
+                    context_generation: 1,
+                    captured_at_monotonic_us: 10,
+                    capture_duration_us: 2,
+                    source_object_count,
+                    record_count,
+                    skipped_slots: source_object_count - record_count,
+                    items: records,
+                    has_more: false,
+                    next_cursor: None,
+                },
+            )
+            .unwrap();
+        assembler.finish().unwrap()
+    }
 
     #[test]
     fn operation_registry_is_explicit_across_every_domain() {
@@ -825,10 +876,10 @@ mod tests {
 
     #[test]
     fn pagination_and_timeout_are_hard_bounded() {
-        assert!(validate_page(0, 1).is_ok());
-        assert!(validate_page(MAX_OFFSET, MAX_PAGE_LIMIT).is_ok());
-        assert!(validate_page(MAX_OFFSET + 1, 1).is_err());
-        assert!(validate_page(0, MAX_PAGE_LIMIT + 1).is_err());
+        assert_eq!(validate_limit(1).unwrap(), 1);
+        assert_eq!(validate_limit(MAX_PAGE_LIMIT).unwrap(), 128);
+        assert!(validate_limit(0).is_err());
+        assert!(validate_limit(MAX_PAGE_LIMIT + 1).is_err());
 
         let service = DomainService::new(Arc::new(SessionManager::new()));
         let response = service.execute(DomainRequest {
@@ -837,5 +888,114 @@ mod tests {
             ..DomainRequest::default()
         });
         assert_eq!(response.error_code.as_deref(), Some("TIMEOUT_INVALID"));
+    }
+
+    #[test]
+    fn package_and_class_queries_use_exact_paths_and_query_bound_cursors() {
+        let index = indexed_fixture(vec![
+            snapshot_record(
+                1,
+                "FirstPlayer",
+                "/Game/Maps/Main.FirstPlayer",
+                "/Script/Game.Player",
+                "/Game/Maps/Main",
+            ),
+            snapshot_record(
+                2,
+                "SecondPlayer",
+                "/Game/Maps/Main.SecondPlayer",
+                "/Script/Game.Player",
+                "/Game/Maps/Main",
+            ),
+            snapshot_record(
+                3,
+                "PluginPlayer",
+                "/Plugin/Maps/Main.PluginPlayer",
+                "/Plugin/Other.Player",
+                "/Plugin/Maps/Main",
+            ),
+        ]);
+
+        let first = package_contents(
+            &index,
+            &PackageArgs {
+                package_path: "/Game/Maps/Main".to_string(),
+                cursor: None,
+                limit: 1,
+            },
+        )
+        .unwrap();
+        assert_eq!(first["count"], 2);
+        assert_eq!(first["items"][0]["name"], "FirstPlayer");
+        assert_eq!(first["has_more"], true);
+        let cursor: SnapshotQueryCursor =
+            serde_json::from_value(first["next_cursor"].clone()).unwrap();
+
+        let second = package_contents(
+            &index,
+            &PackageArgs {
+                package_path: "/Game/Maps/Main".to_string(),
+                cursor: Some(cursor.clone()),
+                limit: 1,
+            },
+        )
+        .unwrap();
+        assert_eq!(second["items"][0]["name"], "SecondPlayer");
+        assert_eq!(second["has_more"], false);
+
+        let wrong_query = package_contents(
+            &index,
+            &PackageArgs {
+                package_path: "/Plugin/Maps/Main".to_string(),
+                cursor: Some(cursor),
+                limit: 1,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(wrong_query.code, "SNAPSHOT_QUERY_CURSOR_MISMATCH");
+
+        let instances = class_instances(
+            &index,
+            &ClassInstancesArgs {
+                class_path: "/Script/Game.Player".to_string(),
+                search: None,
+                cursor: None,
+                limit: 128,
+            },
+        )
+        .unwrap();
+        assert_eq!(instances["matched"], 2);
+        assert_eq!(instances["items"][0]["name"], "FirstPlayer");
+        assert_eq!(instances["items"][1]["name"], "SecondPlayer");
+    }
+
+    #[test]
+    fn object_identity_and_query_schema_reject_ambiguous_or_legacy_inputs() {
+        let index = indexed_fixture(vec![
+            snapshot_record(
+                1,
+                "DuplicateA",
+                "/Game/Shared.Duplicate",
+                "/Script/Game.TypeA",
+                "/Game/Shared",
+            ),
+            snapshot_record(
+                2,
+                "DuplicateB",
+                "/Game/Shared.Duplicate",
+                "/Script/Game.TypeB",
+                "/Game/Shared",
+            ),
+        ]);
+        let ambiguous = object_by_full_path(&index, "/Game/Shared.Duplicate").unwrap_err();
+        assert_eq!(ambiguous.code, "OBJECT_IDENTITY_AMBIGUOUS");
+
+        let legacy = parse_data::<ObjectQueryArgs>(&json!({
+            "offset": 0,
+            "limit": 50,
+            "q": "Duplicate"
+        }))
+        .unwrap_err();
+        assert_eq!(legacy.code, "INVALID_ARGUMENT");
     }
 }

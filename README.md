@@ -44,6 +44,9 @@ injection matrix are implemented. React domain calls now use one Tauri
 `domain_request` command and event consumers use caller-owned Tauri channels. The Host
 operation registry serves status and immutable-snapshot object/type queries; domains
 not yet implemented return a stable capability error instead of reaching legacy code.
+Object/type/package/instance collections now use exact full-path filters and
+generation/query-bound cursor pages capped at 128 records; the Host reuses its snapshot
+indexes instead of rescanning the snapshot or accepting legacy offset pagination.
 The release DLL has no WinSock/WinHTTP/WinINet import or legacy HTTP marker according
 to the transport cutover contract.
 

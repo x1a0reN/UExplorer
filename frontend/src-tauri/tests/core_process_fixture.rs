@@ -248,10 +248,35 @@ fn session_manager_consumes_real_cpp_core_snapshot_event_and_shutdown() {
     assert!(count_response.success, "{:?}", count_response.error);
     assert_eq!(count_response.data["total"], 3);
 
+    let first_page = domain.execute(DomainRequest {
+        target_pid: Some(pid),
+        operation: "objects.list".to_string(),
+        data: json!({"cursor": null, "limit": 1, "search": null, "kind": null, "class_path": null, "package_path": null}),
+        ..DomainRequest::default()
+    });
+    assert!(first_page.success, "{:?}", first_page.error);
+    assert_eq!(first_page.data["items"][0]["index"], 1);
+    assert_eq!(first_page.data["has_more"], true);
+    let first_cursor = first_page.data["next_cursor"].clone();
+    assert!(first_cursor.is_object());
+
+    let second_page = domain.execute(DomainRequest {
+        target_pid: Some(pid),
+        operation: "objects.list".to_string(),
+        data: json!({"cursor": first_cursor, "limit": 1, "search": null, "kind": null, "class_path": null, "package_path": null}),
+        ..DomainRequest::default()
+    });
+    assert!(second_page.success, "{:?}", second_page.error);
+    assert_eq!(second_page.data["items"][0]["index"], 4);
+    assert_eq!(
+        second_page.data["snapshot_generation"],
+        first_page.data["snapshot_generation"]
+    );
+
     let search_response = domain.execute(DomainRequest {
         target_pid: Some(pid),
         operation: "objects.search".to_string(),
-        data: json!({"q": "object1", "offset": 0, "limit": 8}),
+        data: json!({"search": "object1", "cursor": null, "limit": 8}),
         ..DomainRequest::default()
     });
     assert!(search_response.success, "{:?}", search_response.error);

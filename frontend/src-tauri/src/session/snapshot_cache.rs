@@ -399,6 +399,12 @@ impl SnapshotIndex {
         &self.records
     }
 
+    pub fn count_by_kind(&self, kind: SnapshotObjectKind) -> u32 {
+        self.by_kind
+            .get(&kind)
+            .map_or(0, |positions| positions.len() as u32)
+    }
+
     pub fn object_by_index(&self, object_index: i32) -> Option<&SnapshotRecord> {
         self.records
             .binary_search_by_key(&object_index, |record| record.handle.index)

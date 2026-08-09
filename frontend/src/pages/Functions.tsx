@@ -49,22 +49,21 @@ function parseObjectIndices(raw: string): number[] {
   return [...seen];
 }
 
-function extractFunctionParts(detail: ObjectDetail | null): { className: string; functionName: string; functionPath: string } {
-  if (!detail?.full_name) return { className: '', functionName: detail?.name || '', functionPath: '' };
-  const full = detail.full_name;
-  const spaced = full.includes(' ') ? full.split(' ').slice(1).join(' ') : full;
-  const chunks = spaced.split('.');
+function extractFunctionParts(detail: ObjectDetail | null): { classPath: string; functionName: string; functionPath: string } {
+  if (!detail?.full_name) return { classPath: '', functionName: detail?.name || '', functionPath: '' };
+  const prefixedPath = detail.full_name;
+  const fullPath = prefixedPath.includes(' ') ? prefixedPath.split(' ').slice(1).join(' ') : prefixedPath;
+  const separator = fullPath.lastIndexOf('.');
   const functionName = detail.name;
-  const className = chunks.length >= 2 ? chunks[chunks.length - 2] : detail.class;
-  const functionPath = className && functionName ? `${className}.${functionName}` : '';
-  return { className, functionName, functionPath };
+  const classPath = separator > 0 ? fullPath.slice(0, separator) : '';
+  return { classPath, functionName, functionPath: classPath ? fullPath : '' };
 }
 
 export default function Functions({ viewMode = 'function', onViewModeChange }: FunctionsProps) {
   const [activeTab, setActiveTab] = useState<FunctionTab>('Call');
   const [flagTab, setFlagTab] = useState<FlagTab>('All');
   const [search, setSearch] = useState('');
-  const [classFilter, setClassFilter] = useState('');
+  const [packageFilter, setPackageFilter] = useState('');
   const [items, setItems] = useState<FunctionItem[]>([]);
   const [selected, setSelected] = useState<FunctionItem | null>(null);
   const [listLoading, setListLoading] = useState(false);
@@ -221,9 +220,9 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
     setListError(null);
     try {
       const res = await api.searchObjects(search.trim(), {
-        class: 'Function',
-        package: classFilter.trim() || undefined,
-        offset: 0,
+        kind: 'function',
+        packagePath: packageFilter.trim() || undefined,
+        cursor: null,
         limit: 128,
       });
       if (!res.success || !res.data) throw new Error(res.error || t('Failed to load functions'));
@@ -250,7 +249,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
     } finally {
       setListLoading(false);
     }
-  }, [classFilter, flagTab, search]);
+  }, [flagTab, packageFilter, search]);
 
   const loadFunctionDetail = useCallback(async (index: number) => {
     setDetailLoading(true);
@@ -268,11 +267,11 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
       setDetail(detailRes.data);
 
       const parts = extractFunctionParts(detailRes.data);
-      if (!parts.className) return;
-      setStaticClassName(parts.className);
+      if (!parts.classPath) return;
+      setStaticClassName(parts.classPath);
       setBlueprintPath(parts.functionPath);
 
-      const classFuncRes = await api.getClassFunctions(parts.className);
+      const classFuncRes = await api.getClassFunctions(parts.classPath);
       if (!classFuncRes.success || !classFuncRes.data) {
         throw new Error(classFuncRes.error || t('Failed to load class functions'));
       }
@@ -290,9 +289,9 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
         setParamInputs(inputMap);
       }
 
-      const classSearch = await api.searchObjects(parts.className, { class: 'Class', limit: 1 });
-      if (classSearch.success && classSearch.data && classSearch.data.items.length > 0) {
-        setTargetIndex(String(classSearch.data.items[0].index));
+      const classDetail = await api.getObjectByPath(parts.classPath);
+      if (classDetail.success && classDetail.data?.kind === 'class') {
+        setTargetIndex(String(classDetail.data.index));
       } else {
         setTargetIndex('');
       }
@@ -342,7 +341,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
     try {
       if (callMode === 'static') {
         if (!staticClassName.trim()) {
-          setCallResult('Static call requires class name');
+          setCallResult('Static call requires a class full path');
           return;
         }
 
@@ -511,9 +510,9 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
             <Filter className="w-4 h-4 text-text-low absolute left-3 top-2.5" />
             <input
               type="text"
-              value={classFilter}
-              onChange={(e) => setClassFilter(e.target.value)}
-              placeholder={t('Package/class filter')}
+              value={packageFilter}
+              onChange={(e) => setPackageFilter(e.target.value)}
+              placeholder={t('Package full path filter')}
               className="w-full bg-background-base border border-border-subtle text-text-high text-xs rounded-lg pl-9 pr-3 py-2 outline-none focus:border-primary transition-all font-mono placeholder:text-text-low/50"
             />
           </div>
@@ -783,7 +782,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
                   {activeTab === 'Info' && (
                     <div className="bg-surface-dark border border-border-subtle rounded-xl p-6 space-y-2 text-sm shadow-sm">
                       <InfoLine k="Name" v={detail?.name || selected.name} />
-                      <InfoLine k="Class" v={currentParts.className || selected.className} />
+                      <InfoLine k="Class" v={currentParts.classPath || selected.className} />
                       <InfoLine k="Address" v={functionMeta?.address || selected.address} />
                       <InfoLine k="Param Size" v={String(functionMeta?.param_size ?? '-')} />
                       <InfoLine k="Flags" v={functionMeta?.flags || '-'} />
@@ -860,12 +859,12 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
 
                             {callMode === 'static' && (
                               <div className="space-y-1.5">
-                                <label className="text-[10px] font-bold text-text-low uppercase tracking-widest font-display">Target Class Name</label>
+                                <label className="text-[10px] font-bold text-text-low uppercase tracking-widest font-display">Target Class Full Path</label>
                                 <input
                                   type="text"
                                   value={staticClassName}
                                   onChange={(e) => setStaticClassName(e.target.value)}
-                                  placeholder={t('e.g. BP_ItemGridWDT_C')}
+                                  placeholder={t('e.g. /Game/UI/BP_ItemGridWDT_C')}
                                   className="w-full bg-background-base border border-border-subtle text-text-high font-mono text-[13px] rounded-lg px-3 py-2 outline-none focus:border-primary transition-colors placeholder:text-text-low/50"
                                 />
                               </div>

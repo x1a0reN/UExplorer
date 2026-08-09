@@ -6,6 +6,7 @@ import api, {
     type ObjectDetail,
     type ObjectProperty,
     type OuterChainItem,
+    type SnapshotQueryCursor,
 } from '../../api';
 import { Panel, InfoRow, HeaderCard, type BrowserPageProps, type ModeNavContext } from './shared';
 import { toEditable } from './valueUtils';
@@ -31,6 +32,8 @@ export default function InstanceBrowser({ onNavigate, onSwitchMode, navContext }
     const [classFilter, setClassFilter] = useState(navContext?.className || '');
     const [items, setItems] = useState<InstanceItem[]>([]);
     const [total, setTotal] = useState(0);
+    const [nextCursor, setNextCursor] = useState<SnapshotQueryCursor | null>(null);
+    const [hasMore, setHasMore] = useState(false);
     const [listLoading, setListLoading] = useState(false);
     const [listError, setListError] = useState<string | null>(null);
     const [selected, setSelected] = useState<InstanceItem | null>(null);
@@ -47,21 +50,36 @@ export default function InstanceBrowser({ onNavigate, onSwitchMode, navContext }
 
     // ─── Data Loading ──────────────────────────────────────────
 
-    const PAGE_SIZE = 500;
+    const PAGE_SIZE = 128;
 
-    const loadList = useCallback(async (offset = 0) => {
+    const loadList = useCallback(async (
+        cursor: SnapshotQueryCursor | null = null,
+        append = false,
+    ) => {
+        if (!append) {
+            setItems([]);
+            setTotal(0);
+            setNextCursor(null);
+            setHasMore(false);
+        }
         setListLoading(true);
         setListError(null);
-        const append = offset > 0;
         try {
-            const res = await api.searchObjects(search, { class: classFilter || undefined, offset, limit: PAGE_SIZE });
-            if (res.success && res.data) {
-                const mapped = res.data.items.map((o) => ({ index: o.index, name: o.name, className: o.class, address: o.address }));
-                setItems((current) => append ? [...current, ...mapped] : mapped);
-                setTotal(res.data.matched);
-            }
+            const res = await api.searchObjects(search, {
+                classPath: classFilter.trim() || undefined,
+                cursor,
+                limit: PAGE_SIZE,
+            });
+            if (!res.success || !res.data) throw new Error(res.error || 'Instance query failed');
+            const mapped = res.data.items.map((o) => ({ index: o.index, name: o.name, className: o.class, address: o.address }));
+            setItems((current) => append ? [...current, ...mapped] : mapped);
+            setTotal(res.data.matched);
+            setNextCursor(res.data.next_cursor);
+            setHasMore(res.data.has_more);
         } catch (error) {
             setListError(error instanceof Error ? error.message : String(error));
+            setNextCursor(null);
+            setHasMore(false);
         } finally {
             setListLoading(false);
         }
@@ -107,7 +125,11 @@ export default function InstanceBrowser({ onNavigate, onSwitchMode, navContext }
     };
 
     useEffect(() => {
-        const timer = window.setTimeout(() => void loadList(0), 150);
+        const timer = window.setTimeout(() => {
+            setNextCursor(null);
+            setHasMore(false);
+            void loadList(null, false);
+        }, 150);
         return () => window.clearTimeout(timer);
     }, [loadList]);
 
@@ -116,7 +138,7 @@ export default function InstanceBrowser({ onNavigate, onSwitchMode, navContext }
     const parentRef = useRef<HTMLDivElement>(null);
 
     const rowVirtualizer = useVirtualizer({
-        count: items.length + (items.length < total && !listLoading ? 1 : 0),
+        count: items.length + (hasMore && !listLoading ? 1 : 0),
         getScrollElement: () => parentRef.current,
         estimateSize: () => 64, // Approx height of each instance item
         overscan: 10,
@@ -127,11 +149,11 @@ export default function InstanceBrowser({ onNavigate, onSwitchMode, navContext }
         const lastItem = virtualItems[virtualItems.length - 1];
         if (!lastItem) return;
 
-        // Fetch more items when scrolled to the last 150 items
-        if (lastItem.index >= items.length - 150 && !listLoading && items.length < total) {
-            void loadList(items.length);
+        // Fetch the next generation-bound page before the loader row becomes visible.
+        if (lastItem.index >= items.length - 64 && !listLoading && hasMore && nextCursor) {
+            void loadList(nextCursor, true);
         }
-    }, [items.length, listLoading, loadList, total, virtualItems]);
+    }, [hasMore, items.length, listLoading, loadList, nextCursor, virtualItems]);
 
     // ─── Render ────────────────────────────────────────────────
 
@@ -148,7 +170,7 @@ export default function InstanceBrowser({ onNavigate, onSwitchMode, navContext }
                             className="w-full h-8 bg-white/5 border border-white/10 rounded-lg text-xs text-white px-3 pl-9 focus:outline-none focus:border-white/20" />
                     </div>
                     <input type="text" value={classFilter} onChange={(e) => setClassFilter(e.target.value)}
-                        placeholder={t('Filter by class...')}
+                        placeholder={t('Class full path...')}
                         className="w-full h-7 bg-white/5 border border-white/10 rounded-lg text-xs text-white px-3 focus:outline-none focus:border-white/20" />
                 </div>
 

@@ -25,7 +25,7 @@ UExplorer 是一个面向 Unreal Engine 的 **SDK Dump + 实时游戏内省工�
 └──────────────────────────────────────────────┘
 ```
 
-当前分支已完成 R4 原子通信切换。`CoreRuntime`、不可变 `EngineContext`/名称布局、`EngineFacade`、稳定 Handle、不可变 Snapshot/Host 索引、安全关闭边界、Named Pipe RPC、Rust `CoreRpcClient`、EventHub、多 PID `SessionManager`、`DomainService` 与 Tauri Channel bridge 已形成唯一桌面主链路。React 不再直接使用 HTTP/SSE/WebSocket；Core release project 不编译 `Dumper/Server` 或 `Dumper/API`，也不链接 WinSock。旧网络/API 源文件按“不删除”约束保留为历史证据，不能从其推断当前行为。当前 Host 仅实现 status 与 snapshot-backed Object/Type 查询；Memory/Call/World/Watch/Hook/Blueprint/Dump 等命令明确返回 capability unavailable，进入 R5 领域正确性阶段。UE 版本、GC、PostRender/Hook、目标规模与卸载证据仍属于 R7，不由通用进程 fixture 代替。功能真实性与未完成项以 `DESIGN.md` 和 `docs/issue-status.json` 为准。
+当前分支已完成 R4 原子通信切换并进入 R5.1。`CoreRuntime`、不可变 `EngineContext`/名称布局、`EngineFacade`、稳定 Handle、不可变 Snapshot/Host 索引、安全关闭边界、Named Pipe RPC、Rust `CoreRpcClient`、EventHub、多 PID `SessionManager`、`DomainService` 与 Tauri Channel bridge 已形成唯一桌面主链路。React 不再直接使用 HTTP/SSE/WebSocket；Core release project 不编译 `Dumper/Server` 或 `Dumper/API`，也不链接 WinSock。旧网络/API 源文件按“不删除”约束保留为历史证据，不能从其推断当前行为。当前 Host 实现 status 与 snapshot-backed Object/Type 查询；集合查询复用 Host 索引，使用 full path 和 generation/query-bound cursor，单页上限 128。Memory/Call/World/Watch/Hook/Blueprint/Dump 等命令明确返回 capability unavailable，继续进入 R5 领域正确性阶段。UE 版本、GC、PostRender/Hook、目标规模与卸载证据仍属于 R7，不由通用进程 fixture 代替。功能真实性与未完成项以 `DESIGN.md` 和 `docs/issue-status.json` 为准。
 
 ---
 
@@ -545,9 +545,9 @@ Dashboard.tsx
   └─ session events           Tauri Channel
 
 Objects.tsx (三面板)
-  ├─ objects.list/search/get_*      immutable Host snapshot
-  ├─ types.{packages|classes|structs|enums}.list
-  ├─ types.classes.instances
+  ├─ objects.list/search/get_*      immutable Host snapshot + full path identity
+  ├─ types.{packages|classes|structs|enums}.list  generation/query-bound cursor
+  ├─ types.packages.contents / types.classes.instances  exact path + cursor (1..128)
   └─ 尚未迁移的属性/完整反射命令 -> CAPABILITY_UNAVAILABLE
 
 Functions.tsx (四合一)

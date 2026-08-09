@@ -210,7 +210,7 @@ export default function Memory() {
       } else if (head === 'call' && parts.length >= 3) {
         throw new Error('CALL_HANDLE_REQUIRED');
       } else if (head === 'instances' && parts[1]) {
-        const out = await api.getClassInstances(parts[1], 0, 100);
+        const out = await api.getClassInstances(parts[1], null, 100);
         pushConsole(JSON.stringify(out, null, 2));
       } else if (head === 'mem.read' && parts.length >= 3) {
         const out = await api.readMemory(parts[1], Number(parts[2]));

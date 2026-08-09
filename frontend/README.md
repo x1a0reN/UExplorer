@@ -8,6 +8,11 @@ caller-owned Tauri channels. The Host then reaches the selected Core only throug
 PID-scoped Windows Named Pipe session. Frontend code must not add direct Core HTTP,
 SSE, WebSocket, endpoint-file, port, or token access.
 
+R5.1 snapshot-backed collections use exact full paths and Host-issued cursors bound to
+the snapshot generation and normalized query. Limits are strict `1..128`; callers must
+follow `next_cursor`/`has_more` and must not restore offset pagination or clamp invalid
+limits.
+
 The Windows Host owns strict peer PID/session validation, bounded request/event queues,
 deadline/cancel behavior, EventHub, immutable snapshot indexes, multi-PID
 SessionManager, injection-to-Core-Ready gating, and joinable shutdown. Status and basic

@@ -54,6 +54,39 @@ describe('UExplorerApi Tauri domain boundary', () => {
     expect(invokeMock).toHaveBeenCalledTimes(1);
   });
 
+  it('uses generation-bound snapshot cursors instead of offset pagination', async () => {
+    const cursor = {
+      generation: 7,
+      after_index: 42,
+      query_fingerprint: 'fixture-query',
+    };
+    invokeMock.mockResolvedValue({ success: true, data: { items: [], has_more: false } });
+
+    await api.searchObjects('Actor', {
+      kind: 'class',
+      classPath: '/Script/CoreUObject.Class',
+      packagePath: '/Script/Engine',
+      cursor,
+      limit: 64,
+    });
+
+    expect(invokeMock).toHaveBeenCalledWith('domain_request', {
+      request: {
+        targetPid: null,
+        operation: 'objects.search',
+        timeoutMs: 5_000,
+        data: {
+          search: 'Actor',
+          kind: 'class',
+          class_path: '/Script/CoreUObject.Class',
+          package_path: '/Script/Engine',
+          cursor,
+          limit: 64,
+        },
+      },
+    });
+  });
+
   it('turns a failed native invocation into one explicit Host error', async () => {
     invokeMock.mockRejectedValue(new Error('channel closed'));
 

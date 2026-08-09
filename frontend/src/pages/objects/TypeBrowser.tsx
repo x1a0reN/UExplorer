@@ -6,6 +6,7 @@ import api, {
     type ClassFunction,
     type ClassProperty,
     type EnumDetail,
+    type SnapshotQueryCursor,
 } from '../../api';
 import { Panel, HeaderCard, type BrowserPageProps } from './shared';
 
@@ -17,6 +18,7 @@ type TypeDetailTab = 'Fields' | 'Functions' | 'Instances' | 'Values';
 interface TypeItem {
     index: number;
     name: string;
+    fullName: string;
     size?: number;
     super?: string;
     valueCount?: number;
@@ -30,6 +32,8 @@ export default function TypeBrowser({ onSwitchMode }: BrowserPageProps) {
     const [search, setSearch] = useState('');
     const [items, setItems] = useState<TypeItem[]>([]);
     const [total, setTotal] = useState(0);
+    const [nextCursor, setNextCursor] = useState<SnapshotQueryCursor | null>(null);
+    const [hasMore, setHasMore] = useState(false);
     const [listLoading, setListLoading] = useState(false);
     const [listError, setListError] = useState<string | null>(null);
     const [selected, setSelected] = useState<TypeItem | null>(null);
@@ -55,37 +59,50 @@ export default function TypeBrowser({ onSwitchMode }: BrowserPageProps) {
 
     // ─── Data Loading ──────────────────────────────────────────
 
-    const PAGE_SIZE = 500;
+    const PAGE_SIZE = 128;
 
-    const loadList = useCallback(async (offset = 0) => {
+    const loadList = useCallback(async (
+        cursor: SnapshotQueryCursor | null = null,
+        append = false,
+    ) => {
+        if (!append) {
+            setItems([]);
+            setTotal(0);
+            setNextCursor(null);
+            setHasMore(false);
+        }
         setListLoading(true);
         setListError(null);
-        const append = offset > 0;
         try {
             if (subTab === 'Class') {
-                const res = await api.getClasses(offset, PAGE_SIZE, search);
-                if (res.success && res.data) {
-                    const mapped = res.data.items.map((c) => ({ index: c.index, name: c.name, size: c.size, super: c.super }));
-                    setItems((current) => append ? [...current, ...mapped] : mapped);
-                    setTotal(res.data.total);
-                }
+                const res = await api.getClasses(cursor, PAGE_SIZE, search);
+                if (!res.success || !res.data) throw new Error(res.error || 'Class query failed');
+                const mapped = res.data.items.map((c) => ({ index: c.index, name: c.name, fullName: c.full_name, size: c.size, super: c.super }));
+                setItems((current) => append ? [...current, ...mapped] : mapped);
+                setTotal(res.data.total);
+                setNextCursor(res.data.next_cursor);
+                setHasMore(res.data.has_more);
             } else if (subTab === 'Struct') {
-                const res = await api.getStructs(offset, PAGE_SIZE, search);
-                if (res.success && res.data) {
-                    const mapped = res.data.items.map((s) => ({ index: s.index, name: s.name, size: s.size, super: s.super }));
-                    setItems((current) => append ? [...current, ...mapped] : mapped);
-                    setTotal(res.data.total);
-                }
+                const res = await api.getStructs(cursor, PAGE_SIZE, search);
+                if (!res.success || !res.data) throw new Error(res.error || 'Struct query failed');
+                const mapped = res.data.items.map((s) => ({ index: s.index, name: s.name, fullName: s.full_name, size: s.size, super: s.super }));
+                setItems((current) => append ? [...current, ...mapped] : mapped);
+                setTotal(res.data.total);
+                setNextCursor(res.data.next_cursor);
+                setHasMore(res.data.has_more);
             } else if (subTab === 'Enum') {
-                const res = await api.getEnums(offset, PAGE_SIZE, search);
-                if (res.success && res.data) {
-                    const mapped = res.data.items.map((e) => ({ index: e.index, name: e.name }));
-                    setItems((current) => append ? [...current, ...mapped] : mapped);
-                    setTotal(res.data.total);
-                }
+                const res = await api.getEnums(cursor, PAGE_SIZE, search);
+                if (!res.success || !res.data) throw new Error(res.error || 'Enum query failed');
+                const mapped = res.data.items.map((e) => ({ index: e.index, name: e.name, fullName: e.full_name }));
+                setItems((current) => append ? [...current, ...mapped] : mapped);
+                setTotal(res.data.total);
+                setNextCursor(res.data.next_cursor);
+                setHasMore(res.data.has_more);
             }
         } catch (error) {
             setListError(error instanceof Error ? error.message : String(error));
+            setNextCursor(null);
+            setHasMore(false);
         } finally {
             setListLoading(false);
         }
@@ -99,7 +116,7 @@ export default function TypeBrowser({ onSwitchMode }: BrowserPageProps) {
         setInstances([]);
         setEnumDetail(null);
         setSuperChain([]);
-        setFullName('');
+        setFullName(item.fullName);
         setAlignment(0);
         setClassSchemaError(null);
         // Reset to first available tab
@@ -108,9 +125,9 @@ export default function TypeBrowser({ onSwitchMode }: BrowserPageProps) {
         try {
             if (subTab === 'Class') {
                 const [fieldRes, funcRes, instanceRes] = await Promise.all([
-                    api.getClassFields(item.name),
-                    api.getClassFunctions(item.name),
-                    api.getClassInstances(item.name, 0, 100),
+                    api.getClassFields(item.fullName),
+                    api.getClassFunctions(item.fullName),
+                    api.getClassInstances(item.fullName, null, 100),
                 ]);
                 const errors: string[] = [];
                 if (fieldRes.success && fieldRes.data) setFields(fieldRes.data);
@@ -137,7 +154,7 @@ export default function TypeBrowser({ onSwitchMode }: BrowserPageProps) {
                 }
                 setSuperChain(chain);
             } else if (subTab === 'Struct') {
-                const res = await api.getStructByName(item.name);
+                const res = await api.getStructByName(item.fullName);
                 if (res.success && res.data) {
                     setFields(res.data.fields);
                     setFullName(res.data.full_name);
@@ -145,7 +162,7 @@ export default function TypeBrowser({ onSwitchMode }: BrowserPageProps) {
                     if (res.data.super) setSuperChain([res.data.super]);
                 }
             } else if (subTab === 'Enum') {
-                const res = await api.getEnumByName(item.name);
+                const res = await api.getEnumByName(item.fullName);
                 if (res.success && res.data) {
                     setEnumDetail(res.data);
                     setFullName(res.data.full_name);
@@ -159,7 +176,11 @@ export default function TypeBrowser({ onSwitchMode }: BrowserPageProps) {
     };
 
     useEffect(() => {
-        const timer = window.setTimeout(() => void loadList(0), 150);
+        const timer = window.setTimeout(() => {
+            setNextCursor(null);
+            setHasMore(false);
+            void loadList(null, false);
+        }, 150);
         return () => window.clearTimeout(timer);
     }, [loadList]);
 
@@ -168,7 +189,7 @@ export default function TypeBrowser({ onSwitchMode }: BrowserPageProps) {
     const parentRef = useRef<HTMLDivElement>(null);
 
     const rowVirtualizer = useVirtualizer({
-        count: items.length + (items.length < total && !listLoading ? 1 : 0),
+        count: items.length + (hasMore && !listLoading ? 1 : 0),
         getScrollElement: () => parentRef.current,
         estimateSize: () => 64, // Approx height of each item
         overscan: 10,
@@ -181,10 +202,10 @@ export default function TypeBrowser({ onSwitchMode }: BrowserPageProps) {
         if (!lastItem) return;
 
         // Fetch more items when scrolled to the last 150 items
-        if (lastItem.index >= items.length - 150 && !listLoading && items.length < total) {
-            void loadList(items.length);
+        if (lastItem.index >= items.length - 64 && !listLoading && hasMore && nextCursor) {
+            void loadList(nextCursor, true);
         }
-    }, [items.length, listLoading, loadList, total, virtualItems]);
+    }, [hasMore, items.length, listLoading, loadList, nextCursor, virtualItems]);
 
     // ─── Render ────────────────────────────────────────────────
 

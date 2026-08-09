@@ -186,19 +186,30 @@ export interface ObjectPropertyValueData {
   value_state: string;
 }
 
-export interface ObjectsResponse {
-  items: ObjectItem[];
-  total: number;
-  offset: number;
-  limit: number;
+export interface SnapshotQueryCursor {
+  generation: number;
+  after_index: number;
+  query_fingerprint: string;
 }
 
-export interface SearchResponse {
-  items: ObjectItem[];
+export type SnapshotObjectKind = 'object' | 'package' | 'class' | 'struct' | 'enum' | 'function';
+
+export interface SnapshotPageResponse<T> {
+  items: T[];
+  total: number;
   matched: number;
-  offset: number;
   limit: number;
+  has_more: boolean;
+  next_cursor: SnapshotQueryCursor | null;
+  snapshot_generation: number;
+  context_generation: number;
+  source_object_count: number;
+  snapshot_record_count: number;
 }
+
+export type ObjectsResponse = SnapshotPageResponse<ObjectItem>;
+
+export type SearchResponse = SnapshotPageResponse<ObjectItem>;
 
 export interface ObjectCountData {
   total: number;
@@ -250,20 +261,15 @@ export interface ClassDetail {
   functions: ClassFunction[];
 }
 
-export interface PaginatedResponse<T> {
-  items: T[];
-  total: number;
-  offset: number;
-  limit: number;
-}
+export type PaginatedResponse<T> = SnapshotPageResponse<T>;
 
 export interface StructItem {
   index: number;
   name: string;
-  full_name?: string;
+  full_name: string;
   size?: number;
   super?: string;
-  address?: string;
+  address: string;
 }
 
 export interface StructDetail {
@@ -279,6 +285,7 @@ export interface EnumItem {
   index: number;
   name: string;
   full_name: string;
+  address: string;
 }
 
 export interface EnumDetail {
@@ -291,12 +298,12 @@ export interface EnumDetail {
 export interface PackageItem {
   index: number;
   name: string;
+  full_name: string;
   address: string;
 }
 
-export interface PackageContentsResponse {
+export interface PackageContentsResponse extends SnapshotPageResponse<ObjectItem> {
   package: string;
-  items: ObjectItem[];
   count: number;
 }
 
@@ -306,12 +313,9 @@ export interface ClassHierarchy {
   children: string[];
 }
 
-export interface ClassInstancesResponse {
+export interface ClassInstancesResponse
+  extends SnapshotPageResponse<{ index: number; name: string; address: string; outer_name?: string }> {
   class: string;
-  items: Array<{ index: number; name: string; address: string; outer_name?: string }>;
-  matched: number;
-  offset: number;
-  limit: number;
 }
 
 export interface ClassCDOResponse {

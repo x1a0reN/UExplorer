@@ -2,13 +2,14 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Box, Database, Layers, ChevronRight, Package } from 'lucide-react';
 import { t } from '../../i18n';
-import api from '../../api';
+import api, { type SnapshotQueryCursor } from '../../api';
 
 type TypeSubTab = 'Class' | 'Struct' | 'Enum' | 'Package';
 
 interface TypeItem {
     index: number;
     name: string;
+    fullName: string;
     size?: number;
     super?: string;
     valueCount?: number;
@@ -30,47 +31,63 @@ export default function HierarchyPane({ onSelectClass }: HierarchyPaneProps) {
     const [search, setSearch] = useState('');
     const [items, setItems] = useState<TypeItem[]>([]);
     const [total, setTotal] = useState(0);
+    const [nextCursor, setNextCursor] = useState<SnapshotQueryCursor | null>(null);
+    const [hasMore, setHasMore] = useState(false);
     const [listLoading, setListLoading] = useState(false);
     const [selectedName, setSelectedName] = useState<string | null>(null);
     const [expandedItems, setExpandedItems] = useState<Record<string, { loading: boolean, data?: ExpandedChild[] }>>({});
 
-    const PAGE_SIZE = 500;
+    const PAGE_SIZE = 128;
 
-    const loadList = useCallback(async (offset = 0) => {
+    const loadList = useCallback(async (
+        cursor: SnapshotQueryCursor | null = null,
+        append = false,
+    ) => {
+        if (!append) {
+            setItems([]);
+            setTotal(0);
+            setNextCursor(null);
+            setHasMore(false);
+        }
         setListLoading(true);
-        const append = offset > 0;
         try {
             if (subTab === 'Class') {
-                const res = await api.getClasses(offset, PAGE_SIZE, search);
-                if (res.success && res.data) {
-                    const mapped = res.data.items.map((c) => ({ index: c.index, name: c.name, size: c.size, super: c.super }));
-                    setItems((current) => append ? [...current, ...mapped] : mapped);
-                    setTotal(res.data.total);
-                }
+                const res = await api.getClasses(cursor, PAGE_SIZE, search);
+                if (!res.success || !res.data) throw new Error(res.error || 'Class query failed');
+                const mapped = res.data.items.map((c) => ({ index: c.index, name: c.name, fullName: c.full_name, size: c.size, super: c.super }));
+                setItems((current) => append ? [...current, ...mapped] : mapped);
+                setTotal(res.data.total);
+                setNextCursor(res.data.next_cursor);
+                setHasMore(res.data.has_more);
             } else if (subTab === 'Struct') {
-                const res = await api.getStructs(offset, PAGE_SIZE, search);
-                if (res.success && res.data) {
-                    const mapped = res.data.items.map((s) => ({ index: s.index, name: s.name, size: s.size, super: s.super }));
-                    setItems((current) => append ? [...current, ...mapped] : mapped);
-                    setTotal(res.data.total);
-                }
+                const res = await api.getStructs(cursor, PAGE_SIZE, search);
+                if (!res.success || !res.data) throw new Error(res.error || 'Struct query failed');
+                const mapped = res.data.items.map((s) => ({ index: s.index, name: s.name, fullName: s.full_name, size: s.size, super: s.super }));
+                setItems((current) => append ? [...current, ...mapped] : mapped);
+                setTotal(res.data.total);
+                setNextCursor(res.data.next_cursor);
+                setHasMore(res.data.has_more);
             } else if (subTab === 'Enum') {
-                const res = await api.getEnums(offset, PAGE_SIZE, search);
-                if (res.success && res.data) {
-                    const mapped = res.data.items.map((e) => ({ index: e.index, name: e.name }));
-                    setItems((current) => append ? [...current, ...mapped] : mapped);
-                    setTotal(res.data.total);
-                }
+                const res = await api.getEnums(cursor, PAGE_SIZE, search);
+                if (!res.success || !res.data) throw new Error(res.error || 'Enum query failed');
+                const mapped = res.data.items.map((e) => ({ index: e.index, name: e.name, fullName: e.full_name }));
+                setItems((current) => append ? [...current, ...mapped] : mapped);
+                setTotal(res.data.total);
+                setNextCursor(res.data.next_cursor);
+                setHasMore(res.data.has_more);
             } else if (subTab === 'Package') {
-                const res = await api.getPackages(offset, PAGE_SIZE, search);
-                if (res.success && res.data) {
-                    const mapped = res.data.items.map((p) => ({ index: p.index, name: p.name }));
-                    setItems((current) => append ? [...current, ...mapped] : mapped);
-                    setTotal(res.data.total);
-                }
+                const res = await api.getPackages(cursor, PAGE_SIZE, search);
+                if (!res.success || !res.data) throw new Error(res.error || 'Package query failed');
+                const mapped = res.data.items.map((p) => ({ index: p.index, name: p.name, fullName: p.full_name }));
+                setItems((current) => append ? [...current, ...mapped] : mapped);
+                setTotal(res.data.total);
+                setNextCursor(res.data.next_cursor);
+                setHasMore(res.data.has_more);
             }
         } catch (error) {
             console.error("Failed to load list", error);
+            setNextCursor(null);
+            setHasMore(false);
         } finally {
             setListLoading(false);
         }
@@ -80,7 +97,9 @@ export default function HierarchyPane({ onSelectClass }: HierarchyPaneProps) {
     useEffect(() => {
         const timer = window.setTimeout(() => {
             setExpandedItems({});
-            void loadList(0);
+            setNextCursor(null);
+            setHasMore(false);
+            void loadList(null, false);
         }, 150);
         return () => window.clearTimeout(timer);
     }, [loadList]);
@@ -89,33 +108,33 @@ export default function HierarchyPane({ onSelectClass }: HierarchyPaneProps) {
         if (subTab === 'Package') return; // Cannot expand package directly yet
 
         setExpandedItems(prev => {
-            if (prev[item.name]) {
+            if (prev[item.fullName]) {
                 const next = { ...prev };
-                delete next[item.name];
+                delete next[item.fullName];
                 return next;
             }
-            return { ...prev, [item.name]: { loading: true } };
+            return { ...prev, [item.fullName]: { loading: true } };
         });
 
         try {
             if (subTab === 'Class') {
-                const res = await api.getClassFields(item.name);
+                const res = await api.getClassFields(item.fullName);
                 if (res.success && res.data) {
-                    setExpandedItems(prev => ({ ...prev, [item.name]: { loading: false, data: res.data! } }));
+                    setExpandedItems(prev => ({ ...prev, [item.fullName]: { loading: false, data: res.data! } }));
                 }
             } else if (subTab === 'Struct') {
-                const res = await api.getStructByName(item.name);
+                const res = await api.getStructByName(item.fullName);
                 if (res.success && res.data) {
-                    setExpandedItems(prev => ({ ...prev, [item.name]: { loading: false, data: res.data!.fields } }));
+                    setExpandedItems(prev => ({ ...prev, [item.fullName]: { loading: false, data: res.data!.fields } }));
                 }
             } else if (subTab === 'Enum') {
-                const res = await api.getEnumByName(item.name);
+                const res = await api.getEnumByName(item.fullName);
                 if (res.success && res.data) {
-                    setExpandedItems(prev => ({ ...prev, [item.name]: { loading: false, data: res.data!.values } }));
+                    setExpandedItems(prev => ({ ...prev, [item.fullName]: { loading: false, data: res.data!.values } }));
                 }
             }
         } catch {
-            setExpandedItems(prev => ({ ...prev, [item.name]: { loading: false, data: [] } }));
+            setExpandedItems(prev => ({ ...prev, [item.fullName]: { loading: false, data: [] } }));
         }
     };
 
@@ -123,7 +142,7 @@ export default function HierarchyPane({ onSelectClass }: HierarchyPaneProps) {
     const parentRef = useRef<HTMLDivElement>(null);
 
     const rowVirtualizer = useVirtualizer({
-        count: items.length + (items.length < total && !listLoading ? 1 : 0),
+        count: items.length + (hasMore && !listLoading ? 1 : 0),
         getScrollElement: () => parentRef.current,
         estimateSize: () => 26, // Crystal IDE compact size
         overscan: 20,
@@ -135,10 +154,10 @@ export default function HierarchyPane({ onSelectClass }: HierarchyPaneProps) {
         const lastItem = virtualItems[virtualItems.length - 1];
         if (!lastItem) return;
 
-        if (lastItem.index >= items.length - 150 && !listLoading && items.length < total) {
-            void loadList(items.length);
+        if (lastItem.index >= items.length - 64 && !listLoading && hasMore && nextCursor) {
+            void loadList(nextCursor, true);
         }
-    }, [items.length, listLoading, loadList, total, virtualItems]);
+    }, [hasMore, items.length, listLoading, loadList, nextCursor, virtualItems]);
 
     // ─── Render ────────────────────────────────────────────────
 
@@ -203,7 +222,7 @@ export default function HierarchyPane({ onSelectClass }: HierarchyPaneProps) {
                         }
 
                         const item = items[virtualRow.index];
-                        const isSelected = selectedName === item.name;
+                        const isSelected = selectedName === item.fullName;
                         const activeTabColor = SUB_TABS.find(t => t.id === subTab)?.color || 'text-text-mid';
 
                         return (
@@ -220,11 +239,11 @@ export default function HierarchyPane({ onSelectClass }: HierarchyPaneProps) {
                                 }}
                             >
                                 <div
-                                    onClick={() => { setSelectedName(item.name); onSelectClass(item.name, subTab); }}
+                                    onClick={() => { setSelectedName(item.fullName); onSelectClass(item.fullName, subTab); }}
                                     className={`group flex items-center gap-1 px-1 py-0.5 rounded cursor-pointer mx-1 ${isSelected ? 'bg-primary' : 'hover:bg-white/5'}`}
                                 >
                                     <ChevronRight
-                                        className={`w-3.5 h-3.5 flex-none transition-transform cursor-pointer ${expandedItems[item.name] ? 'rotate-90' : ''} ${isSelected ? 'text-white/60 hover:text-white' : 'text-text-low group-hover:text-text-mid'}`}
+                                        className={`w-3.5 h-3.5 flex-none transition-transform cursor-pointer ${expandedItems[item.fullName] ? 'rotate-90' : ''} ${isSelected ? 'text-white/60 hover:text-white' : 'text-text-low group-hover:text-text-mid'}`}
                                         onClick={(e) => { e.stopPropagation(); toggleExpand(item); }}
                                     />
                                     {subTab === 'Class' && <Box className={`w-3.5 h-3.5 flex-none ${isSelected ? 'text-white' : activeTabColor}`} />}
@@ -240,12 +259,12 @@ export default function HierarchyPane({ onSelectClass }: HierarchyPaneProps) {
                                         </span>
                                     )}
                                 </div>
-                                {expandedItems[item.name] && (
+                                {expandedItems[item.fullName] && (
                                     <div className="pl-6 pb-2 border-l border-border-subtle ml-[11px] mt-1 flex flex-col gap-1 mr-2 bg-surface-dark/20 pr-1 rounded-r">
-                                        {expandedItems[item.name].loading ? (
+                                        {expandedItems[item.fullName].loading ? (
                                             <div className="text-[10px] text-text-low font-mono py-1">{t('Loading...')}</div>
                                         ) : (
-                                            expandedItems[item.name].data?.map((child, i) => (
+                                            expandedItems[item.fullName].data?.map((child, i) => (
                                                 <div key={i} className="flex flex-col border-b border-white/5 last:border-0 py-0.5">
                                                     {subTab === 'Enum' ? (
                                                         <div className="flex items-center justify-between">
@@ -264,7 +283,7 @@ export default function HierarchyPane({ onSelectClass }: HierarchyPaneProps) {
                                                 </div>
                                             ))
                                         )}
-                                        {expandedItems[item.name].data?.length === 0 && (
+                                        {expandedItems[item.fullName].data?.length === 0 && (
                                             <div className="text-[10px] text-text-low font-mono py-1">{t('No fields/values')}</div>
                                         )}
                                     </div>
