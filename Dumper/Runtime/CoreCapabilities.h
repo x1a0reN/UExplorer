@@ -4,6 +4,7 @@
 #include "EngineContext.h"
 #include "EngineNameCodec.h"
 #include "ReflectionLayout.h"
+#include "TypeSnapshot.h"
 
 #include <memory>
 #include <string>
@@ -24,7 +25,9 @@ struct RuntimeProbes
 	bool ObjectHandleValidationEnabled = false;
 	bool FunctionHandleValidationEnabled = false;
 	bool ObjectSnapshotPublished = false;
+	std::uint64_t ObjectSnapshotGeneration = 0;
 	std::shared_ptr<const ReflectionRuntimeSnapshot> Reflection;
+	std::shared_ptr<const TypeSnapshot> Types;
 	bool FunctionCallServiceEnabled = false;
 	bool NamedPipeListening = false;
 };
@@ -118,6 +121,21 @@ inline std::shared_ptr<const CapabilitySnapshot> BuildCoreCapabilities(
 		"PROPERTY_CODEC_NOT_CONFIGURED",
 		"No complete immutable property codec profile matching the published reflection layout has passed its layout witnesses",
 		{"engine.reflection"});
+	const bool typeSnapshotPublished = static_cast<bool>(probes.Types);
+	const bool typeSnapshotReady = typeSnapshotPublished
+		&& probes.ObjectSnapshotGeneration != 0
+		&& probes.Types->ObjectSnapshotGeneration() == probes.ObjectSnapshotGeneration
+		&& probes.Types->IsConfigured(context.Generation());
+	builder.Define(
+		"engine.type_snapshot",
+		typeSnapshotReady,
+		typeSnapshotPublished
+			? "TYPE_SNAPSHOT_INVALID"
+			: "TYPE_SNAPSHOT_NOT_PUBLISHED",
+		typeSnapshotPublished
+			? "The type snapshot does not match the active context, object generation, or reflection layout"
+			: "No complete immutable type snapshot has been published",
+		{"engine.reflection", "objects.snapshot"});
 	builder.Define(
 		"objects.identity_source",
 		probes.ObjectIdentitySourceEnabled,
@@ -159,7 +177,7 @@ inline std::shared_ptr<const CapabilitySnapshot> BuildCoreCapabilities(
 		false,
 		"TYPE_COMMAND_NOT_IMPLEMENTED",
 		"Validated class, struct, enum, and package commands are not registered",
-		{"engine.reflection", "objects.snapshot"});
+		{"engine.type_snapshot"});
 	builder.Define(
 		"memory.raw_read",
 		false,

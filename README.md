@@ -62,6 +62,12 @@ not exposed until a real target reflection/profile witness configures
 Object/type/package/instance collections now use exact full-path filters and
 generation/query-bound cursor pages capped at 128 records; the Host reuses its snapshot
 indexes instead of rescanning the snapshot or accepting legacy offset pagination.
+The Core also owns an immutable `TypeSnapshotStore` bound to one object generation and
+one witnessed reflection layout. It requires complete Class/Struct/Enum and Function
+coverage, freezes property descriptor graphs, stores direct members only, makes inherited
+queries explicit, and validates exact CDO handles and bounded acyclic super chains. No
+production type capture source or type-detail command is registered yet, so
+`engine.type_snapshot` and `types.inspect` remain unavailable in real sessions.
 The release DLL has no WinSock/WinHTTP/WinINet import or legacy HTTP marker according
 to the transport cutover contract.
 

@@ -54,6 +54,8 @@ $propertyCodecHeader = Read-ProjectFile 'Dumper\Runtime\PropertyCodec.h'
 $propertyCodec = Read-ProjectFile 'Dumper\Runtime\PropertyCodec.cpp'
 $reflectionLayoutHeader = Read-ProjectFile 'Dumper\Runtime\ReflectionLayout.h'
 $reflectionLayout = Read-ProjectFile 'Dumper\Runtime\ReflectionLayout.cpp'
+$typeSnapshotHeader = Read-ProjectFile 'Dumper\Runtime\TypeSnapshot.h'
+$typeSnapshot = Read-ProjectFile 'Dumper\Runtime\TypeSnapshot.cpp'
 $callbackBarrier = Read-ProjectFile 'Dumper\Runtime\CallbackBarrier.h'
 $safeMemoryHeader = Read-ProjectFile 'Dumper\Runtime\SafeMemory.h'
 $safeMemory = Read-ProjectFile 'Dumper\Runtime\SafeMemory.cpp'
@@ -223,6 +225,7 @@ foreach ($token in @('ObjectHandleService', 'EngineNameCodec', 'Names() const no
 		'Reflection() const noexcept',
 		'Properties() const noexcept', 'ReflectionRuntimeSnapshot',
 		'std::atomic<std::shared_ptr<const ReflectionRuntimeSnapshot>>', 'm_ReflectionMutex',
+		'TypeSnapshotStore', 'PublishTypeSnapshot', 'Types() const noexcept',
 		'ConfigureSnapshotCapture', 'IssueObjectHandle', 'ValidateFunctionHandle',
 		'std::shared_ptr<const EngineContext>')) {
 	Assert-Contains $engineFacade $token 'EngineFacade ownership boundary regressed.'
@@ -265,9 +268,29 @@ foreach ($token in @('Off::', 'Settings::', 'ObjectArray::', '#include "Unreal/'
 		'Platform::IsBadReadPtr')) {
 	Assert-NotContains $reflectionLayout $token 'Reflection layout validation bypassed SafeMemory or immutable profiles.'
 }
+foreach ($token in @('TypeSnapshotCandidate', 'TypeSnapshotStore',
+		'ReflectedMemberState', 'ClassDefaultObjectState', 'TypeMemberScope',
+		'QueryTypeProperties', 'QueryTypeFunctions', 'DescriptorCycle',
+		'FunctionCoverageMismatch', 'HierarchyDepthExceeded',
+		'std::shared_ptr<const EngineSnapshot>', 'std::shared_ptr<const ReflectionLayout>',
+		'std::atomic<std::shared_ptr<const TypeSnapshot>>')) {
+	Assert-Contains ($typeSnapshotHeader + $typeSnapshot) $token 'Immutable type snapshot boundary regressed.'
+}
+foreach ($token in @('CloneDescriptor', 'context.Visiting', 'SameHandle',
+		'FunctionCoverageMismatch', 'defaultObject->ClassPath != type.FullPath',
+		'property.Offset < parent->PropertiesSize', 'TryDeriveParameterDirection',
+		'kPropertyFlagParm', 'm_ValidationFingerprint')) {
+	Assert-Contains $typeSnapshot $token 'Type snapshot semantic validation regressed.'
+}
+foreach ($token in @('Off::', 'Settings::', 'ObjectArray::', '#include "Unreal/',
+		'UEObject ', 'UEStruct ', 'UEProperty ')) {
+	Assert-NotContains $typeSnapshot $token 'Type snapshot validation reached legacy mutable reflection wrappers.'
+}
 foreach ($token in @('std::shared_ptr<const ReflectionRuntimeSnapshot> Reflection',
 		'probes.Reflection->IsLayoutConfigured(context.Generation())',
 		'probes.Reflection->IsPropertyCodecConfigured(context.Generation())',
+		'probes.Types->ObjectSnapshotGeneration() == probes.ObjectSnapshotGeneration',
+		'probes.Types->IsConfigured(context.Generation())', 'engine.type_snapshot',
 		'REFLECTION_RUNTIME_NOT_PUBLISHED', 'REFLECTION_RUNTIME_INVALID')) {
 	Assert-Contains $capabilities $token 'Reflection capability no longer derives from the immutable runtime bundle.'
 }
@@ -354,6 +377,15 @@ foreach ($token in @('TestEngineContextAndCapabilities', 'TestCoreRuntimeStateAn
 		'A non-power-of-two UStruct minimum alignment was accepted',
 		'Layout-only reflection publication was not immutable or fingerprint-bound',
 		'A validated layout did not open reflection independently from property decoding',
+		'A partial type snapshot was published',
+		'A type snapshot omitted a live direct function',
+		'A class accepted another class''s default object',
+		'A cyclic class hierarchy was published',
+		'A cyclic mutable property descriptor was frozen into a type snapshot',
+		'An unknown reflected member state was published',
+		'Parameter direction disagreed with its reflected flags',
+		'Direct and inherited type-member semantics were not explicit and stable',
+		'A type snapshot survived an object snapshot generation change',
 		'Reflection validation was published from a different execution thread',
 		'FString was not copied and converted through the bounded UTF-16 codec',
 		'Validated FText layout returned an unresolved placeholder',

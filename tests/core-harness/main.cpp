@@ -1705,6 +1705,20 @@ namespace
 		EngineContextBuilder contextBuilder(51);
 		contextBuilder.SetIdentity(0x140000000, 0x140100000, 4242, 0, "Fixture", "5.4");
 		contextBuilder.SetNameProfile(nameProfile);
+		contextBuilder.AddOffset({
+			.Name = "process_event.index",
+			.Value = 64,
+			.Required = true,
+			.State = ValidationState::Validated,
+			.Source = "type-snapshot-fixture"
+		});
+		contextBuilder.AddOffset({
+			.Name = "process_event.offset",
+			.Value = 0x1000,
+			.Required = true,
+			.State = ValidationState::Validated,
+			.Source = "type-snapshot-fixture"
+		});
 		const std::shared_ptr<const EngineContext> context = contextBuilder.Build();
 
 		EngineFacade wrongThreadFacade(context, "reflection-wrong-thread", facadeIdentity);
@@ -1776,6 +1790,331 @@ namespace
 				&& capabilities->IsAvailable("engine.property_codec"),
 			"A validated reflection runtime snapshot did not open its exact capabilities");
 
+		const auto makeHandle = [](const std::int32_t index) {
+			return ObjectHandle{
+				.SessionId = "reflection-facade",
+				.ContextGeneration = 51,
+				.Index = index,
+				.SerialNumber = 100 + index,
+				.Address = static_cast<std::uintptr_t>(0x10000 + index * 0x100),
+				.ClassFingerprint = static_cast<std::uint64_t>(0xABC000 + index)
+			};
+		};
+		std::vector<ObjectHandle> handles;
+		for (std::int32_t index = 0; index < 9; ++index)
+			handles.push_back(makeHandle(index));
+		auto objectSnapshot = std::make_shared<EngineSnapshot>(EngineSnapshot{
+			.SessionId = "reflection-facade",
+			.ContextGeneration = 51,
+			.Generation = 7,
+			.CapturedAtMonotonicUs = 100,
+			.CaptureDurationUs = 10,
+			.SourceObjectCount = 9,
+			.SkippedSlots = 0,
+			.Objects = {
+				{handles[0], "/Script/Fixture", "/Script/Fixture", "/Script/CoreUObject.Package", "/Script/Fixture", EngineObjectKind::Package},
+				{handles[1], "Base", "/Script/Fixture.Base", "/Script/CoreUObject.Class", "/Script/Fixture", EngineObjectKind::Class},
+				{handles[2], "Derived", "/Script/Fixture.Derived", "/Script/CoreUObject.Class", "/Script/Fixture", EngineObjectKind::Class},
+				{handles[3], "Vector", "/Script/Fixture.Vector", "/Script/CoreUObject.ScriptStruct", "/Script/Fixture", EngineObjectKind::Struct},
+				{handles[4], "Mode", "/Script/Fixture.Mode", "/Script/CoreUObject.Enum", "/Script/Fixture", EngineObjectKind::Enum},
+				{handles[5], "BaseOnly", "/Script/Fixture.Base.BaseOnly", "/Script/CoreUObject.Function", "/Script/Fixture", EngineObjectKind::Function},
+				{handles[6], "DerivedOnly", "/Script/Fixture.Derived.DerivedOnly", "/Script/CoreUObject.Function", "/Script/Fixture", EngineObjectKind::Function},
+				{handles[7], "Default__Base", "/Script/Fixture.Default__Base", "/Script/Fixture.Base", "/Script/Fixture", EngineObjectKind::Object},
+				{handles[8], "Default__Derived", "/Script/Fixture.Default__Derived", "/Script/Fixture.Derived", "/Script/Fixture", EngineObjectKind::Object}
+			}
+		});
+		const SnapshotPublishResult objectPublished = facade.Snapshots().Publish(*objectSnapshot);
+		Require(
+			objectPublished.Ok(),
+			"Type snapshot fixture object generation was rejected");
+
+		const auto makeDescriptor = [](
+			const PropertyKind kind,
+			std::string typeName,
+			const std::uint32_t size) {
+			auto descriptor = std::make_shared<PropertyDescriptor>();
+			descriptor->Kind = kind;
+			descriptor->TypeName = std::move(typeName);
+			descriptor->Size = size;
+			return descriptor;
+		};
+		const auto makeSupportedProperty = [&makeDescriptor](
+			std::string name,
+			std::string typeName,
+			const PropertyKind kind,
+			const std::uint32_t offset,
+			const std::uint32_t size) {
+			const std::string descriptorTypeName = typeName;
+			return ReflectedProperty{
+				.Name = std::move(name),
+				.TypeName = std::move(typeName),
+				.Kind = kind,
+				.Offset = offset,
+				.Size = size,
+				.ArrayDim = 1,
+				.Flags = 1,
+				.State = ReflectedMemberState::Supported,
+				.Descriptor = makeDescriptor(kind, descriptorTypeName, size)
+			};
+		};
+		const auto makeTypeCandidate = [&]() {
+			ReflectedProperty inputParameter = makeSupportedProperty(
+				"Value", "int32", PropertyKind::Int32, 0, 4);
+			inputParameter.Flags = 0x0000000000000080ull;
+			ReflectedFunction baseFunction{
+				.Handle = {
+					.Function = handles[5],
+					.Owner = handles[1],
+					.FullPath = "Function fname:1:0.fname:5:0",
+					.SignatureFingerprint = 0xB001
+				},
+				.Name = "BaseOnly",
+				.FullPath = "/Script/Fixture.Base.BaseOnly",
+				.Flags = 1,
+				.ParameterSize = 4,
+				.NativeAddress = 0x5000,
+				.Implementation = ReflectedFunctionImplementation::Native,
+				.Parameters = {
+					{ReflectedParameterDirection::Input, std::move(inputParameter)}
+				}
+			};
+			ReflectedFunction derivedFunction{
+				.Handle = {
+					.Function = handles[6],
+					.Owner = handles[2],
+					.FullPath = "Function fname:2:0.fname:6:0",
+					.SignatureFingerprint = 0xD001
+				},
+				.Name = "DerivedOnly",
+				.FullPath = "/Script/Fixture.Derived.DerivedOnly",
+				.Flags = 2,
+				.ParameterSize = 0,
+				.Implementation = ReflectedFunctionImplementation::Bytecode
+			};
+			return TypeSnapshotCandidate{
+				.SessionId = "reflection-facade",
+				.ContextGeneration = 51,
+				.Generation = 1,
+				.ObjectSnapshotGeneration = 7,
+				.ReflectionLayoutFingerprint = validated.Layout->Fingerprint(),
+				.CapturedAtMonotonicUs = 200,
+				.CaptureDurationUs = 20,
+				.Source = "synthetic-type-snapshot",
+				.Types = {
+					{
+						.Handle = handles[1],
+						.Kind = ReflectedTypeKind::Class,
+						.Name = "Base",
+						.FullPath = "/Script/Fixture.Base",
+						.PackagePath = "/Script/Fixture",
+						.PropertiesSize = 16,
+						.MinAlignment = 8,
+						.DefaultObjectState = ClassDefaultObjectState::Present,
+						.DefaultObject = handles[7],
+						.DirectProperties = {
+							makeSupportedProperty("BaseValue", "int32", PropertyKind::Int32, 0, 4),
+							{
+								.Name = "OnChanged",
+								.TypeName = "delegate",
+								.Kind = PropertyKind::Delegate,
+								.Offset = 8,
+								.Size = 8,
+								.ArrayDim = 1,
+								.Flags = 1,
+								.State = ReflectedMemberState::Unsupported,
+								.ReasonCode = "PROPERTY_DELEGATE_UNSUPPORTED",
+								.Reason = "Delegate value decoding is not implemented"
+							}
+						},
+						.DirectFunctions = {std::move(baseFunction)}
+					},
+					{
+						.Handle = handles[2],
+						.Kind = ReflectedTypeKind::Class,
+						.Name = "Derived",
+						.FullPath = "/Script/Fixture.Derived",
+						.PackagePath = "/Script/Fixture",
+						.PropertiesSize = 32,
+						.MinAlignment = 8,
+						.Super = handles[1],
+						.DefaultObjectState = ClassDefaultObjectState::Present,
+						.DefaultObject = handles[8],
+						.DirectProperties = {
+							makeSupportedProperty("DerivedValue", "double", PropertyKind::Double, 16, 8)
+						},
+						.DirectFunctions = {std::move(derivedFunction)}
+					},
+					{
+						.Handle = handles[3],
+						.Kind = ReflectedTypeKind::Struct,
+						.Name = "Vector",
+						.FullPath = "/Script/Fixture.Vector",
+						.PackagePath = "/Script/Fixture",
+						.PropertiesSize = 12,
+						.MinAlignment = 4,
+						.DirectProperties = {
+							makeSupportedProperty("X", "float", PropertyKind::Float, 0, 4),
+							makeSupportedProperty("Y", "float", PropertyKind::Float, 4, 4),
+							makeSupportedProperty("Z", "float", PropertyKind::Float, 8, 4)
+						}
+					},
+					{
+						.Handle = handles[4],
+						.Kind = ReflectedTypeKind::Enum,
+						.Name = "Mode",
+						.FullPath = "/Script/Fixture.Mode",
+						.PackagePath = "/Script/Fixture",
+						.EnumState = ReflectedMemberState::Supported,
+						.EnumUnderlyingKind = PropertyKind::UInt8,
+						.EnumEntries = {{"Off", 0}, {"On", 1}}
+					}
+				}
+			};
+		};
+
+		TypeSnapshotCandidate partialTypes = makeTypeCandidate();
+		partialTypes.Types.pop_back();
+		Require(
+			facade.PublishTypeSnapshot(partialTypes).Error
+				== TypeSnapshotPublishError::TypeCoverageMismatch,
+			"A partial type snapshot was published");
+		TypeSnapshotCandidate missingFunction = makeTypeCandidate();
+		missingFunction.Types[0].DirectFunctions.clear();
+		Require(
+			facade.PublishTypeSnapshot(missingFunction).Error
+				== TypeSnapshotPublishError::FunctionCoverageMismatch,
+			"A type snapshot omitted a live direct function");
+		TypeSnapshotCandidate wrongDefaultObject = makeTypeCandidate();
+		wrongDefaultObject.Types[1].DefaultObject = handles[7];
+		Require(
+			facade.PublishTypeSnapshot(wrongDefaultObject).Error
+				== TypeSnapshotPublishError::RelationshipInvalid,
+			"A class accepted another class's default object");
+		TypeSnapshotCandidate cyclicHierarchy = makeTypeCandidate();
+		cyclicHierarchy.Types[0].PropertiesSize = 32;
+		cyclicHierarchy.Types[0].Super = handles[2];
+		Require(
+			facade.PublishTypeSnapshot(cyclicHierarchy).Error
+				== TypeSnapshotPublishError::HierarchyCycle,
+			"A cyclic class hierarchy was published");
+		TypeSnapshotCandidate recursiveDescriptor = makeTypeCandidate();
+		auto recursive = std::make_shared<PropertyDescriptor>();
+		recursive->Kind = PropertyKind::Struct;
+		recursive->TypeName = "Recursive";
+		recursive->Size = 8;
+		recursive->Fields.push_back({"Self", 0, recursive});
+		ReflectedProperty& recursiveProperty = recursiveDescriptor.Types[0].DirectProperties[0];
+		recursiveProperty.TypeName = "Recursive";
+		recursiveProperty.Kind = PropertyKind::Struct;
+		recursiveProperty.Size = 8;
+		recursiveProperty.Descriptor = recursive;
+		Require(
+			facade.PublishTypeSnapshot(recursiveDescriptor).Error
+				== TypeSnapshotPublishError::DescriptorCycle,
+			"A cyclic mutable property descriptor was frozen into a type snapshot");
+		TypeSnapshotCandidate invalidMemberState = makeTypeCandidate();
+		invalidMemberState.Types[0].DirectProperties[0].State =
+			static_cast<ReflectedMemberState>(0xFF);
+		Require(
+			facade.PublishTypeSnapshot(invalidMemberState).Error
+				== TypeSnapshotPublishError::PropertyInvalid,
+			"An unknown reflected member state was published");
+		TypeSnapshotCandidate wrongParameterDirection = makeTypeCandidate();
+		wrongParameterDirection.Types[0].DirectFunctions[0].Parameters[0].Direction =
+			ReflectedParameterDirection::Output;
+		Require(
+			facade.PublishTypeSnapshot(wrongParameterDirection).Error
+				== TypeSnapshotPublishError::FunctionInvalid,
+			"Parameter direction disagreed with its reflected flags");
+
+		TypeSnapshotCandidate validTypes = makeTypeCandidate();
+		auto mutableDescriptor = std::const_pointer_cast<PropertyDescriptor>(
+			validTypes.Types[0].DirectProperties[0].Descriptor);
+		const TypeSnapshotPublishResult typePublished = facade.PublishTypeSnapshot(
+			std::move(validTypes));
+		Require(
+			typePublished.Ok()
+				&& typePublished.Snapshot->IsConfigured(51)
+				&& typePublished.Snapshot->Types().size() == 4,
+			"A complete generation-bound type snapshot was rejected");
+		mutableDescriptor->TypeName = "corrupted-after-publication";
+		mutableDescriptor->Size = 1;
+		const ReflectedType* frozenBase = typePublished.Snapshot->FindByFullPath(
+			"/Script/Fixture.Base");
+		const ReflectedType* frozenDerived = typePublished.Snapshot->FindByObjectIndex(2);
+		Require(
+			frozenBase
+				&& frozenDerived
+				&& frozenBase->DirectProperties[0].Descriptor
+				&& frozenBase->DirectProperties[0].Descriptor->TypeName == "int32"
+				&& frozenBase->DirectProperties[0].Descriptor->Size == 4
+				&& frozenDerived->DefaultObject
+				&& frozenDerived->DefaultObject->Index == 8,
+			"Published type metadata retained a mutable descriptor alias or guessed its CDO");
+
+		const TypePropertyQueryResult directProperties = QueryTypeProperties(
+			typePublished.Snapshot,
+			"/Script/Fixture.Derived",
+			TypeMemberScope::Direct);
+		const TypePropertyQueryResult inheritedProperties = QueryTypeProperties(
+			typePublished.Snapshot,
+			"/Script/Fixture.Derived",
+			TypeMemberScope::IncludeInherited);
+		const TypeFunctionQueryResult inheritedFunctions = QueryTypeFunctions(
+			typePublished.Snapshot,
+			"/Script/Fixture.Derived",
+			TypeMemberScope::IncludeInherited);
+		const TypePropertyQueryResult invalidScope = QueryTypeProperties(
+			typePublished.Snapshot,
+			"/Script/Fixture.Derived",
+			static_cast<TypeMemberScope>(0xFF));
+		Require(
+			directProperties.Ok()
+				&& directProperties.Members.size() == 1
+				&& directProperties.Members[0].Member->Name == "DerivedValue"
+				&& directProperties.Members[0].InheritanceDepth == 0
+				&& inheritedProperties.Ok()
+				&& inheritedProperties.Members.size() == 3
+				&& inheritedProperties.Members[0].Member->Name == "DerivedValue"
+				&& inheritedProperties.Members[1].Member->Name == "BaseValue"
+				&& inheritedProperties.Members[1].InheritanceDepth == 1
+				&& inheritedProperties.Members[2].Member->State == ReflectedMemberState::Unsupported
+				&& inheritedProperties.Members[2].Member->ReasonCode == "PROPERTY_DELEGATE_UNSUPPORTED"
+				&& inheritedFunctions.Ok()
+				&& inheritedFunctions.Members.size() == 2
+				&& inheritedFunctions.Members[0].Member->Name == "DerivedOnly"
+				&& inheritedFunctions.Members[1].Member->Name == "BaseOnly"
+				&& invalidScope.Error == TypeMemberQueryError::ScopeInvalid,
+			"Direct and inherited type-member semantics were not explicit and stable");
+
+		TypeSnapshotCandidate repeatedGeneration = makeTypeCandidate();
+		Require(
+			facade.PublishTypeSnapshot(repeatedGeneration).Error
+				== TypeSnapshotPublishError::GenerationNotMonotonic,
+			"A non-increasing type snapshot generation replaced the current snapshot");
+		RuntimeProbes typeProbes;
+		typeProbes.GameThreadExecutorEnabled = true;
+		typeProbes.GameThreadPumpObserved = true;
+		typeProbes.GameThreadPumpThreadStable = true;
+		typeProbes.GameThreadPumpActive = true;
+		typeProbes.SafeMemoryEnabled = true;
+		typeProbes.ObjectIdentitySourceEnabled = true;
+		typeProbes.ObjectHandleValidationEnabled = true;
+		typeProbes.ObjectSnapshotPublished = true;
+		typeProbes.ObjectSnapshotGeneration = 7;
+		typeProbes.Reflection = retained;
+		typeProbes.Types = typePublished.Snapshot;
+		const auto typeCapabilities = BuildCoreCapabilities(*context, typeProbes);
+		Require(
+			typeCapabilities->IsAvailable("engine.type_snapshot")
+				&& !typeCapabilities->IsAvailable("types.inspect"),
+			"Type snapshot readiness either ignored its dependencies or advertised an unregistered command");
+		typeProbes.ObjectSnapshotGeneration = 8;
+		const auto staleTypeCapabilities = BuildCoreCapabilities(*context, typeProbes);
+		Require(
+			!staleTypeCapabilities->IsAvailable("engine.type_snapshot"),
+			"A type snapshot survived an object snapshot generation change");
+
 		std::int32_t integer = 42;
 		PropertyDescriptor integerDescriptor{
 			.Kind = PropertyKind::Int32,
@@ -1786,6 +2125,8 @@ namespace
 			facade.Stop()
 				&& !facade.Reflection()
 				&& !facade.Properties()
+				&& facade.Types().Current() == typePublished.Snapshot
+				&& typePublished.Snapshot->IsConfigured(51)
 				&& retained->IsConfigured(51)
 				&& retainedCodec->Decode(
 					reinterpret_cast<std::uintptr_t>(&integer),
@@ -4345,7 +4686,7 @@ int main(const int argc, char** argv)
 		TestPostRenderFrameClientOwnershipAndDrain();
 		TestGameThreadMpscCapacity();
 		TestHttpServerLifecycle();
-		std::cout << "Core harness passed: deterministic bounded frame fuzz/disconnect matrix, secure sessions, real current-user Windows Named Pipe RPC/event lifecycle, runtime/capabilities, EngineFacade/immutable budgeted snapshots, domain commands, stable handles/FUObjectItem layout, witnessed reflection layouts, bounded property codecs, bounded PE/version/global-pointer probing, pattern scanning, Hook RAII/drain, SafeMemory, USMAP consumer, bounded queues, cancellable owned game-thread/frame-client work, SEH, HTTP lifecycle, and shutdown.\n";
+		std::cout << "Core harness passed: deterministic bounded frame fuzz/disconnect matrix, secure sessions, real current-user Windows Named Pipe RPC/event lifecycle, runtime/capabilities, EngineFacade/immutable budgeted object/type snapshots, domain commands, stable handles/FUObjectItem layout, witnessed reflection layouts, bounded property codecs, bounded PE/version/global-pointer probing, pattern scanning, Hook RAII/drain, SafeMemory, USMAP consumer, bounded queues, cancellable owned game-thread/frame-client work, SEH, HTTP lifecycle, and shutdown.\n";
 		return 0;
 	}
 	catch (const std::exception& error)

@@ -65,10 +65,15 @@ namespace
 			g_EngineFacade && g_EngineFacade->IsConfigured();
 		probes.FunctionHandleValidationEnabled =
 			g_IdentitySource && g_IdentitySource->CanIssueFunctionHandles();
-		probes.ObjectSnapshotPublished = g_EngineFacade
-			&& g_EngineFacade->Snapshots().CurrentGeneration() != 0;
+		const std::shared_ptr<const UExplorer::Runtime::EngineSnapshot> objectSnapshot =
+			g_EngineFacade ? g_EngineFacade->Snapshots().Current() : nullptr;
+		probes.ObjectSnapshotPublished = static_cast<bool>(objectSnapshot);
+		probes.ObjectSnapshotGeneration = objectSnapshot ? objectSnapshot->Generation : 0;
 		probes.Reflection = g_EngineFacade
 			? g_EngineFacade->Reflection()
+			: nullptr;
+		probes.Types = g_EngineFacade
+			? g_EngineFacade->Types().Current()
 			: nullptr;
 		probes.FunctionCallServiceEnabled = false;
 		probes.NamedPipeListening = g_PipeServer && g_PipeServer->IsListening();

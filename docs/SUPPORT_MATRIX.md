@@ -49,6 +49,13 @@ validator, codec-boundary, and result-state behavior only; it is not evidence th
 same offsets/layouts apply to any engine row above. Production remains unavailable until
 a target-specific candidate/witness source passes the same boundary.
 
+The generic harness also publishes a synthetic immutable type snapshot only after exact
+Class/Struct/Enum and Function coverage matches one object-snapshot generation. It proves
+deep-frozen descriptor graphs, bounded property/parameter ranges, explicit direct versus
+inherited member order, exact CDO handle/class matching, hierarchy cycle/depth rejection,
+and stale-generation capability closure. It does not provide a production reflection or
+type capture source and therefore does not change any support row.
+
 ## Generic boundary evidence (not an engine support claim)
 
 The R4 desktop transport boundary is verified independently of an Unreal profile:

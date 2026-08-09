@@ -21,6 +21,9 @@ EngineFacade::EngineFacade(
 		m_IdentitySource),
 	  m_Snapshots(
 		m_SessionId,
+		m_Context ? m_Context->Generation() : 0),
+	  m_Types(
+		m_SessionId,
 		m_Context ? m_Context->Generation() : 0)
 {
 }
@@ -32,7 +35,9 @@ bool EngineFacade::IsConfigured() const noexcept
 		&& m_IdentitySource.ContextGeneration() == m_Context->Generation()
 		&& m_Handles.IsConfigured()
 		&& m_Snapshots.IsConfigured()
-		&& !m_Snapshots.IsStopped();
+		&& !m_Snapshots.IsStopped()
+		&& m_Types.IsConfigured()
+		&& !m_Types.IsStopped();
 }
 
 std::uint64_t EngineFacade::ContextGeneration() const noexcept
@@ -140,6 +145,19 @@ bool EngineFacade::ConfigurePropertyCodec(PropertyCodecProfile profile) noexcept
 	}
 }
 
+TypeSnapshotPublishResult EngineFacade::PublishTypeSnapshot(
+	TypeSnapshotCandidate candidate) noexcept
+{
+	if (!IsConfigured())
+		return {.Error = TypeSnapshotPublishError::StoreInvalid};
+	const std::shared_ptr<const EngineSnapshot> objects = m_Snapshots.Current();
+	const std::shared_ptr<const ReflectionRuntimeSnapshot> reflection = Reflection();
+	return m_Types.Publish(
+		std::move(candidate),
+		objects,
+		reflection);
+}
+
 bool EngineFacade::ConfigureSnapshotCapture(IEngineSnapshotSource& source) noexcept
 {
 	if (!IsConfigured()
@@ -172,6 +190,7 @@ bool EngineFacade::Stop(const std::chrono::milliseconds timeout)
 	if (m_SnapshotCapture && !m_SnapshotCapture->StopAndDrain(timeout))
 		return false;
 	m_SnapshotCapture.reset();
+	m_Types.Stop();
 	m_Reflection.store({}, std::memory_order_release);
 	m_Snapshots.Stop();
 	return true;

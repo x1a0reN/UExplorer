@@ -78,6 +78,7 @@
 		"2026-08-09: EngineFacade now binds one session/context/identity generation and owns the immutable EngineSnapshotStore used by future domain services",
 		"2026-08-09: EngineFacade uniquely owns the optional budgeted snapshot producer and refuses teardown until its pump callback barrier drains",
 		"2026-08-09: ObjectArraySnapshotSource is a production metadata boundary built only from stable handles, immutable context offsets, EngineNameCodec, and SafeMemory; Main owns and drains its PostRender frame-client attachment",
+		"2026-08-10: EngineFacade now owns a generation/layout-bound immutable TypeSnapshotStore; publication retains exact object/reflection dependencies, deep-freezes descriptors, and refuses partial type/function coverage",
 		"2026-08-09: Rust DomainService and the split TypeScript Tauri client replace the frontend REST/SSE/WebSocket/configuration monolith at the process boundary",
         "Remaining legacy domain/API monoliths and direct Off/Settings consumers still require migration"
       ]
@@ -455,7 +456,23 @@
 		"2026-08-09: snapshot capture scans both live and empty slots in bounded batches and revalidates the entire source range before atomic publication",
 		"2026-08-09: production object/class/package path traversal uses checked address arithmetic, bounded 128-level outer depth, metadata byte ceilings, cycle rejection, and a final source-count coherence check",
 		"2026-08-09: PropertyCodec validates full array/sparse ranges, header/content coherence, allocation bits, address/multiplication overflow, disjoint layout fields, recursion depth, exact output-node count including Map/Set wrappers, and descriptor/address cycles",
+		"2026-08-10: TypeSnapshot deep-clones descriptor DAGs with node/depth/field limits, rejects descriptor cycles, checks every property/parameter range against the witnessed owner size, and rejects hierarchy cycles/depth overflow",
 		"Real reflection descriptors and target-scale container fixtures remain pending"
+	  ]
+	},
+	"OBJ-007": {
+	  "status": "in_progress",
+	  "verification": [
+		"2026-08-10: immutable TypeSnapshot records only DirectProperties and DirectFunctions; QueryTypeProperties/QueryTypeFunctions require an explicit direct or include_inherited scope and return declaring type plus inheritance depth in nearest-first order",
+		"Named Pipe schemas, Rust Host indexes, and production type capture still need to expose and verify the same explicit scope"
+	  ]
+	},
+	"CLASS-001": {
+	  "status": "in_progress",
+	  "verification": [
+		"2026-08-10: class metadata distinguishes CDO present, not constructed, and unavailable; a present CDO must be an exact stable handle whose snapshot class_path equals the owning class full path",
+		"2026-08-10: complete super references are handle-bound and publication/query paths reject missing parents, kind mismatches, cycles, and depth overflow",
+		"Production CDO/super capture plus Host instance and hierarchy commands remain pending"
 	  ]
 	},
     "OBJ-012": {

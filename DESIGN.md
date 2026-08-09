@@ -23,7 +23,7 @@ React -> Tauri invoke/event -> Rust Host -> Windows Named Pipe RPC -> Core DLL -
 | R2 CoreRuntime/能力模型 | 实现阶段完成；R5/R7 验证待办 | CoreRuntime 状态机、加密随机 session 与 request lease；一次性发布的 immutable EngineContext/identity/name-layout context；带 candidate/confidence 的 offset validation report；依赖式 CapabilityRegistry；Runtime-owned GameThreadExecutor/PostRender backend；ShutdownCoordinator；SafeMemory；稳定 Handle；`EngineFacade`、immutable Snapshot store、生产 snapshot source；transport-neutral CoreCommandService；Rust Host SnapshotCache/索引；VTable Hook RAII owner 与 callback quiet drain | 其余领域 command 属于 R5；真实 identity/name/snapshot/global-pointer、GC churn、LDR/版本与目标规模证据属于 R7 |
 | R3 Named Pipe/Rust Host | 实现阶段完成；R7 验证待办 | 共享严格 RPC 契约；安全且可 join 的 overlapped Named Pipe server/client；PID 核验、deadline/cancel、背压、断线、显式重连和精确 Shutdown；C++/Rust framing fuzz；真实跨语言 Core/Host 进程 fixture；EventHub、multi-PID SessionManager、PID-scoped 操作协调器与 Tauri Channel bridge；真实 x64/x86 注入矩阵 | UE 目标进程连接、Hook/GC/卸载环境矩阵属于 R7 |
 | R4 通信原子切换 | 已完成 | React 领域调用只经 Tauri `domain_request`，事件只经 Tauri Channel；Rust `DomainService` 使用显式 operation registry、PID/session 绑定和稳定错误；Core release project 不编译 `Server/`/`API/` 且不链接 `ws2_32`；二进制契约确认无网络 import/legacy marker；跨语言 fixture 覆盖 DomainService -> SessionManager -> C++ Core | 无；未实现领域按 capability 明确失败，功能实现进入 R5 |
-| R5 领域正确性 | 进行中（R5.1 查询、Codec 与反射验证基础完成） | Object/Type 查询已复用 Host SnapshotIndex；PropertyCodec 具备有界值模型；ReflectionLayout 以完整字段集、UStruct 尺寸/对齐、逐字段语义 witness、context generation 和 fingerprint 发布不可变运行快照；layout 与 codec 分阶段原子发布并分别驱动 capability；合成 C++ fixture 已通过 | 生产 UE reflection candidate/witness source、descriptor、继承/CDO 语义、GC/目标规模，以及 Memory/Call/World/Watch/Hook/Blueprint/Dump 逐项验证 |
+| R5 领域正确性 | 进行中（R5.1 查询、Codec、反射与类型快照基础完成） | Object/Type 列表查询已复用 Host SnapshotIndex；PropertyCodec 具备有界值模型；ReflectionLayout 验证完整字段集和 UStruct 尺寸/对齐；layout/codec 分阶段原子发布；TypeSnapshot 要求完整类型/函数覆盖、冻结 descriptor、显式继承与 CDO/super 语义；合成 C++ fixture 已通过 | 生产 UE reflection/type candidate source、Named Pipe/Host 详情 command、GC/目标规模，以及 Memory/Call/World/Watch/Hook/Blueprint/Dump 逐项验证 |
 | R6 前端状态重构 | 未开始 | UI lint 已清零，基础 Vitest 已建立 | session store、查询取消、BigInt 地址、真实能力 UI |
 | R7 发布硬化 | 未开始 | 无 | 性能、压力、目标 fixture、文档和发布门全部通过 |
 
@@ -140,6 +140,16 @@ CoreHarness 已覆盖各已实现类型、缺失/重叠布局、无 resolver、�
 - 成功结果冻结 context generation、property system、验证线程 ID、逐字段检查/证据和由字段布局计算的 fingerprint。`EngineFacade::ConfigureReflectionLayout` 要求调用线程属于 identity source 的已验证执行点，并与 layout 验证线程一致；`ConfigurePropertyCodec` 只允许在同一线程将匹配 fingerprint 的 codec 原子升级进快照。Stop 原子撤销新读者可见性，已持有的任一 immutable snapshot 仍可安全完成。
 - `RuntimeProbes` 删除 `ReflectionLayoutValidated` 与 `PropertyCodecEnabled` 两个布尔值。能力注册表分别接受 `ReflectionRuntimeSnapshot::IsLayoutConfigured(context.Generation())` 与 `IsPropertyCodecConfigured(...)`；因此 layout-only 快照只开放 `engine.reflection`，generation 漂移或 codec fingerprint 错配不会开放对应能力。
 - CoreHarness 使用完整合成 FProperty 字段与真实内存 witness 覆盖成功、UStruct size/alignment、稳定 fingerprint、generation 错配、缺字段、重叠、record-size 冲突、坏标量、错误 FName、未知 property system、跨线程发布拒绝、fingerprint 错配、layout-only capability、不可变原子升级及 Stop 后 retained reader。该 fixture 只证明验证器边界，不是任何 UE 版本支持证据；production candidate/witness source 尚未实现，因此生产 capability 仍明确 unavailable。
+
+### 0.10 R5.1 immutable TypeSnapshot 与成员语义
+
+- 新增 `Runtime/TypeSnapshot`，由 `EngineFacade` 独占发布入口并持有 store。每一代同时绑定 session、context generation、当前 object snapshot generation 和 witnessed reflection-layout fingerprint，并保留两份 immutable dependency；对象快照更新后旧类型快照立即失去 `engine.type_snapshot` readiness，不能跨代继续提供元数据。
+- 发布必须按对象索引完整覆盖当前 snapshot 内所有 Class/Struct/Enum，并要求每个 Function 恰好归属一个 direct owner。类型/函数/owner/super/CDO 全部使用完整稳定 Handle 和 exact display full path；`FunctionHandle.FullPath` 保持可执行身份所用的 canonical raw-FName token path，不会错误地要求它等于解码后的 display path。CDO 明确区分 `present`、`not_constructed`、`unavailable`，`present` 还必须满足对象 `class_path == owning class full_path`，不再用 outer 名称猜测。
+- Class/Struct 只存 `DirectProperties` 与 `DirectFunctions`。查询必须显式选择 `direct` 或 `include_inherited`；继承结果按当前类型到最近父类顺序返回，并携带 declaring type 与 inheritance depth，不再让列表和单属性查询采用不同隐式规则。super 必须在同一快照中、类型一致、尺寸单调，发布和查询都有独立 cycle/depth guard。
+- 每个 direct property/parameter 都校验 `offset + size * array_dim` 在 witnessed owner size 内；direct property 禁止携带 `Parm`，参数的 input/output/inout/return 则必须与 `Parm/OutParm/ReferenceParm/ReturnParm` flags 唯一推导的方向一致。`supported` 必须提供 kind/type/size 完全一致的 descriptor；`unsupported`/`unavailable` 必须提供稳定原因且不能夹带 descriptor。发布会深拷贝 descriptor DAG，限制节点、深度、字段与枚举数量，拒绝 unknown/Delegate 伪 supported、错误 scalar width、容器 child/stride/range、重复字段以及 descriptor cycle，因此调用方保留的 mutable alias 无法改变已发布布局。
+- `engine.type_snapshot` 是单独的数据 readiness capability；`types.inspect` 仍因 Core/Named Pipe/Host 详情 command 尚未注册而保持 `TYPE_COMMAND_NOT_IMPLEMENTED`。当前 production 也没有 reflection/type capture source，所以本节只建立 fail-closed 模型与合成证据，不宣称真实游戏类型详情已可用。
+
+CoreHarness 覆盖 partial type/function coverage、错误 CDO、super cycle、descriptor cycle、未知成员状态、参数 flags/direction 错配、显式 unsupported、deep-freeze alias、direct/inherited 属性与函数顺序、重复 generation、object-generation 漂移和 capability gating。生产 game-thread 分帧采集、协议 schema、Rust 索引与真实 UE fixture 是下一切片。
 
 ## Context
 
