@@ -153,7 +153,7 @@ CoreHarness 覆盖 partial type/function coverage、错误 CDO、super cycle、d
 
 ### 0.11 R5.1 ReflectionLayoutCapture 生命周期与预算
 
-- 新增 `Runtime/ReflectionLayoutCapture`，由 `EngineFacade` 独占。候选源必须先声明同一 context generation 和显式 `UProperty`/`FProperty`，随后每个 source step 只能增加一个字段及 1-8 个同字段 witness；总字段、witness、字符串和 record 范围复用 `ReflectionLayoutLimits` 的硬上限。空进展、跨字段 witness、一次追加多字段、超限或未知 property system 都是稳定的 source-contract failure，不会把部分候选交给验证器或 capability。
+- 新增 `Runtime/ReflectionLayoutCapture`，由 `EngineFacade` 独占。capture 独占可变候选，source 无法取得或改写已接收的字段；source 只能在单个 step 返回零或一条 evidence，每条 evidence 包含一个字段及 1-8 个同字段 witness。无 evidence 的 step 必须显式报告有界预检进展，整个 source 最多 256 step；总字段、witness、字符串和 record 范围复用 `ReflectionLayoutLimits` 的硬上限。无进展、跨字段 witness、超限或未知 property system 都是稳定的 source-contract failure，不会把部分候选交给验证器或 capability。
 - capture 是 `IGameThreadFrameClient`，准确返回实际消耗的 work unit。Begin、每字段采集、完整 `ValidateReflectionLayout` 和 `EngineFacade` 原子 publication 是独立预算步骤；验证和发布前都会重新检查 source dependency，同一候选不能在 snapshot/证据变化后继续提交。验证器生成的线程 ID仍必须等于 Facade 当前已验证执行线程。
 - 生命周期具有单一 request owner、并发 pump 拒绝、callback barrier 和可重试 drain。`EngineFacade::Stop` 不再持有 reflection publication mutex 等待 producer drain，避免发布回调与停止线程互锁；先停止 producer，随后才撤销 immutable reflection snapshot。合成 fixture 覆盖逐步不可见、完整发布、精确 work accounting、重复 request、缺 witness source contract violation、最终依赖漂移和 Stop。
 - 本切片只建立生产可接入的 owner/预算/失败语义，尚未实现从真实 Object Snapshot 和 `SafeMemory` 生成完整 UE witness 的 source，也未在 `Main` 附加该 client。因此 release Core 中 `engine.reflection`、`engine.property_codec` 和 `engine.type_snapshot` 仍保持 unavailable；旧 `Off::InitReflection()` 仍不是候选来源，也没有任何 fallback。

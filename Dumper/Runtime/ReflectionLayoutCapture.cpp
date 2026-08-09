@@ -159,26 +159,26 @@ bool ReflectionLayoutCapture::StartRequestedCapture() noexcept
 
 	try
 	{
-		m_Candidate.emplace();
-		const ReflectionCandidateSourceStepResult begun = m_Source.Begin(*m_Candidate);
+		const ReflectionCandidateSourceBeginResult begun = m_Source.Begin();
 		if (!begun.Ok())
 		{
 			Fail(ReflectionLayoutCaptureError::SourceRejected, begun.Error);
 			return false;
 		}
-		if (begun.Complete
-			|| m_Candidate->ContextGeneration != m_ContextGeneration
-			|| m_Candidate->PropertySystem == ReflectionPropertySystem::Unavailable
-			|| m_Candidate->Source.empty()
-			|| m_Candidate->Source.size() > ReflectionLayoutLimits::MaxSourceBytes
-			|| !m_Candidate->Fields.empty()
-			|| !m_Candidate->Witnesses.empty())
+		if (begun.PropertySystem == ReflectionPropertySystem::Unavailable
+			|| begun.Source.empty()
+			|| begun.Source.size() > ReflectionLayoutLimits::MaxSourceBytes)
 		{
 			Fail(
 				ReflectionLayoutCaptureError::SourceContractViolation,
 				ReflectionCandidateSourceError::ContractViolation);
 			return false;
 		}
+		m_Candidate.emplace(ReflectionLayoutCandidate{
+			.ContextGeneration = m_ContextGeneration,
+			.PropertySystem = begun.PropertySystem,
+			.Source = begun.Source
+		});
 		m_State.store(ReflectionLayoutCaptureState::Capturing, std::memory_order_release);
 		return true;
 	}
@@ -254,12 +254,10 @@ ReflectionLayoutPumpResult ReflectionLayoutCapture::Pump(
 				};
 			}
 
-			const std::size_t fieldsBefore = m_Candidate->Fields.size();
-			const std::size_t witnessesBefore = m_Candidate->Witnesses.size();
-			const ReflectionCandidateSourceStepResult step =
-				m_Source.CaptureNext(*m_Candidate);
+			ReflectionCandidateSourceStepResult step = m_Source.CaptureNext();
 			++consumed;
-			m_SourceSteps.fetch_add(1, std::memory_order_acq_rel);
+			const std::size_t sourceSteps =
+				m_SourceSteps.fetch_add(1, std::memory_order_acq_rel) + 1;
 			if (!step.Ok())
 			{
 				Fail(ReflectionLayoutCaptureError::SourceRejected, step.Error);
@@ -269,27 +267,26 @@ ReflectionLayoutPumpResult ReflectionLayoutCapture::Pump(
 				};
 			}
 
-			const std::size_t fieldsAfter = m_Candidate->Fields.size();
-			const std::size_t witnessesAfter = m_Candidate->Witnesses.size();
-			const bool countContractValid = fieldsAfter == fieldsBefore + 1
-				&& fieldsAfter <= ReflectionLayoutLimits::MaxFields
-				&& witnessesAfter > witnessesBefore
-				&& witnessesAfter - witnessesBefore <= kMaxWitnessesPerSourceStep
-				&& witnessesAfter <= ReflectionLayoutLimits::MaxWitnesses;
-			bool witnessContractValid = countContractValid;
-			if (witnessContractValid)
+			bool evidenceContractValid = step.Progressed
+				&& sourceSteps <= kMaxSourceSteps;
+			if (evidenceContractValid && step.Evidence)
 			{
-				const ReflectionField field = m_Candidate->Fields.back().Field;
-				for (std::size_t index = witnessesBefore; index < witnessesAfter; ++index)
+				const ReflectionCandidateEvidence& evidence = *step.Evidence;
+				evidenceContractValid = !evidence.Witnesses.empty()
+					&& evidence.Witnesses.size() <= kMaxWitnessesPerSourceStep
+					&& m_Candidate->Fields.size() < ReflectionLayoutLimits::MaxFields
+					&& evidence.Witnesses.size()
+						<= ReflectionLayoutLimits::MaxWitnesses - m_Candidate->Witnesses.size();
+				for (const ReflectionFieldWitness& witness : evidence.Witnesses)
 				{
-					if (m_Candidate->Witnesses[index].Field != field)
+					if (witness.Field != evidence.Field.Field)
 					{
-						witnessContractValid = false;
+						evidenceContractValid = false;
 						break;
 					}
 				}
 			}
-			if (!witnessContractValid)
+			if (!evidenceContractValid)
 			{
 				Fail(
 					ReflectionLayoutCaptureError::SourceContractViolation,
@@ -298,6 +295,12 @@ ReflectionLayoutPumpResult ReflectionLayoutCapture::Pump(
 					.Status = ReflectionLayoutPumpStatus::Failed,
 					.WorkConsumed = consumed
 				};
+			}
+			if (step.Evidence)
+			{
+				m_Candidate->Fields.push_back(std::move(step.Evidence->Field));
+				for (ReflectionFieldWitness& witness : step.Evidence->Witnesses)
+					m_Candidate->Witnesses.push_back(std::move(witness));
 			}
 			PublishCandidateDiagnostics();
 			if (step.Complete)

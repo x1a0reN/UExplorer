@@ -61,7 +61,7 @@ UExplorer/
 │   │   ├── EngineNameCodec.h/.cpp    #   immutable layout + SafeMemory 的严格 FName 解码
 │   │   ├── PropertyCodec.h/.cpp      #   显式状态、完整 profile、稳定句柄与精确值树预算
 │   │   ├── ReflectionLayout.h/.cpp   #   U/FProperty 字段 witness、尺寸边界与分阶段原子 snapshot
-│   │   ├── ReflectionLayoutCapture.* #   逐字段候选预算、依赖复核、同线程发布与 drain owner
+│   │   ├── ReflectionLayoutCapture.* #   单条 evidence/预检预算、依赖复核、同线程发布与 drain owner
 │   │   ├── TypeSnapshot.h/.cpp       #   完整类型覆盖、冻结 descriptor、继承/CDO 语义
 │   │   ├── EngineVersionProbe.h/.cpp #   只扫描已验证 PE 可读节的版本标记探测
 │   │   ├── EngineSnapshot.h/.cpp     #   分段记录、validated publish、旧代 Worker retirement

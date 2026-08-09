@@ -1767,22 +1767,24 @@ namespace
 				return m_ThreadValid;
 			}
 
-			ReflectionCandidateSourceStepResult Begin(
-				ReflectionLayoutCandidate& candidate) noexcept override
+			ReflectionCandidateSourceBeginResult Begin() noexcept override
 			{
 				m_Cursor = 0;
 				m_Active = true;
-				candidate = {
-					.ContextGeneration = m_Template.ContextGeneration,
+				m_PreparationEmitted = false;
+				return {
 					.PropertySystem = m_Template.PropertySystem,
 					.Source = m_Template.Source
 				};
-				return {};
 			}
 
-			ReflectionCandidateSourceStepResult CaptureNext(
-				ReflectionLayoutCandidate& candidate) noexcept override
+			ReflectionCandidateSourceStepResult CaptureNext() noexcept override
 			{
+				if (m_Active && !m_PreparationEmitted)
+				{
+					m_PreparationEmitted = true;
+					return {.Progressed = true};
+				}
 				if (!m_Active || m_Cursor >= m_Template.Fields.size())
 				{
 					return {
@@ -1790,17 +1792,23 @@ namespace
 					};
 				}
 				const ReflectionField field = m_Template.Fields[m_Cursor].Field;
-				candidate.Fields.push_back(m_Template.Fields[m_Cursor]);
+				ReflectionCandidateEvidence evidence{
+					.Field = m_Template.Fields[m_Cursor]
+				};
 				for (const ReflectionFieldWitness& witness : m_Template.Witnesses)
 				{
 					if (witness.Field == field)
-						candidate.Witnesses.push_back(witness);
+						evidence.Witnesses.push_back(witness);
 				}
 				++m_Cursor;
-				return {.Complete = m_Cursor == m_Template.Fields.size()};
+				return {
+					.Progressed = true,
+					.Complete = m_Cursor == m_Template.Fields.size(),
+					.Evidence = std::move(evidence)
+				};
 			}
 
-			bool ValidateDependencies() const noexcept override
+			bool ValidateDependencies() noexcept override
 			{
 				return m_Active && m_DependenciesValid;
 			}
@@ -1820,6 +1828,7 @@ namespace
 			ReflectionLayoutCandidate m_Template;
 			std::size_t m_Cursor = 0;
 			bool m_Active = false;
+			bool m_PreparationEmitted = false;
 			bool m_ThreadValid = true;
 			bool m_DependenciesValid = true;
 		};
@@ -1848,13 +1857,13 @@ namespace
 			reflectionCapture->Diagnostics();
 		Require(
 			publishPump.Status == ReflectionLayoutPumpStatus::Published
-				&& publishPump.WorkConsumed == candidate.Fields.size() + 2
+				&& publishPump.WorkConsumed == candidate.Fields.size() + 3
 				&& !publishPump.MoreWorkPending
 				&& captureDiagnostics.State == ReflectionLayoutCaptureState::Completed
 				&& captureDiagnostics.Error == ReflectionLayoutCaptureError::None
 				&& captureDiagnostics.CapturedFields == candidate.Fields.size()
 				&& captureDiagnostics.CapturedWitnesses == candidate.Witnesses.size()
-				&& captureDiagnostics.SourceSteps == candidate.Fields.size()
+				&& captureDiagnostics.SourceSteps == candidate.Fields.size() + 1
 				&& captureFacade.Reflection()
 				&& captureFacade.Reflection()->Layout->Fingerprint()
 					== validated.Layout->Fingerprint()
@@ -1881,7 +1890,7 @@ namespace
 		Require(
 			brokenCapture
 				&& brokenCapture->RequestCapture() == ReflectionLayoutCaptureError::None
-				&& brokenCapture->Pump(2).Status == ReflectionLayoutPumpStatus::Failed
+				&& brokenCapture->Pump(3).Status == ReflectionLayoutPumpStatus::Failed
 				&& brokenCapture->Diagnostics().Error
 					== ReflectionLayoutCaptureError::SourceContractViolation
 				&& brokenCapture->Diagnostics().SourceError

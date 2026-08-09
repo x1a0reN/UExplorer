@@ -11,6 +11,8 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <string>
+#include <vector>
 
 namespace UExplorer::Runtime
 {
@@ -32,10 +34,30 @@ enum class ReflectionCandidateSourceError : std::uint8_t
 
 const char* ToString(ReflectionCandidateSourceError error) noexcept;
 
+struct ReflectionCandidateSourceBeginResult
+{
+	ReflectionCandidateSourceError Error = ReflectionCandidateSourceError::None;
+	ReflectionPropertySystem PropertySystem = ReflectionPropertySystem::Unavailable;
+	std::string Source;
+
+	bool Ok() const noexcept
+	{
+		return Error == ReflectionCandidateSourceError::None;
+	}
+};
+
+struct ReflectionCandidateEvidence
+{
+	ReflectionFieldCandidate Field;
+	std::vector<ReflectionFieldWitness> Witnesses;
+};
+
 struct ReflectionCandidateSourceStepResult
 {
 	ReflectionCandidateSourceError Error = ReflectionCandidateSourceError::None;
+	bool Progressed = false;
 	bool Complete = false;
+	std::optional<ReflectionCandidateEvidence> Evidence;
 
 	bool Ok() const noexcept
 	{
@@ -50,11 +72,9 @@ public:
 	virtual std::uint64_t ContextGeneration() const noexcept = 0;
 	virtual bool IsConfigured() const noexcept = 0;
 	virtual bool IsCurrentExecutionThreadValid() const noexcept = 0;
-	virtual ReflectionCandidateSourceStepResult Begin(
-		ReflectionLayoutCandidate& candidate) noexcept = 0;
-	virtual ReflectionCandidateSourceStepResult CaptureNext(
-		ReflectionLayoutCandidate& candidate) noexcept = 0;
-	virtual bool ValidateDependencies() const noexcept = 0;
+	virtual ReflectionCandidateSourceBeginResult Begin() noexcept = 0;
+	virtual ReflectionCandidateSourceStepResult CaptureNext() noexcept = 0;
+	virtual bool ValidateDependencies() noexcept = 0;
 	virtual void Cancel() noexcept = 0;
 };
 
@@ -127,6 +147,7 @@ class ReflectionLayoutCapture final : public IGameThreadFrameClient
 {
 public:
 	static constexpr std::size_t kMaxPumpBudget = 64;
+	static constexpr std::size_t kMaxSourceSteps = 256;
 	static constexpr std::size_t kMaxWitnessesPerSourceStep = 8;
 
 	ReflectionLayoutCapture(
