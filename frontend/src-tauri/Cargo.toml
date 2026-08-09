@@ -44,3 +44,9 @@ uexplorer-fake-core = { path = "../../tests/fake-core" }
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+cross-language-fixture = []
+
+[[test]]
+name = "core_process_fixture"
+path = "tests/core_process_fixture.rs"
+required-features = ["cross-language-fixture"]

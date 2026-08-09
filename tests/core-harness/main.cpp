@@ -49,6 +49,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <sstream>
 #include <span>
 #include <thread>
@@ -343,6 +344,130 @@ namespace
 				&& streamed.Frames.size() == 1024
 				&& streamingDecoder.BufferedBytes() == HeaderSize - 1,
 			"Coalesced input was duplicated into an unbounded decoder buffer");
+	}
+
+	void TestFrameDecoderFuzzMatrix()
+	{
+		constexpr std::array<FrameKind, 9> kinds{
+			FrameKind::Hello,
+			FrameKind::Welcome,
+			FrameKind::Request,
+			FrameKind::Response,
+			FrameKind::Event,
+			FrameKind::Cancel,
+			FrameKind::Ping,
+			FrameKind::Pong,
+			FrameKind::Shutdown
+		};
+		std::uint64_t randomState = 0xD1B54A32D192ED03ULL;
+		auto nextRandom = [&randomState] {
+			randomState ^= randomState >> 12U;
+			randomState ^= randomState << 25U;
+			randomState ^= randomState >> 27U;
+			return randomState * 0x2545F4914F6CDD1DULL;
+		};
+
+		std::vector<Frame> expected;
+		std::vector<std::uint8_t> stream;
+		for (std::uint64_t index = 0; index < 256; ++index)
+		{
+			std::vector<std::uint8_t> payload(static_cast<std::size_t>(nextRandom() % 513));
+			for (std::uint8_t& byte : payload)
+				byte = static_cast<std::uint8_t>(nextRandom());
+			const FrameKind kind = kinds[static_cast<std::size_t>(nextRandom() % kinds.size())];
+			std::vector<std::uint8_t> encoded;
+			Require(
+				EncodeFrame(kind, index + 1, payload, encoded) == ProtocolError::None,
+				"Fuzz matrix could not encode a bounded source frame");
+			stream.insert(stream.end(), encoded.begin(), encoded.end());
+			expected.push_back(Frame{
+				.Header = {
+					.Major = ProtocolMajor,
+					.Minor = ProtocolMinor,
+					.Kind = kind,
+					.Flags = 0,
+					.PayloadLength = static_cast<std::uint32_t>(payload.size()),
+					.RequestId = index + 1
+				},
+				.Payload = std::move(payload)
+			});
+		}
+
+		constexpr std::array<std::size_t, 8> chunkSizes{1, 2, 3, 7, 23, 64, 257, 4096};
+		for (const std::size_t chunkSize : chunkSizes)
+		{
+			FrameDecoder decoder;
+			std::vector<Frame> actual;
+			for (std::size_t offset = 0; offset < stream.size();)
+			{
+				const std::size_t take = (std::min)(chunkSize, stream.size() - offset);
+				const DecodeBatch batch = decoder.Push(
+					std::span<const std::uint8_t>(stream).subspan(offset, take));
+				Require(batch.Error == ProtocolError::None, "Valid fuzz stream entered a terminal state");
+				actual.insert(actual.end(), batch.Frames.begin(), batch.Frames.end());
+				offset += take;
+			}
+			Require(actual.size() == expected.size(), "Chunk matrix lost or duplicated a frame");
+			for (std::size_t index = 0; index < expected.size(); ++index)
+			{
+				Require(
+					actual[index].Header.Kind == expected[index].Header.Kind
+						&& actual[index].Header.RequestId == expected[index].Header.RequestId
+						&& actual[index].Payload == expected[index].Payload,
+					"Chunk matrix changed frame identity or payload bytes");
+			}
+			Require(decoder.BufferedBytes() == 0, "Chunk matrix retained a complete stream tail");
+		}
+
+		std::vector<std::uint8_t> truncationFrame;
+		const std::vector<std::uint8_t> truncationPayload(257, 0xA5);
+		Require(
+			EncodeFrame(FrameKind::Event, 0, truncationPayload, truncationFrame)
+				== ProtocolError::None,
+			"Disconnect matrix source frame did not encode");
+		for (std::size_t prefix = 0; prefix < truncationFrame.size(); ++prefix)
+		{
+			FrameDecoder decoder;
+			const DecodeBatch batch = decoder.Push(
+				std::span<const std::uint8_t>(truncationFrame).first(prefix));
+			Require(
+				batch.Error == ProtocolError::None
+					&& batch.Frames.empty()
+					&& decoder.BufferedBytes() == prefix,
+				"Truncated frame was misparsed before disconnect");
+		}
+
+		for (std::size_t iteration = 0; iteration < 4096; ++iteration)
+		{
+			std::vector<std::uint8_t> mutated = truncationFrame;
+			const std::size_t flips = 1 + static_cast<std::size_t>(nextRandom() % 4);
+			for (std::size_t flip = 0; flip < flips; ++flip)
+			{
+				const std::size_t offset = static_cast<std::size_t>(nextRandom() % mutated.size());
+				mutated[offset] ^= static_cast<std::uint8_t>(1U << (nextRandom() % 8));
+			}
+
+			FrameDecoder decoder;
+			std::size_t offset = 0;
+			ProtocolError terminal = ProtocolError::None;
+			while (offset < mutated.size() && terminal == ProtocolError::None)
+			{
+				const std::size_t chunk = 1 + static_cast<std::size_t>(nextRandom() % 31);
+				const std::size_t take = (std::min)(chunk, mutated.size() - offset);
+				terminal = decoder.Push(
+					std::span<const std::uint8_t>(mutated).subspan(offset, take)).Error;
+				offset += take;
+			}
+			Require(
+				decoder.BufferedBytes() <= mutated.size(),
+				"Mutated frame caused decoder amplification");
+			if (terminal != ProtocolError::None)
+			{
+				Require(
+					decoder.Push({}).Error == ProtocolError::DecoderFailed,
+					"Mutated terminal frame did not poison the decoder");
+			}
+		}
 	}
 
 	std::uint32_t ReadU32LittleEndian(const std::vector<std::uint8_t>& bytes, const std::size_t offset)
@@ -1968,6 +2093,10 @@ namespace
 			!server.OpenAdmissions(),
 			"Named-pipe server admitted a handshake before CoreRuntime was Ready");
 		Require(
+			server.PublishEvent("fixture.pipe", 1, {{"phase", "pre_ready"}})
+				== EventPublishResult::Unavailable,
+			"Named-pipe event admission opened before CoreRuntime was Ready");
+		Require(
 			server.PipeName() == L"\\\\.\\pipe\\UExplorer\\v1\\" + std::to_wstring(processId)
 				&& server.IsListening(),
 			"Named-pipe server did not expose the canonical target-PID endpoint");
@@ -1988,18 +2117,89 @@ namespace
 				&& server.OpenAdmissions(),
 			"Pipe admissions opened before the runtime readiness contract was satisfied");
 
+		auto connectFixtureClient = [&server] {
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+			while (std::chrono::steady_clock::now() < deadline)
+			{
+				if (WaitNamedPipeW(server.PipeName().c_str(), 50) != FALSE)
+				{
+					const HANDLE pipe = CreateFileW(
+						server.PipeName().c_str(),
+						GENERIC_READ | GENERIC_WRITE,
+						0,
+						nullptr,
+						OPEN_EXISTING,
+						0,
+						nullptr);
+					if (pipe != INVALID_HANDLE_VALUE)
+						return pipe;
+				}
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
+			throw std::runtime_error("Named-pipe disconnect-matrix connection deadline expired");
+		};
+		const nlohmann::json matrixHelloPayload = {
+			{"host_version", "core-harness-matrix-0.1.0"},
+			{"protocol", {{"major", ProtocolMajor}, {"minor", ProtocolMinor}}},
+			{"target_pid", processId}
+		};
+		const std::string matrixHelloJson = matrixHelloPayload.dump();
+		std::vector<std::uint8_t> matrixHello;
 		Require(
-			WaitNamedPipeW(server.PipeName().c_str(), 5000) != FALSE,
-			"Named-pipe client could not observe the bound endpoint");
-		const HANDLE client = CreateFileW(
-			server.PipeName().c_str(),
-			GENERIC_READ | GENERIC_WRITE,
-			0,
-			nullptr,
-			OPEN_EXISTING,
-			0,
-			nullptr);
-		Require(client != INVALID_HANDLE_VALUE, "Named-pipe client connection failed");
+			EncodeFrame(
+				FrameKind::Hello,
+				1,
+				std::span<const std::uint8_t>(
+					reinterpret_cast<const std::uint8_t*>(matrixHelloJson.data()),
+					matrixHelloJson.size()),
+				matrixHello) == ProtocolError::None,
+			"Named-pipe disconnect matrix Hello did not encode");
+
+		std::uint64_t expectedRejected = 0;
+		auto rejectConnection = [&](const std::vector<std::uint8_t>& bytes) {
+			const HANDLE rejected = connectFixtureClient();
+			if (!bytes.empty())
+				WritePipeBytes(rejected, bytes);
+			CloseHandle(rejected);
+			++expectedRejected;
+			WaitUntil(
+				[&server, expectedRejected] {
+					return server.Diagnostics().RejectedConnections >= expectedRejected;
+				},
+				"Named-pipe disconnect matrix did not retire a rejected connection");
+		};
+		rejectConnection({});
+		rejectConnection(std::vector<std::uint8_t>(
+			matrixHello.begin(),
+			matrixHello.begin() + static_cast<std::ptrdiff_t>(HeaderSize - 1)));
+		rejectConnection(std::vector<std::uint8_t>(matrixHello.begin(), matrixHello.end() - 1));
+		using HeaderMutation = void(*)(std::vector<std::uint8_t>&);
+		const std::array<HeaderMutation, 5> headerMutations{
+			[](std::vector<std::uint8_t>& bytes) { bytes[0] = 'X'; },
+			[](std::vector<std::uint8_t>& bytes) { Detail::WriteU16(bytes.data() + 4, ProtocolMajor + 1); },
+			[](std::vector<std::uint8_t>& bytes) { Detail::WriteU16(bytes.data() + 8, 0xFFFF); },
+			[](std::vector<std::uint8_t>& bytes) { Detail::WriteU16(bytes.data() + 10, 1); },
+			[](std::vector<std::uint8_t>& bytes) { Detail::WriteU32(bytes.data() + 12, MaxPayloadSize + 1); }
+		};
+		for (const HeaderMutation mutateHeader : headerMutations)
+		{
+			std::vector<std::uint8_t> malformed = matrixHello;
+			mutateHeader(malformed);
+			rejectConnection(malformed);
+		}
+
+		const HANDLE idleClient = connectFixtureClient();
+		WritePipeBytes(idleClient, matrixHello);
+		const Frame idleWelcome = ReadPipeFrame(idleClient);
+		Require(
+			idleWelcome.Header.Kind == FrameKind::Welcome,
+			"Named-pipe idle-disconnect fixture did not complete its handshake");
+		CloseHandle(idleClient);
+		WaitUntil(
+			[&server] { return server.Diagnostics().AcceptedConnections >= 1; },
+			"Named-pipe idle disconnect was not accounted for");
+
+		const HANDLE client = connectFixtureClient();
 		ULONG serverProcessId = 0;
 		Require(
 			GetNamedPipeServerProcessId(client, &serverProcessId) != FALSE
@@ -2035,6 +2235,25 @@ namespace
 				&& welcome.at("limits").at("pending_rpc_per_session") == 256
 				&& welcome.at("limits").at("max_payload_bytes") == MaxPayloadSize,
 			"Hello/Welcome did not negotiate the strict shared v1 contract");
+
+		Require(
+			server.PublishEvent("fixture.pipe", 1'234'567, {
+				{"source", "real-core"},
+				{"generation", 88}
+			}) == EventPublishResult::Accepted,
+			"Named-pipe server rejected a bounded event after handshake");
+		const Frame eventFrame = ReadPipeFrame(client);
+		const nlohmann::json event = ParseFrameJson(eventFrame);
+		Require(
+			eventFrame.Header.Kind == FrameKind::Event
+				&& eventFrame.Header.RequestId == 0
+				&& event.at("seq") == 1
+				&& event.at("kind") == "fixture.pipe"
+				&& event.at("timestamp_us") == 1'234'567
+				&& event.at("session_id") == "fixture-pipe-session"
+				&& event.at("dropped_before") == 0
+				&& event.at("data").at("source") == "real-core",
+			"Named-pipe event writer did not preserve the strict event envelope");
 
 		WriteJsonPipeFrame(client, FrameKind::Request, 2, {
 			{"operation", "status.inspect"},
@@ -2147,9 +2366,14 @@ namespace
 		Require(
 			!pipeDiagnostics.Listening
 				&& pipeDiagnostics.WorkerCount == 0
-				&& pipeDiagnostics.AcceptedConnections == 2
+				&& !pipeDiagnostics.EventWriterRunning
+				&& pipeDiagnostics.AcceptedConnections == 3
+				&& pipeDiagnostics.RejectedConnections >= expectedRejected
 				&& pipeDiagnostics.CompletedRequests >= 3
-				&& pipeDiagnostics.CancelledRequests >= 2,
+				&& pipeDiagnostics.CancelledRequests >= 2
+				&& pipeDiagnostics.EnqueuedEvents == 1
+				&& pipeDiagnostics.SentEvents == 1
+				&& pipeDiagnostics.DroppedEvents == 0,
 			"Named-pipe diagnostics did not account for lifecycle, request, and cancellation state");
 		Require(executor.DisableAndDrain(), "Pipe game-thread executor did not drain");
 		Require(engine.Stop(), "Pipe EngineFacade did not stop");
@@ -3010,18 +3234,156 @@ namespace
 		closesocket(slowClient);
 		Require(stopElapsed < std::chrono::seconds(3), "HTTP server Stop did not interrupt a slow client");
 	}
+
+	int RunHostSessionFixture()
+	{
+		using namespace UExplorer::IPC;
+		using namespace UExplorer::Runtime;
+		using namespace UExplorer::Services;
+
+		constexpr char sessionId[] = "fixture-host-session";
+		constexpr std::uint64_t contextGeneration = 901;
+		const std::uint32_t processId = GetCurrentProcessId();
+
+		CoreRuntime runtime;
+		Require(runtime.BeginInitialize(sessionId), "Host fixture runtime did not initialize");
+		const auto context = MakeEngineContext(
+			contextGeneration,
+			true,
+			true,
+			nullptr,
+			processId);
+		Require(runtime.PublishContext(context), "Host fixture runtime rejected its EngineContext");
+
+		GameThreadExecutor executor;
+		Require(executor.Enable(&FakeProcessEvent), "Host fixture game-thread executor did not enable");
+		FakeHandleIdentitySource source;
+		source.Generation = contextGeneration;
+		EngineFacade engine(context, sessionId, source);
+
+		EngineSnapshot snapshot{
+			.SessionId = sessionId,
+			.ContextGeneration = contextGeneration,
+			.Generation = 1,
+			.CapturedAtMonotonicUs = 2'000'000,
+			.CaptureDurationUs = 250,
+			.SourceObjectCount = 8,
+			.SkippedSlots = 5
+		};
+		snapshot.Objects.push_back(MakeSnapshotObject(
+			sessionId,
+			contextGeneration,
+			1,
+			EngineObjectKind::Class));
+		snapshot.Objects.push_back(MakeSnapshotObject(
+			sessionId,
+			contextGeneration,
+			4,
+			EngineObjectKind::Function));
+		snapshot.Objects.push_back(MakeSnapshotObject(
+			sessionId,
+			contextGeneration,
+			7,
+			EngineObjectKind::Object));
+		Require(
+			engine.Snapshots().Publish(std::move(snapshot)).Ok(),
+			"Host fixture immutable snapshot did not publish");
+
+		FakeCoreStatusDiagnostics statusDiagnostics;
+		CoreCommandService service(runtime, executor, engine, statusDiagnostics);
+		Require(service.IsConfigured(), "Host fixture command service was not configured");
+
+		std::atomic<bool> shutdownObserved{false};
+		NamedPipeRpcServer server(
+			runtime,
+			service,
+			executor,
+			[&shutdownObserved] { shutdownObserved.store(true, std::memory_order_release); });
+		Require(server.Start(), "Host fixture Named Pipe server did not bind");
+
+		RuntimeProbes probes;
+		probes.GameThreadExecutorEnabled = true;
+		probes.GameThreadPumpObserved = true;
+		probes.GameThreadPumpThreadStable = true;
+		probes.GameThreadPumpActive = true;
+		probes.SafeMemoryEnabled = true;
+		probes.ObjectIdentitySourceEnabled = true;
+		probes.ObjectHandleValidationEnabled = true;
+		probes.FunctionHandleValidationEnabled = true;
+		probes.ObjectSnapshotPublished = true;
+		probes.NamedPipeListening = server.IsListening();
+		Require(
+			runtime.PublishCapabilities(BuildCoreCapabilities(*context, probes))
+				&& runtime.TryMarkReady(RequiredReadyCapabilities())
+				&& server.OpenAdmissions(),
+			"Host fixture did not reach factual Core Ready");
+
+		const nlohmann::json ready = {
+			{"pid", processId},
+			{"session_id", sessionId},
+			{"snapshot_generation", 1},
+			{"snapshot_records", 3}
+		};
+		std::cout << "UEXPLORER_HOST_FIXTURE_READY " << ready.dump() << '\n' << std::flush;
+
+		bool eventPublished = false;
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+		while (!shutdownObserved.load(std::memory_order_acquire))
+		{
+			if (!eventPublished && server.Diagnostics().AcceptedConnections > 0)
+			{
+				const auto timestamp = std::chrono::duration_cast<std::chrono::microseconds>(
+					std::chrono::steady_clock::now().time_since_epoch()).count();
+				Require(timestamp >= 0, "Host fixture monotonic clock was negative");
+				Require(
+					server.PublishEvent(
+						"fixture.ready",
+						static_cast<std::uint64_t>(timestamp),
+						{
+							{"source", "cpp-core"},
+							{"snapshot_generation", 1}
+						}) == EventPublishResult::Accepted,
+					"Host fixture event was not admitted exactly once");
+				eventPublished = true;
+			}
+			if (std::chrono::steady_clock::now() >= deadline)
+				throw std::runtime_error("Host fixture timed out waiting for an exact Shutdown");
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+
+		Require(eventPublished, "Host fixture shut down before publishing its real Core event");
+		Require(server.Stop(std::chrono::milliseconds(5000)), "Host fixture Pipe workers did not join");
+		const NamedPipeServerDiagnostics pipe = server.Diagnostics();
+		Require(
+			pipe.EnqueuedEvents == 1
+				&& pipe.SentEvents == 1
+				&& pipe.DroppedEvents == 0,
+			"Host fixture event transport diagnostics are not exact");
+		Require(executor.DisableAndDrain(), "Host fixture game-thread executor did not drain");
+		Require(engine.Stop(), "Host fixture EngineFacade did not stop");
+		Require(
+			runtime.BeginStopping()
+				&& runtime.WaitForRequests(std::chrono::milliseconds(100))
+				&& runtime.MarkStopped(),
+			"Host fixture runtime did not reach Stopped");
+		return 0;
+	}
 }
 
 int main(const int argc, char** argv)
 {
 	try
 	{
+		if (argc == 2 && std::string_view(argv[1]) == "--host-session-fixture")
+			return RunHostSessionFixture();
 		if (argc != 2)
-			throw std::runtime_error("Usage: CoreHarness.exe <protocol-fixture-directory>");
+			throw std::runtime_error(
+				"Usage: CoreHarness.exe <protocol-fixture-directory> | --host-session-fixture");
 		const std::filesystem::path fixtureDirectory(argv[1]);
 		TestGoldenHello(fixtureDirectory);
 		TestMultipleFrames();
 		TestTerminalErrors();
+		TestFrameDecoderFuzzMatrix();
 		TestUsmapContainer(fixtureDirectory);
 		TestCoreSessionIdentity();
 		TestEngineContextAndCapabilities();
@@ -3046,7 +3408,7 @@ int main(const int argc, char** argv)
 		TestPostRenderFrameClientOwnershipAndDrain();
 		TestGameThreadMpscCapacity();
 		TestHttpServerLifecycle();
-		std::cout << "Core harness passed: bounded framing, secure sessions, real current-user Windows Named Pipe RPC lifecycle, runtime/capabilities, EngineFacade/immutable budgeted snapshots, domain commands, stable handles/FUObjectItem layout, bounded PE/version/global-pointer probing, pattern scanning, Hook RAII/drain, SafeMemory, USMAP consumer, bounded queues, cancellable owned game-thread/frame-client work, SEH, HTTP lifecycle, and shutdown.\n";
+		std::cout << "Core harness passed: deterministic bounded frame fuzz/disconnect matrix, secure sessions, real current-user Windows Named Pipe RPC/event lifecycle, runtime/capabilities, EngineFacade/immutable budgeted snapshots, domain commands, stable handles/FUObjectItem layout, bounded PE/version/global-pointer probing, pattern scanning, Hook RAII/drain, SafeMemory, USMAP consumer, bounded queues, cancellable owned game-thread/frame-client work, SEH, HTTP lifecycle, and shutdown.\n";
 		return 0;
 	}
 	catch (const std::exception& error)

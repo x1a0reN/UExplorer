@@ -21,17 +21,21 @@ function Assert-NotContains([string]$text, [string]$token, [string]$message) {
 $serverHeader = Read-ProjectFile 'Dumper\IPC\NamedPipeRpcServer.h'
 $server = Read-ProjectFile 'Dumper\IPC\NamedPipeRpcServer.cpp'
 $protocol = Read-ProjectFile 'Dumper\IPC\Protocol.h'
+$rustProtocol = Read-ProjectFile 'protocol\rust\src\lib.rs'
 $main = Read-ProjectFile 'Dumper\Main.cpp'
 $coreProject = Read-ProjectFile 'Dumper\UExplorerCore.vcxproj'
 $harnessProject = Read-ProjectFile 'tests\core-harness\CoreHarness.vcxproj'
 $harness = Read-ProjectFile 'tests\core-harness\main.cpp'
 $hostClient = Read-ProjectFile 'frontend\src-tauri\src\ipc\named_pipe_client.rs'
 $hostCargo = Read-ProjectFile 'frontend\src-tauri\Cargo.toml'
+$crossLanguageFixture = Read-ProjectFile 'frontend\src-tauri\tests\core_process_fixture.rs'
+$ci = Read-ProjectFile '.github\workflows\ci.yml'
 
 foreach ($token in @(
         'kWorkerCount = 4', 'kPendingRequestLimit = 256', 'kIoChunkBytes = 64 * 1024',
+        'kEventQueueCapacity = 1024', 'kMaxEventPayloadBytes = 64 * 1024',
         'bool OpenAdmissions()', 'bool Stop(std::chrono::milliseconds timeout)',
-        'NamedPipeServerDiagnostics')) {
+        'EventPublishResult PublishEvent(', 'NamedPipeServerDiagnostics')) {
     Assert-Contains $serverHeader $token 'Named Pipe public lifecycle/bound contract regressed.'
 }
 
@@ -43,7 +47,9 @@ foreach ($token in @(
         'CancelSynchronousIo', 'FlushFileBuffers', 'JoinOwnedThreads',
         'm_GameThread.Cancel', 'RPC_BACKPRESSURE', 'REQUEST_CANCELLED',
         'DEADLINE_EXPIRED', 'FrameKind::Welcome', 'FrameKind::Pong',
-        'FrameKind::Shutdown', 'transport.named_pipe')) {
+        'FrameKind::Shutdown', 'FrameKind::Event', 'EventWriterLoop',
+        'm_Events.size() == kEventQueueCapacity', 'CountDroppedEvent',
+        'm_EventWriter.join()', 'transport.named_pipe')) {
     Assert-Contains $server $token 'Named Pipe security, framing, cancellation, or shutdown contract regressed.'
 }
 Assert-NotContains $server '.detach(' 'Named Pipe transport reintroduced detached thread ownership.'
@@ -55,6 +61,7 @@ foreach ($token in @(
     Assert-Contains $protocol $token 'C++ framing lost bounded negotiated streaming behavior.'
 }
 Assert-NotContains $protocol 'm_Buffer.insert(m_Buffer.end(), bytes.begin(), bytes.end())' 'Decoder copies an untrusted coalesced read before validating frames.'
+Assert-Contains $rustProtocol 'deterministic_frame_fuzz_and_disconnect_matrix_is_bounded' 'Rust protocol decoder lost its deterministic fuzz/disconnect matrix.'
 
 foreach ($token in @(
         'g_PipeServer->Start()', 'probes.NamedPipeListening = g_PipeServer && g_PipeServer->IsListening()',
@@ -78,7 +85,9 @@ foreach ($token in @(
         'FrameKind::Hello', 'FrameKind::Welcome', 'FrameKind::Request',
         'FrameKind::Ping', 'FrameKind::Pong', 'FrameKind::Cancel',
         'FrameKind::Shutdown', 'REQUEST_CANCELLED',
-        'server.Stop(std::chrono::milliseconds(5000))')) {
+        'server.Stop(std::chrono::milliseconds(5000))',
+        'TestFrameDecoderFuzzMatrix', 'RunHostSessionFixture',
+        '--host-session-fixture', 'EventPublishResult::Accepted')) {
     Assert-Contains $harness $token 'Real Windows Named Pipe lifecycle fixture regressed.'
 }
 
@@ -93,6 +102,8 @@ foreach ($token in @(
         'real_named_pipe_lifecycle_verifies_peer_and_joins_worker',
         'rejects_pipe_server_pid_mismatch_before_hello',
         'mid_request_disconnect_completes_pending_call_and_worker',
+        'handshake_disconnect_matrix_rejects_partial_welcome_frames',
+        'ready_disconnect_malformed_frame_and_shutdown_loss_are_terminal',
         'event_reader_drops_overflow_without_blocking_rpc',
         'cancellation_and_deadline_have_one_explicit_completion',
         'FragmentResponses')) {
@@ -109,5 +120,19 @@ if ($hostPeerCheck -lt 0 -or $hostHello -lt 0 -or $hostPeerCheck -ge $hostHello)
 foreach ($feature in @('Win32_Storage_FileSystem', 'Win32_System_IO', 'Win32_System_Pipes')) {
     Assert-Contains $hostCargo $feature 'Rust Host omitted a required Win32 Named Pipe feature.'
 }
+foreach ($token in @('cross-language-fixture = []', 'required-features = ["cross-language-fixture"]')) {
+    Assert-Contains $hostCargo $token 'Rust Host omitted the explicit cross-language fixture gate.'
+}
+foreach ($token in @(
+        'SessionManager::new()', '.connect(', '.refresh_snapshot(', '.query_snapshot(',
+        '.subscribe_events(', '.disconnect(', 'process_start_time_100ns',
+        'fixture.ready', 'fixture-host-session')) {
+    Assert-Contains $crossLanguageFixture $token 'Cross-language SessionManager/Core fixture regressed.'
+}
+foreach ($token in @(
+        'Build real C++ Core fixture for Rust Host',
+        '--features cross-language-fixture --test core_process_fixture')) {
+    Assert-Contains $ci $token 'CI no longer enforces the real C++ Core/Rust Host fixture.'
+}
 
-Write-Host 'Named Pipe contract verified: current-user ACL, mutual peer PID evidence, strict v1 lifecycle, bounded RPC/event queues, cancellation, reconnect, and joinable Core/Host shutdown.'
+Write-Host 'Named Pipe contract verified: current-user ACL, mutual peer PID evidence, strict v1 lifecycle, bounded RPC/event queues, fuzz/disconnect matrix, real C++/Rust fixture, cancellation, reconnect, and joinable Core/Host shutdown.'

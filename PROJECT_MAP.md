@@ -25,7 +25,7 @@ UExplorer 是一个面向 Unreal Engine 的 **SDK Dump + 实时游戏内省工�
 └──────────────────────────────────────────────┘
 ```
 
-当前分支处于 R2 收尾与 R3 实施阶段：`CoreRuntime`、不可变 `EngineContext`/名称布局、`EngineFacade`、严格名称 codec、稳定 Handle、原子 `EngineSnapshotStore`、生产 object/path snapshot source、PostRender 有界帧泵、generation-bound snapshot page command、Rust Host 原子 SnapshotCache/索引、安全关闭边界，以及有界 x64 PE/pattern/版本探测已经建立。R3 已具备共享严格 payload/limit 类型、transport-independent `CoreRpcSession`、真实 Core `NamedPipeRpcServer` 与真实 Rust `CoreRpcClient`；双方均使用 overlapped I/O、严格 PID/session/correlation/deadline/cancel 边界和可 join 生命周期，Host fixture 已覆盖分片、事件背压、断线与显式重连。Host `EventHub` 已提供有界过滤/replay/drop 诊断，多 PID `SessionManager`、PID-scoped `TargetOperationCoordinator` 与 `EventBridgeManager` 已注册为 Tauri managed state；`inject_and_connect` 在 DLL 检查前拒绝同 PID 并发操作，且只有在 DLL、PID-scoped Pipe、严格 Welcome/Core Ready 和两次目标进程身份核验全部成功后才发布 Ready。调用方专属 Tauri `Channel` bridge 提供有界订阅、精确退订、drop/failure 诊断和 joinable 生命周期，前端不再读取 `runtime.ini` 或隐式切换端点。真实 Core 整体 session/注入 fixture 与完整 frame fuzz/断线矩阵尚未实现。`Dumper/Server` 和 `Dumper/API` 是 R4 前的 legacy HTTP 兼容层，不是目标架构，且不会与 IPC 形成长期双栈。Snapshot 目前是经二次验证后发布的完整 sweep，而非 UE 引擎时钟上的瞬时原子快照；Host cache 已接入 SessionManager，但真实目标规模/GC 行为仍待 fixture，功能真实性与未完成项以 `DESIGN.md` 和 `docs/issue-status.json` 为准。
+当前分支处于 R2 收尾与 R3 实施阶段：`CoreRuntime`、不可变 `EngineContext`/名称布局、`EngineFacade`、严格名称 codec、稳定 Handle、原子 `EngineSnapshotStore`、生产 object/path snapshot source、PostRender 有界帧泵、generation-bound snapshot page command、Rust Host 原子 SnapshotCache/索引、安全关闭边界，以及有界 x64 PE/pattern/版本探测已经建立。R3 已具备共享严格 payload/limit 类型、transport-independent `CoreRpcSession`、真实 Core `NamedPipeRpcServer` 与真实 Rust `CoreRpcClient`；双方均使用 overlapped I/O、严格 PID/session/correlation/deadline/cancel 边界和可 join 生命周期。Core Event adapter 采用 1024 项有界队列和独立 writer；C++/Rust decoder 已覆盖 deterministic mutation、所有截断位置、1-byte 与粘连输入，真实 NPFS 矩阵覆盖握手前/中、Ready、Request 和 Shutdown 各阶段断连。独立进程跨语言 fixture 已证明 `SessionManager -> C++ Core` 的 Welcome/Event/Snapshot/Host 索引/精确 Shutdown 全链路。Host `EventHub` 已提供有界过滤/replay/drop 诊断，多 PID `SessionManager`、PID-scoped `TargetOperationCoordinator` 与 `EventBridgeManager` 已注册为 Tauri managed state；`inject_and_connect` 在 DLL 检查前拒绝同 PID 并发操作，且只有在 DLL、PID-scoped Pipe、严格 Welcome/Core Ready 和两次目标进程身份核验全部成功后才发布 Ready。调用方专属 Tauri `Channel` bridge 提供有界订阅、精确退订、drop/failure 诊断和 joinable 生命周期，前端不再读取 `runtime.ini` 或隐式切换端点。尚缺成功/超时/错误架构/PID 复用/重复加载的真实注入和 UE 目标 fixture。`Dumper/Server` 和 `Dumper/API` 是 R4 前的 legacy HTTP 兼容层，不是目标架构，且不会与 IPC 形成长期双栈。Snapshot 目前是经二次验证后发布的完整 sweep，而非 UE 引擎时钟上的瞬时原子快照；Host cache 已接入 SessionManager，但真实目标规模/GC 行为仍待 fixture，功能真实性与未完成项以 `DESIGN.md` 和 `docs/issue-status.json` 为准。
 
 ---
 
@@ -68,7 +68,7 @@ UExplorer/
 │   │   └── CoreStatusDiagnostics.*   #   只读诊断源
 │   ├── IPC/                           ★ Core Named Pipe RPC transport
 │   │   ├── Protocol.h                #   24-byte framing/有界协商 decoder/limits
-│   │   └── NamedPipeRpcServer.*      #   DACL/PID、overlapped I/O、request workers/cancel/drain
+│   │   └── NamedPipeRpcServer.*      #   DACL/PID、overlapped I/O、request workers 与有界 Event writer
 │   │
 │   ├── Server/                        ★ legacy HTTP 服务器层（R4 移除可达路径）
 │   │   ├── HttpServer.h              #   PIMPL 接口（HttpRequest/HttpResponse/RouteHandler/SSE/WS）

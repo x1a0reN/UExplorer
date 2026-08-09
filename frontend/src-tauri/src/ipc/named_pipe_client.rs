@@ -1552,7 +1552,7 @@ mod tests {
     use serde_json::json;
     use std::sync::OnceLock;
     use uexplorer_fake_core::FakeCore;
-    use uexplorer_protocol::{encode_frame, EventPayload, FrameDecoder, FrameKind};
+    use uexplorer_protocol::{encode_frame, EventPayload, FrameDecoder, FrameKind, HEADER_SIZE};
     use windows::Win32::Foundation::ERROR_PIPE_CONNECTED;
     use windows::Win32::Storage::FileSystem::{
         FlushFileBuffers, FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_DUPLEX,
@@ -1569,6 +1569,11 @@ mod tests {
         BurstEvents,
         HoldRequests,
         CloseOnRequest,
+        CloseDuringWelcomeHeader,
+        CloseDuringWelcomePayload,
+        CloseAfterWelcome,
+        MalformedOnRequest,
+        CloseOnShutdown,
     }
 
     struct TestServer {
@@ -1654,30 +1659,39 @@ mod tests {
             }
             let input = &buffer[..bytes_read as usize];
             let observed = observer.push(input).map_err(|error| error.to_string())?;
-            let close_on_request = mode == ServerMode::CloseOnRequest
-                && observed
-                    .iter()
-                    .any(|frame| frame.header.kind == FrameKind::Request);
-            if close_on_request {
-                return Ok(());
-            }
+            let saw_hello = observed
+                .iter()
+                .any(|frame| frame.header.kind == FrameKind::Hello);
+            let saw_request = observed
+                .iter()
+                .any(|frame| frame.header.kind == FrameKind::Request);
             let saw_shutdown = observed
                 .iter()
                 .any(|frame| frame.header.kind == FrameKind::Shutdown);
-            let hold_request = mode == ServerMode::HoldRequests
-                && observed
-                    .iter()
-                    .any(|frame| frame.header.kind == FrameKind::Request);
+            let close_on_request = mode == ServerMode::CloseOnRequest && saw_request;
+            if close_on_request {
+                return Ok(());
+            }
+            let hold_request = mode == ServerMode::HoldRequests && saw_request;
             let outputs = if hold_request {
                 Vec::new()
             } else {
                 core.accept(input).map_err(|error| error.to_string())?
             };
             let mut output: Vec<u8> = outputs.into_iter().flatten().collect();
-            if observed
-                .iter()
-                .any(|frame| frame.header.kind == FrameKind::Hello)
-            {
+            if saw_hello {
+                if matches!(
+                    mode,
+                    ServerMode::CloseDuringWelcomeHeader | ServerMode::CloseDuringWelcomePayload
+                ) {
+                    let prefix = if mode == ServerMode::CloseDuringWelcomeHeader {
+                        HEADER_SIZE - 1
+                    } else {
+                        HEADER_SIZE + (output.len() - HEADER_SIZE) / 2
+                    };
+                    write_test_server_bytes(pipe.raw(), &output[..prefix])?;
+                    return Ok(());
+                }
                 let event_count = if mode == ServerMode::BurstEvents {
                     EVENT_CAPACITY + 2
                 } else if mode == ServerMode::FragmentResponses {
@@ -1704,11 +1718,7 @@ mod tests {
                     );
                 }
             }
-            if mode == ServerMode::BurstEvents
-                && observed
-                    .iter()
-                    .any(|frame| frame.header.kind == FrameKind::Request)
-            {
+            if mode == ServerMode::BurstEvents && saw_request {
                 let seq = (EVENT_CAPACITY + 3) as u64;
                 let event = EventPayload {
                     seq,
@@ -1727,12 +1737,24 @@ mod tests {
                     .map_err(|error| error.to_string())?,
                 );
             }
+            if mode == ServerMode::MalformedOnRequest && saw_request {
+                output = encode_frame(FrameKind::Response, 1, b"{}")
+                    .map_err(|error| error.to_string())?;
+                output[0] = b'X';
+            }
+            if mode == ServerMode::CloseOnShutdown && saw_shutdown {
+                return Ok(());
+            }
             if mode == ServerMode::FragmentResponses {
                 for byte in output {
                     write_test_server_bytes(pipe.raw(), &[byte])?;
                 }
             } else {
                 write_test_server_bytes(pipe.raw(), &output)?;
+            }
+            if mode == ServerMode::CloseAfterWelcome && saw_hello {
+                thread::sleep(Duration::from_millis(250));
+                return Ok(());
             }
             if saw_shutdown {
                 unsafe { FlushFileBuffers(pipe.raw()) }
@@ -1846,6 +1868,58 @@ mod tests {
             }
         );
         server.join();
+    }
+
+    #[test]
+    fn handshake_disconnect_matrix_rejects_partial_welcome_frames() {
+        let _guard = test_lock();
+        let pid = std::process::id();
+        for mode in [
+            ServerMode::CloseDuringWelcomeHeader,
+            ServerMode::CloseDuringWelcomePayload,
+        ] {
+            let server = spawn_server(pid, mode);
+            let error = CoreRpcClient::connect(pid, "test-host", Duration::from_secs(5))
+                .err()
+                .expect("partial Welcome must fail the connection");
+            assert_eq!(error.code(), "RPC_PIPE_DISCONNECTED");
+            server.join();
+        }
+    }
+
+    #[test]
+    fn ready_disconnect_malformed_frame_and_shutdown_loss_are_terminal() {
+        let _guard = test_lock();
+        let pid = std::process::id();
+
+        let idle_server = spawn_server(pid, ServerMode::CloseAfterWelcome);
+        let idle_client = CoreRpcClient::connect(pid, "test-host", Duration::from_secs(5)).unwrap();
+        let idle_error = idle_client
+            .request("status.inspect", 5_000, json!({}))
+            .expect_err("idle peer disconnect must complete its pending request");
+        assert_eq!(idle_error.code(), "RPC_PIPE_DISCONNECTED");
+        idle_client.disconnect(Duration::from_secs(5)).unwrap();
+        idle_server.join();
+
+        let malformed_server = spawn_server(pid, ServerMode::MalformedOnRequest);
+        let malformed_client =
+            CoreRpcClient::connect(pid, "test-host", Duration::from_secs(5)).unwrap();
+        let malformed_error = malformed_client
+            .request("status.inspect", 5_000, json!({}))
+            .expect_err("malformed ready-session frame must fail the session");
+        assert_eq!(malformed_error.code(), "RPC_PROTOCOL_ERROR");
+        malformed_client.disconnect(Duration::from_secs(5)).unwrap();
+        malformed_server.join();
+
+        let shutdown_server = spawn_server(pid, ServerMode::CloseOnShutdown);
+        let shutdown_client =
+            CoreRpcClient::connect(pid, "test-host", Duration::from_secs(5)).unwrap();
+        let shutdown_error = shutdown_client
+            .shutdown("missing_shutdown_ack", Duration::from_secs(5))
+            .expect_err("missing exact Shutdown acknowledgement must fail");
+        assert_eq!(shutdown_error.code(), "RPC_PIPE_DISCONNECTED");
+        shutdown_client.disconnect(Duration::from_secs(5)).unwrap();
+        shutdown_server.join();
     }
 
     #[test]

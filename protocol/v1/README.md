@@ -80,10 +80,14 @@ Shutdown acknowledgement without a private fixture-only envelope.
 The Core adapter is implemented by `Dumper/IPC/NamedPipeRpcServer.*`. It binds the
 canonical target-PID name before game hooks are installed, applies a protected DACL
 for the current user, rejects remote clients, verifies the client PID and SID, and
-uses overlapped reads/writes plus owned listener/request threads. The Windows Core
-harness uses a real NPFS client to verify the server PID, handshake, domain request,
-queued game-thread cancellation, heartbeat, exact shutdown acknowledgement, and
-thread drain.
+uses overlapped reads/writes plus owned listener/request/event-writer threads. Core
+events enter a 1024-item DropOldest queue and are serialized/written only by the
+joinable event writer. Each event has an internally assigned uint53 sequence, a
+64 KiB serialized bound, and a cumulative `dropped_before` count. A blocked peer can
+fill and drop this queue, but cannot block the producer or game thread. The Windows
+Core harness uses a real NPFS client to verify the server PID, handshake, domain
+request, queued game-thread cancellation, heartbeat, event envelope/drop diagnostics,
+exact shutdown acknowledgement, and thread drain.
 
 The Windows Host adapter is implemented by
 `frontend/src-tauri/src/ipc/named_pipe_client.rs`. It opens only the canonical PID
@@ -98,8 +102,9 @@ I/O before its stable buffer is released. Disconnect completes every pending cal
 requires the exact protocol acknowledgement before the worker joins. Real NPFS tests
 cover 1-byte response fragmentation, a Welcome followed immediately by Event,
 concurrent Ping correlation, cancellation/deadline, event overflow without RPC
-starvation, mid-request disconnect, peer-PID rejection before Hello, and a fresh
-connection to the same PID-scoped name.
+starvation, peer-PID rejection before Hello, partial Welcome header/payload disconnect,
+Ready-idle and mid-request disconnect, malformed ready-session frames, missing Shutdown
+acknowledgement, and a fresh connection to the same PID-scoped name.
 
 The Host `EventHub` is session-scoped and retains at most 1024 events for exact replay.
 It accepts at most 64 KiB of serialized data per event and shares the retained payload
@@ -135,6 +140,16 @@ EventHub replay/filter/drop semantics, records channel delivery failures, and st
 bridge for a PID before that session is disconnected. Worker shutdown remains exhaustive
 even when one bridge panics. The frontend does not discover or retry a `runtime.ini`
 endpoint; all remaining direct HTTP/SSE/WS desktop calls are legacy R4 cutover work.
+
+`frontend/src-tauri/tests/core_process_fixture.rs` is the required real cross-language
+gate. With feature `cross-language-fixture`, it launches the independently built C++
+`CoreHarness.exe --host-session-fixture` process, connects `SessionManager` to that
+process's actual PID-scoped pipe, validates Welcome and one Core Event, pulls a real
+`EngineSnapshotStore` generation into the Host index, queries it, then requires exact
+Shutdown and a zero C++ process exit. CI builds the C++ fixture before this test; a
+missing executable or contract mismatch is a hard failure. Both C++ and Rust decoders
+also run deterministic framing matrices over 256 mixed frames, eight chunk widths,
+every truncation point, and 4096 mutated frames.
 
 ## Identity and errors
 

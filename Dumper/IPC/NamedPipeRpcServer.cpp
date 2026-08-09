@@ -47,6 +47,36 @@ bool IsBoundedText(const std::string& value, const std::size_t maximum)
 	});
 }
 
+bool IsValidEventKind(const std::string& value)
+{
+	if (value.empty() || value.size() > 128)
+		return false;
+	for (std::size_t index = 0; index < value.size(); ++index)
+	{
+		const unsigned char byte = static_cast<unsigned char>(value[index]);
+		if (index == 0)
+		{
+			if (byte < 'a' || byte > 'z')
+				return false;
+			continue;
+		}
+		if ((byte < 'a' || byte > 'z')
+			&& (byte < '0' || byte > '9')
+			&& byte != '_'
+			&& byte != '-'
+			&& byte != '.')
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
+std::uint64_t IncrementProtocolCounter(const std::uint64_t value)
+{
+	return value < kMaxProtocolInteger ? value + 1 : kMaxProtocolInteger;
+}
+
 bool HasExactKeys(const json& value, const std::initializer_list<const char*> keys)
 {
 	if (!value.is_object() || value.size() != keys.size())
@@ -216,6 +246,7 @@ public:
 			m_Workers.reserve(kWorkerCount);
 			for (std::size_t index = 0; index < kWorkerCount; ++index)
 				m_Workers.emplace_back([this] { WorkerLoop(); });
+			m_EventWriter = std::thread([this] { EventWriterLoop(); });
 			m_Listener = std::thread([this] { ListenerLoop(); });
 		}
 		catch (...)
@@ -236,6 +267,10 @@ public:
 				if (worker.joinable())
 					worker.join();
 			}
+			if (m_EventWriter.joinable())
+				m_EventWriter.join();
+			if (m_Listener.joinable())
+				m_Listener.join();
 			m_Workers.clear();
 			m_Started.store(false, std::memory_order_release);
 			m_Listening.store(false, std::memory_order_release);
@@ -266,6 +301,67 @@ public:
 		m_AdmissionsOpen.store(true, std::memory_order_release);
 		m_AdmissionsCondition.notify_all();
 		return true;
+	}
+
+	EventPublishResult PublishEvent(
+		std::string kind,
+		const std::uint64_t timestampUs,
+		json data) noexcept
+	{
+		try
+		{
+			if (!m_Started.load(std::memory_order_acquire)
+				|| !m_AdmissionsOpen.load(std::memory_order_acquire)
+				|| m_StopRequested.load(std::memory_order_acquire))
+			{
+				return EventPublishResult::Unavailable;
+			}
+			if (!IsValidEventKind(kind))
+				return EventPublishResult::InvalidKind;
+			if (timestampUs > kMaxProtocolInteger)
+				return EventPublishResult::InvalidTimestamp;
+
+			const json sizeProbe = {
+				{"seq", kMaxProtocolInteger},
+				{"kind", kind},
+				{"timestamp_us", timestampUs},
+				{"session_id", m_CommandService.SessionId()},
+				{"dropped_before", kMaxProtocolInteger},
+				{"data", data}
+			};
+			if (sizeProbe.dump().size() > kMaxEventPayloadBytes)
+				return EventPublishResult::PayloadTooLarge;
+
+			std::unique_lock<std::mutex> lock(m_EventsMutex);
+			if (m_StopRequested.load(std::memory_order_acquire))
+				return EventPublishResult::Unavailable;
+			if (m_NextEventSequence > kMaxProtocolInteger)
+				return EventPublishResult::SequenceExhausted;
+
+			QueuedEvent event{
+				.Sequence = m_NextEventSequence++,
+				.TimestampUs = timestampUs,
+				.Kind = std::move(kind),
+				.Data = std::move(data)
+			};
+			EventPublishResult result = EventPublishResult::Accepted;
+			if (m_Events.size() == kEventQueueCapacity)
+			{
+				m_Events.pop_front();
+				CountDroppedEvent();
+				result = EventPublishResult::DroppedOldest;
+			}
+			m_Events.push_back(std::move(event));
+			m_QueuedEventCount.store(m_Events.size(), std::memory_order_release);
+			m_EnqueuedEvents.fetch_add(1, std::memory_order_relaxed);
+			lock.unlock();
+			m_EventsCondition.notify_one();
+			return result;
+		}
+		catch (...)
+		{
+			return EventPublishResult::PublishFailed;
+		}
 	}
 
 	bool Stop(const std::chrono::milliseconds timeout)
@@ -325,6 +421,11 @@ public:
 		diagnostics.RejectedConnections = m_RejectedConnections.load(std::memory_order_acquire);
 		diagnostics.CompletedRequests = m_CompletedRequests.load(std::memory_order_acquire);
 		diagnostics.CancelledRequests = m_CancelledRequests.load(std::memory_order_acquire);
+		diagnostics.QueuedEvents = m_QueuedEventCount.load(std::memory_order_acquire);
+		diagnostics.EventWriterRunning = m_EventWriterRunning.load(std::memory_order_acquire);
+		diagnostics.EnqueuedEvents = m_EnqueuedEvents.load(std::memory_order_acquire);
+		diagnostics.SentEvents = m_SentEvents.load(std::memory_order_acquire);
+		diagnostics.DroppedEvents = m_DroppedEvents.load(std::memory_order_acquire);
 		{
 			std::lock_guard<std::mutex> lock(m_ErrorMutex);
 			diagnostics.LastNativeError = m_LastNativeError;
@@ -343,7 +444,16 @@ private:
 		std::atomic<bool> Active{true};
 		std::atomic<bool> GracefulClose{false};
 		std::atomic<bool> ShutdownRequested{false};
+		std::atomic<bool> ReadyForEvents{false};
 		std::mutex WriteMutex;
+	};
+
+	struct QueuedEvent final
+	{
+		std::uint64_t Sequence = 0;
+		std::uint64_t TimestampUs = 0;
+		std::string Kind;
+		json Data;
 	};
 
 	struct RequestKey final
@@ -507,6 +617,7 @@ private:
 
 			RunConnection(connection);
 
+			connection->ReadyForEvents.store(false, std::memory_order_release);
 			CancelConnectionPending(connection->Id);
 			const bool acknowledgementDrained = CloseConnection(*connection);
 			if (connection->ShutdownRequested.load(std::memory_order_acquire)
@@ -663,7 +774,8 @@ private:
 			m_RejectedConnections.fetch_add(1, std::memory_order_relaxed);
 			return;
 		}
-		m_AcceptedConnections.fetch_add(1, std::memory_order_relaxed);
+		connection->ReadyForEvents.store(true, std::memory_order_release);
+		m_AcceptedConnections.fetch_add(1, std::memory_order_release);
 
 		while (connection->Active.load(std::memory_order_acquire)
 			&& !m_StopRequested.load(std::memory_order_acquire))
@@ -1114,6 +1226,95 @@ private:
 			SerializeResponse(response));
 	}
 
+	void CountDroppedEvent() noexcept
+	{
+		std::uint64_t current = m_DroppedEvents.load(std::memory_order_relaxed);
+		while (current < kMaxProtocolInteger
+			&& !m_DroppedEvents.compare_exchange_weak(
+				current,
+				IncrementProtocolCounter(current),
+				std::memory_order_relaxed,
+				std::memory_order_relaxed))
+		{
+		}
+	}
+
+	void EventWriterLoop() noexcept
+	{
+		m_EventWriterRunning.store(true, std::memory_order_release);
+		for (;;)
+		{
+			QueuedEvent event;
+			std::uint64_t droppedBefore = 0;
+			{
+				std::unique_lock<std::mutex> lock(m_EventsMutex);
+				m_EventsCondition.wait(lock, [this] {
+					return m_StopRequested.load(std::memory_order_acquire) || !m_Events.empty();
+				});
+				if (m_Events.empty())
+				{
+					if (m_StopRequested.load(std::memory_order_acquire))
+						break;
+					continue;
+				}
+				event = std::move(m_Events.front());
+				m_Events.pop_front();
+				m_QueuedEventCount.store(m_Events.size(), std::memory_order_release);
+				droppedBefore = m_DroppedEvents.load(std::memory_order_relaxed);
+			}
+
+			std::shared_ptr<Connection> connection;
+			{
+				std::lock_guard<std::mutex> lock(m_CurrentConnectionMutex);
+				if (m_CurrentConnection
+					&& m_CurrentConnection->ReadyForEvents.load(std::memory_order_acquire)
+					&& m_CurrentConnection->Active.load(std::memory_order_acquire))
+				{
+					connection = m_CurrentConnection;
+				}
+			}
+			if (!connection)
+			{
+				CountDroppedEvent();
+				continue;
+			}
+
+			try
+			{
+				const json payload = {
+					{"seq", event.Sequence},
+					{"kind", std::move(event.Kind)},
+					{"timestamp_us", event.TimestampUs},
+					{"session_id", m_CommandService.SessionId()},
+					{"dropped_before", droppedBefore},
+					{"data", std::move(event.Data)}
+				};
+				if (WriteJsonFrame(*connection, FrameKind::Event, 0, payload))
+					m_SentEvents.fetch_add(1, std::memory_order_relaxed);
+				else
+					CountDroppedEvent();
+			}
+			catch (...)
+			{
+				CountDroppedEvent();
+				try
+				{
+					RecordError(
+						"PIPE_EVENT_SERIALIZE_FAILED",
+						"Could not serialize a queued Core event",
+						ERROR_INVALID_DATA);
+				}
+				catch (...)
+				{
+				}
+			}
+		}
+
+		m_EventWriterRunning.store(false, std::memory_order_release);
+		m_EventWriterExited.store(true, std::memory_order_release);
+		m_LifecycleCondition.notify_all();
+	}
+
 	void WorkerLoop() noexcept
 	{
 		m_LiveWorkers.fetch_add(1, std::memory_order_relaxed);
@@ -1299,6 +1500,7 @@ private:
 		}
 		m_AdmissionsCondition.notify_all();
 		m_JobsCondition.notify_all();
+		m_EventsCondition.notify_all();
 	}
 
 	bool WaitForOwnedThreads(const std::chrono::milliseconds timeout)
@@ -1308,6 +1510,7 @@ private:
 		std::unique_lock<std::mutex> lock(m_LifecycleMutex);
 		return m_LifecycleCondition.wait_for(lock, timeout, [this] {
 			return m_ListenerExited.load(std::memory_order_acquire)
+				&& m_EventWriterExited.load(std::memory_order_acquire)
 				&& m_WorkersExited.load(std::memory_order_acquire) == m_Workers.size();
 		});
 	}
@@ -1316,6 +1519,8 @@ private:
 	{
 		if (m_Listener.joinable())
 			m_Listener.join();
+		if (m_EventWriter.joinable())
+			m_EventWriter.join();
 		for (std::thread& worker : m_Workers)
 		{
 			if (worker.joinable())
@@ -1332,6 +1537,7 @@ private:
 			std::unique_lock<std::mutex> lock(m_LifecycleMutex);
 			m_LifecycleCondition.wait(lock, [this] {
 				return m_ListenerExited.load(std::memory_order_acquire)
+					&& m_EventWriterExited.load(std::memory_order_acquire)
 					&& m_WorkersExited.load(std::memory_order_acquire) == m_Workers.size();
 			});
 		}
@@ -1382,8 +1588,11 @@ private:
 	std::vector<std::uint8_t> m_CurrentUserSid;
 
 	std::thread m_Listener;
+	std::thread m_EventWriter;
 	std::vector<std::thread> m_Workers;
 	std::atomic<bool> m_ListenerExited{false};
+	std::atomic<bool> m_EventWriterExited{false};
+	std::atomic<bool> m_EventWriterRunning{false};
 	std::atomic<std::size_t> m_WorkersExited{0};
 	std::atomic<std::size_t> m_LiveWorkers{0};
 	std::mutex m_LifecycleMutex;
@@ -1399,6 +1608,10 @@ private:
 	std::condition_variable m_JobsCondition;
 	std::deque<std::shared_ptr<PendingRequest>> m_Jobs;
 	std::unordered_map<RequestKey, std::shared_ptr<PendingRequest>, RequestKeyHash> m_Pending;
+	std::mutex m_EventsMutex;
+	std::condition_variable m_EventsCondition;
+	std::deque<QueuedEvent> m_Events;
+	std::uint64_t m_NextEventSequence = 1;
 
 	std::atomic<std::uint32_t> m_ConnectedClientProcessId{0};
 	std::atomic<std::size_t> m_PendingCount{0};
@@ -1407,6 +1620,10 @@ private:
 	std::atomic<std::uint64_t> m_RejectedConnections{0};
 	std::atomic<std::uint64_t> m_CompletedRequests{0};
 	std::atomic<std::uint64_t> m_CancelledRequests{0};
+	std::atomic<std::size_t> m_QueuedEventCount{0};
+	std::atomic<std::uint64_t> m_EnqueuedEvents{0};
+	std::atomic<std::uint64_t> m_SentEvents{0};
+	std::atomic<std::uint64_t> m_DroppedEvents{0};
 	mutable std::mutex m_ErrorMutex;
 	DWORD m_LastNativeError = ERROR_SUCCESS;
 	std::string m_LastErrorCode;
@@ -1436,6 +1653,14 @@ bool NamedPipeRpcServer::Start()
 bool NamedPipeRpcServer::OpenAdmissions()
 {
 	return m_Impl->OpenAdmissions();
+}
+
+EventPublishResult NamedPipeRpcServer::PublishEvent(
+	std::string kind,
+	const std::uint64_t timestampUs,
+	nlohmann::json data) noexcept
+{
+	return m_Impl->PublishEvent(std::move(kind), timestampUs, std::move(data));
 }
 
 bool NamedPipeRpcServer::Stop(const std::chrono::milliseconds timeout)

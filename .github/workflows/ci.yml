@@ -91,9 +91,20 @@ jobs:
           cargo clippy --manifest-path ./protocol/rust/Cargo.toml --all-targets -- -D warnings
           cargo clippy --manifest-path ./tests/fake-core/Cargo.toml --all-targets -- -D warnings
 
+      - name: Configure MSBuild for cross-language fixture
+        uses: microsoft/setup-msbuild@v3
+
+      - name: Build real C++ Core fixture for Rust Host
+        shell: pwsh
+        run: >-
+          msbuild ./tests/core-harness/CoreHarness.vcxproj
+          /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143
+          /m:1 /v:minimal
+
       - name: Run Rust tests
         shell: pwsh
         run: |
           cargo test --manifest-path ./frontend/src-tauri/Cargo.toml
+          cargo test --manifest-path ./frontend/src-tauri/Cargo.toml --features cross-language-fixture --test core_process_fixture
           cargo test --manifest-path ./protocol/rust/Cargo.toml
           cargo test --manifest-path ./tests/fake-core/Cargo.toml

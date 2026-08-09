@@ -521,6 +521,87 @@ mod tests {
     }
 
     #[test]
+    fn deterministic_frame_fuzz_and_disconnect_matrix_is_bounded() {
+        fn next_random(state: &mut u64) -> u64 {
+            *state ^= *state >> 12;
+            *state ^= *state << 25;
+            *state ^= *state >> 27;
+            state.wrapping_mul(0x2545_F491_4F6C_DD1D)
+        }
+
+        let kinds = [
+            FrameKind::Hello,
+            FrameKind::Welcome,
+            FrameKind::Request,
+            FrameKind::Response,
+            FrameKind::Event,
+            FrameKind::Cancel,
+            FrameKind::Ping,
+            FrameKind::Pong,
+            FrameKind::Shutdown,
+        ];
+        let mut random_state = 0xD1B5_4A32_D192_ED03;
+        let mut expected = Vec::new();
+        let mut stream = Vec::new();
+        for index in 0..256u64 {
+            let payload_len = (next_random(&mut random_state) % 513) as usize;
+            let payload = (0..payload_len)
+                .map(|_| next_random(&mut random_state) as u8)
+                .collect::<Vec<_>>();
+            let kind = kinds[(next_random(&mut random_state) as usize) % kinds.len()];
+            let encoded = encode_frame(kind, index + 1, &payload).unwrap();
+            let header = decode_header(&encoded[..HEADER_SIZE]).unwrap();
+            stream.extend_from_slice(&encoded);
+            expected.push(Frame { header, payload });
+        }
+
+        for chunk_size in [1usize, 2, 3, 7, 23, 64, 257, 4096] {
+            let mut decoder = FrameDecoder::default();
+            let mut actual = Vec::new();
+            for chunk in stream.chunks(chunk_size) {
+                actual.extend(decoder.push(chunk).unwrap());
+            }
+            assert_eq!(actual, expected, "chunk size {chunk_size} changed frames");
+            assert_eq!(decoder.buffered_bytes(), 0);
+        }
+
+        let truncation_frame = encode_frame(FrameKind::Event, 0, &[0xA5; 257]).unwrap();
+        for prefix in 0..truncation_frame.len() {
+            let mut decoder = FrameDecoder::default();
+            assert!(decoder
+                .push(&truncation_frame[..prefix])
+                .unwrap()
+                .is_empty());
+            assert_eq!(decoder.buffered_bytes(), prefix);
+        }
+
+        for _ in 0..4096 {
+            let mut mutated = truncation_frame.clone();
+            let flips = 1 + (next_random(&mut random_state) % 4) as usize;
+            for _ in 0..flips {
+                let offset = (next_random(&mut random_state) as usize) % mutated.len();
+                mutated[offset] ^= 1 << (next_random(&mut random_state) % 8);
+            }
+
+            let mut decoder = FrameDecoder::default();
+            let mut offset = 0;
+            let mut terminal = None;
+            while offset < mutated.len() && terminal.is_none() {
+                let chunk = 1 + (next_random(&mut random_state) % 31) as usize;
+                let end = (offset + chunk).min(mutated.len());
+                if let Err(error) = decoder.push(&mutated[offset..end]) {
+                    terminal = Some(error);
+                }
+                offset = end;
+            }
+            assert!(decoder.buffered_bytes() <= mutated.len());
+            if terminal.is_some() {
+                assert_eq!(decoder.push(&[]), Err(ProtocolError::DecoderFailed));
+            }
+        }
+    }
+
+    #[test]
     fn independent_usmap_consumer_accepts_uncompressed_golden_container() {
         let bytes = decode_hex(include_str!("../../v1/fixtures/usmap-none.hex"));
         assert_eq!(&bytes[..2], &[0xC4, 0x30]);

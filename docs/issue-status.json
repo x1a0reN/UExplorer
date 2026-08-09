@@ -36,6 +36,15 @@
         "GitHub Actions run 31289059121 passed all three jobs"
       ]
     },
+    "ENG-002": {
+      "status": "in_progress",
+      "verification": [
+        "2026-08-09: C++ and Rust deterministic frame matrices cover 256 mixed frames, 8 chunk widths, every truncation point, and 4096 mutations without decoder amplification",
+        "2026-08-09: real NPFS tests cover pre-Hello, partial header/payload, invalid header fields, Ready-idle, request, malformed-session, and missing-Shutdown-ack disconnects",
+        "2026-08-09: feature-gated process fixture proves Rust SessionManager against the real C++ Core server for Welcome, Event, Snapshot/Host query, exact Shutdown, and joined process exit; CI builds and runs both languages",
+        "Live UE injection, Hook/GC/target-scale snapshot, dump, and unload fixtures remain pending"
+      ]
+    },
     "ENG-003": {
       "status": "verified",
       "verification": ["2026-08-09: root and frontend README replaced with current architecture and validation commands"]
@@ -103,6 +112,7 @@
         "2026-08-09: real Pipe event reader accepts an Event immediately after Welcome; its 1024-item nonblocking inbox records overflow, attaches the cumulative transport-drop snapshot to the next delivered event, and keeps RPC responsive",
         "2026-08-09: Host EventHub has a 1024-event replay window, 64 KiB per-event cap, shared Arc payloads, at most 64 independently bounded subscribers, nonblocking fan-out, combined transport/subscriber Host drop diagnostics, and exact kind/watch_id/hook_name filters",
         "2026-08-09: EventBridgeManager adapts filtered/replayable EventHub subscriptions to caller-owned Tauri Channels with a 64-bridge cap, joinable workers, delivery-failure diagnostics, PID-scoped teardown, and no detached survivor after panic",
+        "2026-08-09: real C++ NamedPipeRpcServer now owns a 1024-item DropOldest event queue and joinable writer with uint53 sequence, 64 KiB envelope bound, cumulative Core drop count, and send/drop diagnostics; the cross-language process fixture delivers it through SessionManager/EventHub",
         "Real Core Watch/Hook event producers remain pending"
       ]
     },
