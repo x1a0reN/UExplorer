@@ -22,12 +22,12 @@ namespace UExplorer::Runtime
 namespace
 {
 
-constexpr std::size_t kMaximumSourceBytes = 1024;
-constexpr std::size_t kMaximumWitnessIdBytes = 128;
-constexpr std::size_t kMaximumWitnessNameBytes = 1024;
-constexpr std::size_t kMaximumFields = 64;
-constexpr std::size_t kMaximumWitnesses = 256;
-constexpr std::int32_t kMaximumRecordSize = 4096;
+constexpr std::size_t kMaximumSourceBytes = ReflectionLayoutLimits::MaxSourceBytes;
+constexpr std::size_t kMaximumWitnessIdBytes = ReflectionLayoutLimits::MaxWitnessIdBytes;
+constexpr std::size_t kMaximumWitnessNameBytes = ReflectionLayoutLimits::MaxWitnessNameBytes;
+constexpr std::size_t kMaximumFields = ReflectionLayoutLimits::MaxFields;
+constexpr std::size_t kMaximumWitnesses = ReflectionLayoutLimits::MaxWitnesses;
+constexpr std::int32_t kMaximumRecordSize = ReflectionLayoutLimits::MaxRecordSize;
 
 constexpr std::array kFPropertyFields{
 	ReflectionField::StructSuper,

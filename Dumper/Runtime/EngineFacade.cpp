@@ -145,6 +145,32 @@ bool EngineFacade::ConfigurePropertyCodec(PropertyCodecProfile profile) noexcept
 	}
 }
 
+bool EngineFacade::ConfigureReflectionCapture(IReflectionCandidateSource& source) noexcept
+{
+	if (!IsConfigured()
+		|| m_ReflectionCapture
+		|| Reflection()
+		|| source.ContextGeneration() != ContextGeneration())
+	{
+		return false;
+	}
+	try
+	{
+		auto capture = std::make_unique<ReflectionLayoutCapture>(
+			ContextGeneration(),
+			source,
+			*this);
+		if (!capture->IsConfigured())
+			return false;
+		m_ReflectionCapture = std::move(capture);
+		return true;
+	}
+	catch (...)
+	{
+		return false;
+	}
+}
+
 TypeSnapshotPublishResult EngineFacade::PublishTypeSnapshot(
 	TypeSnapshotCandidate candidate) noexcept
 {
@@ -186,9 +212,12 @@ bool EngineFacade::ConfigureSnapshotCapture(IEngineSnapshotSource& source) noexc
 
 bool EngineFacade::Stop(const std::chrono::milliseconds timeout)
 {
-	std::lock_guard lock(m_ReflectionMutex);
+	if (m_ReflectionCapture && !m_ReflectionCapture->StopAndDrain(timeout))
+		return false;
 	if (m_SnapshotCapture && !m_SnapshotCapture->StopAndDrain(timeout))
 		return false;
+	std::lock_guard lock(m_ReflectionMutex);
+	m_ReflectionCapture.reset();
 	m_SnapshotCapture.reset();
 	m_Types.Stop();
 	m_Reflection.store({}, std::memory_order_release);

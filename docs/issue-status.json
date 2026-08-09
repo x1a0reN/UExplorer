@@ -81,6 +81,7 @@
 		"2026-08-10: EngineFacade now owns a generation/layout-bound immutable TypeSnapshotStore; publication retains exact object/reflection dependencies, deep-freezes descriptors, and refuses partial type/function coverage",
 		"2026-08-10: GameThreadFrameScheduler replaces the exclusive domain frame slot with one backend-owned, eight-client bounded scheduler; per-client pointer withdrawal and callback barriers preserve explicit lifetime ownership",
 		"2026-08-10: production EngineSnapshot publication now uses an unforgeable validated token, segmented records, atomic ownership transfer, and fixed-capacity worker reclamation instead of a final game-thread O(N) scan/allocation/destruction",
+		"2026-08-10: EngineFacade now owns a drainable ReflectionLayoutCapture; candidate sources can add only one field and bounded same-field witnesses per work unit, while dependency revalidation, same-thread validation, and atomic publication reject partial or changed evidence",
 		"2026-08-09: Rust DomainService and the split TypeScript Tauri client replace the frontend REST/SSE/WebSocket/configuration monolith at the process boundary",
         "Remaining legacy domain/API monoliths and direct Off/Settings consumers still require migration"
       ]
@@ -364,6 +365,7 @@
         "2026-08-09: IGameThreadPump and the explicit PostRenderPumpBackend move pump ownership out of API code",
 		"2026-08-10: PostRenderPumpBackend now refuses all frame-client dispatch unless IsCurrentPumpThread() remains true; the harness reproduces a second-thread tick and proves zero domain callbacks after mismatch",
 		"2026-08-10: the backend owns one detachable GameThreadFrameScheduler; it round-robins at most eight clients under a shared 32-work-unit/2ms frame bound, detects 0-progress and budget-contract violations, and independently withdraws/quiet-drains every client",
+		"2026-08-10: ReflectionLayoutCapture implements the next scheduler client contract with exact work accounting, single-owner requests, concurrent-pump rejection, callback-barrier drain, and separate Begin/field/validate/publish units; production source attachment remains pending",
         "Live minimized/loading fixtures remain pending"
       ]
     },

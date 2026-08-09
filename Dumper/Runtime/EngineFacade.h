@@ -7,6 +7,7 @@
 #include "ObjectHandle.h"
 #include "PropertyCodec.h"
 #include "ReflectionLayout.h"
+#include "ReflectionLayoutCapture.h"
 #include "TypeSnapshot.h"
 
 #include <atomic>
@@ -43,6 +44,7 @@ public:
 	bool ConfigureReflectionLayout(
 		std::shared_ptr<const ReflectionLayout> layout) noexcept;
 	bool ConfigurePropertyCodec(PropertyCodecProfile profile) noexcept;
+	bool ConfigureReflectionCapture(IReflectionCandidateSource& source) noexcept;
 	std::shared_ptr<const ReflectionRuntimeSnapshot> Reflection() const noexcept
 	{
 		return m_Reflection.load(std::memory_order_acquire);
@@ -60,6 +62,11 @@ public:
 	bool ConfigureSnapshotCapture(IEngineSnapshotSource& source) noexcept;
 	EngineSnapshotCapture* SnapshotCapture() noexcept { return m_SnapshotCapture.get(); }
 	const EngineSnapshotCapture* SnapshotCapture() const noexcept { return m_SnapshotCapture.get(); }
+	ReflectionLayoutCapture* ReflectionCapture() noexcept { return m_ReflectionCapture.get(); }
+	const ReflectionLayoutCapture* ReflectionCapture() const noexcept
+	{
+		return m_ReflectionCapture.get();
+	}
 	bool Stop(std::chrono::milliseconds timeout = std::chrono::milliseconds(5000));
 
 private:
@@ -73,6 +80,7 @@ private:
 	EngineSnapshotStore m_Snapshots;
 	TypeSnapshotStore m_Types;
 	std::unique_ptr<EngineSnapshotCapture> m_SnapshotCapture;
+	std::unique_ptr<ReflectionLayoutCapture> m_ReflectionCapture;
 };
 
 } // namespace UExplorer::Runtime

@@ -23,7 +23,7 @@ React -> Tauri invoke/event -> Rust Host -> Windows Named Pipe RPC -> Core DLL -
 | R2 CoreRuntime/能力模型 | 实现阶段完成；R5/R7 验证待办 | CoreRuntime 状态机、加密随机 session 与 request lease；一次性发布的 immutable EngineContext/identity/name-layout context；带 candidate/confidence 的 offset validation report；依赖式 CapabilityRegistry；Runtime-owned GameThreadExecutor/PostRender backend；ShutdownCoordinator；SafeMemory；稳定 Handle；`EngineFacade`、immutable Snapshot store、生产 snapshot source；transport-neutral CoreCommandService；Rust Host SnapshotCache/索引；VTable Hook RAII owner 与 callback quiet drain | 其余领域 command 属于 R5；真实 identity/name/snapshot/global-pointer、GC churn、LDR/版本与目标规模证据属于 R7 |
 | R3 Named Pipe/Rust Host | 实现阶段完成；R7 验证待办 | 共享严格 RPC 契约；安全且可 join 的 overlapped Named Pipe server/client；PID 核验、deadline/cancel、背压、断线、显式重连和精确 Shutdown；C++/Rust framing fuzz；真实跨语言 Core/Host 进程 fixture；EventHub、multi-PID SessionManager、PID-scoped 操作协调器与 Tauri Channel bridge；真实 x64/x86 注入矩阵 | UE 目标进程连接、Hook/GC/卸载环境矩阵属于 R7 |
 | R4 通信原子切换 | 已完成 | React 领域调用只经 Tauri `domain_request`，事件只经 Tauri Channel；Rust `DomainService` 使用显式 operation registry、PID/session 绑定和稳定错误；Core release project 不编译 `Server/`/`API/` 且不链接 `ws2_32`；二进制契约确认无网络 import/legacy marker；跨语言 fixture 覆盖 DomainService -> SessionManager -> C++ Core | 无；未实现领域按 capability 明确失败，功能实现进入 R5 |
-| R5 领域正确性 | 进行中（R5.1 查询、Codec、反射与类型快照基础完成） | Object/Type 列表查询已复用 Host SnapshotIndex；PropertyCodec 具备有界值模型；ReflectionLayout 验证完整字段集和 UStruct 尺寸/对齐；layout/codec 分阶段原子发布；TypeSnapshot 要求完整类型/函数覆盖、冻结 descriptor、显式继承与 CDO/super 语义；PostRender 下新增 8-client、32-work-unit、2ms 有界公平调度层；Object Snapshot 逐条校验、分段存储并把旧代/失败工作集移交 Worker 回收；合成 C++ fixture 已通过 | 生产 UE reflection/type candidate source、Named Pipe/Host 详情 command、GC/目标规模，以及 Memory/Call/World/Watch/Hook/Blueprint/Dump 逐项验证 |
+| R5 领域正确性 | 进行中（R5.1 查询、Codec、反射与类型快照基础完成） | Object/Type 列表查询已复用 Host SnapshotIndex；PropertyCodec 具备有界值模型；ReflectionLayout 验证完整字段集和 UStruct 尺寸/对齐；ReflectionLayoutCapture 以逐字段/逐 witness 预算、同线程验证和原子发布管理候选生命周期；layout/codec 分阶段原子发布；TypeSnapshot 要求完整类型/函数覆盖、冻结 descriptor、显式继承与 CDO/super 语义；PostRender 下新增 8-client、32-work-unit、2ms 有界公平调度层；Object Snapshot 逐条校验、分段存储并把旧代/失败工作集移交 Worker 回收；合成 C++ fixture 已通过 | 生产 UE reflection/type candidate source、Named Pipe/Host 详情 command、GC/目标规模，以及 Memory/Call/World/Watch/Hook/Blueprint/Dump 逐项验证 |
 | R6 前端状态重构 | 未开始 | UI lint 已清零，基础 Vitest 已建立 | session store、查询取消、BigInt 地址、真实能力 UI |
 | R7 发布硬化 | 未开始 | 无 | 性能、压力、目标 fixture、文档和发布门全部通过 |
 
@@ -150,6 +150,13 @@ CoreHarness 已覆盖各已实现类型、缺失/重叠布局、无 resolver、�
 - `engine.type_snapshot` 是单独的数据 readiness capability；`types.inspect` 仍因 Core/Named Pipe/Host 详情 command 尚未注册而保持 `TYPE_COMMAND_NOT_IMPLEMENTED`。当前 production 也没有 reflection/type capture source，所以本节只建立 fail-closed 模型与合成证据，不宣称真实游戏类型详情已可用。
 
 CoreHarness 覆盖 partial type/function coverage、错误 CDO、super cycle、descriptor cycle、未知成员状态、参数 flags/direction 错配、显式 unsupported、deep-freeze alias、direct/inherited 属性与函数顺序、重复 generation、object-generation 漂移和 capability gating。生产 game-thread 分帧采集、协议 schema、Rust 索引与真实 UE fixture 是下一切片。
+
+### 0.11 R5.1 ReflectionLayoutCapture 生命周期与预算
+
+- 新增 `Runtime/ReflectionLayoutCapture`，由 `EngineFacade` 独占。候选源必须先声明同一 context generation 和显式 `UProperty`/`FProperty`，随后每个 source step 只能增加一个字段及 1-8 个同字段 witness；总字段、witness、字符串和 record 范围复用 `ReflectionLayoutLimits` 的硬上限。空进展、跨字段 witness、一次追加多字段、超限或未知 property system 都是稳定的 source-contract failure，不会把部分候选交给验证器或 capability。
+- capture 是 `IGameThreadFrameClient`，准确返回实际消耗的 work unit。Begin、每字段采集、完整 `ValidateReflectionLayout` 和 `EngineFacade` 原子 publication 是独立预算步骤；验证和发布前都会重新检查 source dependency，同一候选不能在 snapshot/证据变化后继续提交。验证器生成的线程 ID仍必须等于 Facade 当前已验证执行线程。
+- 生命周期具有单一 request owner、并发 pump 拒绝、callback barrier 和可重试 drain。`EngineFacade::Stop` 不再持有 reflection publication mutex 等待 producer drain，避免发布回调与停止线程互锁；先停止 producer，随后才撤销 immutable reflection snapshot。合成 fixture 覆盖逐步不可见、完整发布、精确 work accounting、重复 request、缺 witness source contract violation、最终依赖漂移和 Stop。
+- 本切片只建立生产可接入的 owner/预算/失败语义，尚未实现从真实 Object Snapshot 和 `SafeMemory` 生成完整 UE witness 的 source，也未在 `Main` 附加该 client。因此 release Core 中 `engine.reflection`、`engine.property_codec` 和 `engine.type_snapshot` 仍保持 unavailable；旧 `Off::InitReflection()` 仍不是候选来源，也没有任何 fallback。
 
 ## Context
 

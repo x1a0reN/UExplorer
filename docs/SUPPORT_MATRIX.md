@@ -50,12 +50,16 @@ The generic Core harness now exercises a synthetic, explicitly validated x64 pro
 profile for scalar, FName/FString/FText, object/weak/soft reference, enum, struct,
 array, map, and set decoding. It also supplies the exact FProperty field set with
 per-field stable scalar/pointer/FName witnesses, including exact int32 UStruct property
-size and minimum alignment, then verifies generation/fingerprint binding. Layout publication and
+size and minimum alignment, then verifies generation/fingerprint binding. The candidate is
+fed through the owned `ReflectionLayoutCapture` one field at a time; the fixture verifies
+bounded work accounting, no partial visibility, dependency revalidation, source-contract
+failure, same-thread validation/publication, and drain. Layout publication and
 the fingerprint-matched codec upgrade replace the same immutable reflection runtime
 snapshot atomically, while reflection and property-codec capabilities remain independent. This proves
 validator, codec-boundary, and result-state behavior only; it is not evidence that the
 same offsets/layouts apply to any engine row above. Production remains unavailable until
-a target-specific candidate/witness source passes the same boundary.
+a target-specific candidate/witness source passes the same boundary and is attached to the
+runtime scheduler.
 
 The generic harness also publishes a synthetic immutable type snapshot only after exact
 Class/Struct/Enum and Function coverage matches one object-snapshot generation. It proves

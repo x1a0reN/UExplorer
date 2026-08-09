@@ -2,6 +2,7 @@
 
 #include "EngineNameCodec.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -13,6 +14,16 @@ namespace UExplorer::Runtime
 {
 
 class PropertyCodec;
+
+struct ReflectionLayoutLimits final
+{
+	static constexpr std::size_t MaxSourceBytes = 1024;
+	static constexpr std::size_t MaxWitnessIdBytes = 128;
+	static constexpr std::size_t MaxWitnessNameBytes = 1024;
+	static constexpr std::size_t MaxFields = 64;
+	static constexpr std::size_t MaxWitnesses = 256;
+	static constexpr std::int32_t MaxRecordSize = 4096;
+};
 
 enum class ReflectionPropertySystem : std::uint8_t
 {

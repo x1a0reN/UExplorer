@@ -136,6 +136,7 @@
 	<ClCompile Include="Runtime\PostRenderHook.cpp" />
 	<ClCompile Include="Runtime\PropertyCodec.cpp" />
 	<ClCompile Include="Runtime\ReflectionLayout.cpp" />
+	<ClCompile Include="Runtime\ReflectionLayoutCapture.cpp" />
 	<ClCompile Include="Runtime\TypeSnapshot.cpp" />
     <ClCompile Include="Runtime\SafeMemory.cpp" />
     <ClCompile Include="Runtime\VTableHook.cpp" />
@@ -224,6 +225,7 @@
 	<ClInclude Include="Runtime\PostRenderHook.h" />
 	<ClInclude Include="Runtime\PropertyCodec.h" />
 	<ClInclude Include="Runtime\ReflectionLayout.h" />
+	<ClInclude Include="Runtime\ReflectionLayoutCapture.h" />
 	<ClInclude Include="Runtime\TypeSnapshot.h" />
     <ClInclude Include="Runtime\SafeMemory.h" />
     <ClInclude Include="Runtime\ShutdownCoordinator.h" />

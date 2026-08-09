@@ -28,6 +28,7 @@
 #include "Runtime/ObjectArraySnapshotSource.h"
 #include "Runtime/PropertyCodec.h"
 #include "Runtime/ReflectionLayout.h"
+#include "Runtime/ReflectionLayoutCapture.h"
 #include "Runtime/SafeMemory.h"
 #include "Runtime/ShutdownCoordinator.h"
 #include "Runtime/VTableHook.h"
@@ -1741,6 +1742,175 @@ namespace
 			.Source = "type-snapshot-fixture"
 		});
 		const std::shared_ptr<const EngineContext> context = contextBuilder.Build();
+		class SyntheticReflectionCandidateSource final : public IReflectionCandidateSource
+		{
+		public:
+			explicit SyntheticReflectionCandidateSource(ReflectionLayoutCandidate candidate)
+				: m_Template(std::move(candidate))
+			{
+			}
+
+			std::uint64_t ContextGeneration() const noexcept override
+			{
+				return m_Template.ContextGeneration;
+			}
+
+			bool IsConfigured() const noexcept override
+			{
+				return m_Template.ContextGeneration != 0
+					&& m_Template.PropertySystem != ReflectionPropertySystem::Unavailable
+					&& !m_Template.Source.empty();
+			}
+
+			bool IsCurrentExecutionThreadValid() const noexcept override
+			{
+				return m_ThreadValid;
+			}
+
+			ReflectionCandidateSourceStepResult Begin(
+				ReflectionLayoutCandidate& candidate) noexcept override
+			{
+				m_Cursor = 0;
+				m_Active = true;
+				candidate = {
+					.ContextGeneration = m_Template.ContextGeneration,
+					.PropertySystem = m_Template.PropertySystem,
+					.Source = m_Template.Source
+				};
+				return {};
+			}
+
+			ReflectionCandidateSourceStepResult CaptureNext(
+				ReflectionLayoutCandidate& candidate) noexcept override
+			{
+				if (!m_Active || m_Cursor >= m_Template.Fields.size())
+				{
+					return {
+						.Error = ReflectionCandidateSourceError::ContractViolation
+					};
+				}
+				const ReflectionField field = m_Template.Fields[m_Cursor].Field;
+				candidate.Fields.push_back(m_Template.Fields[m_Cursor]);
+				for (const ReflectionFieldWitness& witness : m_Template.Witnesses)
+				{
+					if (witness.Field == field)
+						candidate.Witnesses.push_back(witness);
+				}
+				++m_Cursor;
+				return {.Complete = m_Cursor == m_Template.Fields.size()};
+			}
+
+			bool ValidateDependencies() const noexcept override
+			{
+				return m_Active && m_DependenciesValid;
+			}
+
+			void Cancel() noexcept override
+			{
+				m_Active = false;
+				m_Cursor = 0;
+			}
+
+			void SetDependenciesValid(const bool valid) noexcept
+			{
+				m_DependenciesValid = valid;
+			}
+
+		private:
+			ReflectionLayoutCandidate m_Template;
+			std::size_t m_Cursor = 0;
+			bool m_Active = false;
+			bool m_ThreadValid = true;
+			bool m_DependenciesValid = true;
+		};
+
+		SyntheticReflectionCandidateSource captureSource(candidate);
+		EngineFacade captureFacade(context, "reflection-capture", facadeIdentity);
+		Require(
+			captureFacade.ConfigureReflectionCapture(captureSource),
+			"EngineFacade rejected a bounded reflection candidate source");
+		ReflectionLayoutCapture* reflectionCapture = captureFacade.ReflectionCapture();
+		Require(
+			reflectionCapture
+				&& reflectionCapture->RequestCapture() == ReflectionLayoutCaptureError::None
+				&& reflectionCapture->RequestCapture() == ReflectionLayoutCaptureError::Busy,
+			"Reflection capture request admission was not single-owner");
+		const ReflectionLayoutPumpResult beginPump = reflectionCapture->Pump(1);
+		Require(
+			beginPump.Status == ReflectionLayoutPumpStatus::Progress
+				&& beginPump.WorkConsumed == 1
+				&& beginPump.MoreWorkPending
+				&& !captureFacade.Reflection(),
+			"Reflection capture begin step published partial evidence");
+		const ReflectionLayoutPumpResult publishPump =
+			reflectionCapture->Pump(ReflectionLayoutCapture::kMaxPumpBudget);
+		const ReflectionLayoutCaptureDiagnostics captureDiagnostics =
+			reflectionCapture->Diagnostics();
+		Require(
+			publishPump.Status == ReflectionLayoutPumpStatus::Published
+				&& publishPump.WorkConsumed == candidate.Fields.size() + 2
+				&& !publishPump.MoreWorkPending
+				&& captureDiagnostics.State == ReflectionLayoutCaptureState::Completed
+				&& captureDiagnostics.Error == ReflectionLayoutCaptureError::None
+				&& captureDiagnostics.CapturedFields == candidate.Fields.size()
+				&& captureDiagnostics.CapturedWitnesses == candidate.Witnesses.size()
+				&& captureDiagnostics.SourceSteps == candidate.Fields.size()
+				&& captureFacade.Reflection()
+				&& captureFacade.Reflection()->Layout->Fingerprint()
+					== validated.Layout->Fingerprint()
+				&& reflectionCapture->RequestCapture()
+					== ReflectionLayoutCaptureError::AlreadyConfigured
+				&& captureFacade.Stop(),
+			"Bounded reflection evidence was not validated and atomically published");
+
+		ReflectionLayoutCandidate missingWitnessCandidate = candidate;
+		missingWitnessCandidate.Witnesses.erase(
+			std::remove_if(
+				missingWitnessCandidate.Witnesses.begin(),
+				missingWitnessCandidate.Witnesses.end(),
+				[&](const ReflectionFieldWitness& witness) {
+					return witness.Field == missingWitnessCandidate.Fields.front().Field;
+				}),
+			missingWitnessCandidate.Witnesses.end());
+		SyntheticReflectionCandidateSource brokenSource(std::move(missingWitnessCandidate));
+		EngineFacade brokenCaptureFacade(context, "reflection-capture-broken", facadeIdentity);
+		Require(
+			brokenCaptureFacade.ConfigureReflectionCapture(brokenSource),
+			"Broken reflection source fixture could not reach capture validation");
+		ReflectionLayoutCapture* brokenCapture = brokenCaptureFacade.ReflectionCapture();
+		Require(
+			brokenCapture
+				&& brokenCapture->RequestCapture() == ReflectionLayoutCaptureError::None
+				&& brokenCapture->Pump(2).Status == ReflectionLayoutPumpStatus::Failed
+				&& brokenCapture->Diagnostics().Error
+					== ReflectionLayoutCaptureError::SourceContractViolation
+				&& brokenCapture->Diagnostics().SourceError
+					== ReflectionCandidateSourceError::ContractViolation
+				&& !brokenCaptureFacade.Reflection()
+				&& brokenCaptureFacade.Stop(),
+			"A source step without a same-field witness escaped fail-closed capture");
+
+		SyntheticReflectionCandidateSource changingSource(candidate);
+		EngineFacade changingCaptureFacade(context, "reflection-capture-changing", facadeIdentity);
+		Require(
+			changingCaptureFacade.ConfigureReflectionCapture(changingSource),
+			"Changing reflection source fixture could not be configured");
+		ReflectionLayoutCapture* changingCapture = changingCaptureFacade.ReflectionCapture();
+		Require(
+			changingCapture
+				&& changingCapture->RequestCapture() == ReflectionLayoutCaptureError::None
+				&& changingCapture->Pump(2).Status == ReflectionLayoutPumpStatus::Progress,
+			"Changing reflection source did not enter bounded capture");
+		changingSource.SetDependenciesValid(false);
+		const ReflectionLayoutPumpResult changedPump = changingCapture->Pump(
+			ReflectionLayoutCapture::kMaxPumpBudget);
+		Require(
+			changedPump.Status == ReflectionLayoutPumpStatus::Failed
+				&& changingCapture->Diagnostics().Error
+					== ReflectionLayoutCaptureError::DependencyChanged
+				&& !changingCaptureFacade.Reflection()
+				&& changingCaptureFacade.Stop(),
+			"A changed reflection dependency was published after final validation");
 
 		EngineFacade wrongThreadFacade(context, "reflection-wrong-thread", facadeIdentity);
 		const bool wrongThreadConfigured = std::async(
@@ -5003,7 +5173,7 @@ int main(const int argc, char** argv)
 		TestGameThreadFrameSchedulerBudgetFairnessAndDrain();
 		TestGameThreadMpscCapacity();
 		TestHttpServerLifecycle();
-		std::cout << "Core harness passed: deterministic bounded frame fuzz/disconnect matrix, secure sessions, real current-user Windows Named Pipe RPC/event lifecycle, runtime/capabilities, EngineFacade/immutable budgeted object/type snapshots, domain commands, stable handles/FUObjectItem layout, witnessed reflection layouts, bounded property codecs, bounded PE/version/global-pointer probing, pattern scanning, Hook RAII/drain, SafeMemory, USMAP consumer, bounded queues, cancellable owned game-thread/frame-client work, SEH, HTTP lifecycle, and shutdown.\n";
+		std::cout << "Core harness passed: deterministic bounded frame fuzz/disconnect matrix, secure sessions, real current-user Windows Named Pipe RPC/event lifecycle, runtime/capabilities, EngineFacade/immutable budgeted object/type snapshots, domain commands, stable handles/FUObjectItem layout, budgeted witnessed reflection capture/layouts, bounded property codecs, bounded PE/version/global-pointer probing, pattern scanning, Hook RAII/drain, SafeMemory, USMAP consumer, bounded queues, cancellable owned game-thread/frame-client work, SEH, HTTP lifecycle, and shutdown.\n";
 		return 0;
 	}
 	catch (const std::exception& error)
