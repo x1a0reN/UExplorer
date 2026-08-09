@@ -115,7 +115,8 @@ fn load_runtime_endpoint() -> Result<Option<RuntimeEndpoint>, String> {
         return Ok(None);
     }
 
-    let content = fs::read_to_string(&path).map_err(|e| format!("Read runtime state failed: {e}"))?;
+    let content =
+        fs::read_to_string(&path).map_err(|e| format!("Read runtime state failed: {e}"))?;
     let pid = read_ini_value(&content, "Runtime", "Pid")
         .and_then(|v| v.parse::<u32>().ok())
         .unwrap_or(0);
@@ -159,8 +160,10 @@ fn scan_processes_internal() -> Result<Vec<ProcessInfo>, String> {
         let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
             .map_err(|e| format!("CreateToolhelp32Snapshot failed: {e}"))?;
 
-        let mut entry = PROCESSENTRY32W::default();
-        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        let mut entry = PROCESSENTRY32W {
+            dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+            ..Default::default()
+        };
 
         if Process32FirstW(snapshot, &mut entry).is_ok() {
             loop {
@@ -407,7 +410,10 @@ fn inject_dll_internal(pid: u32, dll_path: String) -> Result<InjectionResult, St
             });
         };
 
-        let start_routine = std::mem::transmute(load_library);
+        let start_routine = std::mem::transmute::<
+            unsafe extern "system" fn() -> isize,
+            unsafe extern "system" fn(*mut std::ffi::c_void) -> u32,
+        >(load_library);
 
         // Create remote thread
         let h_thread = match CreateRemoteThread(

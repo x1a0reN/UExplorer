@@ -233,7 +233,7 @@ export interface ClassHierarchy {
 
 export interface ClassInstancesResponse {
   class: string;
-  items: Array<{ index: number; name: string; address: string }>;
+  items: Array<{ index: number; name: string; address: string; outer_name?: string }>;
   matched: number;
   offset: number;
   limit: number;
@@ -262,7 +262,7 @@ export interface WorldLevelsResponse {
   count: number;
 }
 
-export interface WorldActorItem extends ObjectItem { }
+export type WorldActorItem = ObjectItem;
 
 export interface WorldActorResponse {
   items: WorldActorItem[];

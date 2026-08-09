@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { t } from '../../i18n';
 import { Search, MapPin, Globe, ChevronDown, ChevronRight, Save } from 'lucide-react';
 import api, {
@@ -27,7 +27,7 @@ function parseVecInput(input: VecInput): Vec3Data | null {
 
 // ─── Component ─────────────────────────────────────────────────
 
-export default function WorldBrowser({ onNavigate: _onNavigate, onSwitchMode }: BrowserPageProps) {
+export default function WorldBrowser({ onSwitchMode }: BrowserPageProps) {
     // World state
     const [levels, setLevels] = useState<WorldLevelItem[]>([]);
     const [expandedLevels, setExpandedLevels] = useState<Set<string>>(new Set());
@@ -53,7 +53,7 @@ export default function WorldBrowser({ onNavigate: _onNavigate, onSwitchMode }: 
 
     // ─── Data Loading ──────────────────────────────────────────
 
-    const loadWorld = async () => {
+    const loadWorld = useCallback(async () => {
         setListLoading(true);
         try {
             const levelsRes = await api.getWorldLevels();
@@ -66,14 +66,14 @@ export default function WorldBrowser({ onNavigate: _onNavigate, onSwitchMode }: 
             }
         } catch { /* ignore */ }
         setListLoading(false);
-    };
+    }, []);
 
-    const loadActors = async () => {
+    const loadActors = useCallback(async () => {
         try {
             const res = await api.getWorldActors(0, 200, search, classFilter);
             if (res.success && res.data) setActors(res.data.items);
         } catch { /* ignore */ }
-    };
+    }, [classFilter, search]);
 
     const loadActorDetail = async (actor: ObjectItem) => {
         setDetailLoading(true);
@@ -122,8 +122,15 @@ export default function WorldBrowser({ onNavigate: _onNavigate, onSwitchMode }: 
         }
     };
 
-    useEffect(() => { void loadWorld(); void loadActors(); }, []);
-    useEffect(() => { void loadActors(); }, [search, classFilter]);
+    useEffect(() => {
+        const timer = window.setTimeout(() => void loadWorld(), 0);
+        return () => window.clearTimeout(timer);
+    }, [loadWorld]);
+
+    useEffect(() => {
+        const timer = window.setTimeout(() => void loadActors(), 150);
+        return () => window.clearTimeout(timer);
+    }, [loadActors]);
 
     // ─── Helpers ───────────────────────────────────────────────
 

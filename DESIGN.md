@@ -1,11 +1,41 @@
 # UExplorer — 功能设计与页面架构方案
 
+## 0. 当前事实与重构状态（2026-08-09）
+
+本节是当前状态入口，优先级高于下方历史设计。下方带“已完成”的旧阶段记录只表示曾存在对应代码或界面，不代表功能正确、线程安全或已经过目标进程验证。
+
+完整问题、证据等级、目标架构和 R0-R7 验收门见 `REFACTOR_PLAN.md`；支持范围见 `docs/SUPPORT_MATRIX.md`；进程边界决策见 `docs/adr/0001-process-boundary-and-ipc.md`。
+
+目标运行链路已经确定为：
+
+```text
+React -> Tauri invoke/event -> Rust Host -> Windows Named Pipe RPC -> Core DLL -> Unreal Engine
+```
+
+- Core DLL 将移除可达的 HTTP、SSE 和 WebSocket 运行路径。
+- 外部 HTTP/WebSocket 若启用，只能位于 Rust Host，并复用同一 DomainService。
+- 不保留 HTTP/IPC 双运行栈，不做端口、Offset、执行线程、协议或压缩算法的静默 fallback。
+
+| 重构阶段 | 当前状态 | 已有证据 | 未完成门槛 |
+|---|---|---|---|
+| R0 证据与测试地基 | 进行中 | 128 项问题可跟踪；65 条 API v1 路由快照；IPC v1 契约；C++ framing/queue/backpressure/shutdown harness；Rust protocol/Fake Core 测试；前端 lint 与 build 通过 | CI 首次远端运行、三类 UE fixture、每个 P0 的回归测试 |
+| R1 安全止血 | 未开始 | P0 静态证据已登记 | 注入、GameThread、Hook、HTTP worker、USMAP、reconnect、critical offset 全部修复并验证 |
+| R2 CoreRuntime/能力模型 | 未开始 | 目标状态机已在重构计划定义 | CoreRuntime、EngineContext、CapabilityRegistry 实装 |
+| R3 Named Pipe/Rust Host | 未开始 | IPC v1 framing 与 Fake Core 地基已建立 | 真实 Pipe、PID/ACL 校验、SessionManager、deadline/cancel |
+| R4 通信原子切换 | 未开始 | ADR 已接受 | React 只走 Tauri，Core 发布构建不含可达网络栈 |
+| R5 领域正确性 | 未开始 | 问题清单与验收矩阵已建立 | Object/Memory/Call/World/Watch/Hook/Blueprint/Dump 逐项验证 |
+| R6 前端状态重构 | 未开始 | UI lint 已清零，基础 Vitest 已建立 | session store、查询取消、BigInt 地址、真实能力 UI |
+| R7 发布硬化 | 未开始 | 无 | 性能、压力、目标 fixture、文档和发布门全部通过 |
+
+当前不能宣称“可用”的既有功能包括：假实时 Watch、占位 WebSocket Console、直接 Transform 内存写、带错误 Zstd 标记的 USMAP、未生效 Dump option、猜测 Offset 后继续 Ready，以及未证明可安全卸载的 Hook/HTTP worker。它们在修复或禁用前均视为已知缺陷。
+
 ## Context
 
 基于 Dumper-7 的实现原理，设计一个桌面端 Unreal Engine SDK Dump + 实时探索工具。
 - 主要功能：SDK Dump（类似 Dumper7）
 - 辅助功能：Live Explorer（类似 UE4SS / UnityExplorer，但更强大）
-- 架构：Tauri 2 + React + TS + Vite 前端，C++ DLL 核心（注入/劫持），HTTP 通信
+- 当前实现：Tauri 2 + React + TS + Vite 前端，C++ DLL 核心（注入/劫持），DLL 内 HTTP 通信
+- 重构目标：React/Tauri -> Rust Host -> Named Pipe -> Core DLL；DLL 不再承担网络协议
 - 第一阶段：功能设计 + 页面功能设计（用户负责 UI 设计）
 
 ---

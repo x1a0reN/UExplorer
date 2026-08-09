@@ -1,0 +1,38 @@
+{
+  "name": "uexplorer-ipc",
+  "version": {
+    "major": 1,
+    "minor": 0
+  },
+  "transport": "windows-named-pipe",
+  "pipe_name_template": "\\\\.\\pipe\\UExplorer\\v1\\{target_pid}",
+  "endianness": "little",
+  "magic_ascii": "UEXP",
+  "header_size": 24,
+  "compression": ["none"],
+  "frame_kinds": {
+    "hello": 1,
+    "welcome": 2,
+    "request": 3,
+    "response": 4,
+    "event": 5,
+    "cancel": 6,
+    "ping": 7,
+    "pong": 8,
+    "shutdown": 9
+  },
+  "limits": {
+    "max_payload_bytes": 8388608,
+    "pending_rpc_per_session": 256,
+    "game_thread_tasks": 128,
+    "hook_event_ring": 8192,
+    "subscriber_events": 1024,
+    "dump_running": 1,
+    "max_timeout_ms": 120000
+  },
+  "compatibility": {
+    "major": "exact",
+    "minor": "capability-negotiated",
+    "fallback": "forbidden"
+  }
+}

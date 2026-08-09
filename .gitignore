@@ -1,6 +1,13 @@
 # Build artifacts
 Dumper/x64/
 Dumper/UExplorerCore/
+frontend/dist/
+frontend/node_modules/
+frontend/src-tauri/target/
+protocol/rust/target/
+tests/core-harness/x64/
+tests/fake-core/target/
+frontend/lint-report.json
 *.obj
 *.iobj
 *.ipdb

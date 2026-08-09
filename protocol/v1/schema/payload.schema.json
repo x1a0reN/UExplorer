@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://uexplorer.invalid/protocol/v1/payload.schema.json",
+  "title": "UExplorer IPC v1 payloads",
+  "oneOf": [
+    { "$ref": "#/$defs/hello" },
+    { "$ref": "#/$defs/welcome" },
+    { "$ref": "#/$defs/request" },
+    { "$ref": "#/$defs/response" },
+    { "$ref": "#/$defs/event" },
+    { "$ref": "#/$defs/cancel" }
+  ],
+  "$defs": {
+    "protocolVersion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["major", "minor"],
+      "properties": {
+        "major": { "const": 1 },
+        "minor": { "type": "integer", "minimum": 0, "maximum": 65535 }
+      }
+    },
+    "hello": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["host_version", "protocol", "target_pid"],
+      "properties": {
+        "host_version": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "protocol": { "$ref": "#/$defs/protocolVersion" },
+        "target_pid": { "type": "integer", "minimum": 1, "maximum": 4294967295 }
+      }
+    },
+    "welcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["core_version", "protocol", "session_id", "target_pid", "engine_profile", "capabilities", "limits"],
+      "properties": {
+        "core_version": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "protocol": { "$ref": "#/$defs/protocolVersion" },
+        "session_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "target_pid": { "type": "integer", "minimum": 1, "maximum": 4294967295 },
+        "engine_profile": { "type": ["string", "null"], "maxLength": 128 },
+        "capabilities": { "type": "object", "additionalProperties": { "type": "boolean" } },
+        "limits": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } }
+      }
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "session_id", "timeout_ms", "data"],
+      "properties": {
+        "operation": { "type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,127}$" },
+        "session_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 120000 },
+        "data": {}
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "details"],
+      "properties": {
+        "code": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,63}$" },
+        "message": { "type": "string", "maxLength": 1024 },
+        "details": { "type": "object" }
+      }
+    },
+    "response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ok", "request_id", "session_id", "error", "data", "timing"],
+      "properties": {
+        "ok": { "type": "boolean" },
+        "request_id": { "type": "integer", "minimum": 1 },
+        "session_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "error": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/error" }] },
+        "data": {},
+        "timing": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["queued_us", "execute_us"],
+          "properties": {
+            "queued_us": { "type": "integer", "minimum": 0 },
+            "execute_us": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["seq", "kind", "timestamp_us", "session_id", "dropped_before", "data"],
+      "properties": {
+        "seq": { "type": "integer", "minimum": 1 },
+        "kind": { "type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,127}$" },
+        "timestamp_us": { "type": "integer", "minimum": 0 },
+        "session_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "dropped_before": { "type": "integer", "minimum": 0 },
+        "data": {}
+      }
+    },
+    "cancel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["session_id", "reason"],
+      "properties": {
+        "session_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "reason": { "type": "string", "maxLength": 256 }
+      }
+    }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "core_version": "0.1.0",
+  "protocol": { "major": 1, "minor": 0 },
+  "session_id": "fixture-session-4242",
+  "target_pid": 4242,
+  "engine_profile": null,
+  "capabilities": {
+    "status": true,
+    "function_call": false
+  },
+  "limits": {
+    "max_payload_bytes": 8388608,
+    "pending_rpc": 256
+  }
+}

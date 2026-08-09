@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { ArrowDown } from 'lucide-react';
 import { t } from '../../i18n';
@@ -26,22 +26,22 @@ export default function InstancePane({ selectedClass, onSelectInstance }: Instan
 
     const PAGE_SIZE = 500;
 
-    const loadList = async (append = false) => {
+    const loadList = useCallback(async (offset = 0) => {
         if (!selectedClass) return; // Wait until a class is selected
         setListLoading(true);
-        const offset = append ? items.length : 0;
+        const append = offset > 0;
         try {
             const res = await api.getClassInstances(selectedClass, offset, PAGE_SIZE);
             if (res.success && res.data) {
                 // Return data format mapping
-                const mapped = res.data.items.map((i: any) => ({
+                const mapped = res.data.items.map((i) => ({
                     index: i.index,
                     name: i.name,
                     className: selectedClass, // Passed down from selection
                     outerName: i.outer_name || 'Package',
                     address: i.address
                 }));
-                setItems(append ? [...items, ...mapped] : mapped);
+                setItems((current) => append ? [...current, ...mapped] : mapped);
                 setTotal(res.data.matched);
             }
         } catch (error) {
@@ -49,16 +49,15 @@ export default function InstancePane({ selectedClass, onSelectInstance }: Instan
         } finally {
             setListLoading(false);
         }
-    };
+    }, [selectedClass]);
 
     // Reload list when class selection or search changes
     useEffect(() => {
-        setItems([]);
-        const timer = setTimeout(() => {
-            void loadList(false);
+        const timer = window.setTimeout(() => {
+            void loadList(0);
         }, 50); // slight debounce
-        return () => clearTimeout(timer);
-    }, [search, selectedClass]);
+        return () => window.clearTimeout(timer);
+    }, [loadList, search]);
 
     // ─── Virtualization ─────────────────────────────────────────
 
@@ -78,9 +77,9 @@ export default function InstancePane({ selectedClass, onSelectInstance }: Instan
         if (!lastItem) return;
 
         if (lastItem.index >= items.length - 150 && !listLoading && items.length < total) {
-            void loadList(true);
+            void loadList(items.length);
         }
-    }, [virtualItems, items.length, listLoading, total]);
+    }, [items.length, listLoading, loadList, total, virtualItems]);
 
     // ─── Render ────────────────────────────────────────────────
 

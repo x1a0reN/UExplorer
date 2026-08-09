@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Box, Database, Layers, ChevronRight, Package } from 'lucide-react';
 import { t } from '../../i18n';
@@ -14,6 +14,13 @@ interface TypeItem {
     valueCount?: number;
 }
 
+interface ExpandedChild {
+    name: string;
+    type?: string;
+    offset?: number;
+    value?: number;
+}
+
 interface HierarchyPaneProps {
     onSelectClass: (className: string, type: TypeSubTab) => void;
 }
@@ -25,40 +32,40 @@ export default function HierarchyPane({ onSelectClass }: HierarchyPaneProps) {
     const [total, setTotal] = useState(0);
     const [listLoading, setListLoading] = useState(false);
     const [selectedName, setSelectedName] = useState<string | null>(null);
-    const [expandedItems, setExpandedItems] = useState<Record<string, { loading: boolean, data?: any[] }>>({});
+    const [expandedItems, setExpandedItems] = useState<Record<string, { loading: boolean, data?: ExpandedChild[] }>>({});
 
     const PAGE_SIZE = 500;
 
-    const loadList = async (append = false) => {
+    const loadList = useCallback(async (offset = 0) => {
         setListLoading(true);
-        const offset = append ? items.length : 0;
+        const append = offset > 0;
         try {
             if (subTab === 'Class') {
                 const res = await api.getClasses(offset, PAGE_SIZE, search);
                 if (res.success && res.data) {
                     const mapped = res.data.items.map((c) => ({ index: c.index, name: c.name, size: c.size, super: c.super }));
-                    setItems(append ? [...items, ...mapped] : mapped);
+                    setItems((current) => append ? [...current, ...mapped] : mapped);
                     setTotal(res.data.total);
                 }
             } else if (subTab === 'Struct') {
                 const res = await api.getStructs(offset, PAGE_SIZE, search);
                 if (res.success && res.data) {
                     const mapped = res.data.items.map((s) => ({ index: s.index, name: s.name, size: s.size, super: s.super }));
-                    setItems(append ? [...items, ...mapped] : mapped);
+                    setItems((current) => append ? [...current, ...mapped] : mapped);
                     setTotal(res.data.total);
                 }
             } else if (subTab === 'Enum') {
                 const res = await api.getEnums(offset, PAGE_SIZE, search);
                 if (res.success && res.data) {
                     const mapped = res.data.items.map((e) => ({ index: e.index, name: e.name }));
-                    setItems(append ? [...items, ...mapped] : mapped);
+                    setItems((current) => append ? [...current, ...mapped] : mapped);
                     setTotal(res.data.total);
                 }
             } else if (subTab === 'Package') {
                 const res = await api.getPackages(offset, PAGE_SIZE, search);
                 if (res.success && res.data) {
                     const mapped = res.data.items.map((p) => ({ index: p.index, name: p.name }));
-                    setItems(append ? [...items, ...mapped] : mapped);
+                    setItems((current) => append ? [...current, ...mapped] : mapped);
                     setTotal(res.data.total);
                 }
             }
@@ -67,14 +74,16 @@ export default function HierarchyPane({ onSelectClass }: HierarchyPaneProps) {
         } finally {
             setListLoading(false);
         }
-    };
+    }, [search, subTab]);
 
     // Reload when tab or search changes
     useEffect(() => {
-        setItems([]);
-        setExpandedItems({});
-        void loadList(false);
-    }, [subTab, search]);
+        const timer = window.setTimeout(() => {
+            setExpandedItems({});
+            void loadList(0);
+        }, 150);
+        return () => window.clearTimeout(timer);
+    }, [loadList]);
 
     const toggleExpand = async (item: TypeItem) => {
         if (subTab === 'Package') return; // Cannot expand package directly yet
@@ -105,7 +114,7 @@ export default function HierarchyPane({ onSelectClass }: HierarchyPaneProps) {
                     setExpandedItems(prev => ({ ...prev, [item.name]: { loading: false, data: res.data!.values } }));
                 }
             }
-        } catch (error) {
+        } catch {
             setExpandedItems(prev => ({ ...prev, [item.name]: { loading: false, data: [] } }));
         }
     };
@@ -127,9 +136,9 @@ export default function HierarchyPane({ onSelectClass }: HierarchyPaneProps) {
         if (!lastItem) return;
 
         if (lastItem.index >= items.length - 150 && !listLoading && items.length < total) {
-            void loadList(true);
+            void loadList(items.length);
         }
-    }, [virtualItems, items.length, listLoading, total]);
+    }, [items.length, listLoading, loadList, total, virtualItems]);
 
     // ─── Render ────────────────────────────────────────────────
 
@@ -236,7 +245,7 @@ export default function HierarchyPane({ onSelectClass }: HierarchyPaneProps) {
                                         {expandedItems[item.name].loading ? (
                                             <div className="text-[10px] text-text-low font-mono py-1">{t('Loading...')}</div>
                                         ) : (
-                                            expandedItems[item.name].data?.map((child: any, i: number) => (
+                                            expandedItems[item.name].data?.map((child, i) => (
                                                 <div key={i} className="flex flex-col border-b border-white/5 last:border-0 py-0.5">
                                                     {subTab === 'Enum' ? (
                                                         <div className="flex items-center justify-between">
@@ -248,7 +257,7 @@ export default function HierarchyPane({ onSelectClass }: HierarchyPaneProps) {
                                                             <span className="text-[10px] text-text-mid font-mono truncate max-w-[120px]" title={child.name}>{child.name}</span>
                                                             <div className="flex items-center gap-2">
                                                                 <span className="text-[9px] text-text-low border border-border-subtle rounded px-0.5 font-mono truncate max-w-[60px]" title={child.type}>{child.type}</span>
-                                                                <span className="text-[9px] text-text-low font-mono">+0x{child.offset.toString(16).toUpperCase().padStart(2, '0')}</span>
+                                                                <span className="text-[9px] text-text-low font-mono">+0x{(child.offset ?? 0).toString(16).toUpperCase().padStart(2, '0')}</span>
                                                             </div>
                                                         </div>
                                                     )}

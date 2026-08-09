@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import api from '../api';
 import { t } from '../i18n';
 
@@ -84,30 +84,30 @@ export default function ProcessSelector({ isOpen, onClose, onInjectSuccess }: Pr
   const [error, setError] = useState<string | null>(null);
   const [injectResult, setInjectResult] = useState<{ success: boolean; message: string } | null>(null);
 
-  useEffect(() => {
-    if (isOpen) {
-      setDllPath(api.getSettings().dllPath);
-      loadProcesses();
-    }
-  }, [isOpen]);
-
-  const loadProcesses = async () => {
+  const loadProcesses = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const procs = await api.scanUEProcesses();
       const filtered = procs.filter(isUEProcessCandidate);
       setProcesses(filtered);
-      if (selectedProcess && !filtered.some((p) => p.pid === selectedProcess.pid)) {
-        setSelectedProcess(null);
-      }
+      setSelectedProcess((current) =>
+        current && !filtered.some((process) => process.pid === current.pid) ? null : current
+      );
     } catch (err) {
       setError(t('Failed to scan processes'));
       console.error(err);
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setDllPath(api.getSettings().dllPath);
+    const timer = window.setTimeout(() => void loadProcesses(), 0);
+    return () => window.clearTimeout(timer);
+  }, [isOpen, loadProcesses]);
 
   const handleInject = async () => {
     if (!selectedProcess) return;

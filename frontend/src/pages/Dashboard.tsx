@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import api, { type EngineStatusData, type ObjectCountData, type StatusData } from '../api';
 import ProcessSelector from '../components/ProcessSelector';
 import { t } from '../i18n';
@@ -17,7 +17,8 @@ import {
   Search,
   RefreshCw,
   Zap,
-  Settings2
+  Settings2,
+  type LucideIcon,
 } from 'lucide-react';
 
 interface DashboardProps {
@@ -36,25 +37,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
   const [showProcessSelector, setShowProcessSelector] = useState(false);
   const [port, setPort] = useState<number>(api.getSettings().port);
 
-  useEffect(() => {
-    loadStatus();
-    const interval = setInterval(loadStatus, 5000);
-    return () => clearInterval(interval);
-  }, []);
-
-  useEffect(() => {
-    const conn = api.connectWebSocket('/ws/events', {
-      onOpen: () => setEventWsConnected(true),
-      onClose: () => setEventWsConnected(false),
-      onError: () => setEventWsConnected(false),
-      onMessage: () => {
-        setEventWsCount((v) => v + 1);
-      },
-    });
-    return () => conn.close();
-  }, []);
-
-  const loadStatus = async () => {
+  const loadStatus = useCallback(async () => {
     const [statusResponse, countsResponse, worldResponse, engineResponse] = await Promise.all([
       api.getStatus(),
       api.getObjectCounts(),
@@ -70,27 +53,33 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
       setError(statusResponse.error || t('Failed to connect'));
     }
 
-    if (countsResponse.success && countsResponse.data) {
-      setCounts(countsResponse.data);
-    } else {
-      setCounts(null);
-    }
-
-    if (worldResponse.success && worldResponse.data) {
-      setActorCount(worldResponse.data.actor_count);
-    } else {
-      setActorCount(0);
-    }
-
-    if (engineResponse.success && engineResponse.data) {
-      setEngineStatus(engineResponse.data);
-    } else {
-      setEngineStatus(null);
-    }
-
+    setCounts(countsResponse.success && countsResponse.data ? countsResponse.data : null);
+    setActorCount(worldResponse.success && worldResponse.data ? worldResponse.data.actor_count : 0);
+    setEngineStatus(engineResponse.success && engineResponse.data ? engineResponse.data : null);
     setPort(api.getSettings().port);
     setLoading(false);
-  };
+  }, []);
+
+  useEffect(() => {
+    const initialLoad = window.setTimeout(() => void loadStatus(), 0);
+    const interval = window.setInterval(() => void loadStatus(), 5000);
+    return () => {
+      window.clearTimeout(initialLoad);
+      window.clearInterval(interval);
+    };
+  }, [loadStatus]);
+
+  useEffect(() => {
+    const conn = api.connectWebSocket('/ws/events', {
+      onOpen: () => setEventWsConnected(true),
+      onClose: () => setEventWsConnected(false),
+      onError: () => setEventWsConnected(false),
+      onMessage: () => {
+        setEventWsCount((v) => v + 1);
+      },
+    });
+    return () => conn.close();
+  }, []);
 
   if (loading) {
     return (
@@ -322,7 +311,15 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
   );
 }
 
-function BentoStatItem({ icon: Icon, label, value, color, bg }: any) {
+interface BentoStatItemProps {
+  icon: LucideIcon;
+  label: string;
+  value: string | number;
+  color: string;
+  bg: string;
+}
+
+function BentoStatItem({ icon: Icon, label, value, color, bg }: BentoStatItemProps) {
   return (
     <div className="bg-surface-dark border border-border-subtle rounded-xl p-4 flex flex-col justify-between group h-full">
       <div className="flex items-center justify-between mb-2">
@@ -338,7 +335,16 @@ function BentoStatItem({ icon: Icon, label, value, color, bg }: any) {
   );
 }
 
-function BentoCategoryBox({ icon: Icon, label, value, color, bg, onClick }: any) {
+interface BentoCategoryBoxProps {
+  icon: LucideIcon;
+  label: string;
+  value: number;
+  color: string;
+  bg: string;
+  onClick: () => void;
+}
+
+function BentoCategoryBox({ icon: Icon, label, value, color, bg, onClick }: BentoCategoryBoxProps) {
   return (
     <div onClick={onClick} className="md:col-span-3 bg-surface-dark border border-border-subtle rounded-xl p-4 cursor-pointer hover:bg-surface-stripe transition-all duration-200">
       <div className="flex items-start justify-between mb-3">
@@ -353,7 +359,15 @@ function BentoCategoryBox({ icon: Icon, label, value, color, bg, onClick }: any)
   );
 }
 
-function ActionListItem({ icon: Icon, title, desc, shortcut, onClick }: any) {
+interface ActionListItemProps {
+  icon: LucideIcon;
+  title: string;
+  desc: string;
+  shortcut: string;
+  onClick: () => void;
+}
+
+function ActionListItem({ icon: Icon, title, desc, shortcut, onClick }: ActionListItemProps) {
   return (
     <div onClick={onClick} className="flex items-center justify-between p-3 rounded-lg bg-surface-stripe/50 border border-border-subtle hover:bg-surface-stripe cursor-pointer transition-colors group">
       <div className="flex items-center gap-3">

@@ -181,6 +181,8 @@
     <ClInclude Include="Utils\Encoding\UtfN.hpp" />
     <ClInclude Include="Utils\Json\json.hpp" />
     <ClInclude Include="Utils\Utils.h" />
+    <ClInclude Include="IPC\Protocol.h" />
+    <ClInclude Include="Runtime\BoundedQueue.h" />
     <!-- New: Server Headers -->
     <ClInclude Include="Server\HttpServer.h" />
     <!-- New: API Headers -->

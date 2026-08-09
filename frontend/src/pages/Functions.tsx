@@ -146,15 +146,6 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
   const hookLogTotalPages = Math.max(1, Math.ceil(hookLog.length / hookLogPageSize));
 
   useEffect(() => {
-    void loadFunctions();
-  }, [search, classFilter, flagTab]);
-
-  useEffect(() => {
-    if (!selected) return;
-    void loadFunctionDetail(selected.index);
-  }, [selected]);
-
-  useEffect(() => {
     setHookPage(1);
   }, [hookFilterKeyword, hookFilterClass]);
 
@@ -297,7 +288,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
     };
   }, [activeTab, clearHookReconnectTimer, refreshHookLog, refreshHooks, startHookPolling, stopHookPolling, viewMode]);
 
-  const loadFunctions = async () => {
+  const loadFunctions = useCallback(async () => {
     setListLoading(true);
     setListError(null);
     try {
@@ -331,9 +322,9 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
     } finally {
       setListLoading(false);
     }
-  };
+  }, [classFilter, flagTab, search]);
 
-  const loadFunctionDetail = async (index: number) => {
+  const loadFunctionDetail = useCallback(async (index: number) => {
     setDetailLoading(true);
     setDetailError(null);
     setFunctionMeta(null);
@@ -378,14 +369,23 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
         setTargetIndex('');
       }
 
-      await refreshHookLog();
-      await refreshHooks();
     } catch (error) {
       setDetailError(error instanceof Error ? error.message : String(error));
     } finally {
       setDetailLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => void loadFunctions(), 150);
+    return () => window.clearTimeout(timer);
+  }, [loadFunctions]);
+
+  useEffect(() => {
+    if (!selected) return;
+    const timer = window.setTimeout(() => void loadFunctionDetail(selected.index), 0);
+    return () => window.clearTimeout(timer);
+  }, [loadFunctionDetail, selected]);
 
   const executeCall = async () => {
     if (!detail) return;
@@ -1124,4 +1124,3 @@ function InfoLine({ k, v }: { k: string; v: string }) {
     </div>
   );
 }
-

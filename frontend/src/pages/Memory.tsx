@@ -54,6 +54,7 @@ export default function Memory() {
   const [currentAddress, setCurrentAddress] = useState('0x0');
   const [history, setHistory] = useState<string[]>(['0x0']);
   const [historyIndex, setHistoryIndex] = useState(0);
+  const historyIndexRef = useRef(0);
 
   const [hexBytes, setHexBytes] = useState<string[]>([]);
   const [readError, setReadError] = useState<string | null>(null);
@@ -148,10 +149,6 @@ export default function Memory() {
   }, []);
 
   useEffect(() => {
-    void loadMemory('0x0', false);
-  }, []);
-
-  useEffect(() => {
     const conn = api.connectWebSocket('/ws/console', {
       onOpen: () => {
         setWsConsoleConnected(true);
@@ -226,11 +223,6 @@ export default function Memory() {
     };
   }, [clearWatchReconnectTimer, refreshWatches, startWatchPolling, stopWatchPolling]);
 
-  useEffect(() => {
-    if (!currentAddress) return;
-    void loadTypedValues();
-  }, [currentAddress, cursorOffset, hexBytes.length]);
-
   const consoleEndRef = useRef<HTMLDivElement>(null);
 
   function pushConsole(line: string) {
@@ -241,7 +233,12 @@ export default function Memory() {
     consoleEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [consoleLogs]);
 
-  const loadMemory = async (addr: string, pushHistory = true) => {
+  const updateHistoryIndex = useCallback((next: number) => {
+    historyIndexRef.current = next;
+    setHistoryIndex(next);
+  }, []);
+
+  const loadMemory = useCallback(async (addr: string, pushHistory = true) => {
     setLoading(true);
     setReadError(null);
     const normalized = parseAddress(addr);
@@ -260,14 +257,14 @@ export default function Memory() {
 
     if (pushHistory) {
       setHistory((prev) => {
-        const next = [...prev.slice(0, historyIndex + 1), res.data?.address || normalized];
-        setHistoryIndex(next.length - 1);
+        const next = [...prev.slice(0, historyIndexRef.current + 1), res.data?.address || normalized];
+        updateHistoryIndex(next.length - 1);
         return next;
       });
     }
-  };
+  }, [updateHistoryIndex]);
 
-  const loadTypedValues = async () => {
+  const loadTypedValues = useCallback(async () => {
     const base = Number.parseInt(currentAddress.replace(/^0x/i, ''), 16) || 0;
     const at = `0x${(base + cursorOffset).toString(16).toUpperCase()}`;
     const types = ['byte', 'int32', 'uint32', 'int64', 'uint64', 'float', 'double', 'pointer'];
@@ -278,7 +275,18 @@ export default function Memory() {
       next[types[i]] = res.success && res.data ? String(res.data.value) : '-';
     });
     setTypedValues(next);
-  };
+  }, [currentAddress, cursorOffset]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => void loadMemory('0x0', false), 0);
+    return () => window.clearTimeout(timer);
+  }, [loadMemory]);
+
+  useEffect(() => {
+    if (!currentAddress) return;
+    const timer = window.setTimeout(() => void loadTypedValues(), 0);
+    return () => window.clearTimeout(timer);
+  }, [currentAddress, hexBytes.length, loadTypedValues]);
 
   const navigateToInput = async () => {
     await loadMemory(addressInput, true);
@@ -287,14 +295,14 @@ export default function Memory() {
   const navigateBack = async () => {
     if (historyIndex <= 0) return;
     const target = history[historyIndex - 1];
-    setHistoryIndex((idx) => idx - 1);
+    updateHistoryIndex(historyIndex - 1);
     await loadMemory(target, false);
   };
 
   const navigateForward = async () => {
     if (historyIndex >= history.length - 1) return;
     const target = history[historyIndex + 1];
-    setHistoryIndex((idx) => idx + 1);
+    updateHistoryIndex(historyIndex + 1);
     await loadMemory(target, false);
   };
 
@@ -682,4 +690,3 @@ function InspectorRow({ label, value, isLink }: { label: string; value: string; 
     </div>
   );
 }
-

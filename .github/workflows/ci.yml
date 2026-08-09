@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  contracts-and-core:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify issue and API contracts
+        shell: pwsh
+        run: |
+          ./tests/contracts/verify-issue-register.ps1
+          ./tests/contracts/verify-api-v1.ps1
+          Get-Content ./protocol/v1/protocol.json -Raw -Encoding UTF8 | ConvertFrom-Json | Out-Null
+          Get-Content ./protocol/v1/schema/payload.schema.json -Raw -Encoding UTF8 | ConvertFrom-Json | Out-Null
+
+      - name: Configure MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build Core DLL
+        shell: pwsh
+        run: >-
+          msbuild ./Dumper/UExplorerCore.vcxproj
+          /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143
+          /m:1 /v:minimal
+
+      - name: Build Core harness
+        shell: pwsh
+        run: >-
+          msbuild ./tests/core-harness/CoreHarness.vcxproj
+          /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143
+          /m:1 /v:minimal
+
+      - name: Run Core harness
+        shell: pwsh
+        run: ./tests/core-harness/x64/Release/CoreHarness.exe ./protocol/v1/fixtures
+
+  frontend:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run test
+      - run: npm run build
+
+  rust:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust quality components
+        shell: pwsh
+        run: rustup component add rustfmt clippy
+
+      - name: Check formatting
+        shell: pwsh
+        run: |
+          cargo fmt --manifest-path ./frontend/src-tauri/Cargo.toml -- --check
+          cargo fmt --manifest-path ./protocol/rust/Cargo.toml -- --check
+          cargo fmt --manifest-path ./tests/fake-core/Cargo.toml -- --check
+
+      - name: Run Clippy
+        shell: pwsh
+        run: |
+          cargo clippy --manifest-path ./frontend/src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
+          cargo clippy --manifest-path ./protocol/rust/Cargo.toml --all-targets -- -D warnings
+          cargo clippy --manifest-path ./tests/fake-core/Cargo.toml --all-targets -- -D warnings
+
+      - name: Run Rust tests
+        shell: pwsh
+        run: |
+          cargo test --manifest-path ./frontend/src-tauri/Cargo.toml
+          cargo test --manifest-path ./protocol/rust/Cargo.toml
+          cargo test --manifest-path ./tests/fake-core/Cargo.toml

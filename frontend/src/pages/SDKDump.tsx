@@ -56,11 +56,16 @@ export default function SDKDump() {
   }, []);
 
   useEffect(() => {
-    void loadJobs();
-    const timer = setInterval(() => {
+    const initialLoad = window.setTimeout(() => {
+      void loadJobs();
+    }, 0);
+    const timer = window.setInterval(() => {
       void loadJobs();
     }, 1200);
-    return () => clearInterval(timer);
+    return () => {
+      window.clearTimeout(initialLoad);
+      window.clearInterval(timer);
+    };
   }, [loadJobs]);
 
   const sortedJobs = useMemo(
@@ -342,5 +347,4 @@ function ToggleRow({
     </div>
   );
 }
-
 

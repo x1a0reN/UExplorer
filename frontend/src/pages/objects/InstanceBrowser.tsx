@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { t } from '../../i18n';
 import { Search, Box, RefreshCw, Save, ExternalLink } from 'lucide-react';
@@ -7,7 +7,8 @@ import api, {
     type ObjectProperty,
     type OuterChainItem,
 } from '../../api';
-import { Panel, InfoRow, HeaderCard, parseInputValue, toEditable, type BrowserPageProps, type ModeNavContext } from './shared';
+import { Panel, InfoRow, HeaderCard, type BrowserPageProps, type ModeNavContext } from './shared';
+import { parseInputValue, toEditable } from './valueUtils';
 
 // ─── Types ─────────────────────────────────────────────────────
 
@@ -48,15 +49,15 @@ export default function InstanceBrowser({ onNavigate, onSwitchMode, navContext }
 
     const PAGE_SIZE = 500;
 
-    const loadList = async (append = false) => {
+    const loadList = useCallback(async (offset = 0) => {
         setListLoading(true);
         setListError(null);
-        const offset = append ? items.length : 0;
+        const append = offset > 0;
         try {
             const res = await api.searchObjects(search, { class: classFilter || undefined, offset, limit: PAGE_SIZE });
             if (res.success && res.data) {
                 const mapped = res.data.items.map((o) => ({ index: o.index, name: o.name, className: o.class, address: o.address }));
-                setItems(append ? [...items, ...mapped] : mapped);
+                setItems((current) => append ? [...current, ...mapped] : mapped);
                 setTotal(res.data.matched);
             }
         } catch (error) {
@@ -64,7 +65,7 @@ export default function InstanceBrowser({ onNavigate, onSwitchMode, navContext }
         } finally {
             setListLoading(false);
         }
-    };
+    }, [classFilter, search]);
 
     const loadDetail = async (item: InstanceItem) => {
         setDetailLoading(true);
@@ -112,7 +113,10 @@ export default function InstanceBrowser({ onNavigate, onSwitchMode, navContext }
         setPropertyRefreshing((prev) => ({ ...prev, [propName]: false }));
     };
 
-    useEffect(() => { void loadList(); }, [search, classFilter]);
+    useEffect(() => {
+        const timer = window.setTimeout(() => void loadList(0), 150);
+        return () => window.clearTimeout(timer);
+    }, [loadList]);
 
     // ─── Virtualization ─────────────────────────────────────────
 
@@ -132,9 +136,9 @@ export default function InstanceBrowser({ onNavigate, onSwitchMode, navContext }
 
         // Fetch more items when scrolled to the last 150 items
         if (lastItem.index >= items.length - 150 && !listLoading && items.length < total) {
-            void loadList(true);
+            void loadList(items.length);
         }
-    }, [virtualItems, items.length, listLoading, total]);
+    }, [items.length, listLoading, loadList, total, virtualItems]);
 
     // ─── Render ────────────────────────────────────────────────
 

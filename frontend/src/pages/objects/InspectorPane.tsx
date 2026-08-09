@@ -3,6 +3,7 @@ import { MoreHorizontal, Save, RefreshCw } from 'lucide-react';
 import { t } from '../../i18n';
 import api from '../../api';
 import type { ClassFunction, ClassProperty, ClassHierarchy, ObjectDetail, ObjectProperty } from '../../api';
+import { parseInputValue, toEditable } from './valueUtils';
 
 interface InspectorPaneProps {
     selectedClass: string | null;
@@ -11,29 +12,6 @@ interface InspectorPaneProps {
 }
 
 type TabType = 'Properties' | 'Fields' | 'Functions' | 'CDO' | 'Values';
-
-// Helper to reliably convert various value types to string for inputs
-function toEditable(val: unknown): string {
-    if (val === null || val === undefined) return '';
-    if (typeof val === 'string') return val;
-    if (typeof val === 'number') return val.toString();
-    if (typeof val === 'boolean') return val ? 'true' : 'false';
-    if (typeof val === 'object') return JSON.stringify(val);
-    return String(val);
-}
-
-// Convert string back to proper typed value
-function parseInputValue(valStr: string): any {
-    if (valStr.toLowerCase() === 'true') return true;
-    if (valStr.toLowerCase() === 'false') return false;
-    const num = Number(valStr);
-    if (!isNaN(num) && valStr.trim() !== '') return num;
-    try {
-        return JSON.parse(valStr);
-    } catch {
-        return valStr;
-    }
-}
 
 export default function InspectorPane({ selectedClass, selectedType, selectedIndex }: InspectorPaneProps) {
     // Context state
@@ -135,7 +113,7 @@ export default function InspectorPane({ selectedClass, selectedType, selectedInd
         };
 
         void loadData();
-    }, [selectedClass, selectedIndex]);
+    }, [isInstanceMode, selectedClass, selectedIndex, selectedType]);
 
     const handlePropertySave = async (propName: string) => {
         if (!isInstanceMode || selectedIndex === null) return;

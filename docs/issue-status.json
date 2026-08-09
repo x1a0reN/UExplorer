@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "source": "../REFACTOR_PLAN.md",
+  "allowed_statuses": ["open", "in_progress", "blocked", "verified"],
+  "default": {
+    "status": "open",
+    "verification": []
+  },
+  "owners_by_prefix": {
+    "BP": "core-blueprint",
+    "CALL": "core-call",
+    "CLASS": "core-object",
+    "DUMP": "core-dump",
+    "ENG": "engineering",
+    "GT": "core-game-thread",
+    "HOOK": "core-hook",
+    "INJ": "host-injection",
+    "LIFE": "core-runtime",
+    "MEM": "core-memory",
+    "NET": "transport",
+    "OBJ": "core-object",
+    "OFF": "core-engine",
+    "PLATFORM": "core-platform",
+    "PROC": "host-process",
+    "SEC": "host-security",
+    "STATE": "core-runtime",
+    "UI": "frontend",
+    "WATCH": "core-watch",
+    "WORLD": "core-world"
+  },
+  "overrides": {
+    "ENG-001": {
+      "status": "in_progress",
+      "verification": ["R0 test harness and CI scaffolding in progress"]
+    },
+    "ENG-003": {
+      "status": "verified",
+      "verification": ["2026-08-09: root and frontend README replaced with current architecture and validation commands"]
+    },
+    "ENG-007": {
+      "status": "in_progress",
+      "verification": ["ESLint excludes src-tauri/target; C++ warning gates remain open"]
+    },
+    "ENG-008": {
+      "status": "in_progress",
+      "verification": ["IPC v1 ADR and machine-readable protocol contract added"]
+    },
+    "UI-015": {
+      "status": "verified",
+      "verification": [
+        "2026-08-09: cd frontend; npm run lint",
+        "2026-08-09: cd frontend; npm run build"
+      ]
+    }
+  }
+}

@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { t } from '../../i18n';
 import { Search, Box, Database, Layers, Hash, ExternalLink } from 'lucide-react';
@@ -24,11 +24,10 @@ interface TypeItem {
 
 // ─── Component ─────────────────────────────────────────────────
 
-export default function TypeBrowser({ onNavigate: _onNavigate, onSwitchMode }: BrowserPageProps) {
+export default function TypeBrowser({ onSwitchMode }: BrowserPageProps) {
     // Left panel state
     const [subTab, setSubTab] = useState<TypeSubTab>('Class');
     const [search, setSearch] = useState('');
-    const [packageFilter] = useState('');
     const [items, setItems] = useState<TypeItem[]>([]);
     const [total, setTotal] = useState(0);
     const [listLoading, setListLoading] = useState(false);
@@ -58,30 +57,30 @@ export default function TypeBrowser({ onNavigate: _onNavigate, onSwitchMode }: B
 
     const PAGE_SIZE = 500;
 
-    const loadList = async (append = false) => {
+    const loadList = useCallback(async (offset = 0) => {
         setListLoading(true);
         setListError(null);
-        const offset = append ? items.length : 0;
+        const append = offset > 0;
         try {
             if (subTab === 'Class') {
                 const res = await api.getClasses(offset, PAGE_SIZE, search);
                 if (res.success && res.data) {
                     const mapped = res.data.items.map((c) => ({ index: c.index, name: c.name, size: c.size, super: c.super }));
-                    setItems(append ? [...items, ...mapped] : mapped);
+                    setItems((current) => append ? [...current, ...mapped] : mapped);
                     setTotal(res.data.total);
                 }
             } else if (subTab === 'Struct') {
                 const res = await api.getStructs(offset, PAGE_SIZE, search);
                 if (res.success && res.data) {
                     const mapped = res.data.items.map((s) => ({ index: s.index, name: s.name, size: s.size, super: s.super }));
-                    setItems(append ? [...items, ...mapped] : mapped);
+                    setItems((current) => append ? [...current, ...mapped] : mapped);
                     setTotal(res.data.total);
                 }
             } else if (subTab === 'Enum') {
                 const res = await api.getEnums(offset, PAGE_SIZE, search);
                 if (res.success && res.data) {
                     const mapped = res.data.items.map((e) => ({ index: e.index, name: e.name }));
-                    setItems(append ? [...items, ...mapped] : mapped);
+                    setItems((current) => append ? [...current, ...mapped] : mapped);
                     setTotal(res.data.total);
                 }
             }
@@ -90,7 +89,7 @@ export default function TypeBrowser({ onNavigate: _onNavigate, onSwitchMode }: B
         } finally {
             setListLoading(false);
         }
-    };
+    }, [search, subTab]);
 
     const loadDetail = async (item: TypeItem) => {
         setDetailLoading(true);
@@ -159,7 +158,10 @@ export default function TypeBrowser({ onNavigate: _onNavigate, onSwitchMode }: B
         }
     };
 
-    useEffect(() => { void loadList(); }, [subTab, search, packageFilter]);
+    useEffect(() => {
+        const timer = window.setTimeout(() => void loadList(0), 150);
+        return () => window.clearTimeout(timer);
+    }, [loadList]);
 
     // ─── Virtualization ─────────────────────────────────────────
 
@@ -180,9 +182,9 @@ export default function TypeBrowser({ onNavigate: _onNavigate, onSwitchMode }: B
 
         // Fetch more items when scrolled to the last 150 items
         if (lastItem.index >= items.length - 150 && !listLoading && items.length < total) {
-            void loadList(true);
+            void loadList(items.length);
         }
-    }, [virtualItems, items.length, listLoading, total]);
+    }, [items.length, listLoading, loadList, total, virtualItems]);
 
     // ─── Render ────────────────────────────────────────────────
 
