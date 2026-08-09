@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <memory>
 #include <random>
 #include <stdexcept>
 #include <vector>
@@ -25,6 +26,7 @@
 #include "Runtime/EngineFacade.h"
 #include "Runtime/GameThreadExecutor.h"
 #include "Runtime/ObjectArrayIdentitySource.h"
+#include "Runtime/ObjectArraySnapshotSource.h"
 #include "Runtime/ShutdownCoordinator.h"
 #include "Services/CoreCommandService.h"
 #include "Services/CoreCommandServiceAccess.h"
@@ -38,7 +40,9 @@ static UExplorer::Runtime::CoreRuntime g_Runtime;
 static UExplorer::Services::EngineCoreStatusDiagnosticsSource g_StatusDiagnostics;
 static std::unique_ptr<UExplorer::Runtime::ObjectArrayIdentitySource> g_IdentitySource;
 static std::unique_ptr<UExplorer::Runtime::EngineFacade> g_EngineFacade;
+static std::unique_ptr<UExplorer::Runtime::ObjectArraySnapshotSource> g_SnapshotSource;
 static std::unique_ptr<UExplorer::Services::CoreCommandService> g_CommandService;
+static bool g_SnapshotPumpAttached = false;
 static HMODULE g_Module = nullptr;
 
 namespace
@@ -212,6 +216,7 @@ namespace
 		UExplorer::Services::SetCoreCommandService(nullptr);
 		g_CommandService.reset();
 		g_EngineFacade.reset();
+		g_SnapshotSource.reset();
 		g_IdentitySource.reset();
 		g_Runtime.MarkFailed(code, message);
 		g_Runtime.BeginStopping();
@@ -388,6 +393,22 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 			*g_IdentitySource);
 		if (!g_EngineFacade->IsConfigured())
 			throw std::runtime_error("EngineFacade rejected the runtime session/context");
+		if (g_EngineFacade->Names().IsConfigured() && g_IdentitySource->CanReadObjectSlots())
+		{
+			g_SnapshotSource = std::make_unique<UExplorer::Runtime::ObjectArraySnapshotSource>(
+				runtimeSnapshot.Context,
+				*g_EngineFacade,
+				*g_IdentitySource);
+			if (!g_SnapshotSource->IsConfigured()
+				|| !g_EngineFacade->ConfigureSnapshotCapture(*g_SnapshotSource))
+			{
+				throw std::runtime_error("Production object snapshot source rejected the immutable context");
+			}
+		}
+		else
+		{
+			std::cerr << "[UExplorer] Object snapshot unavailable: immutable names or serial-backed object slots are not validated.\n";
+		}
 		g_CommandService = std::make_unique<UExplorer::Services::CoreCommandService>(
 			g_Runtime,
 			UExplorer::Runtime::GetGameThreadExecutor(),
@@ -440,6 +461,26 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 			}
 			else
 			{
+				if (UExplorer::Runtime::EngineSnapshotCapture* capture =
+					g_EngineFacade ? g_EngineFacade->SnapshotCapture() : nullptr)
+				{
+					auto& pump = UExplorer::Runtime::GetPostRenderPumpBackend();
+					if (!pump.AttachFrameClient(*capture))
+					{
+						std::cerr << "[UExplorer] Object snapshot unavailable: PostRender frame client attachment failed.\n";
+					}
+					else
+					{
+						g_SnapshotPumpAttached = true;
+						const UExplorer::Runtime::SnapshotCaptureRequestResult requested =
+							capture->RequestCapture();
+						if (!requested.Ok())
+						{
+							std::cerr << "[UExplorer] Initial object snapshot request failed: "
+								<< UExplorer::Runtime::ToString(requested.Error) << "\n";
+						}
+					}
+				}
 				const uint16_t actualPort = g_Server->GetPort();
 				WriteRuntimeState(actualPort, token, true);
 				RefreshRuntimeCapabilities(true);
@@ -453,9 +494,32 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 	}
 
 	// Keep alive only after every required startup stage succeeds.
+	auto nextSnapshotRefresh = std::chrono::steady_clock::now() + std::chrono::seconds(2);
 	while (startupReady && g_Running.load())
 	{
 		RefreshRuntimeCapabilities(true);
+		const auto now = std::chrono::steady_clock::now();
+		if (g_SnapshotPumpAttached && now >= nextSnapshotRefresh)
+		{
+			if (UExplorer::Runtime::EngineSnapshotCapture* capture =
+				g_EngineFacade ? g_EngineFacade->SnapshotCapture() : nullptr)
+			{
+				const UExplorer::Runtime::SnapshotCaptureState state = capture->Diagnostics().State;
+				if (state == UExplorer::Runtime::SnapshotCaptureState::Idle
+					|| state == UExplorer::Runtime::SnapshotCaptureState::Completed
+					|| state == UExplorer::Runtime::SnapshotCaptureState::Failed)
+				{
+					const UExplorer::Runtime::SnapshotCaptureRequestResult requested =
+						capture->RequestCapture();
+					if (!requested.Ok())
+					{
+						std::cerr << "[UExplorer] Object snapshot refresh request failed: "
+							<< UExplorer::Runtime::ToString(requested.Error) << "\n";
+					}
+				}
+			}
+			nextSnapshotRefresh = now + std::chrono::seconds(2);
+		}
 		if (GetAsyncKeyState(VK_F6) & 1)
 		{
 			g_Running.store(false);
@@ -472,6 +536,7 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 	bool serverStopped = true;
 	bool dumpStopped = true;
 	bool hooksStopped = true;
+	bool snapshotPumpStopped = true;
 	UExplorer::Runtime::ShutdownCoordinator shutdown;
 	shutdown.AddStage("legacy_http", [&] {
 		serverStopped = !g_Server || g_Server->Stop();
@@ -485,9 +550,24 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 		hooksStopped = UExplorer::API::ShutdownHooks();
 		return hooksStopped;
 	});
+	shutdown.AddStage("snapshot_pump", [&] {
+		if (!g_SnapshotPumpAttached)
+			return true;
+		UExplorer::Runtime::EngineSnapshotCapture* capture =
+			g_EngineFacade ? g_EngineFacade->SnapshotCapture() : nullptr;
+		if (!capture)
+			return false;
+		snapshotPumpStopped = UExplorer::Runtime::GetPostRenderPumpBackend().DetachFrameClient(
+			*capture,
+			std::chrono::milliseconds(5000));
+		if (snapshotPumpStopped)
+			g_SnapshotPumpAttached = false;
+		return snapshotPumpStopped;
+	});
 	shutdown.AddStage("engine_facade", [&] {
-		return !g_EngineFacade
-			|| g_EngineFacade->Stop(std::chrono::milliseconds(5000));
+		return snapshotPumpStopped
+			&& (!g_EngineFacade
+				|| g_EngineFacade->Stop(std::chrono::milliseconds(5000)));
 	});
 	shutdown.AddStage("runtime_requests", [&] {
 		return g_Runtime.WaitForRequests(std::chrono::milliseconds(5000));
@@ -516,6 +596,7 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 	}
 	g_CommandService.reset();
 	g_EngineFacade.reset();
+	g_SnapshotSource.reset();
 	g_IdentitySource.reset();
 	if (!g_Runtime.MarkStopped())
 	{

@@ -59,6 +59,7 @@
 	<ClCompile Include="..\..\Dumper\Runtime\EngineSnapshotCapture.cpp" />
 	<ClCompile Include="..\..\Dumper\Runtime\FUObjectItemLayout.cpp" />
 	<ClCompile Include="..\..\Dumper\Runtime\GameThreadExecutor.cpp" />
+	<ClCompile Include="..\..\Dumper\Runtime\ObjectArraySnapshotSource.cpp" />
     <ClCompile Include="..\..\Dumper\Runtime\ObjectHandle.cpp" />
     <ClCompile Include="..\..\Dumper\Runtime\SafeMemory.cpp" />
     <ClCompile Include="..\..\Dumper\Runtime\VTableHook.cpp" />
@@ -80,8 +81,10 @@
 	<ClInclude Include="..\..\Dumper\Runtime\EngineSnapshotCapture.h" />
 	<ClInclude Include="..\..\Dumper\Runtime\FUObjectItemLayout.h" />
 	<ClInclude Include="..\..\Dumper\Runtime\GameThreadExecutor.h" />
+	<ClInclude Include="..\..\Dumper\Runtime\ObjectArraySnapshotSource.h" />
     <ClInclude Include="..\..\Dumper\Runtime\ObjectHandle.h" />
 	<ClInclude Include="..\..\Dumper\Runtime\ObjectIdentityContext.h" />
+	<ClInclude Include="..\..\Dumper\Runtime\ObjectSnapshotIdentitySource.h" />
     <ClInclude Include="..\..\Dumper\Runtime\SafeMemory.h" />
     <ClInclude Include="..\..\Dumper\Runtime\ShutdownCoordinator.h" />
     <ClInclude Include="..\..\Dumper\Runtime\VTableHook.h" />

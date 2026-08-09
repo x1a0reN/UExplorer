@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CallbackBarrier.h"
+
 #include <Windows.h>
 
 #include <atomic>
@@ -167,6 +169,13 @@ public:
 	virtual const char* BackendName() const noexcept = 0;
 };
 
+class IGameThreadFrameClient
+{
+public:
+	virtual ~IGameThreadFrameClient() = default;
+	virtual void PumpFrame() noexcept = 0;
+};
+
 class PostRenderPumpBackend final : public IGameThreadPump
 {
 public:
@@ -177,9 +186,19 @@ public:
 
 	void Tick() noexcept override;
 	const char* BackendName() const noexcept override { return "post_render_vtable"; }
+	bool AttachFrameClient(IGameThreadFrameClient& client) noexcept;
+	bool DetachFrameClient(
+		IGameThreadFrameClient& client,
+		std::chrono::milliseconds timeout = std::chrono::milliseconds(5000));
+	bool HasFrameClient() const noexcept;
+	std::uint32_t FrameClientInFlight() const noexcept;
 
 private:
 	GameThreadExecutor& m_Executor;
+	std::atomic<IGameThreadFrameClient*> m_FrameClient{nullptr};
+	CallbackBarrier m_FrameClientBarrier;
+	mutable std::mutex m_FrameClientMutex;
+	IGameThreadFrameClient* m_DrainingClient = nullptr;
 };
 
 GameThreadExecutor& GetGameThreadExecutor();

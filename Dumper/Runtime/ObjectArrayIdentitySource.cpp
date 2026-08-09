@@ -208,6 +208,17 @@ bool ObjectArrayIdentitySource::IsCurrentExecutionThreadValid() const noexcept
 		&& executor.IsCurrentPumpThread();
 }
 
+bool ObjectArrayIdentitySource::TryGetObjectCount(std::int32_t& objectCount)
+{
+	objectCount = -1;
+	if (!CanReadObjectSlots() || !IsCurrentExecutionThreadValid())
+		return false;
+	std::int32_t capacity = -1;
+	return ObjectArray::TryGetCounts(objectCount, capacity)
+		&& objectCount >= 0
+		&& capacity >= objectCount;
+}
+
 bool ObjectArrayIdentitySource::TryReadObjectCore(
 	const std::int32_t index,
 	ObjectIdentity& identity) const
@@ -273,9 +284,38 @@ bool ObjectArrayIdentitySource::TryReadObject(
 	const std::int32_t index,
 	ObjectIdentity& identity)
 {
-	if (!CanIssueObjectHandles() || !IsCurrentExecutionThreadValid())
-		return false;
-	return TryReadObjectCore(index, identity);
+	return TryReadObjectSlot(index, identity) == ObjectSnapshotSlotReadResult::Captured;
+}
+
+ObjectSnapshotSlotReadResult ObjectArrayIdentitySource::TryReadObjectSlot(
+	const std::int32_t index,
+	ObjectIdentity& identity)
+{
+	identity = {};
+	if (!CanReadObjectSlots() || !IsCurrentExecutionThreadValid())
+		return ObjectSnapshotSlotReadResult::Failed;
+
+	FUObjectItemIdentity slotIdentity;
+	switch (ObjectArray::TryReadIdentitySlot(index, slotIdentity))
+	{
+	case EFUObjectItemReadResult::Empty:
+		return ObjectSnapshotSlotReadResult::Empty;
+	case EFUObjectItemReadResult::Failed:
+		return ObjectSnapshotSlotReadResult::Failed;
+	case EFUObjectItemReadResult::Captured:
+		break;
+	}
+
+	ObjectIdentity coherentIdentity;
+	if (!TryReadObjectCore(index, coherentIdentity)
+		|| coherentIdentity.Index != slotIdentity.Index
+		|| coherentIdentity.SerialNumber != slotIdentity.SerialNumber
+		|| coherentIdentity.Address != slotIdentity.ObjectAddress)
+	{
+		return ObjectSnapshotSlotReadResult::Failed;
+	}
+	identity = coherentIdentity;
+	return ObjectSnapshotSlotReadResult::Captured;
 }
 
 bool ObjectArrayIdentitySource::TryReadFunction(

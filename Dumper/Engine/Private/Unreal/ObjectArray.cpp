@@ -296,6 +296,16 @@ bool ObjectArray::TryReadIdentityCandidate(
 	FUObjectItemIdentity& Identity,
 	int32* ClusterRootIndex)
 {
+	return TryReadIdentitySlotCandidate(Index, SerialOffset, Identity, ClusterRootIndex)
+		== EFUObjectItemReadResult::Captured;
+}
+
+EFUObjectItemReadResult ObjectArray::TryReadIdentitySlotCandidate(
+	const int32 Index,
+	const int32 SerialOffset,
+	FUObjectItemIdentity& Identity,
+	int32* ClusterRootIndex)
+{
 	Identity = {};
 	Identity.Index = -1;
 	if (SerialOffset < 0
@@ -303,12 +313,12 @@ bool ObjectArray::TryReadIdentityCandidate(
 		|| static_cast<uint32>(SerialOffset) + sizeof(int32) > SizeOfFUObjectItem
 		|| Off::UObject::Index <= 0)
 	{
-		return false;
+		return EFUObjectItemReadResult::Failed;
 	}
 
 	uintptr_t itemAddress = 0;
 	if (!TryResolveItemAddress(Index, itemAddress))
-		return false;
+		return EFUObjectItemReadResult::Failed;
 
 	const uintptr_t objectField = itemAddress + FUObjectItemInitialOffset;
 	const uintptr_t clusterField = objectField + sizeof(void*) + sizeof(int32);
@@ -325,25 +335,35 @@ bool ObjectArray::TryReadIdentityCandidate(
 		|| !UExplorer::Runtime::ReadValue(objectField, objectSecond).Ok()
 		|| !UExplorer::Runtime::ReadValue(serialField, serialSecond).Ok()
 		|| !UExplorer::Runtime::ReadValue(clusterField, clusterSecond).Ok()
-		|| !objectFirst
 		|| objectFirst != objectSecond
 		|| serialFirst != serialSecond
 		|| clusterFirst != clusterSecond)
 	{
-		return false;
+		return EFUObjectItemReadResult::Failed;
+	}
+	if (ClusterRootIndex)
+		*ClusterRootIndex = clusterFirst;
+	if (!objectFirst)
+	{
+		Identity = {
+			.Index = Index,
+			.SerialNumber = serialFirst,
+			.ObjectAddress = 0
+		};
+		return EFUObjectItemReadResult::Empty;
 	}
 
 	int32 internalIndex = -1;
 	const uintptr_t objectAddress = reinterpret_cast<uintptr_t>(objectFirst);
 	const uintptr_t internalIndexOffset = static_cast<uintptr_t>(Off::UObject::Index);
 	if (internalIndexOffset > (std::numeric_limits<uintptr_t>::max)() - objectAddress)
-		return false;
+		return EFUObjectItemReadResult::Failed;
 	if (!UExplorer::Runtime::ReadValue(
 		objectAddress + internalIndexOffset,
 		internalIndex).Ok()
 		|| internalIndex != Index)
 	{
-		return false;
+		return EFUObjectItemReadResult::Failed;
 	}
 
 	void* objectFinal = nullptr;
@@ -353,7 +373,7 @@ bool ObjectArray::TryReadIdentityCandidate(
 		|| objectFinal != objectFirst
 		|| serialFinal != serialFirst)
 	{
-		return false;
+		return EFUObjectItemReadResult::Failed;
 	}
 
 	Identity = {
@@ -361,9 +381,7 @@ bool ObjectArray::TryReadIdentityCandidate(
 		.SerialNumber = serialFirst,
 		.ObjectAddress = objectAddress
 	};
-	if (ClusterRootIndex)
-		*ClusterRootIndex = clusterFirst;
-	return true;
+	return EFUObjectItemReadResult::Captured;
 }
 
 bool ObjectArray::ValidateIdentityLayout()
@@ -448,11 +466,47 @@ const FUObjectItemIdentityLayout& ObjectArray::GetIdentityLayout()
 	return IdentityLayout;
 }
 
-bool ObjectArray::TryReadIdentity(const int32 Index, FUObjectItemIdentity& Identity)
+bool ObjectArray::TryGetCounts(int32& Count, int32& Capacity)
+{
+	Count = -1;
+	Capacity = -1;
+	if (!GObjects
+		|| Off::FUObjectArray::GetNumElementsOffset() < 0
+		|| Off::FUObjectArray::GetMaxElementsOffset() < 0)
+	{
+		return false;
+	}
+	if (!UExplorer::Runtime::ReadValue(
+		reinterpret_cast<uintptr_t>(GObjects)
+			+ static_cast<uintptr_t>(Off::FUObjectArray::GetNumElementsOffset()),
+		Count).Ok()
+		|| !UExplorer::Runtime::ReadValue(
+			reinterpret_cast<uintptr_t>(GObjects)
+			+ static_cast<uintptr_t>(Off::FUObjectArray::GetMaxElementsOffset()),
+		Capacity).Ok()
+		|| Count < 0
+		|| Capacity < 0
+		|| Count > Capacity)
+	{
+		Count = -1;
+		Capacity = -1;
+		return false;
+	}
+	return true;
+}
+
+EFUObjectItemReadResult ObjectArray::TryReadIdentitySlot(
+	const int32 Index,
+	FUObjectItemIdentity& Identity)
 {
 	if (!IdentityLayout.Validated || IdentityLayout.SerialOffset < 0)
-		return false;
-	return TryReadIdentityCandidate(Index, IdentityLayout.SerialOffset, Identity);
+		return EFUObjectItemReadResult::Failed;
+	return TryReadIdentitySlotCandidate(Index, IdentityLayout.SerialOffset, Identity);
+}
+
+bool ObjectArray::TryReadIdentity(const int32 Index, FUObjectItemIdentity& Identity)
+{
+	return TryReadIdentitySlot(Index, Identity) == EFUObjectItemReadResult::Captured;
 }
 
 void ObjectArray::InitDecryption(uint8_t* (*DecryptionFunction)(void* ObjPtr), const char* DecryptionLambdaAsStr)
@@ -725,28 +779,16 @@ void ObjectArray::DumpObjectsWithProperties(const fs::path& Path, bool bWithPath
 
 int32 ObjectArray::Num()
 {
-	if (!GObjects || Off::FUObjectArray::GetNumElementsOffset() < 0)
-		return 0;
-	int32 value = 0;
-	return UExplorer::Runtime::ReadValue(
-		reinterpret_cast<uintptr_t>(GObjects)
-			+ static_cast<uintptr_t>(Off::FUObjectArray::GetNumElementsOffset()),
-		value).Ok() && value >= 0
-		? value
-		: 0;
+	int32 count = -1;
+	int32 capacity = -1;
+	return TryGetCounts(count, capacity) ? count : 0;
 }
 
 int32 ObjectArray::Max()
 {
-	if (!GObjects || Off::FUObjectArray::GetMaxElementsOffset() < 0)
-		return 0;
-	int32 value = 0;
-	return UExplorer::Runtime::ReadValue(
-		reinterpret_cast<uintptr_t>(GObjects)
-			+ static_cast<uintptr_t>(Off::FUObjectArray::GetMaxElementsOffset()),
-		value).Ok() && value >= 0
-		? value
-		: 0;
+	int32 count = -1;
+	int32 capacity = -1;
+	return TryGetCounts(count, capacity) ? capacity : 0;
 }
 
 int32 ObjectArray::NumChunks()

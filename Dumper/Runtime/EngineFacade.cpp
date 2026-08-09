@@ -93,6 +93,7 @@ bool EngineFacade::Stop(const std::chrono::milliseconds timeout)
 {
 	if (m_SnapshotCapture && !m_SnapshotCapture->StopAndDrain(timeout))
 		return false;
+	m_SnapshotCapture.reset();
 	m_Snapshots.Stop();
 	return true;
 }

@@ -508,6 +508,65 @@ void GameThreadExecutor::RemoveQueuedLocked(
 void PostRenderPumpBackend::Tick() noexcept
 {
 	m_Executor.Pump();
+	IGameThreadFrameClient* client = m_FrameClient.load(std::memory_order_acquire);
+	if (!client)
+		return;
+
+	auto frameLease = m_FrameClientBarrier.Enter();
+	if (!frameLease.OwnedWorkAllowed()
+		|| m_FrameClient.load(std::memory_order_acquire) != client)
+	{
+		return;
+	}
+	client->PumpFrame();
+}
+
+bool PostRenderPumpBackend::AttachFrameClient(IGameThreadFrameClient& client) noexcept
+{
+	std::lock_guard<std::mutex> lock(m_FrameClientMutex);
+	if (m_FrameClient.load(std::memory_order_acquire) || m_DrainingClient)
+		return false;
+	if (!m_FrameClientBarrier.Reset())
+		return false;
+	m_FrameClient.store(&client, std::memory_order_release);
+	return true;
+}
+
+bool PostRenderPumpBackend::DetachFrameClient(
+	IGameThreadFrameClient& client,
+	const std::chrono::milliseconds timeout)
+{
+	std::lock_guard<std::mutex> lock(m_FrameClientMutex);
+	IGameThreadFrameClient* current = m_FrameClient.load(std::memory_order_acquire);
+	if (current && current != &client)
+		return false;
+	if (m_DrainingClient && m_DrainingClient != &client)
+		return false;
+	if (current == &client)
+	{
+		m_FrameClient.store(nullptr, std::memory_order_release);
+		m_FrameClientBarrier.BeginStopping();
+		m_DrainingClient = &client;
+	}
+	else if (!m_DrainingClient)
+	{
+		return true;
+	}
+
+	if (!m_FrameClientBarrier.WaitForDrain(timeout))
+		return false;
+	m_DrainingClient = nullptr;
+	return true;
+}
+
+bool PostRenderPumpBackend::HasFrameClient() const noexcept
+{
+	return m_FrameClient.load(std::memory_order_acquire) != nullptr;
+}
+
+std::uint32_t PostRenderPumpBackend::FrameClientInFlight() const noexcept
+{
+	return m_FrameClientBarrier.InFlight();
 }
 
 GameThreadExecutor& GetGameThreadExecutor()

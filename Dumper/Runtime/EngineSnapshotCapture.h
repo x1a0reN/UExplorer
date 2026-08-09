@@ -2,6 +2,7 @@
 
 #include "CallbackBarrier.h"
 #include "EngineSnapshot.h"
+#include "GameThreadExecutor.h"
 
 #include <atomic>
 #include <chrono>
@@ -64,6 +65,7 @@ enum class SnapshotCaptureError : std::uint8_t
 	ExecutionThreadInvalid,
 	SourceContextMismatch,
 	SourceCountInvalid,
+	SourceCountChanged,
 	SourceReadFailed,
 	SourceValidationFailed,
 	PublicationRejected,
@@ -105,9 +107,10 @@ struct SnapshotCaptureDiagnostics
 	std::uint32_t PumpInFlight = 0;
 };
 
-class EngineSnapshotCapture final
+class EngineSnapshotCapture final : public IGameThreadFrameClient
 {
 public:
+	static constexpr std::size_t kFramePumpBudget = 32;
 	static constexpr std::size_t kDefaultPumpBudget = 256;
 	static constexpr std::size_t kMaxPumpBudget = 4096;
 
@@ -122,6 +125,7 @@ public:
 	bool IsConfigured() const noexcept;
 	SnapshotCaptureRequestResult RequestCapture() noexcept;
 	SnapshotPumpResult Pump(std::size_t workBudget = kDefaultPumpBudget) noexcept;
+	void PumpFrame() noexcept override { (void)Pump(kFramePumpBudget); }
 	SnapshotCaptureDiagnostics Diagnostics() const noexcept;
 	bool StopAndDrain(std::chrono::milliseconds timeout = std::chrono::milliseconds(5000));
 

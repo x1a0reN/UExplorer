@@ -25,7 +25,7 @@ UExplorer 是一个面向 Unreal Engine 的 **SDK Dump + 实时游戏内省工�
 └──────────────────────────────────────────────┘
 ```
 
-当前分支处于 R2：`CoreRuntime`、不可变 `EngineContext`/名称布局、`EngineFacade`、严格名称 codec、稳定 Handle、原子 `EngineSnapshotStore`、有界游戏线程执行器和安全关闭边界已建立；Named Pipe 与 Rust Session Host 尚属 R3。`Dumper/Server` 和 `Dumper/API` 是 R4 前的 legacy HTTP 兼容层，不是目标架构，且不会与 IPC 形成长期双栈。功能真实性与未完成项以 `DESIGN.md` 和 `docs/issue-status.json` 为准。
+当前分支处于 R2：`CoreRuntime`、不可变 `EngineContext`/名称布局、`EngineFacade`、严格名称 codec、稳定 Handle、原子 `EngineSnapshotStore`、生产 object/path snapshot source、PostRender 有界帧泵和安全关闭边界已建立；Named Pipe 与 Rust Session Host 尚属 R3。`Dumper/Server` 和 `Dumper/API` 是 R4 前的 legacy HTTP 兼容层，不是目标架构，且不会与 IPC 形成长期双栈。Snapshot 目前是经二次验证后发布的完整 sweep，而非 UE 引擎时钟上的瞬时原子快照；功能真实性与未完成项以 `DESIGN.md` 和 `docs/issue-status.json` 为准。
 
 ---
 
@@ -51,7 +51,10 @@ UExplorer/
 │   │   ├── EngineNameCodec.h/.cpp    #   immutable layout + SafeMemory 的严格 FName 解码
 │   │   ├── EngineSnapshot.h/.cpp     #   严格校验并原子发布的不可变快照 store
 │   │   ├── EngineSnapshotCapture.*   #   budgeted capture/validate/publish producer
-│   │   ├── GameThreadExecutor.h/.cpp #   有界 owned work、deadline、cancel、drain
+│   │   ├── ObjectSnapshotIdentitySource.h # snapshot 所需的 typed slot identity 边界
+│   │   ├── ObjectArrayIdentitySource.*    # 生产 FUObjectItem/Handle identity source
+│   │   ├── ObjectArraySnapshotSource.*    # 生产 name/full/class/package/kind metadata source
+│   │   ├── GameThreadExecutor.h/.cpp #   有界 owned work、deadline、cancel、frame client、drain
 │   │   ├── ObjectHandle*.h/.cpp      #   serial-backed Object/FunctionHandle
 │   │   ├── SafeMemory.h/.cpp         #   范围、SEH、保护恢复与代码写策略
 │   │   └── VTableHook.h/.cpp         #   RAII patch owner

@@ -48,6 +48,7 @@ const char* ToString(const SnapshotCaptureError error) noexcept
 	case SnapshotCaptureError::ExecutionThreadInvalid: return "SNAPSHOT_EXECUTION_THREAD_INVALID";
 	case SnapshotCaptureError::SourceContextMismatch: return "SNAPSHOT_SOURCE_CONTEXT_MISMATCH";
 	case SnapshotCaptureError::SourceCountInvalid: return "SNAPSHOT_SOURCE_COUNT_INVALID";
+	case SnapshotCaptureError::SourceCountChanged: return "SNAPSHOT_SOURCE_COUNT_CHANGED";
 	case SnapshotCaptureError::SourceReadFailed: return "SNAPSHOT_SOURCE_READ_FAILED";
 	case SnapshotCaptureError::SourceValidationFailed: return "SNAPSHOT_SOURCE_VALIDATION_FAILED";
 	case SnapshotCaptureError::PublicationRejected: return "SNAPSHOT_PUBLICATION_REJECTED";
@@ -287,6 +288,13 @@ SnapshotPumpResult EngineSnapshotCapture::Pump(const std::size_t workBudget) noe
 		if (m_Working->ValidationIndex == m_Working->SourceObjectCount
 			&& m_State.load(std::memory_order_acquire) == SnapshotCaptureState::Validating)
 		{
+			std::int32_t finalObjectCount = -1;
+			if (!m_Source.TryGetObjectCount(finalObjectCount)
+				|| finalObjectCount != m_Working->SourceObjectCount)
+			{
+				Fail(SnapshotCaptureError::SourceCountChanged, -1);
+				return SnapshotPumpResult::Failed;
+			}
 			m_Working->PublishedObjects.reserve(m_Working->CapturedObjects.size());
 			m_State.store(SnapshotCaptureState::Publishing, std::memory_order_release);
 		}
@@ -308,6 +316,13 @@ SnapshotPumpResult EngineSnapshotCapture::Pump(const std::size_t workBudget) noe
 			return SnapshotPumpResult::Progress;
 		if (StopRequested())
 			return SnapshotPumpResult::Stopping;
+		std::int32_t publishObjectCount = -1;
+		if (!m_Source.TryGetObjectCount(publishObjectCount)
+			|| publishObjectCount != m_Working->SourceObjectCount)
+		{
+			Fail(SnapshotCaptureError::SourceCountChanged, -1);
+			return SnapshotPumpResult::Failed;
+		}
 
 		const std::uint64_t finishedAt = MonotonicMicroseconds();
 		EngineSnapshot snapshot{

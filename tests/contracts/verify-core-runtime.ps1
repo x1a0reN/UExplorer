@@ -32,13 +32,20 @@ $handleHeader = Read-ProjectFile 'Dumper\Runtime\ObjectHandle.h'
 $handleImplementation = Read-ProjectFile 'Dumper\Runtime\ObjectHandle.cpp'
 $identityLayout = Read-ProjectFile 'Dumper\Runtime\FUObjectItemLayout.cpp'
 $identityContext = Read-ProjectFile 'Dumper\Runtime\ObjectIdentityContext.h'
-$identitySource = Read-ProjectFile 'Dumper\Runtime\ObjectArrayIdentitySource.cpp'
+$identitySourceHeader = Read-ProjectFile 'Dumper\Runtime\ObjectArrayIdentitySource.h'
+$identitySourceImplementation = Read-ProjectFile 'Dumper\Runtime\ObjectArrayIdentitySource.cpp'
+$identitySource = $identitySourceHeader + $identitySourceImplementation
+$snapshotIdentitySource = Read-ProjectFile 'Dumper\Runtime\ObjectSnapshotIdentitySource.h'
 $engineFacade = Read-ProjectFile 'Dumper\Runtime\EngineFacade.h'
 $engineSnapshotHeader = Read-ProjectFile 'Dumper\Runtime\EngineSnapshot.h'
 $engineSnapshot = Read-ProjectFile 'Dumper\Runtime\EngineSnapshot.cpp'
 $snapshotCaptureHeader = Read-ProjectFile 'Dumper\Runtime\EngineSnapshotCapture.h'
 $snapshotCapture = Read-ProjectFile 'Dumper\Runtime\EngineSnapshotCapture.cpp'
-$objectArray = Read-ProjectFile 'Dumper\Engine\Private\Unreal\ObjectArray.cpp'
+$objectArrayHeader = Read-ProjectFile 'Dumper\Engine\Public\Unreal\ObjectArray.h'
+$objectArrayImplementation = Read-ProjectFile 'Dumper\Engine\Private\Unreal\ObjectArray.cpp'
+$objectArray = $objectArrayHeader + $objectArrayImplementation
+$objectSnapshotSourceHeader = Read-ProjectFile 'Dumper\Runtime\ObjectArraySnapshotSource.h'
+$objectSnapshotSource = Read-ProjectFile 'Dumper\Runtime\ObjectArraySnapshotSource.cpp'
 $callbackBarrier = Read-ProjectFile 'Dumper\Runtime\CallbackBarrier.h'
 $safeMemoryHeader = Read-ProjectFile 'Dumper\Runtime\SafeMemory.h'
 $safeMemory = Read-ProjectFile 'Dumper\Runtime\SafeMemory.cpp'
@@ -107,6 +114,11 @@ foreach ($token in @('GameThreadTaskTiming', 'TryGetTiming', 'PumpThreadWaitDeni
         'releasedWork = std::move(task->Work)')) {
     Assert-Contains $gameThread $token 'Game-thread command timing/terminal ownership regressed.'
 }
+foreach ($token in @('IGameThreadFrameClient', 'AttachFrameClient', 'DetachFrameClient',
+		'm_FrameClient.store(nullptr', 'm_FrameClientBarrier.BeginStopping',
+		'm_FrameClientBarrier.WaitForDrain', 'm_DrainingClient')) {
+	Assert-Contains $gameThread $token 'PostRender frame-client ownership/drain regressed.'
+}
 
 foreach ($token in @('status.inspect', 'status.engine', 'status.health',
         'objects.handle.issue', 'functions.handle.issue', 'SESSION_MISMATCH',
@@ -150,6 +162,15 @@ foreach ($token in @('TryReadIdentityCandidate', 'objectFirst != objectSecond', 
 		'internalIndexOffset > (std::numeric_limits<uintptr_t>::max)() - objectAddress')) {
     Assert-Contains $objectArray $token 'Production FUObjectItem identity reads regressed.'
 }
+foreach ($token in @('EFUObjectItemReadResult', 'Captured', 'Empty', 'Failed',
+		'TryReadIdentitySlot', 'TryGetCounts')) {
+	Assert-Contains $objectArray $token 'Typed production object-slot reads regressed.'
+}
+foreach ($token in @('IObjectSnapshotIdentitySource', 'CanReadObjectSlots',
+		'TryGetObjectCount', 'ObjectSnapshotSlotReadResult')) {
+	Assert-Contains $snapshotIdentitySource $token 'Snapshot identity-source boundary regressed.'
+	Assert-Contains $identitySource $token 'Production identity source no longer implements snapshot slot reads.'
+}
 foreach ($token in @('IsCurrentExecutionThreadValid', 'executor.IsCurrentPumpThread()',
         'TryReadObjectCore', 'TryReadCanonicalFNameToken', 'TryBuildCanonicalFunctionPath',
 		'm_Offsets.ObjectClass', 'm_Offsets.FunctionExec',
@@ -157,6 +178,14 @@ foreach ($token in @('IsCurrentExecutionThreadValid', 'executor.IsCurrentPumpThr
     Assert-Contains $identitySource $token 'Production object/function identity source regressed.'
 }
 Assert-NotContains $identitySource 'Off::' 'Production identity validation must use its immutable context, not mutable offset globals.'
+foreach ($token in @('TryValidateLiveAddress', 'TryReadNode', 'TryReadKind', 'TryBuildPath',
+		'TryBuildRecord', 'SameRecord(first, second)', 'EngineObjectKind::Package',
+		'ValidateObjectHandle', 'ObjectSnapshotSlotReadResult::Empty', 'ReadValue')) {
+	Assert-Contains ($objectSnapshotSourceHeader + $objectSnapshotSource) $token 'Production object snapshot metadata source regressed.'
+}
+foreach ($token in @('Off::', 'Settings::', 'NameArray::', 'ObjectArray::', 'UEObject ', 'UEClass ')) {
+	Assert-NotContains $objectSnapshotSource $token 'Production snapshot metadata bypassed its immutable source/SafeMemory boundary.'
+}
 foreach ($token in @('ObjectHandleService', 'EngineNameCodec', 'Names() const noexcept',
 		'EngineSnapshotStore', 'EngineSnapshotCapture',
 		'ConfigureSnapshotCapture', 'IssueObjectHandle', 'ValidateFunctionHandle',
@@ -171,13 +200,16 @@ foreach ($token in @('SNAPSHOT_GENERATION_NOT_MONOTONIC', 'SNAPSHOT_RECORDS_NOT_
 		'IsValidHandleEnvelope', 'IsValidMetadata', 'm_Current.store', 'm_Current.load')) {
 	Assert-Contains $engineSnapshot $token 'Atomic EngineSnapshot publication regressed.'
 }
-foreach ($token in @('IEngineSnapshotSource', 'kDefaultPumpBudget', 'kMaxPumpBudget',
+foreach ($token in @('IEngineSnapshotSource', 'IGameThreadFrameClient', 'kFramePumpBudget',
+		'kDefaultPumpBudget', 'kMaxPumpBudget', 'PumpFrame',
 		'Capturing', 'Validating', 'Publishing', 'StopAndDrain', 'CallbackBarrier')) {
 	Assert-Contains $snapshotCaptureHeader $token 'Incremental snapshot capture contract regressed.'
 }
 foreach ($token in @('m_PumpOwned.test_and_set', 'SnapshotSlotReadResult::Empty',
 		'ValidateSlot(index, expected)', 'PublishedObjects.reserve',
-		'SnapshotCaptureError::SourceValidationFailed', 'm_PumpBarrier.WaitForDrain')) {
+		'SnapshotCaptureError::SourceValidationFailed', 'SnapshotCaptureError::SourceCountChanged',
+		'finalObjectCount != m_Working->SourceObjectCount',
+		'publishObjectCount != m_Working->SourceObjectCount', 'm_PumpBarrier.WaitForDrain')) {
 	Assert-Contains $snapshotCapture $token 'Budgeted snapshot capture implementation regressed.'
 }
 Assert-NotContains $snapshotCapture 'ObjectArray::' 'Generic snapshot scheduling must not bypass its source boundary.'
@@ -212,7 +244,9 @@ foreach ($apiFile in Get-ChildItem -LiteralPath (Join-Path $root 'Dumper\API') -
 }
 
 foreach ($token in @('CaptureEngineContext', 'RefreshRuntimeCapabilities', 'ShutdownCoordinator',
-        'BeginStopping', 'MarkStopped')) {
+		'ObjectArraySnapshotSource', 'ConfigureSnapshotCapture', 'AttachFrameClient',
+		'RequestCapture', 'DetachFrameClient', 'snapshot_pump',
+		'BeginStopping', 'MarkStopped')) {
     Assert-Contains $main $token 'Main does not use the runtime ownership path.'
 }
 
@@ -236,10 +270,16 @@ foreach ($token in @('TestEngineContextAndCapabilities', 'TestCoreRuntimeStateAn
 		'Chunked name-array entry identity mismatch was accepted',
 		'Name codec did not convert an inaccessible storage read into a stable error',
 		'Status domain command did not serialize the immutable runtime/name profile',
+		'TestProductionSnapshotMetadataSource',
+		'Production snapshot source confused an empty slot with a read failure',
+		'Production snapshot metadata path or kind is incorrect',
+		'Production snapshot validation ignored slot recycling',
 		'TestEngineFacadeAndImmutableSnapshots', 'Snapshot reader observed a torn generation',
 		'Incomplete snapshot metadata was published as usable data',
 		'TestIncrementalSnapshotCapture', 'Snapshot pump exceeded its per-frame work budget',
 		'A slot mutation between capture and validation was published',
+		'Object-count mutation was published as a complete snapshot',
+		'Object-count mutation during publication replaced the complete snapshot',
 		'Concurrent snapshot pumps accessed one mutable working generation',
 		'Snapshot source exception escaped the guarded pump boundary',
 		'Snapshot producer crossed an identity-source context generation',
@@ -255,6 +295,9 @@ foreach ($token in @('TestEngineContextAndCapabilities', 'TestCoreRuntimeStateAn
         'Zero-only serial candidate was accepted',
         'TestHookOwnershipAndCallbackDrain', 'Failed VTable restore discarded hook ownership',
         'TestGenericGameThreadWorkAndCancellation', 'explicitly cancelled',
+		'TestPostRenderFrameClientOwnershipAndDrain',
+		'PostRender frame-client detach ignored an in-flight callback',
+		'Post-stop callback was allowed to run owned frame-client work',
         'Post-stop callback was allowed to run owned work',
         'TestSafeMemory', 'ExecutableWriteDenied', 'InstructionCacheFlushRequired',
         'CoreRuntime became Ready without its pipe listener', 'Required capability loss left readiness true',

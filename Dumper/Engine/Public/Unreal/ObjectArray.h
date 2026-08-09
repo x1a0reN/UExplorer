@@ -16,6 +16,13 @@ struct FUObjectItemIdentity
 	uintptr_t ObjectAddress = 0;
 };
 
+enum class EFUObjectItemReadResult : uint8
+{
+	Captured,
+	Empty,
+	Failed
+};
+
 struct FUObjectItemIdentityLayout
 {
 	bool Validated = false;
@@ -62,6 +69,11 @@ private:
 		int32 SerialOffset,
 		FUObjectItemIdentity& Identity,
 		int32* ClusterRootIndex = nullptr);
+	static EFUObjectItemReadResult TryReadIdentitySlotCandidate(
+		int32 Index,
+		int32 SerialOffset,
+		FUObjectItemIdentity& Identity,
+		int32* ClusterRootIndex = nullptr);
 
 public:
 	static void InitDecryption(uint8_t* (*DecryptionFunction)(void* ObjPtr), const char* DecryptionLambdaAsStr);
@@ -80,6 +92,8 @@ public:
 	static int32 MaxChunks();
 	static bool ValidateIdentityLayout();
 	static const FUObjectItemIdentityLayout& GetIdentityLayout();
+	static bool TryGetCounts(int32& Count, int32& Capacity);
+	static EFUObjectItemReadResult TryReadIdentitySlot(int32 Index, FUObjectItemIdentity& Identity);
 	static bool TryReadIdentity(int32 Index, FUObjectItemIdentity& Identity);
 
 	template<typename UEType = UEObject>

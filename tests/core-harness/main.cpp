@@ -19,6 +19,7 @@
 #include "Runtime/GameThreadExecutor.h"
 #include "Runtime/ObjectHandle.h"
 #include "Runtime/ObjectIdentityContext.h"
+#include "Runtime/ObjectArraySnapshotSource.h"
 #include "Runtime/SafeMemory.h"
 #include "Runtime/ShutdownCoordinator.h"
 #include "Runtime/VTableHook.h"
@@ -106,6 +107,22 @@ namespace
 		int Output = 0;
 		bool ShouldThrow = false;
 		std::uint32_t ExecutionThreadId = 0;
+	};
+
+	class FrameClientProbe final : public UExplorer::Runtime::IGameThreadFrameClient
+	{
+	public:
+		void PumpFrame() noexcept override
+		{
+			Calls.fetch_add(1, std::memory_order_acq_rel);
+			Entered.store(true, std::memory_order_release);
+			while (Block.load(std::memory_order_acquire))
+				std::this_thread::yield();
+		}
+
+		std::atomic<int> Calls{0};
+		std::atomic<bool> Block{false};
+		std::atomic<bool> Entered{false};
 	};
 
 	std::string ReadText(const std::filesystem::path& path)
@@ -251,12 +268,17 @@ namespace
 	std::shared_ptr<const UExplorer::Runtime::EngineContext> MakeEngineContext(
 		const std::uint64_t generation = 1,
 		const bool includeFunctionIdentity = true,
-		const bool includeNameProfile = true)
+		const bool includeNameProfile = true,
+		const UExplorer::Runtime::EngineNameProfile* nameProfileOverride = nullptr)
 	{
 		UExplorer::Runtime::EngineContextBuilder builder(generation);
 		builder.SetIdentity(0x140000000, 0x140100000, 4242, 100, "FixtureGame", "5.4");
 		builder.SetProfile({.UsesFProperty = true, .UsesLargeWorldCoordinates = true});
-		if (includeNameProfile)
+		if (nameProfileOverride)
+		{
+			builder.SetNameProfile(*nameProfileOverride);
+		}
+		else if (includeNameProfile)
 		{
 			builder.SetNameProfile({
 				.Storage = UExplorer::Runtime::EngineNameStorageKind::NamePool,
@@ -667,13 +689,14 @@ namespace
 		Require(second.Stages.size() == first.Stages.size() && order.size() == 3, "Shutdown coordinator ran twice");
 	}
 
-	class FakeHandleIdentitySource final : public UExplorer::Runtime::IHandleIdentitySource
+	class FakeHandleIdentitySource final : public UExplorer::Runtime::IObjectSnapshotIdentitySource
 	{
 	public:
 		bool Available = true;
 		bool ThrowOnRead = false;
 		bool ExecutionThreadValid = true;
 		std::uint64_t Generation = 42;
+		std::int32_t ObjectCount = 0;
 		std::unordered_map<std::int32_t, UExplorer::Runtime::ObjectIdentity> Objects;
 		std::unordered_map<std::int32_t, UExplorer::Runtime::FunctionIdentity> Functions;
 
@@ -681,6 +704,37 @@ namespace
 		bool IsCurrentExecutionThreadValid() const noexcept override
 		{
 			return ExecutionThreadValid;
+		}
+
+		bool CanReadObjectSlots() const noexcept override
+		{
+			return Available;
+		}
+
+		bool TryGetObjectCount(std::int32_t& objectCount) override
+		{
+			if (ThrowOnRead)
+				throw std::runtime_error("fixture identity source failure");
+			if (!Available || !ExecutionThreadValid || ObjectCount < 0)
+				return false;
+			objectCount = ObjectCount;
+			return true;
+		}
+
+		UExplorer::Runtime::ObjectSnapshotSlotReadResult TryReadObjectSlot(
+			const std::int32_t index,
+			UExplorer::Runtime::ObjectIdentity& identity) override
+		{
+			if (ThrowOnRead)
+				throw std::runtime_error("fixture identity source failure");
+			identity = {};
+			if (!Available || !ExecutionThreadValid || index < 0 || index >= ObjectCount)
+				return UExplorer::Runtime::ObjectSnapshotSlotReadResult::Failed;
+			const auto found = Objects.find(index);
+			if (found == Objects.end())
+				return UExplorer::Runtime::ObjectSnapshotSlotReadResult::Empty;
+			identity = found->second;
+			return UExplorer::Runtime::ObjectSnapshotSlotReadResult::Captured;
 		}
 
 		bool TryReadObject(
@@ -825,6 +879,185 @@ namespace
 				&& current->Kind == expectedObject->Kind;
 		}
 	};
+
+	void TestProductionSnapshotMetadataSource()
+	{
+		using namespace UExplorer::Runtime;
+
+		const auto writeValue = [](auto& buffer, const std::size_t offset, const auto& value) {
+			Require(offset <= buffer.size() && sizeof(value) <= buffer.size() - offset,
+				"Production snapshot fixture write exceeded its buffer");
+			std::memcpy(buffer.data() + offset, &value, sizeof(value));
+		};
+		const auto writeRaw = [](auto& buffer, const std::size_t offset, const void* data, const std::size_t size) {
+			Require(offset <= buffer.size() && size <= buffer.size() - offset,
+				"Production snapshot string write exceeded its buffer");
+			std::memcpy(buffer.data() + offset, data, size);
+		};
+
+		std::array<std::byte, 64> pool{};
+		std::array<std::byte, 512> nameBlock{};
+		std::size_t nameCursor = 0;
+		const auto addName = [&](const std::string& value) {
+			Require(!value.empty() && value.size() <= 1024, "Snapshot fixture name is invalid");
+			nameCursor = (nameCursor + 1) & ~std::size_t{1};
+			const std::uint32_t id = static_cast<std::uint32_t>(nameCursor / 2);
+			const std::uint16_t header = static_cast<std::uint16_t>(value.size() << 6);
+			writeValue(nameBlock, nameCursor, header);
+			writeRaw(nameBlock, nameCursor + 2, value.data(), value.size());
+			nameCursor = (nameCursor + 2 + value.size() + 1) & ~std::size_t{1};
+			return id;
+		};
+
+		const std::uint32_t noneName = addName("None");
+		const std::uint32_t corePackageName = addName("/Script/CoreUObject");
+		const std::uint32_t className = addName("Class");
+		const std::uint32_t packageName = addName("Package");
+		const std::uint32_t actorName = addName("Actor");
+		const std::uint32_t fixturePackageName = addName("/Script/Fixture");
+		const std::uint32_t heroName = addName("Hero");
+		Require(noneName == 0, "NamePool fixture did not preserve the None witness");
+		writeValue(pool, 0, std::int32_t{0});
+		writeValue(pool, 4, static_cast<std::int32_t>(nameCursor));
+		writeValue(pool, 16, reinterpret_cast<std::uintptr_t>(nameBlock.data()));
+
+		EngineNameProfile nameProfile{
+			.Storage = EngineNameStorageKind::NamePool,
+			.StorageAddress = reinterpret_cast<std::uintptr_t>(pool.data()),
+			.FNameSize = 8,
+			.ComparisonIndexOffset = 0,
+			.NumberOffset = 4,
+			.BlockOffsetBits = 14,
+			.EntryStride = 2,
+			.ChunksStart = 16,
+			.MaxChunkIndexOffset = 0,
+			.ByteCursorOffset = 4,
+			.EntryStringOffset = 2,
+			.EntryHeaderOffset = 0,
+			.EntryLengthShift = 6,
+			.Validated = true,
+			.Source = "snapshot-name-fixture"
+		};
+
+		using ObjectBytes = std::array<std::byte, 0x60>;
+		ObjectBytes corePackage{};
+		ObjectBytes classClass{};
+		ObjectBytes packageClass{};
+		ObjectBytes actorClass{};
+		ObjectBytes fixturePackage{};
+		ObjectBytes hero{};
+		const auto addressOf = [](ObjectBytes& object) {
+			return reinterpret_cast<std::uintptr_t>(object.data());
+		};
+		const auto setObject = [&](
+			ObjectBytes& object,
+			const std::int32_t index,
+			const std::uintptr_t classAddress,
+			const std::uint32_t nameIndex,
+			const std::uintptr_t outerAddress) {
+			writeValue(object, 0x0C, index);
+			writeValue(object, 0x10, classAddress);
+			writeValue(object, 0x18, nameIndex);
+			writeValue(object, 0x1C, std::uint32_t{0});
+			writeValue(object, 0x20, outerAddress);
+		};
+
+		setObject(corePackage, 1, addressOf(packageClass), corePackageName, 0);
+		setObject(classClass, 2, addressOf(classClass), className, addressOf(corePackage));
+		setObject(packageClass, 3, addressOf(classClass), packageName, addressOf(corePackage));
+		setObject(actorClass, 4, addressOf(classClass), actorName, addressOf(corePackage));
+		setObject(fixturePackage, 5, addressOf(packageClass), fixturePackageName, 0);
+		setObject(hero, 6, addressOf(actorClass), heroName, addressOf(fixturePackage));
+		writeValue(classClass, 0x38, std::uint64_t{0x0000000000000020ULL});
+		writeValue(packageClass, 0x38, std::uint64_t{0x0000000400000000ULL});
+		writeValue(actorClass, 0x38, std::uint64_t{0x0000001000000000ULL});
+
+		FakeHandleIdentitySource identitySource;
+		identitySource.Generation = 42;
+		identitySource.ObjectCount = 7;
+		const auto addIdentity = [&](const std::int32_t index, ObjectBytes& object) {
+			identitySource.Objects.emplace(index, ObjectIdentity{
+				.Index = index,
+				.SerialNumber = 1000 + index,
+				.Address = addressOf(object),
+				.ClassFingerprint = static_cast<std::uint64_t>(0xA000 + index)
+			});
+		};
+		addIdentity(1, corePackage);
+		addIdentity(2, classClass);
+		addIdentity(3, packageClass);
+		addIdentity(4, actorClass);
+		addIdentity(5, fixturePackage);
+		addIdentity(6, hero);
+
+		const auto context = MakeEngineContext(42, true, true, &nameProfile);
+		EngineFacade facade(context, "fixture-production-snapshot", identitySource);
+		ObjectArraySnapshotSource source(context, facade, identitySource);
+		Require(source.IsConfigured(), "Production snapshot metadata source rejected a complete profile");
+		std::int32_t objectCount = -1;
+		Require(
+			source.TryGetObjectCount(objectCount) && objectCount == 7,
+			"Production snapshot source did not expose a checked object count");
+
+		EngineSnapshotObject empty;
+		Require(
+			source.TryCaptureObject(0, empty) == SnapshotSlotReadResult::Empty,
+			"Production snapshot source confused an empty slot with a read failure");
+		EngineSnapshotObject heroRecord;
+		Require(
+			source.TryCaptureObject(6, heroRecord) == SnapshotSlotReadResult::Captured,
+			"Production snapshot source failed to capture a coherent object");
+		Require(
+			heroRecord.Name == "Hero"
+				&& heroRecord.FullPath == "/Script/Fixture.Hero"
+				&& heroRecord.ClassPath == "/Script/CoreUObject.Actor"
+				&& heroRecord.PackagePath == "/Script/Fixture"
+				&& heroRecord.Kind == EngineObjectKind::Object,
+			"Production snapshot metadata path or kind is incorrect");
+		EngineSnapshotObject packageRecord;
+		Require(
+			source.TryCaptureObject(5, packageRecord) == SnapshotSlotReadResult::Captured
+				&& packageRecord.Name == "Fixture"
+				&& packageRecord.FullPath == "/Script/Fixture"
+				&& packageRecord.ClassPath == "/Script/CoreUObject.Package"
+				&& packageRecord.Kind == EngineObjectKind::Package,
+			"Production snapshot package metadata is incorrect");
+
+		Require(
+			facade.ConfigureSnapshotCapture(source)
+				&& facade.SnapshotCapture()->RequestCapture().Ok()
+				&& facade.SnapshotCapture()->Pump(4096) == SnapshotPumpResult::Published,
+			"Production snapshot source did not publish through the bounded producer");
+		const std::shared_ptr<const EngineSnapshot> published = facade.Snapshots().Current();
+		Require(
+			published && published->SourceObjectCount == 7
+				&& published->Objects.size() == 6
+				&& published->SkippedSlots == 1,
+			"Production snapshot publication lost live or empty slots");
+
+		writeValue(hero, 0x18, actorName);
+		Require(
+			!source.ValidateSlot(6, &heroRecord),
+			"Production snapshot validation ignored a name mutation");
+		writeValue(hero, 0x18, heroName);
+		identitySource.Objects.at(6).SerialNumber++;
+		Require(
+			!source.ValidateSlot(6, &heroRecord),
+			"Production snapshot validation ignored slot recycling");
+		identitySource.Objects.at(6).SerialNumber--;
+		writeValue(hero, 0x20, addressOf(hero));
+		EngineSnapshotObject cyclic;
+		Require(
+			source.TryCaptureObject(6, cyclic) == SnapshotSlotReadResult::Failed,
+			"Production snapshot metadata source accepted an outer cycle");
+		writeValue(hero, 0x20, addressOf(fixturePackage));
+		identitySource.ExecutionThreadValid = false;
+		Require(
+			!source.IsCurrentExecutionThreadValid(),
+			"Production snapshot source ignored its execution-thread boundary");
+		identitySource.ExecutionThreadValid = true;
+		Require(facade.Stop(), "Production snapshot source did not drain from its facade");
+	}
 
 	void TestStableObjectAndFunctionHandles()
 	{
@@ -1146,7 +1379,31 @@ namespace
 			"Failed revalidation replaced the last complete snapshot");
 		source.Slots[2]->Name = "Object2";
 
-		Require(capture.RequestCapture().Ok(), "Third snapshot generation was not requested");
+		Require(capture.RequestCapture().Ok(), "Object-count mutation capture was not requested");
+		Require(
+			capture.Pump(10) == SnapshotPumpResult::Progress,
+			"Object-count mutation fixture did not finish its capture phase");
+		source.Slots.resize(11);
+		Require(
+			capture.Pump(10) == SnapshotPumpResult::Failed
+				&& capture.Diagnostics().Error == SnapshotCaptureError::SourceCountChanged
+				&& store.CurrentGeneration() == 1,
+			"Object-count mutation was published as a complete snapshot");
+		source.Slots.resize(10);
+		Require(capture.RequestCapture().Ok(), "Publication-count mutation capture was not requested");
+		Require(
+			capture.Pump(20) == SnapshotPumpResult::Progress
+				&& capture.Diagnostics().State == SnapshotCaptureState::Publishing,
+			"Publication-count mutation fixture did not reach its publishing phase");
+		source.Slots.resize(11);
+		Require(
+			capture.Pump(5) == SnapshotPumpResult::Failed
+				&& capture.Diagnostics().Error == SnapshotCaptureError::SourceCountChanged
+				&& store.CurrentGeneration() == 1,
+			"Object-count mutation during publication replaced the complete snapshot");
+		source.Slots.resize(10);
+
+		Require(capture.RequestCapture().Ok(), "Execution-thread snapshot generation was not requested");
 		source.ExecutionThreadValid.store(false, std::memory_order_release);
 		Require(
 			capture.Pump(1) == SnapshotPumpResult::Failed
@@ -1837,6 +2094,51 @@ namespace
 		Require(executor.DisableAndDrain(), "Generic game-thread executor did not drain");
 	}
 
+	void TestPostRenderFrameClientOwnershipAndDrain()
+	{
+		using namespace UExplorer::Runtime;
+
+		GameThreadExecutor executor;
+		PostRenderPumpBackend backend(executor);
+		FrameClientProbe first;
+		FrameClientProbe second;
+		Require(backend.AttachFrameClient(first), "PostRender frame client did not attach");
+		Require(!backend.AttachFrameClient(second), "PostRender accepted two frame clients");
+		Require(backend.HasFrameClient(), "Attached PostRender frame client was not published");
+		backend.Tick();
+		Require(first.Calls.load() == 1, "PostRender did not pump the attached frame client");
+
+		first.Block.store(true, std::memory_order_release);
+		first.Entered.store(false, std::memory_order_release);
+		auto inFlightTick = std::async(std::launch::async, [&backend] { backend.Tick(); });
+		WaitUntil(
+			[&first] { return first.Entered.load(std::memory_order_acquire); },
+			"Blocking PostRender frame client was not entered");
+		Require(
+			!backend.DetachFrameClient(first, std::chrono::milliseconds(20)),
+			"PostRender frame-client detach ignored an in-flight callback");
+		Require(!backend.HasFrameClient(), "Draining frame client remained reachable to new ticks");
+		Require(backend.FrameClientInFlight() == 1, "Frame-client in-flight diagnostic was incorrect");
+		first.Block.store(false, std::memory_order_release);
+		inFlightTick.get();
+		Require(
+			backend.DetachFrameClient(first, std::chrono::seconds(1)),
+			"PostRender frame-client detach could not be retried after drain");
+		Require(backend.FrameClientInFlight() == 0, "Drained frame client retained a callback lease");
+
+		const int detachedCalls = first.Calls.load();
+		backend.Tick();
+		Require(
+			first.Calls.load() == detachedCalls,
+			"Post-stop callback was allowed to run owned frame-client work");
+		Require(backend.AttachFrameClient(second), "PostRender frame-client barrier did not reset");
+		backend.Tick();
+		Require(second.Calls.load() == 1, "Replacement frame client was not pumped");
+		Require(
+			backend.DetachFrameClient(second, std::chrono::seconds(1)),
+			"Replacement frame client did not drain");
+	}
+
 	void TestGameThreadMpscCapacity()
 	{
 		using UExplorer::GameThread::DisableAndDrain;
@@ -1955,6 +2257,7 @@ int main(const int argc, char** argv)
 		TestEngineNameCodec();
 		TestCoreRuntimeStateAndShutdown();
 		TestStableObjectAndFunctionHandles();
+		TestProductionSnapshotMetadataSource();
 		TestEngineFacadeAndImmutableSnapshots();
 		TestIncrementalSnapshotCapture();
 		TestCoreDomainCommandsAndHandleExecution();
@@ -1965,9 +2268,10 @@ int main(const int argc, char** argv)
 		TestQueueShutdownWakesWaiters();
 		TestGameThreadTaskOwnershipAndTimeouts();
 		TestGenericGameThreadWorkAndCancellation();
+		TestPostRenderFrameClientOwnershipAndDrain();
 		TestGameThreadMpscCapacity();
 		TestHttpServerLifecycle();
-		std::cout << "Core harness passed: framing, secure sessions, runtime/capabilities, EngineFacade/immutable budgeted snapshots, domain commands, stable handles/FUObjectItem layout, Hook RAII/drain, SafeMemory, USMAP consumer, bounded queues, cancellable owned game-thread work, SEH, HTTP lifecycle, and shutdown.\n";
+		std::cout << "Core harness passed: framing, secure sessions, runtime/capabilities, EngineFacade/immutable budgeted snapshots, domain commands, stable handles/FUObjectItem layout, Hook RAII/drain, SafeMemory, USMAP consumer, bounded queues, cancellable owned game-thread/frame-client work, SEH, HTTP lifecycle, and shutdown.\n";
 		return 0;
 	}
 	catch (const std::exception& error)

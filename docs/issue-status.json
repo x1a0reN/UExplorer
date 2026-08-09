@@ -67,6 +67,7 @@
 		"2026-08-09: EngineNameCodec isolates NamePool/chunked-array decoding behind immutable layout data and SafeMemory without runtime Off/Settings reads",
 		"2026-08-09: EngineFacade now binds one session/context/identity generation and owns the immutable EngineSnapshotStore used by future domain services",
 		"2026-08-09: EngineFacade uniquely owns the optional budgeted snapshot producer and refuses teardown until its pump callback barrier drains",
+		"2026-08-09: ObjectArraySnapshotSource is a production metadata boundary built only from stable handles, immutable context offsets, EngineNameCodec, and SafeMemory; Main owns and drains its PostRender frame-client attachment",
         "Remaining legacy domain/API monoliths and direct Off/Settings consumers still require migration"
       ]
     },
@@ -185,6 +186,7 @@
         "2026-08-09: EngineContext reports fuobjectitem.serial_number only after exact profile and runtime witness validation",
         "2026-08-09: FName size/comparison/number and UClass cast-flags now have bounded validation reports and are frozen into the handle identity context",
 		"2026-08-09: initialized NamePool/chunked-array addresses and entry fields are frozen into EngineNameProfile and require index zero to decode exactly as None before engine.names is available",
+		"2026-08-09: production object snapshot metadata consumes only the frozen UObject index/class/name/outer and UClass cast-flags profile; runtime source code is contract-checked against Off/Settings access",
         "Required offset validation blocks context publication; candidate lists and deeper semantic validation remain incomplete"
       ]
     },
@@ -224,6 +226,7 @@
         "2026-08-09: PostRender pump records OS thread ID, monotonic last tick, tick count, queue depth, and cross-thread mismatch",
         "Capability becomes unavailable before the first tick, on thread mismatch, or after a two-second stall; mismatch stops task consumption instead of executing on the wrong thread",
         "2026-08-09: IGameThreadPump and the explicit PostRenderPumpBackend move pump ownership out of API code",
+		"2026-08-09: PostRenderPumpBackend owns one detachable frame client; pointer withdrawal precedes quiet drain, timeout retains the draining owner, and the Core harness proves retry plus post-detach callback suppression",
         "Live minimized/loading fixtures remain pending"
       ]
     },
@@ -265,7 +268,9 @@
 		"Core harness concurrently reads 32 published generations and rejects stale generation, wrong session, incomplete metadata, and unordered records",
 		"2026-08-09: EngineSnapshotCapture bounds each capture/validate/publish pump, revalidates every original slot, rejects concurrent pumps, and drains in-flight work before teardown",
 		"Core harness proves mutation between capture and validation leaves the previous generation published",
-		"Production metadata source, PostRender attachment, and GC-churn target fixtures remain pending"
+		"2026-08-09: production ObjectArraySnapshotSource builds stable name/full/class/package/kind metadata on the verified PostRender thread and atomically publishes only after a full validation sweep and final count check",
+		"2026-08-09: Main attaches the producer as an exclusive 32-work-unit PostRender frame client, requests initial/periodic generations, and detaches/drains it before facade/source teardown",
+		"GC-churn, large-object-table, and real target profile fixtures remain pending; the result is a validated complete sweep, not a point-in-engine-time atomic snapshot"
 	  ]
 	},
     "OBJ-003": {
@@ -273,6 +278,7 @@
       "verification": [
         "2026-08-09: MemoryApi and HookApi use centralized SafeMemory; API implementation files no longer call VirtualProtect directly",
 		"2026-08-09: EngineNameCodec replaces raw/catch-based FName entry reads with checked range arithmetic, SafeMemory, strict encoding, and bounded redirects",
+		"2026-08-09: production snapshot metadata revalidates every referenced live object through a typed serial-backed slot and performs all field reads through SafeMemory without legacy UE wrappers",
         "Legacy object/world route reads still contain direct live-memory traversal and require snapshot/codec migration"
       ]
     },
@@ -293,7 +299,8 @@
 	  "verification": [
 		"2026-08-09: immutable snapshot publication rejects empty name/full-path/class-path/package-path metadata instead of publishing placeholders as usable records",
 		"2026-08-09: name decoding now returns explicit typed errors for unsupported layouts, bounds, memory, headers, encoding, and redirect cycles instead of an apparently valid placeholder",
-		"Property codec result states and production metadata capture remain pending"
+		"2026-08-09: production snapshot capture emits only fully decoded name/full/class/package/kind metadata and rejects any read/decode/coherence failure instead of publishing placeholders",
+		"Property codec result states remain pending"
 	  ]
 	},
 	"OBJ-006": {
@@ -301,6 +308,7 @@
 	  "verification": [
 		"2026-08-09: snapshot envelopes enforce an 8,000,000 source-slot ceiling, complete skipped-slot accounting, strict index ordering, and bounded metadata lengths",
 		"2026-08-09: snapshot capture scans both live and empty slots in bounded batches and revalidates the entire source range before atomic publication",
+		"2026-08-09: production object/class/package path traversal uses checked address arithmetic, bounded 128-level outer depth, metadata byte ceilings, cycle rejection, and a final source-count coherence check",
 		"Container/property traversal bounds and cycle guards remain pending"
 	  ]
 	},
