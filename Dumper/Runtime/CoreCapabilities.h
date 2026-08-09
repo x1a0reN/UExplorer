@@ -2,6 +2,7 @@
 
 #include "CapabilityRegistry.h"
 #include "EngineContext.h"
+#include "EngineNameCodec.h"
 
 #include <memory>
 #include <string>
@@ -33,6 +34,17 @@ inline std::shared_ptr<const CapabilitySnapshot> BuildCoreCapabilities(
 {
 	CapabilityRegistryBuilder builder;
 	builder.Define("engine.core", true);
+	const EngineNameProfile& nameProfile = context.NameProfile();
+	const bool namesAvailable = nameProfile.Validated
+		&& IsEngineNameProfileLayoutValid(nameProfile);
+	builder.Define(
+		"engine.names",
+		namesAvailable,
+		nameProfile.ReasonCode.empty() ? "NAME_STORAGE_LAYOUT_NOT_VALIDATED" : nameProfile.ReasonCode,
+		nameProfile.Reason.empty()
+			? "No complete immutable FName storage layout is available"
+			: nameProfile.Reason,
+		{"engine.core", "memory.safe"});
 	builder.Define(
 		"engine.process_event",
 		context.HasValidatedOffset("process_event.index")
@@ -121,7 +133,7 @@ inline std::shared_ptr<const CapabilitySnapshot> BuildCoreCapabilities(
 		probes.ObjectSnapshotPublished,
 		"OBJECT_SNAPSHOT_UNAVAILABLE",
 		"No complete immutable object snapshot has been published",
-		{"objects.handles"});
+		{"engine.names", "objects.handles"});
 	builder.Define(
 		"call.invoke",
 		probes.FunctionCallServiceEnabled,

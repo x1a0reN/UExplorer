@@ -12,6 +12,7 @@
 #include "Runtime/CoreRuntime.h"
 #include "Runtime/CoreSession.h"
 #include "Runtime/EngineFacade.h"
+#include "Runtime/EngineNameCodec.h"
 #include "Runtime/EngineSnapshot.h"
 #include "Runtime/EngineSnapshotCapture.h"
 #include "Runtime/FUObjectItemLayout.h"
@@ -29,6 +30,7 @@
 #include <atomic>
 #include <chrono>
 #include <cctype>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -248,11 +250,33 @@ namespace
 
 	std::shared_ptr<const UExplorer::Runtime::EngineContext> MakeEngineContext(
 		const std::uint64_t generation = 1,
-		const bool includeFunctionIdentity = true)
+		const bool includeFunctionIdentity = true,
+		const bool includeNameProfile = true)
 	{
 		UExplorer::Runtime::EngineContextBuilder builder(generation);
 		builder.SetIdentity(0x140000000, 0x140100000, 4242, 100, "FixtureGame", "5.4");
 		builder.SetProfile({.UsesFProperty = true, .UsesLargeWorldCoordinates = true});
+		if (includeNameProfile)
+		{
+			builder.SetNameProfile({
+				.Storage = UExplorer::Runtime::EngineNameStorageKind::NamePool,
+				.StorageAddress = 0x140200000,
+				.FNameSize = 8,
+				.ComparisonIndexOffset = 0,
+				.NumberOffset = 4,
+				.BlockOffsetBits = 14,
+				.EntryStride = 2,
+				.ChunksStart = 16,
+				.MaxChunkIndexOffset = 0,
+				.ByteCursorOffset = 4,
+				.EntryStringOffset = 2,
+				.EntryHeaderOffset = 0,
+				.EntryLengthShift = 6,
+				.Validated = true,
+				.Source = "harness",
+				.Checks = {"fixture"}
+			});
+		}
 		builder.AddOffset(ValidatedOffset("gobjects", 0x100000, true));
 		builder.AddOffset(ValidatedOffset("gworld", 0x200000));
 		builder.AddOffset(ValidatedOffset("process_event.index", 0x4C, true));
@@ -305,6 +329,7 @@ namespace
 		Require(context->Generation() == 1, "Engine context generation changed");
 		Require(context->HasValidatedOffset("gobjects"), "Validated offset was not published");
 		Require(context->Profile().UsesFProperty, "Immutable engine profile was not published");
+		Require(context->NameProfile().Validated, "Immutable name profile was not published");
 		const ObjectIdentityContext identityContext = CaptureObjectIdentityContext(*context);
 		Require(
 			identityContext.CanIssueObjectHandles()
@@ -347,7 +372,8 @@ namespace
 		probes.FunctionHandleValidationEnabled = true;
 		const auto withoutCallService = BuildCoreCapabilities(*context, probes);
 		Require(
-			withoutCallService->IsAvailable("objects.handles")
+			withoutCallService->IsAvailable("engine.names")
+				&& withoutCallService->IsAvailable("objects.handles")
 				&& !withoutCallService->IsAvailable("objects.snapshot")
 				&& !withoutCallService->IsAvailable("call.invoke"),
 			"Handle capability falsely enabled an unregistered function-call command");
@@ -372,6 +398,11 @@ namespace
 			!withoutIdentitySource->IsAvailable("objects.handles")
 				&& !withoutIdentitySource->IsAvailable("call.invoke"),
 			"Handle/call capability ignored the production identity source dependency");
+		const auto withoutNameProfile = BuildCoreCapabilities(*MakeEngineContext(3, true, false), probes);
+		Require(
+			!withoutNameProfile->IsAvailable("engine.names")
+				&& !withoutNameProfile->IsAvailable("objects.snapshot"),
+			"Snapshot capability ignored the immutable name-layout dependency");
 		RuntimeProbes stalledProbes = probes;
 		stalledProbes.GameThreadPumpActive = false;
 		const auto stalled = BuildCoreCapabilities(*context, stalledProbes);
@@ -398,6 +429,159 @@ namespace
 			cycleRejected = true;
 		}
 		Require(cycleRejected, "Capability dependency cycle was accepted");
+	}
+
+	void TestEngineNameCodec()
+	{
+		using namespace UExplorer::Runtime;
+
+		const auto writeBytes = [](auto& buffer, const std::size_t offset, const auto& value) {
+			Require(offset <= buffer.size() && sizeof(value) <= buffer.size() - offset,
+				"Name codec fixture write exceeded its buffer");
+			std::memcpy(buffer.data() + offset, &value, sizeof(value));
+		};
+		const auto writeString = [](auto& buffer, const std::size_t offset, const void* value, const std::size_t size) {
+			Require(offset <= buffer.size() && size <= buffer.size() - offset,
+				"Name codec string fixture write exceeded its buffer");
+			std::memcpy(buffer.data() + offset, value, size);
+		};
+
+		std::array<std::byte, 64> pool{};
+		std::array<std::byte, 96> block{};
+		writeBytes(pool, 0, std::int32_t{0});
+		writeBytes(pool, 4, std::int32_t{64});
+		writeBytes(pool, 16, reinterpret_cast<std::uintptr_t>(block.data()));
+
+		writeBytes(block, 2, static_cast<std::uint16_t>(5u << 6));
+		constexpr char actor[] = "Actor";
+		writeString(block, 4, actor, 5);
+		writeBytes(block, 10, static_cast<std::uint16_t>((2u << 6) | 1u));
+		const std::array<wchar_t, 2> wideName{L'\u6D4B', L'\u8BD5'};
+		writeString(block, 12, wideName.data(), sizeof(wideName));
+
+		writeBytes(block, 16, std::uint16_t{0});
+		writeBytes(block, 18, std::int32_t{1});
+		writeBytes(block, 22, std::int32_t{3});
+		writeBytes(block, 32, std::uint16_t{0});
+		writeBytes(block, 34, std::int32_t{22});
+		writeBytes(block, 38, std::int32_t{0});
+		writeBytes(block, 44, std::uint16_t{0});
+		writeBytes(block, 46, std::int32_t{16});
+		writeBytes(block, 50, std::int32_t{0});
+		writeBytes(block, 56, static_cast<std::uint16_t>(1u << 6));
+		const std::uint8_t invalidUtf8 = 0xFF;
+		writeBytes(block, 58, invalidUtf8);
+
+		EngineNameProfile poolProfile{
+			.Storage = EngineNameStorageKind::NamePool,
+			.StorageAddress = reinterpret_cast<std::uintptr_t>(pool.data()),
+			.FNameSize = 8,
+			.ComparisonIndexOffset = 0,
+			.NumberOffset = 4,
+			.BlockOffsetBits = 14,
+			.EntryStride = 2,
+			.ChunksStart = 16,
+			.MaxChunkIndexOffset = 0,
+			.ByteCursorOffset = 4,
+			.EntryStringOffset = 2,
+			.EntryHeaderOffset = 0,
+			.EntryLengthShift = 6,
+			.Validated = true,
+			.Source = "name-pool-fixture"
+		};
+		EngineNameCodec poolCodec(poolProfile);
+		Require(poolCodec.IsConfigured(), "Validated NamePool profile was rejected");
+		const EngineNameResult numbered = poolCodec.Decode(1, 2);
+		Require(numbered.Ok() && numbered.Value == "Actor_1", "NamePool number suffix decoded incorrectly");
+		const EngineNameResult wide = poolCodec.Decode(5);
+		Require(
+			wide.Ok() && wide.Value == "\xE6\xB5\x8B\xE8\xAF\x95",
+			"Wide NamePool entry did not produce strict UTF-8");
+		const std::array<std::uint32_t, 2> fname{1, 2};
+		const EngineNameResult decodedFName = poolCodec.DecodeFName(
+			reinterpret_cast<std::uintptr_t>(fname.data()));
+		Require(decodedFName.Ok() && decodedFName.Value == "Actor_1", "FName field layout was ignored");
+		Require(
+			poolCodec.Decode(1000).Error == EngineNameError::IndexOutOfRange,
+			"NamePool byte cursor did not bound an index");
+		Require(
+			poolCodec.Decode(28).Error == EngineNameError::EncodingInvalid,
+			"Invalid UTF-8 FName entry was accepted");
+
+		EngineNameProfile outlineProfile = poolProfile;
+		outlineProfile.FNameSize = 4;
+		outlineProfile.NumberOffset = -1;
+		outlineProfile.UsesOutlineNumber = true;
+		EngineNameCodec outlineCodec(outlineProfile);
+		const EngineNameResult redirected = outlineCodec.Decode(8);
+		Require(
+			redirected.Ok() && redirected.Value == "Actor_2",
+			"Outline-number redirect did not preserve its suffix");
+		Require(
+			outlineCodec.Decode(16).Error == EngineNameError::RedirectCycle,
+			"NamePool redirect cycle was not rejected");
+		Require(
+			outlineCodec.Decode(1, 1).Error == EngineNameError::NumberInvalid,
+			"Outline-number profile accepted an inline FName number");
+
+		std::array<std::byte, 32> legacyStorage{};
+		std::vector<std::uintptr_t> legacyChunk(0x4000);
+		std::array<std::byte, 64> legacyNarrow{};
+		std::array<std::byte, 64> legacyWide{};
+		writeBytes(legacyNarrow, 0, std::uint32_t{0});
+		constexpr char legacyText[] = "Legacy";
+		writeString(legacyNarrow, 4, legacyText, sizeof(legacyText));
+		writeBytes(legacyWide, 0, std::uint32_t{3});
+		const std::array<wchar_t, 3> legacyWideText{L'W', L'i', L'\0'};
+		writeString(legacyWide, 4, legacyWideText.data(), sizeof(legacyWideText));
+		legacyChunk[0] = reinterpret_cast<std::uintptr_t>(legacyNarrow.data());
+		legacyChunk[1] = reinterpret_cast<std::uintptr_t>(legacyWide.data());
+		writeBytes(legacyStorage, 0, reinterpret_cast<std::uintptr_t>(legacyChunk.data()));
+		writeBytes(legacyStorage, 8, std::int32_t{2});
+		writeBytes(legacyStorage, 12, std::int32_t{1});
+
+		EngineNameProfile legacyProfile{
+			.Storage = EngineNameStorageKind::ChunkedArray,
+			.StorageAddress = reinterpret_cast<std::uintptr_t>(legacyStorage.data()),
+			.FNameSize = 8,
+			.ComparisonIndexOffset = 0,
+			.NumberOffset = 4,
+			.ChunksStart = 0,
+			.MaxChunkIndexOffset = 12,
+			.NumElementsOffset = 8,
+			.EntryStringOffset = 4,
+			.EntryIndexOffset = 0,
+			.Validated = true,
+			.Source = "legacy-name-array-fixture"
+		};
+		EngineNameCodec legacyCodec(legacyProfile);
+		Require(legacyCodec.IsConfigured(), "Validated chunked name-array profile was rejected");
+		const EngineNameResult legacyNumbered = legacyCodec.Decode(0, 4);
+		Require(
+			legacyNumbered.Ok() && legacyNumbered.Value == "Legacy_3",
+			"Chunked name-array number suffix decoded incorrectly");
+		const EngineNameResult legacyWideResult = legacyCodec.Decode(1);
+		Require(
+			legacyWideResult.Ok() && legacyWideResult.Value == "Wi",
+			"Chunked wide name entry decoded incorrectly");
+		Require(
+			legacyCodec.Decode(2).Error == EngineNameError::IndexOutOfRange,
+			"Chunked name-array element count did not bound an index");
+		writeBytes(legacyNarrow, 0, std::uint32_t{4});
+		Require(
+			legacyCodec.Decode(0).Error == EngineNameError::HeaderInvalid,
+			"Chunked name-array entry identity mismatch was accepted");
+
+		EngineNameProfile invalidProfile = poolProfile;
+		invalidProfile.ChunksStart = 3;
+		Require(
+			!EngineNameCodec(invalidProfile).IsConfigured(),
+			"Structurally invalid name profile was accepted");
+		EngineNameProfile inaccessibleProfile = poolProfile;
+		inaccessibleProfile.StorageAddress = 1;
+		Require(
+			EngineNameCodec(inaccessibleProfile).Decode(1).Error == EngineNameError::EntryUnavailable,
+			"Name codec did not convert an inaccessible storage read into a stable error");
 	}
 
 	void TestCoreRuntimeStateAndShutdown()
@@ -880,6 +1064,7 @@ namespace
 		const auto context = MakeEngineContext(42);
 		EngineFacade facade(context, "fixture-snapshot-session", source);
 		Require(facade.IsConfigured(), "EngineFacade rejected a matching immutable generation");
+		Require(facade.Names().IsConfigured(), "EngineFacade did not own its immutable name codec");
 		Require(facade.IssueObjectHandle(7).Ok(), "EngineFacade bypassed or lost handle issuance");
 		Require(
 			facade.Snapshots().Publish(makeSnapshot(1)).Ok()
@@ -1107,9 +1292,11 @@ namespace
 			status.Ok
 				&& status.Data.at("runtime").at("session_id") == "fixture-command-session"
 				&& status.Data.at("architecture") == "x64-fixture"
+				&& status.Data.at("name_profile").at("validated").get<bool>()
+				&& status.Data.at("name_profile").at("storage") == "name_pool"
 				&& !status.Data.at("object_snapshot").at("published").get<bool>()
 				&& !status.Data.at("object_snapshot").at("capture_configured").get<bool>(),
-			"Status domain command did not serialize the immutable runtime");
+			"Status domain command did not serialize the immutable runtime/name profile");
 
 		CoreCommandRequest objectRequest{
 			.RequestId = 2,
@@ -1765,6 +1952,7 @@ int main(const int argc, char** argv)
 		TestUsmapContainer(fixtureDirectory);
 		TestCoreSessionIdentity();
 		TestEngineContextAndCapabilities();
+		TestEngineNameCodec();
 		TestCoreRuntimeStateAndShutdown();
 		TestStableObjectAndFunctionHandles();
 		TestEngineFacadeAndImmutableSnapshots();

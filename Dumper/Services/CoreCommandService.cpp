@@ -181,6 +181,35 @@ json SerializeOffsetReports(const Runtime::EngineContext& context)
 	return reports;
 }
 
+json SerializeNameProfile(const Runtime::EngineNameProfile& profile)
+{
+	return {
+		{"storage", Runtime::ToString(profile.Storage)},
+		{"storage_address", profile.StorageAddress == 0
+			? json(nullptr)
+			: json(std::format("0x{:X}", profile.StorageAddress))},
+		{"validated", profile.Validated},
+		{"fname_size", profile.FNameSize},
+		{"comparison_index_offset", profile.ComparisonIndexOffset},
+		{"number_offset", profile.NumberOffset},
+		{"uses_outline_number", profile.UsesOutlineNumber},
+		{"block_offset_bits", profile.BlockOffsetBits},
+		{"entry_stride", profile.EntryStride},
+		{"chunks_start", profile.ChunksStart},
+		{"max_chunk_index_offset", profile.MaxChunkIndexOffset},
+		{"num_elements_offset", profile.NumElementsOffset},
+		{"byte_cursor_offset", profile.ByteCursorOffset},
+		{"entry_string_offset", profile.EntryStringOffset},
+		{"entry_header_offset", profile.EntryHeaderOffset},
+		{"entry_index_offset", profile.EntryIndexOffset},
+		{"entry_length_shift", profile.EntryLengthShift},
+		{"source", profile.Source},
+		{"checks", profile.Checks},
+		{"reason_code", profile.ReasonCode.empty() ? json(nullptr) : json(profile.ReasonCode)},
+		{"reason", profile.Reason.empty() ? json(nullptr) : json(profile.Reason)}
+	};
+}
+
 json ModuleRelativeAddress(
 	const Runtime::EngineContext& context,
 	const std::string& offsetName)
@@ -449,6 +478,7 @@ CoreCommandResponse CoreCommandService::ExecuteStatus(const CoreCommandRequest& 
 		data["pid"] = context.ProcessId();
 		data["architecture"] = m_StatusDiagnostics.ProcessArchitecture();
 		data["script_offset_diagnostics"] = SerializeScriptOffsetDiagnostics(scriptDiagnostics);
+		data["name_profile"] = SerializeNameProfile(context.NameProfile());
 		data["runtime"] = SerializeRuntime(snapshot);
 		data["capabilities"] = SerializeCapabilities(snapshot);
 		data["game_thread"] = SerializeGameThreadDiagnostics(m_GameThread);
@@ -490,6 +520,7 @@ CoreCommandResponse CoreCommandService::ExecuteStatus(const CoreCommandRequest& 
 	data["object_count"] = context.ObjectCount();
 	data["offsets"] = std::move(offsets);
 	data["offset_reports"] = SerializeOffsetReports(context);
+	data["name_profile"] = SerializeNameProfile(context.NameProfile());
 	data["addresses"] = std::move(addresses);
 	data["internals"] = std::move(internals);
 	data["script_offset_diagnostics"] = SerializeScriptOffsetDiagnostics(scriptDiagnostics);

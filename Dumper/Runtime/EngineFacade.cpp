@@ -12,6 +12,7 @@ EngineFacade::EngineFacade(
 	: m_Context(std::move(context)),
 	  m_SessionId(std::move(sessionId)),
 	  m_IdentitySource(identitySource),
+	  m_Names(m_Context ? m_Context->NameProfile() : EngineNameProfile{}),
 	  m_Handles(
 		m_SessionId,
 		m_Context ? m_Context->Generation() : 0,

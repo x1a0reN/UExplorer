@@ -22,6 +22,10 @@ $runtime = Read-ProjectFile 'Dumper\Runtime\CoreRuntime.h'
 $coreSession = Read-ProjectFile 'Dumper\Runtime\CoreSession.cpp'
 $context = Read-ProjectFile 'Dumper\Runtime\EngineContext.h'
 $capture = Read-ProjectFile 'Dumper\Runtime\EngineContextCapture.cpp'
+$nameArrayHeader = Read-ProjectFile 'Dumper\Engine\Public\Unreal\NameArray.h'
+$nameArray = Read-ProjectFile 'Dumper\Engine\Private\Unreal\NameArray.cpp'
+$nameCodecHeader = Read-ProjectFile 'Dumper\Runtime\EngineNameCodec.h'
+$nameCodec = Read-ProjectFile 'Dumper\Runtime\EngineNameCodec.cpp'
 $capabilities = Read-ProjectFile 'Dumper\Runtime\CoreCapabilities.h'
 $shutdown = Read-ProjectFile 'Dumper\Runtime\ShutdownCoordinator.h'
 $handleHeader = Read-ProjectFile 'Dumper\Runtime\ObjectHandle.h'
@@ -64,16 +68,33 @@ foreach ($token in @('BCryptGenRandom', 'BCRYPT_USE_SYSTEM_PREFERRED_RNG', 'core
 }
 
 foreach ($token in @('Generation()', 'OffsetReport', 'Required engine offsets are not validated',
-        'std::shared_ptr<const EngineContext>')) {
+		'EngineNameProfile', 'NameProfile()', 'SetNameProfile',
+		'std::shared_ptr<const EngineContext>')) {
     Assert-Contains $context $token 'Immutable EngineContext contract regressed.'
 }
 
 foreach ($token in @('gobjects', 'process_event.index', 'positive_member_offset',
-        'count_within_capacity', 'validated_ini_override', 'fuobjectitem.serial_number')) {
+		'count_within_capacity', 'validated_ini_override', 'fuobjectitem.serial_number',
+		'CaptureNameProfile', 'runtime_name_storage_layout', 'NAME_STORAGE_LAYOUT_NOT_CAPTURED',
+		'name_index_zero_decodes_none', 'NAME_STORAGE_SEMANTIC_VALIDATION_FAILED')) {
     Assert-Contains $capture $token 'Offset validation report regressed.'
 }
 
+foreach ($token in @('FNameStorageLayout', 'TryCaptureRuntimeLayout')) {
+	Assert-Contains $nameArrayHeader $token 'Initialized name storage layout capture regressed.'
+	Assert-Contains $nameArray $token 'Initialized name storage layout capture implementation regressed.'
+}
+foreach ($token in @('EngineNameError', 'IsEngineNameProfileLayoutValid', 'DecodeFName',
+		'DecodeNamePool', 'DecodeChunkedArray', 'kMaxNameUnits', 'kMaxRedirectDepth',
+		'MB_ERR_INVALID_CHARS', 'WC_ERR_INVALID_CHARS', 'ReadMemory', 'ReadValue')) {
+	Assert-Contains ($nameCodecHeader + $nameCodec) $token 'Safe immutable name codec regressed.'
+}
+foreach ($token in @('Off::', 'Settings::', 'NameArray::', 'FName::', ' FName(')) {
+	Assert-NotContains $nameCodec $token 'Production name decoding bypassed its immutable profile boundary.'
+}
+
 foreach ($token in @('transport.named_pipe', 'PIPE_LISTENER_NOT_READY', 'objects.identity_source',
+		'engine.names', 'NAME_STORAGE_LAYOUT_NOT_VALIDATED',
 		'functions.handles', 'FUNCTION_HANDLE_VALIDATION_NOT_READY',
         'GAME_THREAD_PUMP_NOT_OBSERVED', 'GAME_THREAD_PUMP_STALLED', 'RequiredReadyCapabilities')) {
     Assert-Contains $capabilities $token 'Capability dependency/readiness contract regressed.'
@@ -136,7 +157,8 @@ foreach ($token in @('IsCurrentExecutionThreadValid', 'executor.IsCurrentPumpThr
     Assert-Contains $identitySource $token 'Production object/function identity source regressed.'
 }
 Assert-NotContains $identitySource 'Off::' 'Production identity validation must use its immutable context, not mutable offset globals.'
-foreach ($token in @('ObjectHandleService', 'EngineSnapshotStore', 'EngineSnapshotCapture',
+foreach ($token in @('ObjectHandleService', 'EngineNameCodec', 'Names() const noexcept',
+		'EngineSnapshotStore', 'EngineSnapshotCapture',
 		'ConfigureSnapshotCapture', 'IssueObjectHandle', 'ValidateFunctionHandle',
 		'std::shared_ptr<const EngineContext>')) {
 	Assert-Contains $engineFacade $token 'EngineFacade ownership boundary regressed.'
@@ -195,7 +217,8 @@ foreach ($token in @('CaptureEngineContext', 'RefreshRuntimeCapabilities', 'Shut
 }
 
 foreach ($token in @('liveness', 'readiness', 'offset_reports', 'capabilities', 'context_generation',
-        'last_tick_monotonic_us', 'queue_depth', 'object_snapshot')) {
+		'last_tick_monotonic_us', 'queue_depth', 'object_snapshot', 'name_profile',
+		'SerializeNameProfile')) {
     Assert-Contains $commandService $token 'Core status command does not expose truthful runtime state.'
 }
 Assert-NotContains $statusApi 'Off::' 'Status handlers must read the immutable EngineContext, not raw offset globals.'
@@ -208,6 +231,11 @@ Assert-NotContains $statusApi 'CoreRuntimeSnapshot' 'Status HTTP adapter must no
 
 foreach ($token in @('TestEngineContextAndCapabilities', 'TestCoreRuntimeStateAndShutdown',
         'TestCoreSessionIdentity',
+		'TestEngineNameCodec', 'Invalid UTF-8 FName entry was accepted',
+		'NamePool redirect cycle was not rejected',
+		'Chunked name-array entry identity mismatch was accepted',
+		'Name codec did not convert an inaccessible storage read into a stable error',
+		'Status domain command did not serialize the immutable runtime/name profile',
 		'TestEngineFacadeAndImmutableSnapshots', 'Snapshot reader observed a torn generation',
 		'Incomplete snapshot metadata was published as usable data',
 		'TestIncrementalSnapshotCapture', 'Snapshot pump exceeded its per-frame work budget',

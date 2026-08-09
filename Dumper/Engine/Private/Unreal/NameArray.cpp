@@ -743,6 +743,55 @@ void NameArray::PostInit()
 	}
 }
 
+bool NameArray::TryCaptureRuntimeLayout(FNameStorageLayout& layout)
+{
+	layout = {};
+	layout.BlockOffsetBits = -1;
+	layout.EntryStride = -1;
+	layout.ChunksStart = -1;
+	layout.MaxChunkIndexOffset = -1;
+	layout.NumElementsOffset = -1;
+	layout.ByteCursorOffset = -1;
+	layout.EntryStringOffset = -1;
+	layout.EntryHeaderOffset = -1;
+	layout.EntryIndexOffset = -1;
+	layout.EntryLengthShift = -1;
+	if (!GNames)
+		return false;
+
+	layout.UsesNamePool = Settings::Internal::bUseNamePool;
+	layout.UsesOutlineNumber = Settings::Internal::bUseOutlineNumberName;
+	layout.Address = reinterpret_cast<uintptr_t>(GNames);
+	layout.MaxChunkIndexOffset = Off::NameArray::MaxChunkIndex;
+	if (layout.UsesNamePool)
+	{
+		layout.BlockOffsetBits = FNameBlockOffsetBits;
+		layout.EntryStride = static_cast<int32>(NameEntryStride);
+		layout.ChunksStart = Off::NameArray::ChunksStart;
+		layout.ByteCursorOffset = Off::NameArray::ByteCursor;
+		layout.EntryStringOffset = Off::FNameEntry::NamePool::StringOffset;
+		layout.EntryHeaderOffset = Off::FNameEntry::NamePool::HeaderOffset;
+		layout.EntryLengthShift = FNameEntry::FNameEntryLengthShiftCount;
+		return layout.BlockOffsetBits > 0 && layout.BlockOffsetBits < 31
+			&& layout.EntryStride > 0 && layout.EntryStride <= 16
+			&& layout.ChunksStart >= 0 && layout.ChunksStart <= 0x1000
+			&& layout.MaxChunkIndexOffset >= 0 && layout.MaxChunkIndexOffset <= 0x1000
+			&& layout.ByteCursorOffset >= 0 && layout.ByteCursorOffset <= 0x1000
+			&& layout.EntryStringOffset > 0 && layout.EntryStringOffset <= 32
+			&& layout.EntryHeaderOffset >= 0 && layout.EntryHeaderOffset <= 32
+			&& layout.EntryLengthShift > 0 && layout.EntryLengthShift < 16;
+	}
+
+	layout.ChunksStart = 0;
+	layout.NumElementsOffset = Off::NameArray::NumElements;
+	layout.EntryStringOffset = Off::FNameEntry::NameArray::StringOffset;
+	layout.EntryIndexOffset = Off::FNameEntry::NameArray::IndexOffset;
+	return layout.MaxChunkIndexOffset >= 0 && layout.MaxChunkIndexOffset <= 0x10000
+		&& layout.NumElementsOffset >= 0 && layout.NumElementsOffset <= 0x10000
+		&& layout.EntryStringOffset >= 0 && layout.EntryStringOffset <= 0x100
+		&& layout.EntryIndexOffset >= 0 && layout.EntryIndexOffset <= 0x100;
+}
+
 int32 NameArray::GetNumChunks()
 {
 	int32 value = 0;

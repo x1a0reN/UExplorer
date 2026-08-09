@@ -1,6 +1,7 @@
 #pragma once
 
 #include "EngineContext.h"
+#include "EngineNameCodec.h"
 #include "EngineSnapshot.h"
 #include "EngineSnapshotCapture.h"
 #include "ObjectHandle.h"
@@ -33,6 +34,7 @@ public:
 	ObjectValidationResult ValidateObjectHandle(const ObjectHandle& handle);
 	FunctionHandleResult IssueFunctionHandle(std::int32_t index);
 	FunctionValidationResult ValidateFunctionHandle(const FunctionHandle& handle);
+	const EngineNameCodec& Names() const noexcept { return m_Names; }
 
 	EngineSnapshotStore& Snapshots() noexcept { return m_Snapshots; }
 	const EngineSnapshotStore& Snapshots() const noexcept { return m_Snapshots; }
@@ -45,6 +47,7 @@ private:
 	std::shared_ptr<const EngineContext> m_Context;
 	std::string m_SessionId;
 	IHandleIdentitySource& m_IdentitySource;
+	EngineNameCodec m_Names;
 	ObjectHandleService m_Handles;
 	EngineSnapshotStore m_Snapshots;
 	std::unique_ptr<EngineSnapshotCapture> m_SnapshotCapture;

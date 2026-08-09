@@ -2,6 +2,23 @@
 
 #include "Unreal/UnrealTypes.h"
 
+struct FNameStorageLayout
+{
+	bool UsesNamePool = false;
+	bool UsesOutlineNumber = false;
+	uintptr_t Address = 0;
+	int32 BlockOffsetBits = -1;
+	int32 EntryStride = -1;
+	int32 ChunksStart = -1;
+	int32 MaxChunkIndexOffset = -1;
+	int32 NumElementsOffset = -1;
+	int32 ByteCursorOffset = -1;
+	int32 EntryStringOffset = -1;
+	int32 EntryHeaderOffset = -1;
+	int32 EntryIndexOffset = -1;
+	int32 EntryLengthShift = -1;
+};
+
 class FNameEntry
 {
 private:
@@ -61,6 +78,7 @@ public:
 	static bool SetGNamesWithoutCommitting();
 
 	static void PostInit();
+	static bool TryCaptureRuntimeLayout(FNameStorageLayout& layout);
 	
 public:
 	static int32 GetNumChunks();

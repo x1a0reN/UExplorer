@@ -59,6 +59,49 @@ struct EngineProfile
 	bool SmallEnumValue = false;
 };
 
+enum class EngineNameStorageKind : std::uint8_t
+{
+	Unavailable,
+	ChunkedArray,
+	NamePool
+};
+
+inline const char* ToString(const EngineNameStorageKind kind) noexcept
+{
+	switch (kind)
+	{
+	case EngineNameStorageKind::Unavailable: return "unavailable";
+	case EngineNameStorageKind::ChunkedArray: return "chunked_array";
+	case EngineNameStorageKind::NamePool: return "name_pool";
+	}
+	return "unknown";
+}
+
+struct EngineNameProfile
+{
+	EngineNameStorageKind Storage = EngineNameStorageKind::Unavailable;
+	std::uintptr_t StorageAddress = 0;
+	std::int32_t FNameSize = -1;
+	std::int32_t ComparisonIndexOffset = -1;
+	std::int32_t NumberOffset = -1;
+	std::int32_t BlockOffsetBits = -1;
+	std::int32_t EntryStride = -1;
+	std::int32_t ChunksStart = -1;
+	std::int32_t MaxChunkIndexOffset = -1;
+	std::int32_t NumElementsOffset = -1;
+	std::int32_t ByteCursorOffset = -1;
+	std::int32_t EntryStringOffset = -1;
+	std::int32_t EntryHeaderOffset = -1;
+	std::int32_t EntryIndexOffset = -1;
+	std::int32_t EntryLengthShift = -1;
+	bool UsesOutlineNumber = false;
+	bool Validated = false;
+	std::string Source;
+	std::vector<std::string> Checks;
+	std::string ReasonCode;
+	std::string Reason;
+};
+
 class EngineContext final
 {
 public:
@@ -70,6 +113,7 @@ public:
 	const std::string& GameName() const noexcept { return m_GameName; }
 	const std::string& GameVersion() const noexcept { return m_GameVersion; }
 	const EngineProfile& Profile() const noexcept { return m_Profile; }
+	const EngineNameProfile& NameProfile() const noexcept { return m_NameProfile; }
 	const std::map<std::string, OffsetReport>& Offsets() const noexcept { return m_Offsets; }
 
 	const OffsetReport* FindOffset(const std::string& name) const
@@ -95,6 +139,7 @@ private:
 	std::string m_GameName;
 	std::string m_GameVersion;
 	EngineProfile m_Profile;
+	EngineNameProfile m_NameProfile;
 	std::map<std::string, OffsetReport> m_Offsets;
 };
 
@@ -126,6 +171,12 @@ public:
 	EngineContextBuilder& SetProfile(const EngineProfile& profile)
 	{
 		m_Profile = profile;
+		return *this;
+	}
+
+	EngineContextBuilder& SetNameProfile(EngineNameProfile profile)
+	{
+		m_NameProfile = std::move(profile);
 		return *this;
 	}
 
@@ -170,6 +221,7 @@ public:
 		context->m_GameName = m_GameName;
 		context->m_GameVersion = m_GameVersion;
 		context->m_Profile = m_Profile;
+		context->m_NameProfile = m_NameProfile;
 		context->m_Offsets = m_Offsets;
 		return std::shared_ptr<const EngineContext>(std::move(context));
 	}
@@ -183,6 +235,7 @@ private:
 	std::string m_GameName;
 	std::string m_GameVersion;
 	EngineProfile m_Profile;
+	EngineNameProfile m_NameProfile;
 	std::map<std::string, OffsetReport> m_Offsets;
 };
 

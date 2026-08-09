@@ -64,6 +64,7 @@
         "2026-08-09: ObjectArrayIdentitySource establishes a production SafeMemory/game-thread identity boundary for the explicit Epic 64-bit FUObjectItem profile",
         "2026-08-09: transport-neutral CoreCommandService now owns status and handle-issue business logic; StatusApi is only a legacy HTTP adapter",
         "2026-08-09: production handle validation captures its offsets from one immutable EngineContext and no longer reads mutable Off globals or a reconfigurable identity singleton",
+		"2026-08-09: EngineNameCodec isolates NamePool/chunked-array decoding behind immutable layout data and SafeMemory without runtime Off/Settings reads",
 		"2026-08-09: EngineFacade now binds one session/context/identity generation and owns the immutable EngineSnapshotStore used by future domain services",
 		"2026-08-09: EngineFacade uniquely owns the optional budgeted snapshot producer and refuses teardown until its pump callback barrier drains",
         "Remaining legacy domain/API monoliths and direct Off/Settings consumers still require migration"
@@ -183,6 +184,7 @@
         "2026-08-09: EngineContext publishes per-offset value, required flag, source, checks, validation state, and stable failure reason",
         "2026-08-09: EngineContext reports fuobjectitem.serial_number only after exact profile and runtime witness validation",
         "2026-08-09: FName size/comparison/number and UClass cast-flags now have bounded validation reports and are frozen into the handle identity context",
+		"2026-08-09: initialized NamePool/chunked-array addresses and entry fields are frozen into EngineNameProfile and require index zero to decode exactly as None before engine.names is available",
         "Required offset validation blocks context publication; candidate lists and deeper semantic validation remain incomplete"
       ]
     },
@@ -270,6 +272,7 @@
       "status": "in_progress",
       "verification": [
         "2026-08-09: MemoryApi and HookApi use centralized SafeMemory; API implementation files no longer call VirtualProtect directly",
+		"2026-08-09: EngineNameCodec replaces raw/catch-based FName entry reads with checked range arithmetic, SafeMemory, strict encoding, and bounded redirects",
         "Legacy object/world route reads still contain direct live-memory traversal and require snapshot/codec migration"
       ]
     },
@@ -289,6 +292,7 @@
 	  "status": "in_progress",
 	  "verification": [
 		"2026-08-09: immutable snapshot publication rejects empty name/full-path/class-path/package-path metadata instead of publishing placeholders as usable records",
+		"2026-08-09: name decoding now returns explicit typed errors for unsupported layouts, bounds, memory, headers, encoding, and redirect cycles instead of an apparently valid placeholder",
 		"Property codec result states and production metadata capture remain pending"
 	  ]
 	},

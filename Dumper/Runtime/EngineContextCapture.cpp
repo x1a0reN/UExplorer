@@ -1,8 +1,10 @@
 #include "EngineContextCapture.h"
 
+#include "EngineNameCodec.h"
 #include "OffsetFinder/OffsetFinder.h"
 #include "OffsetFinder/Offsets.h"
 #include "Settings.h"
+#include "Unreal/NameArray.h"
 #include "Unreal/ObjectArray.h"
 
 #include <Windows.h>
@@ -84,6 +86,67 @@ OffsetReport VTableIndex(
 		{"positive_vtable_index", "vtable_index_at_most_512"});
 }
 
+EngineNameProfile CaptureNameProfile()
+{
+	FNameStorageLayout layout;
+	const bool layoutCaptured = NameArray::TryCaptureRuntimeLayout(layout);
+	EngineNameProfile profile{
+		.Storage = layout.Address == 0
+			? EngineNameStorageKind::Unavailable
+			: (layout.UsesNamePool
+				? EngineNameStorageKind::NamePool
+				: EngineNameStorageKind::ChunkedArray),
+		.StorageAddress = layout.Address,
+		.FNameSize = Off::InSDK::Name::FNameSize,
+		.ComparisonIndexOffset = Off::FName::CompIdx,
+		.NumberOffset = Off::FName::Number,
+		.BlockOffsetBits = layout.BlockOffsetBits,
+		.EntryStride = layout.EntryStride,
+		.ChunksStart = layout.ChunksStart,
+		.MaxChunkIndexOffset = layout.MaxChunkIndexOffset,
+		.NumElementsOffset = layout.NumElementsOffset,
+		.ByteCursorOffset = layout.ByteCursorOffset,
+		.EntryStringOffset = layout.EntryStringOffset,
+		.EntryHeaderOffset = layout.EntryHeaderOffset,
+		.EntryIndexOffset = layout.EntryIndexOffset,
+		.EntryLengthShift = layout.EntryLengthShift,
+		.UsesOutlineNumber = layout.UsesOutlineNumber,
+		.Source = "runtime_name_storage_layout",
+		.Checks = {
+			"storage_address_nonzero",
+			"fname_fields_within_size",
+			"storage_offsets_bounded",
+			"entry_encoding_layout_bounded",
+			"name_index_zero_decodes_none"
+		}
+	};
+	const bool structurallyValid = layoutCaptured && IsEngineNameProfileLayoutValid(profile);
+	profile.Validated = structurallyValid;
+	EngineNameResult witness;
+	if (structurallyValid)
+		witness = EngineNameCodec(profile).Decode(0);
+	profile.Validated = structurallyValid && witness.Ok() && witness.Value == "None";
+	if (!profile.Validated)
+	{
+		if (!layoutCaptured)
+		{
+			profile.ReasonCode = "NAME_STORAGE_LAYOUT_NOT_CAPTURED";
+			profile.Reason = "The initialized name storage did not expose a complete immutable layout";
+		}
+		else if (!structurallyValid)
+		{
+			profile.ReasonCode = "NAME_STORAGE_LAYOUT_INVALID";
+			profile.Reason = "The captured name storage layout did not pass structural validation";
+		}
+		else
+		{
+			profile.ReasonCode = "NAME_STORAGE_SEMANTIC_VALIDATION_FAILED";
+			profile.Reason = "Name index zero did not decode exactly to None through checked memory";
+		}
+	}
+	return profile;
+}
+
 } // namespace
 
 std::shared_ptr<const EngineContext> CaptureEngineContext(const std::uint64_t generation)
@@ -111,6 +174,7 @@ std::shared_ptr<const EngineContext> CaptureEngineContext(const std::uint64_t ge
 		.EnumNameOnly = Settings::Internal::bIsEnumNameOnly,
 		.SmallEnumValue = Settings::Internal::bIsSmallEnumValue
 	});
+	builder.SetNameProfile(CaptureNameProfile());
 
 	const bool objectArrayValidated = Off::InSDK::ObjArray::GObjects > 0
 		&& objectArrayAddress != 0

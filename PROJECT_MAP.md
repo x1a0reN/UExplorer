@@ -25,7 +25,7 @@ UExplorer 是一个面向 Unreal Engine 的 **SDK Dump + 实时游戏内省工�
 └──────────────────────────────────────────────┘
 ```
 
-当前分支处于 R2：`CoreRuntime`、不可变 `EngineContext`、`EngineFacade`、稳定 Handle、原子 `EngineSnapshotStore`、有界游戏线程执行器和安全关闭边界已建立；Named Pipe 与 Rust Session Host 尚属 R3。`Dumper/Server` 和 `Dumper/API` 是 R4 前的 legacy HTTP 兼容层，不是目标架构，且不会与 IPC 形成长期双栈。功能真实性与未完成项以 `DESIGN.md` 和 `docs/issue-status.json` 为准。
+当前分支处于 R2：`CoreRuntime`、不可变 `EngineContext`/名称布局、`EngineFacade`、严格名称 codec、稳定 Handle、原子 `EngineSnapshotStore`、有界游戏线程执行器和安全关闭边界已建立；Named Pipe 与 Rust Session Host 尚属 R3。`Dumper/Server` 和 `Dumper/API` 是 R4 前的 legacy HTTP 兼容层，不是目标架构，且不会与 IPC 形成长期双栈。功能真实性与未完成项以 `DESIGN.md` 和 `docs/issue-status.json` 为准。
 
 ---
 
@@ -48,6 +48,7 @@ UExplorer/
 │   │   ├── CoreRuntime.h             #   状态机、request lease、readiness
 │   │   ├── EngineContext*.h/.cpp     #   一次性发布的引擎 profile/offset report
 │   │   ├── EngineFacade.h/.cpp       #   session/context/identity 的单一领域入口
+│   │   ├── EngineNameCodec.h/.cpp    #   immutable layout + SafeMemory 的严格 FName 解码
 │   │   ├── EngineSnapshot.h/.cpp     #   严格校验并原子发布的不可变快照 store
 │   │   ├── EngineSnapshotCapture.*   #   budgeted capture/validate/publish producer
 │   │   ├── GameThreadExecutor.h/.cpp #   有界 owned work、deadline、cancel、drain
