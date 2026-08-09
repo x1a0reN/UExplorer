@@ -66,6 +66,7 @@
 	<ClCompile Include="..\..\Dumper\Runtime\GameThreadExecutor.cpp" />
 	<ClCompile Include="..\..\Dumper\Runtime\ObjectArraySnapshotSource.cpp" />
 	<ClCompile Include="..\..\Dumper\Runtime\ObjectSnapshotReflectionCandidateSource.cpp" />
+	<ClCompile Include="..\..\Dumper\Runtime\ObjectSnapshotTypeCandidateSource.cpp" />
     <ClCompile Include="..\..\Dumper\Runtime\ObjectHandle.cpp" />
 	<ClCompile Include="..\..\Dumper\Runtime\PropertyCodec.cpp" />
 	<ClCompile Include="..\..\Dumper\Runtime\ReflectionLayout.cpp" />
@@ -100,6 +101,7 @@
 	<ClInclude Include="..\..\Dumper\Runtime\GameThreadExecutor.h" />
 	<ClInclude Include="..\..\Dumper\Runtime\ObjectArraySnapshotSource.h" />
 	<ClInclude Include="..\..\Dumper\Runtime\ObjectSnapshotReflectionCandidateSource.h" />
+	<ClInclude Include="..\..\Dumper\Runtime\ObjectSnapshotTypeCandidateSource.h" />
     <ClInclude Include="..\..\Dumper\Runtime\ObjectHandle.h" />
 	<ClInclude Include="..\..\Dumper\Runtime\ObjectIdentityContext.h" />
 	<ClInclude Include="..\..\Dumper\Runtime\ObjectSnapshotIdentitySource.h" />
@@ -108,6 +110,7 @@
 	<ClInclude Include="..\..\Dumper\Runtime\ReflectionLayoutCapture.h" />
 	<ClInclude Include="..\..\Dumper\Runtime\TypeSnapshot.h" />
 	<ClInclude Include="..\..\Dumper\Runtime\TypeSnapshotCapture.h" />
+	<ClInclude Include="..\..\Dumper\Runtime\TypeMetadataContext.h" />
     <ClInclude Include="..\..\Dumper\Runtime\SafeMemory.h" />
     <ClInclude Include="..\..\Dumper\Runtime\ShutdownCoordinator.h" />
     <ClInclude Include="..\..\Dumper\Runtime\VTableHook.h" />

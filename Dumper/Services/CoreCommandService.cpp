@@ -1,6 +1,7 @@
 #include "CoreCommandService.h"
 
 #include "Runtime/ObjectSnapshotReflectionCandidateSource.h"
+#include "Runtime/ObjectSnapshotTypeCandidateSource.h"
 
 #include <algorithm>
 #include <chrono>
@@ -225,7 +226,9 @@ json SerializeReflectionDiagnostics(
 	return data;
 }
 
-json SerializeTypeSnapshotDiagnostics(const Runtime::EngineFacade& engine)
+json SerializeTypeSnapshotDiagnostics(
+	const Runtime::EngineFacade& engine,
+	const Runtime::ObjectSnapshotTypeCandidateSource* source)
 {
 	const Runtime::TypeSnapshotStore& store = engine.Types();
 	const std::shared_ptr<const Runtime::TypeSnapshot> snapshot = store.Current();
@@ -293,6 +296,37 @@ json SerializeTypeSnapshotDiagnostics(const Runtime::EngineFacade& engine)
 	else
 	{
 		data["capture"] = nullptr;
+	}
+	if (source)
+	{
+		const Runtime::ObjectSnapshotTypeSourceDiagnostics diagnostics =
+			source->Diagnostics();
+		data["source"] = {
+			{"preparation_error_code", diagnostics.PreparationError
+					== Runtime::TypeCandidatePreparationError::None
+				? json(nullptr)
+				: json(Runtime::ToString(diagnostics.PreparationError))},
+			{"source_error_code", diagnostics.SourceError
+					== Runtime::TypeSnapshotSourceError::None
+				? json(nullptr)
+				: json(Runtime::ToString(diagnostics.SourceError))},
+			{"prepared_snapshot_generation", diagnostics.PreparedSnapshotGeneration},
+			{"reflection_layout_fingerprint", diagnostics.ReflectionLayoutFingerprint == 0
+				? json(nullptr)
+				: json(std::format(
+					"0x{:016X}", diagnostics.ReflectionLayoutFingerprint))},
+			{"prepared_types", diagnostics.PreparedTypes},
+			{"prepared_functions", diagnostics.PreparedFunctions},
+			{"capture_phase", diagnostics.CapturePhase},
+			{"source_steps", diagnostics.SourceSteps},
+			{"validation_steps", diagnostics.ValidationSteps},
+			{"captured_evidence", diagnostics.CapturedEvidence},
+			{"active", diagnostics.Active}
+		};
+	}
+	else
+	{
+		data["source"] = nullptr;
 	}
 	return data;
 }
@@ -593,12 +627,14 @@ CoreCommandService::CoreCommandService(
 	Runtime::GameThreadExecutor& gameThread,
 	Runtime::EngineFacade& engine,
 	ICoreStatusDiagnosticsSource& statusDiagnostics,
-	const Runtime::ObjectSnapshotReflectionCandidateSource* reflectionSource)
+	const Runtime::ObjectSnapshotReflectionCandidateSource* reflectionSource,
+	const Runtime::ObjectSnapshotTypeCandidateSource* typeSource)
 	: m_Runtime(runtime),
 	  m_GameThread(gameThread),
 	  m_Engine(engine),
 	  m_StatusDiagnostics(statusDiagnostics),
-	  m_ReflectionSource(reflectionSource)
+	  m_ReflectionSource(reflectionSource),
+	  m_TypeSource(typeSource)
 {
 	const Runtime::CoreRuntimeSnapshot snapshot = m_Runtime.Snapshot();
 	m_SessionId = snapshot.SessionId;
@@ -614,7 +650,9 @@ bool CoreCommandService::IsConfigured() const noexcept
 		&& m_Engine.SessionId() == m_SessionId
 		&& m_Engine.ContextGeneration() == m_ContextGeneration
 		&& (!m_ReflectionSource
-			|| m_ReflectionSource->ContextGeneration() == m_ContextGeneration);
+			|| m_ReflectionSource->ContextGeneration() == m_ContextGeneration)
+		&& (!m_TypeSource
+			|| m_TypeSource->ContextGeneration() == m_ContextGeneration);
 }
 
 CoreCommandResponse CoreCommandService::Execute(
@@ -856,7 +894,8 @@ CoreCommandResponse CoreCommandService::ExecuteStatus(const CoreCommandRequest& 
 		data["object_snapshot"] = SerializeSnapshotDiagnostics(m_Engine);
 		data["reflection"] = SerializeReflectionDiagnostics(
 			m_Engine, m_ReflectionSource);
-		data["type_snapshot"] = SerializeTypeSnapshotDiagnostics(m_Engine);
+		data["type_snapshot"] = SerializeTypeSnapshotDiagnostics(
+			m_Engine, m_TypeSource);
 		return Success(request, std::move(data), {.ExecuteUs = ElapsedMicroseconds(started)});
 	}
 	if (!snapshot.Context)
@@ -882,7 +921,8 @@ CoreCommandResponse CoreCommandService::ExecuteStatus(const CoreCommandRequest& 
 		data["object_snapshot"] = SerializeSnapshotDiagnostics(m_Engine);
 		data["reflection"] = SerializeReflectionDiagnostics(
 			m_Engine, m_ReflectionSource);
-		data["type_snapshot"] = SerializeTypeSnapshotDiagnostics(m_Engine);
+		data["type_snapshot"] = SerializeTypeSnapshotDiagnostics(
+			m_Engine, m_TypeSource);
 		return Success(request, std::move(data), {.ExecuteUs = ElapsedMicroseconds(started)});
 	}
 
@@ -930,7 +970,8 @@ CoreCommandResponse CoreCommandService::ExecuteStatus(const CoreCommandRequest& 
 	data["object_snapshot"] = SerializeSnapshotDiagnostics(m_Engine);
 	data["reflection"] = SerializeReflectionDiagnostics(
 		m_Engine, m_ReflectionSource);
-	data["type_snapshot"] = SerializeTypeSnapshotDiagnostics(m_Engine);
+	data["type_snapshot"] = SerializeTypeSnapshotDiagnostics(
+		m_Engine, m_TypeSource);
 	return Success(request, std::move(data), {.ExecuteUs = ElapsedMicroseconds(started)});
 }
 

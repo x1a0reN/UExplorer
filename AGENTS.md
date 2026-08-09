@@ -32,7 +32,7 @@ UExplorerCore.dll（目标进程内）
 
 - React 领域调用只进入 `frontend/src/api/client.ts`，并调用 Tauri `domain_request`；事件只通过调用方持有的 Tauri Channel。
 - Rust `DomainService` 使用显式 operation 白名单，绑定明确 target PID 或 active session。未知 operation 在接触 session 前返回 `OPERATION_NOT_SUPPORTED`。
-- 当前 Host 已实现 status 和 immutable snapshot-backed Object/Type 基础查询。Core 会从一代稳定 Object Snapshot 自动尝试 witnessed ReflectionLayout 采集；只有完整 U/FProperty 证据成功才开放 `engine.reflection`。通用 `TypeSnapshotCapture` owner 已实现，但 PropertyCodec/type metadata 生产源、type Main 调度接线以及 Property、Memory、Call、World、Watch、Hook、Blueprint、Dump 等领域仍不可用；不得伪造字段或回退旧实现。
+- 当前 Host 已实现 status 和 immutable snapshot-backed Object/Type 基础查询。Core 会从一代稳定 Object Snapshot 自动尝试 witnessed ReflectionLayout，再由生产 `ObjectSnapshotTypeCandidateSource` 从 exact Object/Reflection generation 采集完整类型/函数结构；两者都由 Main 接入共享 PostRender scheduler。当前仍缺生产 PropertyCodec、property descriptor/enum/bytecode witness、type 详情 command，以及 Property、Memory、Call、World、Watch、Hook、Blueprint、Dump 等领域；不得伪造字段或回退旧实现。
 - Core release project 只运行 PID-scoped Named Pipe；不编译 `Dumper/Server/HttpServer.cpp` 和 `Dumper/API/*.cpp`，不链接 `ws2_32`。旧 HTTP/SSE/WebSocket/API 源码保留为历史证据，不是兼容层。
 - Core 在 Pipe bind 后安装生产 `PostRenderHook`，发布事实 capability/Ready 后才开放 admissions。
 - 当前没有外部 HTTP/WebSocket Gateway，也没有 `connection.ini`、`runtime.ini`、port 或 Token 运行依赖。
@@ -57,7 +57,7 @@ UExplorerCore.dll（目标进程内）
 ### Core DLL
 
 - `Dumper/Main.cpp`：唯一 DLL 生命周期装配入口；负责 Runtime、Facade、Pipe、PostRender 和有序关闭。
-- `Dumper/Runtime/`：CoreRuntime、EngineContext、Capability、SafeMemory、Handle、Snapshot、GameThread、Hook owner；`ObjectSnapshotReflectionCandidateSource.*` 是唯一生产 reflection candidate 边界，不得重新接入 `Off::InitReflection()` 作为 fallback；`TypeSnapshotCapture.*` 只是通用分帧/Worker publication owner，不得把它描述为生产 type metadata source。
+- `Dumper/Runtime/`：CoreRuntime、EngineContext、Capability、SafeMemory、Handle、Snapshot、GameThread、Hook owner；`ObjectSnapshotReflectionCandidateSource.*` 是唯一生产 reflection candidate 边界，`ObjectSnapshotTypeCandidateSource.*` 是 exact snapshot/layout 上的生产结构类型源，`TypeSnapshotCapture.*` 只负责通用分帧、依赖封口与 Worker publication。不得重新接入 `Off::InitReflection()` 或 legacy wrapper 作为 fallback。
 - `Dumper/Services/CoreCommandService.*`：transport-neutral Core command 边界。
 - `Dumper/IPC/NamedPipeRpcServer.*`：唯一 release transport。
 - `Dumper/Engine/` 与 `Dumper/Generator/`：Dumper-7 派生的 UE 模型和生成器；仍含待迁移的版本/布局假设。

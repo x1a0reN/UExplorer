@@ -63,15 +63,19 @@ attached to the runtime scheduler and fails closed when its exact fixtures or wi
 do not match, but no engine row can become supported until the same path passes that
 row's target-process fixture.
 
-The generic harness also feeds a complete, strictly ordered synthetic metadata stream
-through the generic `TypeSnapshotCapture`. It proves per-unit capture/validation, no
-partial visibility, exact object/reflection dependency identity, worker-only publication,
-rejection of publication on the witnessed game thread, fixed-capacity failed-candidate
-retirement/backpressure, deep-frozen descriptor graphs,
-bounded property/parameter ranges, explicit direct versus inherited member order, exact
-CDO handle/class matching, hierarchy cycle/depth rejection, and stale-generation closure.
-It does not provide a production type metadata source, Main attachment, or target-process
-reflection evidence and therefore does not change any support row.
+The generic harness also feeds complete metadata through both the generic
+`TypeSnapshotCapture` record fixture and the production
+`ObjectSnapshotTypeCandidateSource`. The production source freezes one exact
+object/reflection generation, walks witnessed UProperty field/function chains only
+through stable handles and `SafeMemory`, emits complete structural type/function coverage,
+and incrementally re-reads every evidence record before sealing. Main attaches that source
+to the shared scheduler and performs worker-only publication after quiet detach. The
+fixtures prove per-unit capture/validation, no partial visibility, exact dependency
+identity, mutation rejection, fixed-capacity retirement/backpressure, deep-frozen generic
+descriptor graphs, bounded member ranges, direct versus inherited ordering, exact
+CDO/owner matching, and hierarchy guards. Property descriptors, UEnum layout, and
+Blueprint bytecode are still explicitly unavailable in the production stream. No
+target-process reflection/type run exists, so this does not change any support row.
 
 ## Generic boundary evidence (not an engine support claim)
 

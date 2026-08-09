@@ -62,6 +62,9 @@ $typeSnapshotHeader = Read-ProjectFile 'Dumper\Runtime\TypeSnapshot.h'
 $typeSnapshot = Read-ProjectFile 'Dumper\Runtime\TypeSnapshot.cpp'
 $typeCaptureHeader = Read-ProjectFile 'Dumper\Runtime\TypeSnapshotCapture.h'
 $typeCapture = Read-ProjectFile 'Dumper\Runtime\TypeSnapshotCapture.cpp'
+$typeMetadataContext = Read-ProjectFile 'Dumper\Runtime\TypeMetadataContext.h'
+$typeSourceHeader = Read-ProjectFile 'Dumper\Runtime\ObjectSnapshotTypeCandidateSource.h'
+$typeSource = Read-ProjectFile 'Dumper\Runtime\ObjectSnapshotTypeCandidateSource.cpp'
 $callbackBarrier = Read-ProjectFile 'Dumper\Runtime\CallbackBarrier.h'
 $safeMemoryHeader = Read-ProjectFile 'Dumper\Runtime\SafeMemory.h'
 $safeMemory = Read-ProjectFile 'Dumper\Runtime\SafeMemory.cpp'
@@ -343,6 +346,24 @@ foreach ($token in @('Off::', 'Settings::', 'ObjectArray::', 'NameArray::',
 		'#include "Unreal/', 'UEObject ', 'UEStruct ', 'UEProperty ')) {
 	Assert-NotContains $typeCapture $token 'Generic type snapshot capture reached mutable legacy reflection state.'
 }
+foreach ($token in @('TypeMetadataContext', 'ClassDefaultObject',
+		'FunctionFlags', 'FunctionExec', 'CaptureTypeMetadataContext')) {
+	Assert-Contains $typeMetadataContext $token 'Frozen type metadata context regressed.'
+}
+foreach ($token in @('ObjectSnapshotTypeCandidateSource', 'Prepare() noexcept',
+		'ReleasePreparedPlan', 'PreparedPlan', 'TypeIndexByAddress',
+		"kMaximumFieldChainDepth = 65'536", 'ReadStable', 'DecodeFNameStable',
+		'IssueFunctionHandle', 'ValidateObjectHandle', 'BeginValidation',
+		'ValidateEvidence', 'PROPERTY_DESCRIPTOR_NOT_CAPTURED',
+		'ENUM_LAYOUT_NOT_CAPTURED', 'FUNCTION_IMPLEMENTATION_NOT_WITNESSED',
+		'FUNCTION_BYTECODE_NOT_CAPTURED', 'kFunctionFlagNative',
+		'ValidateDependencies')) {
+	Assert-Contains ($typeSourceHeader + $typeSource) $token 'Production type source evidence boundary regressed.'
+}
+foreach ($token in @('Off::', 'Settings::', 'ObjectArray::', 'NameArray::',
+		'#include "Unreal/', 'UEObject ', 'UEStruct ', 'UEProperty ')) {
+	Assert-NotContains $typeSource $token 'Production type source reached mutable legacy wrappers or offsets.'
+}
 foreach ($token in @('ConfigureTypeSnapshotCapture',
 		'friend class TypeSnapshotCapture', 'std::unique_ptr<TypeSnapshotCapture>',
 		'm_TypeCapture->StopAndDrain')) {
@@ -365,13 +386,20 @@ foreach ($token in @('DriveReflectionDiscovery', 'ReflectionCaptureBlocksSnapsho
 		'shutdown.AddStage("reflection_frame_client"')) {
 	Assert-Contains $main $token 'Main no longer owns the production reflection/snapshot exclusion lifecycle.'
 }
+foreach ($token in @('DriveTypeDiscovery', 'TypeCaptureBlocksSnapshotRefresh',
+		'g_TypeFrameClientAttached', 'DetachTypeFrameClient',
+		'ObjectSnapshotTypeCandidateSource', 'PublishReady',
+		'shutdown.AddStage("type_frame_client"')) {
+	Assert-Contains $main $token 'Main no longer owns the production type/snapshot exclusion lifecycle.'
+}
 foreach ($token in @('SerializeReflectionDiagnostics', 'preparation_error_code',
 		'validation_error_code', 'prepared_snapshot_generation', 'layout_fingerprint')) {
 	Assert-Contains $commandService $token 'Reflection preparation/capture diagnostics are no longer observable.'
 }
 foreach ($token in @('SerializeTypeSnapshotDiagnostics', 'type_snapshot',
 		'publish_error_code', 'captured_types', 'captured_functions',
-		'captured_members', 'validation_steps', 'retired_candidates')) {
+		'captured_members', 'validation_steps', 'retired_candidates',
+		'prepared_functions', 'captured_evidence')) {
 	Assert-Contains $commandService $token 'Type snapshot capture/publication diagnostics are no longer observable.'
 }
 foreach ($token in @('EngineSnapshotObject', 'SessionId', 'ContextGeneration', 'Generation',

@@ -81,15 +81,20 @@ generic `TypeSnapshotCapture` now assembles strictly ordered metadata records un
 shared frame budget, revalidates the exact object/reflection `shared_ptr` dependencies,
 and hands complete candidates to a worker-only `PublishReady` path. The Facade publication
 entry is private to that owner and the handoff rejects the witnessed game thread. Failed candidates use
-fixed-capacity worker reclamation with explicit backpressure. No production type metadata
-source, Main scheduler attachment, or type-detail command is registered yet, so
-`engine.type_snapshot` and `types.inspect` remain unavailable in real sessions.
+fixed-capacity worker reclamation with explicit backpressure. The production
+`ObjectSnapshotTypeCandidateSource` freezes one exact object/reflection generation,
+captures complete structural type/function coverage through stable handles and
+SafeMemory, incrementally revalidates every live evidence record, and is attached by
+Main to the same scheduler. It publishes witnessed super/CDO, direct property/parameter,
+and native-exec structure while explicitly marking unavailable property descriptors,
+enum layouts, and bytecode. The type-detail command is not registered, so
+`types.inspect` still returns `TYPE_COMMAND_NOT_IMPLEMENTED`; no UE profile is claimed.
 PostRender now drives one `GameThreadFrameScheduler` rather than giving the object
 snapshot producer an exclusive callback slot. The scheduler supports at most eight
 clients, shares a 32-unit frame budget in four-unit round-robin quanta, stops further
 dispatch after 2 ms, and quiet-drains each client independently. Frame clients are not
-called after a pump-thread mismatch. Production object-snapshot and reflection capture
-both use this scheduler; future type/watch collectors must do the same rather than add
+called after a pump-thread mismatch. Production object-snapshot, reflection, and type
+capture use this scheduler; future watch collectors must do the same rather than add
 another Hook or unbounded per-frame loop. Reflection capture temporarily pauses periodic
 object-snapshot replacement so its exact generation dependency cannot drift before
 validation/publication, then releases the retained plan on every terminal path.
@@ -98,7 +103,9 @@ to the transport cutover contract.
 
 The production reflection path is covered by complete synthetic UProperty and FProperty
 memory graphs, including fail-closed profile mismatch, bounded field chains, no partial
-publication, and shutdown ownership. No Unreal Engine version is currently claimed as
+publication, and shutdown ownership. A production type-source UProperty graph additionally
+proves exact dependency sealing, complete structural coverage, worker publication, and
+mutation rejection during incremental validation. No Unreal Engine version is currently claimed as
 verified because the required target fixtures have not yet been added. A successful
 build or synthetic fixture does not establish target runtime safety.
 

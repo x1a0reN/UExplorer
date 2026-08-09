@@ -133,6 +133,7 @@
 	<ClCompile Include="Runtime\ObjectArrayIdentitySource.cpp" />
 	<ClCompile Include="Runtime\ObjectArraySnapshotSource.cpp" />
 	<ClCompile Include="Runtime\ObjectSnapshotReflectionCandidateSource.cpp" />
+	<ClCompile Include="Runtime\ObjectSnapshotTypeCandidateSource.cpp" />
     <ClCompile Include="Runtime\ObjectHandle.cpp" />
 	<ClCompile Include="Runtime\PostRenderHook.cpp" />
 	<ClCompile Include="Runtime\PropertyCodec.cpp" />
@@ -222,6 +223,7 @@
 	<ClInclude Include="Runtime\ObjectArrayIdentitySource.h" />
 	<ClInclude Include="Runtime\ObjectArraySnapshotSource.h" />
 	<ClInclude Include="Runtime\ObjectSnapshotReflectionCandidateSource.h" />
+	<ClInclude Include="Runtime\ObjectSnapshotTypeCandidateSource.h" />
     <ClInclude Include="Runtime\ObjectHandle.h" />
 	<ClInclude Include="Runtime\ObjectIdentityContext.h" />
 	<ClInclude Include="Runtime\ObjectSnapshotIdentitySource.h" />
@@ -231,6 +233,7 @@
 	<ClInclude Include="Runtime\ReflectionLayoutCapture.h" />
 	<ClInclude Include="Runtime\TypeSnapshot.h" />
 	<ClInclude Include="Runtime\TypeSnapshotCapture.h" />
+	<ClInclude Include="Runtime\TypeMetadataContext.h" />
     <ClInclude Include="Runtime\SafeMemory.h" />
     <ClInclude Include="Runtime\ShutdownCoordinator.h" />
     <ClInclude Include="Runtime\VTableHook.h" />

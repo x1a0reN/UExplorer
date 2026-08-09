@@ -27,6 +27,7 @@
 #include "Runtime/ObjectIdentityContext.h"
 #include "Runtime/ObjectArraySnapshotSource.h"
 #include "Runtime/ObjectSnapshotReflectionCandidateSource.h"
+#include "Runtime/ObjectSnapshotTypeCandidateSource.h"
 #include "Runtime/PropertyCodec.h"
 #include "Runtime/ReflectionLayout.h"
 #include "Runtime/ReflectionLayoutCapture.h"
@@ -594,6 +595,7 @@ namespace
 		builder.AddOffset(ValidatedOffset("fname.comparison_index", 0x00));
 		builder.AddOffset(ValidatedOffset("fname.number", 0x04));
 		builder.AddOffset(ValidatedOffset("uclass.cast_flags", 0x38));
+		builder.AddOffset(ValidatedOffset("uclass.default_object", 0xE0));
 		builder.AddOffset(ValidatedOffset("ufunction.function_flags", 0xB0));
 		if (includeFunctionIdentity)
 			builder.AddOffset(ValidatedOffset("ufunction.exec_function", 0xD8));
@@ -2907,6 +2909,7 @@ namespace
 		constexpr std::uint64_t castProperty = 0x0000000000008000;
 		constexpr std::uint64_t castObject = 0x0000000000010000;
 		constexpr std::uint64_t castBool = 0x0000000000020000;
+		constexpr std::uint64_t castFunction = 0x0000000000080000;
 		constexpr std::uint64_t castStruct = 0x0000000000100000;
 		constexpr std::uint64_t castArray = 0x0000000000200000;
 		constexpr std::uint64_t castNumeric = 0x0000000001000000;
@@ -3097,6 +3100,24 @@ namespace
 			"/Script/Engine.ActorComponent.CreationMethod", enumClass);
 		FixtureBlock& autoPossessAi = addSnapshotProperty(
 			"/Script/Engine.Pawn.AutoPossessAI", enumClass);
+		FixtureBlock& functionClass = addPropertyClass(castFunction);
+		FixtureBlock& nativeFunction = addSnapshotObject(
+			"/Script/Engine.Engine.DoThing",
+			EngineObjectKind::Function);
+		initializeProperty(
+			nativeFunction,
+			snapshot.Objects.back().Handle.Index,
+			functionClass);
+		FixtureBlock& functionParameter = addSnapshotProperty(
+			"/Script/Engine.Engine.DoThing.Value",
+			intClass);
+		FixtureBlock& scriptFunction = addSnapshotObject(
+			"/Script/Engine.Engine.ScriptThing",
+			EngineObjectKind::Function);
+		initializeProperty(
+			scriptFunction,
+			snapshot.Objects.back().Handle.Index,
+			functionClass);
 
 		const auto addInnerProperty = [&](FixtureBlock& propertyClass)
 			-> FixtureBlock& {
@@ -3195,6 +3216,82 @@ namespace
 		write(autoPossessAi, derivedPropertyOffset, enumUnderlying2.Address());
 		write(autoPossessAi, derivedPropertyOffset + sizeof(std::uintptr_t),
 			addressOf("/Script/Engine.EAutoPossessAI"));
+
+		for (const RequiredObject& required : requiredObjects)
+		{
+			if (required.Kind == EngineObjectKind::Enum)
+				continue;
+			FixtureBlock& object = *nodes.at(std::string(required.Path)).Memory;
+			std::int32_t propertiesSize = required.Kind == EngineObjectKind::Class
+				? 0x100
+				: 0x20;
+			std::int32_t minAlignment = 8;
+			if (required.Path == "/Script/CoreUObject.Field")
+				propertiesSize = 0x80;
+			else if (required.Path == "/Script/CoreUObject.Struct")
+				propertiesSize = structContainerSize;
+			else if (required.Path == "/Script/CoreUObject.Class")
+				propertiesSize = 0xC0;
+			else if (required.Path == "/Script/CoreUObject.Guid")
+			{
+				propertiesSize = 16;
+				minAlignment = 4;
+			}
+			else if (required.Path == "/Script/CoreUObject.Color")
+			{
+				propertiesSize = 4;
+				minAlignment = 1;
+			}
+			write(object, structPropertiesSizeOffset, propertiesSize);
+			write(object, structMinAlignmentOffset, minAlignment);
+		}
+		for (FixtureBlock* property : std::array{&colorR, &colorG})
+		{
+			write(*property, propertyArrayDimOffset, std::int32_t{1});
+			write(*property, propertyElementSizeOffset, std::int32_t{1});
+		}
+		FixtureBlock& engineType = *nodes.at("/Script/Engine.Engine").Memory;
+		write(engineType, structChildrenOffset, nativeFunction.Address());
+		write(nativeFunction, fieldNextOffset, scriptFunction.Address());
+		write(nativeFunction, structChildrenOffset, functionParameter.Address());
+		write(nativeFunction, structPropertiesSizeOffset, std::int32_t{4});
+		write(nativeFunction, std::size_t{0xB0}, std::uint32_t{0x400});
+		write(
+			nativeFunction,
+			std::size_t{0xD8},
+			reinterpret_cast<std::uintptr_t>(&FakeProcessEvent));
+		write(functionParameter, propertyArrayDimOffset, std::int32_t{1});
+		write(functionParameter, propertyElementSizeOffset, std::int32_t{4});
+		write(functionParameter, propertyFlagsOffset, std::uint64_t{0x80});
+		write(functionParameter, propertyOffsetOffset, std::int32_t{0});
+		write(scriptFunction, structPropertiesSizeOffset, std::int32_t{0});
+		write(scriptFunction, std::size_t{0xB0}, std::uint32_t{0});
+		write(
+			scriptFunction,
+			std::size_t{0xD8},
+			reinterpret_cast<std::uintptr_t>(&FakeProcessEvent));
+		const ObjectIdentity functionIdentity = identitySource.Objects.at(
+			nodes.at("/Script/Engine.Engine.DoThing").Index);
+		const ObjectIdentity scriptFunctionIdentity = identitySource.Objects.at(
+			nodes.at("/Script/Engine.Engine.ScriptThing").Index);
+		const ObjectIdentity engineIdentity = identitySource.Objects.at(
+			nodes.at("/Script/Engine.Engine").Index);
+		identitySource.Functions.emplace(
+			functionIdentity.Index,
+			FunctionIdentity{
+				.Function = functionIdentity,
+				.Owner = engineIdentity,
+				.FullPath = "Function fname:1:0.fname:2:0",
+				.SignatureFingerprint = 0x12345678ULL
+			});
+		identitySource.Functions.emplace(
+			scriptFunctionIdentity.Index,
+			FunctionIdentity{
+				.Function = scriptFunctionIdentity,
+				.Owner = engineIdentity,
+				.FullPath = "Function fname:1:0.fname:3:0",
+				.SignatureFingerprint = 0x87654321ULL
+			});
 
 		identitySource.ObjectCount = nextIndex;
 		snapshot.SourceObjectCount = nextIndex;
@@ -3305,11 +3402,133 @@ namespace
 				&& hasOffset(ReflectionField::PropertyOffset, propertyOffsetOffset)
 				&& hasOffset(ReflectionField::BoolFieldSize, derivedPropertyOffset)
 				&& hasOffset(ReflectionField::MapPropertyValue,
-					derivedPropertyOffset + static_cast<std::int32_t>(sizeof(std::uintptr_t)))
-				&& source.ReleasePreparedPlan()
-				&& !source.IsConfigured()
-				&& facade.Stop(),
+					derivedPropertyOffset + static_cast<std::int32_t>(sizeof(std::uintptr_t))),
 			"Production reflection source did not publish the witnessed immutable layout");
+		Require(
+			source.ReleasePreparedPlan() && !source.IsConfigured(),
+			"Production reflection source retained its completed worker-owned plan");
+
+		ObjectSnapshotTypeCandidateSource typeSource(context, facade);
+		const TypeCandidatePreparationResult typePrepared = typeSource.Prepare();
+		Require(
+			typePrepared.Ok()
+				&& typePrepared.SnapshotGeneration == 1
+				&& typePrepared.ReflectionLayoutFingerprint == reflection->Layout->Fingerprint()
+				&& typePrepared.TypeCount == requiredObjects.size()
+				&& typePrepared.FunctionCount == 2
+				&& typeSource.IsConfigured()
+				&& facade.ConfigureTypeSnapshotCapture(typeSource),
+			"Production type source did not freeze the exact object/reflection plan");
+		TypeSnapshotCapture* typeCapture = facade.TypeCapture();
+		Require(
+			typeCapture
+				&& typeCapture->RequestCapture() == TypeSnapshotCaptureError::None,
+			"Production type source capture request was rejected");
+		TypeSnapshotPumpResult finalTypePump;
+		for (std::size_t pump = 0; pump < 1024; ++pump)
+		{
+			finalTypePump = typeCapture->Pump(TypeSnapshotCapture::kMaxPumpBudget);
+			if (finalTypePump.Status == TypeSnapshotPumpStatus::Ready
+				|| finalTypePump.Status == TypeSnapshotPumpStatus::Failed)
+			{
+				break;
+			}
+		}
+		if (finalTypePump.Status != TypeSnapshotPumpStatus::Ready)
+		{
+			const TypeSnapshotCaptureDiagnostics diagnostics = typeCapture->Diagnostics();
+			const ObjectSnapshotTypeSourceDiagnostics sourceState = typeSource.Diagnostics();
+			std::ostringstream detail;
+			detail << "Production type source failed: pump="
+				<< static_cast<int>(finalTypePump.Status)
+				<< ", capture=" << ToString(diagnostics.Error)
+				<< ", source=" << ToString(diagnostics.SourceError)
+				<< ", phase=" << sourceState.CapturePhase
+				<< ", steps=" << sourceState.SourceSteps
+				<< ", validation=" << sourceState.ValidationSteps
+				<< ", evidence=" << sourceState.CapturedEvidence;
+			throw std::runtime_error(detail.str());
+		}
+		identitySource.ExecutionThreadValid = false;
+		const TypeSnapshotPublishResult publishedTypes = typeCapture->PublishReady();
+		identitySource.ExecutionThreadValid = true;
+		const std::shared_ptr<const TypeSnapshot> types = facade.Types().Current();
+		const ReflectedType* guidType = types
+			? types->FindByFullPath("/Script/CoreUObject.Guid")
+			: nullptr;
+		const ReflectedType* engineTypeRecord = types
+			? types->FindByFullPath("/Script/Engine.Engine")
+			: nullptr;
+		const ReflectedType* enumType = types
+			? types->FindByFullPath("/Script/Engine.ECollisionResponse")
+			: nullptr;
+		const ObjectSnapshotTypeSourceDiagnostics completedTypeSource =
+			typeSource.Diagnostics();
+		Require(
+			publishedTypes.Ok()
+				&& types == publishedTypes.Snapshot
+				&& types->ObjectSnapshotGeneration() == 1
+				&& types->Types().size() == requiredObjects.size()
+				&& guidType
+				&& guidType->DirectProperties.size() == 2
+				&& guidType->DirectProperties[0].Name == "A"
+				&& guidType->DirectProperties[1].Name == "C"
+				&& guidType->DirectProperties[0].State
+					== ReflectedMemberState::Unavailable
+				&& engineTypeRecord
+				&& engineTypeRecord->DefaultObjectState
+					== ClassDefaultObjectState::NotConstructed
+				&& engineTypeRecord->DirectFunctions.size() == 2
+				&& engineTypeRecord->DirectFunctions[0].Implementation
+					== ReflectedFunctionImplementation::Native
+				&& engineTypeRecord->DirectFunctions[0].Parameters.size() == 1
+				&& engineTypeRecord->DirectFunctions[0].Parameters[0].Direction
+					== ReflectedParameterDirection::Input
+				&& engineTypeRecord->DirectFunctions[1].Implementation
+					== ReflectedFunctionImplementation::Unavailable
+				&& engineTypeRecord->DirectFunctions[1].NativeAddress == 0
+				&& engineTypeRecord->DirectFunctions[1].ReasonCode
+					== "FUNCTION_BYTECODE_NOT_CAPTURED"
+				&& enumType
+				&& enumType->EnumState == ReflectedMemberState::Unavailable
+				&& completedTypeSource.SourceError == TypeSnapshotSourceError::None
+				&& !completedTypeSource.Active
+				&& completedTypeSource.CapturedEvidence > requiredObjects.size()
+				&& typeSource.ReleasePreparedPlan(),
+			"Production type source did not publish witnessed structural metadata");
+
+		const TypeCandidatePreparationResult retryPrepared = typeSource.Prepare();
+		Require(
+			retryPrepared.Ok()
+				&& typeCapture->RequestCapture() == TypeSnapshotCaptureError::None,
+			"Production type source could not prepare a second exact-generation audit");
+		for (std::size_t pump = 0; pump < 4096
+			&& typeCapture->Diagnostics().State != TypeSnapshotCaptureState::Validating
+			&& typeCapture->Diagnostics().State != TypeSnapshotCaptureState::Failed;
+			++pump)
+		{
+			(void)typeCapture->Pump(1);
+		}
+		Require(
+			typeCapture->Diagnostics().State == TypeSnapshotCaptureState::Validating,
+			"Production type source did not reach incremental validation");
+		(void)typeCapture->Pump(1);
+		write(guidC, propertyElementSizeOffset, std::int32_t{8});
+		for (std::size_t pump = 0; pump < 4096
+			&& typeCapture->Diagnostics().State != TypeSnapshotCaptureState::Failed;
+			++pump)
+		{
+			(void)typeCapture->Pump(1);
+		}
+		write(guidC, propertyElementSizeOffset, std::int32_t{4});
+		Require(
+			typeCapture->Diagnostics().State == TypeSnapshotCaptureState::Failed
+				&& typeCapture->Diagnostics().SourceError
+					== TypeSnapshotSourceError::DependencyChanged
+				&& typeCapture->ReclaimRetired() == 1
+				&& typeSource.ReleasePreparedPlan()
+				&& facade.Stop(),
+			"Production type source accepted metadata that changed during validation");
 	}
 
 	void TestFPropertySnapshotReflectionCandidateSource()

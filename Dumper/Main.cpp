@@ -20,6 +20,7 @@
 #include "Runtime/ObjectArrayIdentitySource.h"
 #include "Runtime/ObjectArraySnapshotSource.h"
 #include "Runtime/ObjectSnapshotReflectionCandidateSource.h"
+#include "Runtime/ObjectSnapshotTypeCandidateSource.h"
 #include "Runtime/PostRenderHook.h"
 #include "Runtime/ShutdownCoordinator.h"
 #include "Services/CoreCommandService.h"
@@ -37,11 +38,14 @@ static std::unique_ptr<UExplorer::Runtime::EngineFacade> g_EngineFacade;
 static std::unique_ptr<UExplorer::Runtime::ObjectArraySnapshotSource> g_SnapshotSource;
 static std::unique_ptr<UExplorer::Runtime::ObjectSnapshotReflectionCandidateSource>
 	g_ReflectionSource;
+static std::unique_ptr<UExplorer::Runtime::ObjectSnapshotTypeCandidateSource>
+	g_TypeSource;
 static std::unique_ptr<UExplorer::Services::CoreCommandService> g_CommandService;
 static std::unique_ptr<UExplorer::Runtime::PostRenderHook> g_PostRenderHook;
 static bool g_FrameSchedulerPumpAttached = false;
 static bool g_SnapshotFrameClientAttached = false;
 static bool g_ReflectionFrameClientAttached = false;
+static bool g_TypeFrameClientAttached = false;
 
 namespace
 {
@@ -122,6 +126,34 @@ namespace
 			|| state == SnapshotCaptureState::Publishing;
 	}
 
+	bool IsTypeCapturePumping(
+		const UExplorer::Runtime::TypeSnapshotCaptureState state) noexcept
+	{
+		using UExplorer::Runtime::TypeSnapshotCaptureState;
+		return state == TypeSnapshotCaptureState::Requested
+			|| state == TypeSnapshotCaptureState::Capturing
+			|| state == TypeSnapshotCaptureState::Validating
+			|| state == TypeSnapshotCaptureState::Sealing
+			|| state == TypeSnapshotCaptureState::Publishing;
+	}
+
+	bool DetachTypeFrameClient(const std::chrono::milliseconds timeout)
+	{
+		if (!g_TypeFrameClientAttached)
+			return true;
+		UExplorer::Runtime::TypeSnapshotCapture* capture =
+			g_EngineFacade ? g_EngineFacade->TypeCapture() : nullptr;
+		if (!capture
+			|| !UExplorer::Runtime::GetGameThreadFrameScheduler().DetachClient(
+				*capture,
+				timeout))
+		{
+			return false;
+		}
+		g_TypeFrameClientAttached = false;
+		return true;
+	}
+
 	bool DetachReflectionFrameClient(const std::chrono::milliseconds timeout)
 	{
 		if (!g_ReflectionFrameClientAttached)
@@ -145,6 +177,18 @@ namespace
 			g_EngineFacade ? g_EngineFacade->ReflectionCapture() : nullptr;
 		return capture
 			&& IsReflectionCaptureActive(capture->Diagnostics().State);
+	}
+
+	bool TypeCaptureBlocksSnapshotRefresh() noexcept
+	{
+		const UExplorer::Runtime::TypeSnapshotCapture* capture =
+			g_EngineFacade ? g_EngineFacade->TypeCapture() : nullptr;
+		if (!capture)
+			return false;
+		const UExplorer::Runtime::TypeSnapshotCaptureState state =
+			capture->Diagnostics().State;
+		return IsTypeCapturePumping(state)
+			|| state == UExplorer::Runtime::TypeSnapshotCaptureState::Ready;
 	}
 
 	bool DriveReflectionDiscovery(
@@ -267,6 +311,162 @@ namespace
 		return true;
 	}
 
+	bool DriveTypeDiscovery(
+		std::uint64_t& lastPreparationGeneration,
+		std::uint64_t& lastPreparationFingerprint,
+		std::uint64_t& lastReportedFailureGeneration,
+		std::uint64_t& lastReportedFailureFingerprint)
+	{
+		if (!g_EngineFacade || !g_TypeSource)
+			return true;
+
+		UExplorer::Runtime::TypeSnapshotCapture* capture =
+			g_EngineFacade->TypeCapture();
+		if (capture)
+		{
+			const UExplorer::Runtime::TypeSnapshotCaptureDiagnostics diagnostics =
+				capture->Diagnostics();
+			if (IsTypeCapturePumping(diagnostics.State))
+				return true;
+			if (diagnostics.State == UExplorer::Runtime::TypeSnapshotCaptureState::Ready)
+			{
+				if (!DetachTypeFrameClient(std::chrono::milliseconds(5000)))
+					return false;
+				const UExplorer::Runtime::TypeSnapshotPublishResult published =
+					capture->PublishReady();
+				(void)capture->ReclaimRetired();
+				if (!g_TypeSource->ReleasePreparedPlan())
+					return false;
+				if (!published.Ok())
+				{
+					std::cerr << "[UExplorer] Type snapshot publication failed: "
+						<< UExplorer::Runtime::ToString(published.Error) << "\n";
+				}
+			}
+			else if (diagnostics.State == UExplorer::Runtime::TypeSnapshotCaptureState::Failed)
+			{
+				if (lastReportedFailureGeneration != diagnostics.ObjectSnapshotGeneration
+					|| lastReportedFailureFingerprint
+						!= diagnostics.ReflectionLayoutFingerprint)
+				{
+					std::cerr << "[UExplorer] Type capture failed: capture="
+						<< UExplorer::Runtime::ToString(diagnostics.Error)
+						<< " source=" << UExplorer::Runtime::ToString(diagnostics.SourceError)
+						<< " publish=" << UExplorer::Runtime::ToString(diagnostics.PublishError)
+						<< " snapshot_generation=" << diagnostics.ObjectSnapshotGeneration
+						<< " reflection_fingerprint=0x" << std::hex
+						<< diagnostics.ReflectionLayoutFingerprint << std::dec << "\n";
+					lastReportedFailureGeneration = diagnostics.ObjectSnapshotGeneration;
+					lastReportedFailureFingerprint = diagnostics.ReflectionLayoutFingerprint;
+				}
+				if (!DetachTypeFrameClient(std::chrono::milliseconds(5000)))
+					return false;
+				(void)capture->ReclaimRetired();
+				if (!g_TypeSource->ReleasePreparedPlan())
+					return false;
+			}
+			else if (diagnostics.State == UExplorer::Runtime::TypeSnapshotCaptureState::Completed)
+			{
+				if (!DetachTypeFrameClient(std::chrono::milliseconds(5000))
+					|| !g_TypeSource->ReleasePreparedPlan())
+				{
+					return false;
+				}
+			}
+		}
+
+		const std::shared_ptr<const UExplorer::Runtime::EngineSnapshot> objects =
+			g_EngineFacade->Snapshots().Current();
+		const std::shared_ptr<const UExplorer::Runtime::ReflectionRuntimeSnapshot> reflection =
+			g_EngineFacade->Reflection();
+		if (!objects || !reflection || !reflection->Layout
+			|| !reflection->IsLayoutConfigured(g_EngineFacade->ContextGeneration()))
+		{
+			return true;
+		}
+		const std::shared_ptr<const UExplorer::Runtime::TypeSnapshot> current =
+			g_EngineFacade->Types().Current();
+		if (current
+			&& current->ObjectSnapshotGeneration() == objects->Generation
+			&& current->ReflectionLayoutFingerprint() == reflection->Layout->Fingerprint()
+			&& current->IsConfigured(g_EngineFacade->ContextGeneration()))
+		{
+			return true;
+		}
+		const UExplorer::Runtime::EngineSnapshotCapture* snapshotCapture =
+			g_EngineFacade->SnapshotCapture();
+		if (snapshotCapture
+			&& IsSnapshotCaptureActive(snapshotCapture->Diagnostics().State))
+		{
+			return true;
+		}
+		const UExplorer::Runtime::ReflectionLayoutCapture* reflectionCapture =
+			g_EngineFacade->ReflectionCapture();
+		if (reflectionCapture
+			&& IsReflectionCaptureActive(reflectionCapture->Diagnostics().State))
+		{
+			return true;
+		}
+		const std::uint64_t fingerprint = reflection->Layout->Fingerprint();
+		if (objects->Generation == lastPreparationGeneration
+			&& fingerprint == lastPreparationFingerprint)
+		{
+			return true;
+		}
+		lastPreparationGeneration = objects->Generation;
+		lastPreparationFingerprint = fingerprint;
+
+		const UExplorer::Runtime::TypeCandidatePreparationResult prepared =
+			g_TypeSource->Prepare();
+		if (!prepared.Ok())
+		{
+			std::cerr << "[UExplorer] Type preparation unavailable: code="
+				<< UExplorer::Runtime::ToString(prepared.Error)
+				<< " snapshot_generation=" << objects->Generation
+				<< " reflection_fingerprint=0x" << std::hex << fingerprint
+				<< std::dec << "\n";
+			return prepared.Error != UExplorer::Runtime::TypeCandidatePreparationError::Busy
+				&& g_TypeSource->ReleasePreparedPlan();
+		}
+
+		capture = g_EngineFacade->TypeCapture();
+		if (!capture)
+		{
+			if (!g_EngineFacade->ConfigureTypeSnapshotCapture(*g_TypeSource))
+			{
+				std::cerr << "[UExplorer] Type capture ownership configuration failed.\n";
+				(void)g_TypeSource->ReleasePreparedPlan();
+				return false;
+			}
+			capture = g_EngineFacade->TypeCapture();
+		}
+		if (!capture)
+			return false;
+		if (!g_TypeFrameClientAttached)
+		{
+			if (!UExplorer::Runtime::GetGameThreadFrameScheduler().AttachClient(*capture))
+			{
+				std::cerr << "[UExplorer] Type frame-client attachment failed.\n";
+				(void)g_TypeSource->ReleasePreparedPlan();
+				return false;
+			}
+			g_TypeFrameClientAttached = true;
+		}
+		const UExplorer::Runtime::TypeSnapshotCaptureError requested =
+			capture->RequestCapture();
+		if (requested != UExplorer::Runtime::TypeSnapshotCaptureError::None)
+		{
+			std::cerr << "[UExplorer] Type capture request failed: "
+				<< UExplorer::Runtime::ToString(requested) << "\n";
+			if (IsTypeCapturePumping(capture->Diagnostics().State))
+				return true;
+			(void)DetachTypeFrameClient(std::chrono::milliseconds(5000));
+			(void)g_TypeSource->ReleasePreparedPlan();
+			return false;
+		}
+		return true;
+	}
+
 	void ReclaimSnapshotStorage()
 	{
 		if (!g_EngineFacade)
@@ -277,10 +477,17 @@ namespace
 		{
 			(void)capture->ReclaimRetired();
 		}
+		if (UExplorer::Runtime::TypeSnapshotCapture* capture =
+			g_EngineFacade->TypeCapture())
+		{
+			(void)capture->ReclaimRetired();
+		}
 	}
 
 	bool DetachFrameScheduling(const std::chrono::milliseconds timeout)
 	{
+		if (!DetachTypeFrameClient(timeout))
+			return false;
 		if (!DetachReflectionFrameClient(timeout))
 			return false;
 		if (g_SnapshotFrameClientAttached)
@@ -364,9 +571,10 @@ namespace
 			FreeConsole();
 			ExitThread(1);
 		}
-		g_EngineFacade.reset();
+		g_TypeSource.reset();
 		g_ReflectionSource.reset();
 		g_SnapshotSource.reset();
+		g_EngineFacade.reset();
 		g_IdentitySource.reset();
 		g_Runtime.MarkFailed(code, message);
 		g_Runtime.BeginStopping();
@@ -496,6 +704,10 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 				UExplorer::Runtime::ObjectSnapshotReflectionCandidateSource>(
 					runtimeSnapshot.Context,
 					*g_EngineFacade);
+			g_TypeSource = std::make_unique<
+				UExplorer::Runtime::ObjectSnapshotTypeCandidateSource>(
+					runtimeSnapshot.Context,
+					*g_EngineFacade);
 		}
 		else
 		{
@@ -506,7 +718,8 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 			UExplorer::Runtime::GetGameThreadExecutor(),
 			*g_EngineFacade,
 			g_StatusDiagnostics,
-			g_ReflectionSource.get());
+			g_ReflectionSource.get(),
+			g_TypeSource.get());
 		if (!g_CommandService->IsConfigured())
 			throw std::runtime_error("Core command service rejected the runtime session/context");
 		UExplorer::Services::SetCoreCommandService(g_CommandService.get());
@@ -596,6 +809,10 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 	auto nextSnapshotRefresh = std::chrono::steady_clock::now() + std::chrono::seconds(2);
 	std::uint64_t lastReflectionPreparationGeneration = 0;
 	std::uint64_t lastReportedReflectionFailureGeneration = 0;
+	std::uint64_t lastTypePreparationGeneration = 0;
+	std::uint64_t lastTypePreparationFingerprint = 0;
+	std::uint64_t lastReportedTypeFailureGeneration = 0;
+	std::uint64_t lastReportedTypeFailureFingerprint = 0;
 	while (startupReady && g_Running.load())
 	{
 		ReclaimSnapshotStorage();
@@ -604,6 +821,16 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 			lastReportedReflectionFailureGeneration))
 		{
 			std::cerr << "[UExplorer] Reflection lifecycle could not release its frame/snapshot ownership.\n";
+			g_Running.store(false, std::memory_order_release);
+			break;
+		}
+		if (!DriveTypeDiscovery(
+			lastTypePreparationGeneration,
+			lastTypePreparationFingerprint,
+			lastReportedTypeFailureGeneration,
+			lastReportedTypeFailureFingerprint))
+		{
+			std::cerr << "[UExplorer] Type lifecycle could not release its frame/snapshot ownership.\n";
 			g_Running.store(false, std::memory_order_release);
 			break;
 		}
@@ -617,6 +844,7 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 		const auto now = std::chrono::steady_clock::now();
 		if (g_SnapshotFrameClientAttached
 			&& !ReflectionCaptureBlocksSnapshotRefresh()
+			&& !TypeCaptureBlocksSnapshotRefresh()
 			&& now >= nextSnapshotRefresh)
 		{
 			if (UExplorer::Runtime::EngineSnapshotCapture* capture =
@@ -652,6 +880,7 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 	UExplorer::Services::SetCoreCommandService(nullptr);
 	bool pipeStopped = true;
 	bool hooksStopped = true;
+	bool typeFrameStopped = true;
 	bool reflectionFrameStopped = true;
 	bool snapshotFrameStopped = true;
 	bool frameSchedulerStopped = true;
@@ -665,6 +894,11 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 		hooksStopped = !g_PostRenderHook
 			|| g_PostRenderHook->Stop(std::chrono::milliseconds(5000));
 		return hooksStopped;
+	});
+	shutdown.AddStage("type_frame_client", [&] {
+		typeFrameStopped = DetachTypeFrameClient(
+			std::chrono::milliseconds(5000));
+		return typeFrameStopped;
 	});
 	shutdown.AddStage("reflection_frame_client", [&] {
 		reflectionFrameStopped = DetachReflectionFrameClient(
@@ -697,7 +931,8 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 		return frameSchedulerStopped;
 	});
 	shutdown.AddStage("engine_facade", [&] {
-		return reflectionFrameStopped
+		return typeFrameStopped
+			&& reflectionFrameStopped
 			&& snapshotFrameStopped
 			&& (!g_EngineFacade
 				|| g_EngineFacade->Stop(std::chrono::milliseconds(5000)));
@@ -723,9 +958,10 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 		return 1;
 	}
 	g_CommandService.reset();
-	g_EngineFacade.reset();
+	g_TypeSource.reset();
 	g_ReflectionSource.reset();
 	g_SnapshotSource.reset();
+	g_EngineFacade.reset();
 	g_IdentitySource.reset();
 	if (!g_Runtime.MarkStopped())
 	{
