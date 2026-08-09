@@ -387,9 +387,10 @@
     "OBJ-008": {
       "status": "in_progress",
       "verification": [
-        "2026-08-09: ObjectArray rejects index == Num(), uses checked module-offset conversion, and applies configured pointer decryption consistently in manual fixed/chunked paths",
+		"2026-08-09: ObjectArray rejects index == Num(), uses checked module-offset conversion, and applies configured pointer decryption consistently in manual fixed/chunked paths",
 		"2026-08-09: objects.snapshot.page enforces an exact cursor/limit object, rejects unknown filter fields and non-integral/out-of-range values, caps limit at 128, and reports exact snapshot-wide source/record/skipped totals",
-		"Legacy routes and future Host query commands still require the same unified validator and explicit matched/total semantics"
+		"2026-08-09: Host SnapshotIndex queries cap limit at 128, validate typed/canonical filters, bind cursor to generation and normalized query fingerprint, and report separate exact snapshot_record_count/matched_count",
+		"Legacy routes still require retirement and Tauri command adapters remain pending"
       ]
     },
 	"OBJ-009": {
@@ -397,13 +398,16 @@
 	  "verification": [
 		"2026-08-09: EngineSnapshotStore publishes strictly monotonic immutable generations suitable for stable Host indexing",
 		"2026-08-09: snapshot continuation cursors bind generation plus the last returned object index; a newly published generation returns SNAPSHOT_GENERATION_MISMATCH instead of mixing pages",
-		"Host SnapshotCache and atomic type/path/package/address/search indexes remain pending"
+		"2026-08-09: Rust Host SnapshotAssembler rejects missing/mixed/out-of-order pages and becomes terminal on rejection; SnapshotCache atomically publishes only complete increasing generations",
+		"2026-08-09: bounded indexes cover kind, case-insensitive full/class/package paths, unique address, and token-prefix search without rescanning live GObjects",
+		"Real CoreRpcClient refresh, SessionManager invalidation, target-scale performance and Tauri query adapters remain pending"
 	  ]
 	},
 	"OBJ-011": {
 	  "status": "in_progress",
 	  "verification": [
 		"2026-08-09: the Core snapshot collection command requires cursor/limit and caps each page at 128 records; the final page returns a null cursor",
+		"2026-08-09: Host indexed collection queries also require a query-bound cursor and 1..128 limit; incomplete page chains cannot be published",
 		"The R3 Named Pipe encoder must still enforce the 8 MiB serialized frame ceiling, and legacy package contents remains reachable until R4"
 	  ]
 	},

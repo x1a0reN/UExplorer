@@ -6,6 +6,8 @@ use std::time::Duration;
 use tauri::command;
 use tauri::Manager;
 
+pub mod session;
+
 #[cfg(windows)]
 use std::ffi::c_void;
 #[cfg(windows)]

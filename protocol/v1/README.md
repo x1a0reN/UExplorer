@@ -91,5 +91,10 @@ indexes. Snapshot pages never enter the game-thread queue and are capped at 128
 records; snapshot-wide `source_object_count`, `record_count`, and `skipped_slots` are
 exact rather than page-relative estimates.
 
+The shared Rust types live in `protocol/rust`; the Host must deserialize pages with
+unknown-field rejection. `frontend/src-tauri/src/session/snapshot_cache.rs` validates
+the complete cursor chain and snapshot-wide metadata before atomically publishing a
+generation. A rejected or incomplete generation never replaces the current cache.
+
 See `protocol.json`, `schema/payload.schema.json`, and `fixtures/` for the
 machine-readable contract and golden data.

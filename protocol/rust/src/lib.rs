@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
 pub const MAGIC: [u8; 4] = *b"UEXP";
@@ -5,6 +6,67 @@ pub const PROTOCOL_MAJOR: u16 = 1;
 pub const PROTOCOL_MINOR: u16 = 0;
 pub const HEADER_SIZE: usize = 24;
 pub const MAX_PAYLOAD_SIZE: u32 = 8 * 1024 * 1024;
+pub const MAX_GENERATION: u64 = 9_007_199_254_740_991;
+pub const MAX_SNAPSHOT_SOURCE_OBJECTS: u32 = 8_000_000;
+pub const MAX_SNAPSHOT_PAGE_RECORDS: usize = 128;
+pub const MAX_SNAPSHOT_NAME_BYTES: usize = 1_024;
+pub const MAX_SNAPSHOT_PATH_BYTES: usize = 4_096;
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ObjectHandle {
+    pub session_id: String,
+    pub context_generation: u64,
+    pub index: i32,
+    pub serial: i32,
+    pub address: String,
+    pub class_fingerprint: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[repr(u8)]
+#[serde(rename_all = "lowercase")]
+pub enum SnapshotObjectKind {
+    Object,
+    Package,
+    Class,
+    Struct,
+    Enum,
+    Function,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SnapshotRecord {
+    pub handle: ObjectHandle,
+    pub name: String,
+    pub full_path: String,
+    pub class_path: String,
+    pub package_path: String,
+    pub kind: SnapshotObjectKind,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SnapshotCursor {
+    pub generation: u64,
+    pub after_index: i32,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SnapshotPage {
+    pub generation: u64,
+    pub context_generation: u64,
+    pub captured_at_monotonic_us: u64,
+    pub capture_duration_us: u64,
+    pub source_object_count: u32,
+    pub record_count: u32,
+    pub skipped_slots: u32,
+    pub items: Vec<SnapshotRecord>,
+    pub has_more: bool,
+    pub next_cursor: Option<SnapshotCursor>,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u16)]
@@ -282,5 +344,33 @@ mod tests {
         assert_eq!(u32::from_le_bytes(bytes[16..20].try_into().unwrap()), 0);
         assert_eq!(u32::from_le_bytes(bytes[20..24].try_into().unwrap()), 0);
         assert_eq!(u32::from_le_bytes(bytes[24..28].try_into().unwrap()), 0);
+    }
+
+    #[test]
+    fn snapshot_page_golden_payload_has_strict_typed_identity() {
+        #[derive(Deserialize)]
+        struct Envelope {
+            data: SnapshotPage,
+        }
+
+        let envelope: Envelope = serde_json::from_str(include_str!(
+            "../../v1/fixtures/object-snapshot-page-response.json"
+        ))
+        .unwrap();
+        assert_eq!(envelope.data.generation, 9);
+        assert_eq!(envelope.data.items.len(), 2);
+        assert_eq!(envelope.data.items[1].kind, SnapshotObjectKind::Class);
+        assert_eq!(
+            envelope.data.next_cursor,
+            Some(SnapshotCursor {
+                generation: 9,
+                after_index: 1
+            })
+        );
+
+        let unknown_field = r#"{
+            "generation":9,"after_index":1,"unexpected":true
+        }"#;
+        assert!(serde_json::from_str::<SnapshotCursor>(unknown_field).is_err());
     }
 }

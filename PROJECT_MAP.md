@@ -25,7 +25,7 @@ UExplorer 是一个面向 Unreal Engine 的 **SDK Dump + 实时游戏内省工�
 └──────────────────────────────────────────────┘
 ```
 
-当前分支处于 R2：`CoreRuntime`、不可变 `EngineContext`/名称布局、`EngineFacade`、严格名称 codec、稳定 Handle、原子 `EngineSnapshotStore`、生产 object/path snapshot source、PostRender 有界帧泵、generation-bound snapshot page command、安全关闭边界，以及有界 x64 PE/pattern/版本探测已经建立；Named Pipe 与 Rust Session Host/SnapshotCache 尚属 R3。`Dumper/Server` 和 `Dumper/API` 是 R4 前的 legacy HTTP 兼容层，不是目标架构，且不会与 IPC 形成长期双栈。Snapshot 目前是经二次验证后发布的完整 sweep，而非 UE 引擎时钟上的瞬时原子快照；功能真实性与未完成项以 `DESIGN.md` 和 `docs/issue-status.json` 为准。
+当前分支处于 R2：`CoreRuntime`、不可变 `EngineContext`/名称布局、`EngineFacade`、严格名称 codec、稳定 Handle、原子 `EngineSnapshotStore`、生产 object/path snapshot source、PostRender 有界帧泵、generation-bound snapshot page command、Rust Host 原子 SnapshotCache/索引、安全关闭边界，以及有界 x64 PE/pattern/版本探测已经建立；Named Pipe、CoreRpcClient 与多 PID SessionManager 尚属 R3。`Dumper/Server` 和 `Dumper/API` 是 R4 前的 legacy HTTP 兼容层，不是目标架构，且不会与 IPC 形成长期双栈。Snapshot 目前是经二次验证后发布的完整 sweep，而非 UE 引擎时钟上的瞬时原子快照；Host cache 当前有独立测试但尚未接入真实 Pipe，功能真实性与未完成项以 `DESIGN.md` 和 `docs/issue-status.json` 为准。
 
 ---
 
@@ -37,6 +37,10 @@ UExplorer/
 ├── DESIGN.md                           # 功能设计文档（727 行）
 ├── PROJECT_MAP.md                      # 本文档
 ├── UExplorerCore.slnx                  # VS2026 解决方案
+│
+├── protocol/                           ★ IPC v1 schema、Rust typed payload 与跨语言 fixture
+│   ├── v1/                             #   JSON schema、协议说明与 golden data
+│   └── rust/                           #   framing + strict Handle/snapshot payload types
 │
 ├── Dumper/                             ★ Core DLL（C++）
 │   ├── UExplorerCore.vcxproj          # MSBuild 项目文件 (v145, C++latest)
@@ -196,6 +200,8 @@ UExplorer/
         └── src/
             ├── main.rs               #   Tauri 主入口
             ├── lib.rs                #   Tauri 命令；进程身份扫描与受校验的 x64 DLL 注入
+            ├── session/
+            │   └── snapshot_cache.rs #   terminal page assembly、原子发布与有界 Host 查询索引
             └── inject_dll.ps1        #   已禁用的 legacy 注入脚本，仅保留历史证据，不是 fallback
 ```
 

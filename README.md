@@ -93,6 +93,12 @@ Core harness and contract checks:
 
 & 'D:\Projects\UExplorer\tests\contracts\verify-issue-register.ps1'
 & 'D:\Projects\UExplorer\tests\contracts\verify-api-v1.ps1'
+& 'D:\Projects\UExplorer\tests\contracts\verify-injection-safety.ps1'
+& 'D:\Projects\UExplorer\tests\contracts\verify-core-safety.ps1'
+& 'D:\Projects\UExplorer\tests\contracts\verify-core-runtime.ps1'
+& 'D:\Projects\UExplorer\tests\contracts\verify-host-snapshot.ps1'
+& 'D:\Projects\UExplorer\tests\contracts\verify-platform-safety.ps1'
+& 'D:\Projects\UExplorer\tests\contracts\verify-offset-discovery.ps1'
 ```
 
 GitHub Actions runs the same quality gates with the Visual Studio 2022 `v143`
