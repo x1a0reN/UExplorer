@@ -11,6 +11,11 @@
 #include <optional>
 #include <string>
 
+namespace UExplorer::Runtime
+{
+class ObjectSnapshotReflectionCandidateSource;
+}
+
 namespace UExplorer::Services
 {
 
@@ -57,7 +62,8 @@ public:
 		Runtime::CoreRuntime& runtime,
 		Runtime::GameThreadExecutor& gameThread,
 		Runtime::EngineFacade& engine,
-		ICoreStatusDiagnosticsSource& statusDiagnostics);
+		ICoreStatusDiagnosticsSource& statusDiagnostics,
+		const Runtime::ObjectSnapshotReflectionCandidateSource* reflectionSource = nullptr);
 
 	CoreCommandService(const CoreCommandService&) = delete;
 	CoreCommandService& operator=(const CoreCommandService&) = delete;
@@ -90,6 +96,7 @@ private:
 	Runtime::GameThreadExecutor& m_GameThread;
 	Runtime::EngineFacade& m_Engine;
 	ICoreStatusDiagnosticsSource& m_StatusDiagnostics;
+	const Runtime::ObjectSnapshotReflectionCandidateSource* m_ReflectionSource = nullptr;
 	std::string m_SessionId;
 	std::uint64_t m_ContextGeneration = 0;
 };

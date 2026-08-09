@@ -147,7 +147,9 @@ class ReflectionLayoutCapture final : public IGameThreadFrameClient
 {
 public:
 	static constexpr std::size_t kMaxPumpBudget = 64;
-	static constexpr std::size_t kMaxSourceSteps = 256;
+	// Covers exhaustive bounded offset scans plus twelve 512-node field chains;
+	// the scheduler still meters every outer candidate and field-chain slice.
+	static constexpr std::size_t kMaxSourceSteps = 4096;
 	static constexpr std::size_t kMaxWitnessesPerSourceStep = 8;
 
 	ReflectionLayoutCapture(

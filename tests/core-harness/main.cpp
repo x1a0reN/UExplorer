@@ -26,6 +26,7 @@
 #include "Runtime/ObjectHandle.h"
 #include "Runtime/ObjectIdentityContext.h"
 #include "Runtime/ObjectArraySnapshotSource.h"
+#include "Runtime/ObjectSnapshotReflectionCandidateSource.h"
 #include "Runtime/PropertyCodec.h"
 #include "Runtime/ReflectionLayout.h"
 #include "Runtime/ReflectionLayoutCapture.h"
@@ -545,11 +546,15 @@ namespace
 		const bool includeFunctionIdentity = true,
 		const bool includeNameProfile = true,
 		const UExplorer::Runtime::EngineNameProfile* nameProfileOverride = nullptr,
-		const std::uint32_t processId = 4242)
+		const std::uint32_t processId = 4242,
+		const bool usesFProperty = true)
 	{
 		UExplorer::Runtime::EngineContextBuilder builder(generation);
 		builder.SetIdentity(0x140000000, 0x140100000, processId, 100, "FixtureGame", "5.4");
-		builder.SetProfile({.UsesFProperty = true, .UsesLargeWorldCoordinates = true});
+		builder.SetProfile({
+			.UsesFProperty = usesFProperty,
+			.UsesLargeWorldCoordinates = true
+		});
 		if (nameProfileOverride)
 		{
 			builder.SetNameProfile(*nameProfileOverride);
@@ -2492,6 +2497,906 @@ namespace
 		}
 	};
 
+	void TestObjectSnapshotReflectionCandidateSource()
+	{
+		using namespace UExplorer::Runtime;
+
+		constexpr std::uint64_t contextGeneration = 77;
+		constexpr std::string_view sessionId = "fixture-reflection-source";
+		constexpr std::int32_t structSuperOffset = 0x40;
+		constexpr std::int32_t structChildrenOffset = 0x50;
+		constexpr std::int32_t structPropertiesSizeOffset = 0x58;
+		constexpr std::int32_t structMinAlignmentOffset = 0x5C;
+		constexpr std::int32_t structContainerSize = 0xA0;
+		constexpr std::int32_t fieldNextOffset = 0x28;
+		constexpr std::int32_t propertyArrayDimOffset = 0x30;
+		constexpr std::int32_t propertyElementSizeOffset = 0x34;
+		constexpr std::int32_t propertyFlagsOffset = 0x38;
+		constexpr std::int32_t propertyOffsetOffset = 0x40;
+		constexpr std::int32_t derivedPropertyOffset = 0x80;
+
+		constexpr std::uint64_t castField = 0x0000000000000001;
+		constexpr std::uint64_t castByte = 0x0000000000000040;
+		constexpr std::uint64_t castInt = 0x0000000000000080;
+		constexpr std::uint64_t castName = 0x0000000000002000;
+		constexpr std::uint64_t castProperty = 0x0000000000008000;
+		constexpr std::uint64_t castObject = 0x0000000000010000;
+		constexpr std::uint64_t castBool = 0x0000000000020000;
+		constexpr std::uint64_t castStruct = 0x0000000000100000;
+		constexpr std::uint64_t castArray = 0x0000000000200000;
+		constexpr std::uint64_t castNumeric = 0x0000000001000000;
+		constexpr std::uint64_t castText = 0x0000000040000000;
+		constexpr std::uint64_t castMap = 0x0000400000000000;
+		constexpr std::uint64_t castSet = 0x0000800000000000;
+		constexpr std::uint64_t castEnum = 0x0001000000000000;
+		(void)castField;
+
+		struct alignas(16) FixtureBlock final
+		{
+			std::array<std::byte, 0x240> Bytes{};
+
+			std::uintptr_t Address() noexcept
+			{
+				return reinterpret_cast<std::uintptr_t>(Bytes.data());
+			}
+		};
+		struct FixtureNode final
+		{
+			FixtureBlock* Memory = nullptr;
+			std::int32_t Index = -1;
+		};
+
+		std::vector<std::unique_ptr<FixtureBlock>> memory;
+		const auto allocateBlock = [&]() -> FixtureBlock& {
+			memory.push_back(std::make_unique<FixtureBlock>());
+			return *memory.back();
+		};
+		const auto write = []<typename T>(
+			FixtureBlock& block,
+			const std::size_t offset,
+			const T& value) {
+			static_assert(std::is_trivially_copyable_v<T>);
+			Require(
+				offset <= block.Bytes.size()
+					&& sizeof(T) <= block.Bytes.size() - offset,
+				"Reflection fixture write exceeded its backing block");
+			std::memcpy(block.Bytes.data() + offset, &value, sizeof(T));
+		};
+
+		FakeHandleIdentitySource identitySource;
+		identitySource.Generation = contextGeneration;
+		std::int32_t nextIndex = 1;
+		EngineSnapshot snapshot{
+			.SessionId = std::string(sessionId),
+			.ContextGeneration = contextGeneration,
+			.Generation = 1,
+			.CapturedAtMonotonicUs = 1000,
+			.CaptureDurationUs = 10
+		};
+		std::unordered_map<std::string, FixtureNode> nodes;
+
+		const auto addIdentity = [&](FixtureBlock& block) {
+			const std::int32_t index = nextIndex++;
+			const ObjectIdentity identity{
+				.Index = index,
+				.SerialNumber = 1000 + index,
+				.Address = block.Address(),
+				.ClassFingerprint = 0xA000u + static_cast<std::uint64_t>(index)
+			};
+			identitySource.Objects.emplace(index, identity);
+			return identity;
+		};
+		const auto addSnapshotObject = [&](const std::string_view path,
+			const EngineObjectKind kind) -> FixtureBlock& {
+			FixtureBlock& block = allocateBlock();
+			const ObjectIdentity identity = addIdentity(block);
+			const std::string fullPath(path);
+			const std::size_t nameStart = fullPath.find_last_of('.');
+			const std::size_t packageEnd = fullPath.find('.');
+			snapshot.Objects.push_back({
+				.Handle = {
+					.SessionId = std::string(sessionId),
+					.ContextGeneration = contextGeneration,
+					.Index = identity.Index,
+					.SerialNumber = identity.SerialNumber,
+					.Address = identity.Address,
+					.ClassFingerprint = identity.ClassFingerprint
+				},
+				.Name = nameStart == std::string::npos
+					? fullPath
+					: fullPath.substr(nameStart + 1),
+				.FullPath = fullPath,
+				.ClassPath = "/Script/CoreUObject.Class",
+				.PackagePath = packageEnd == std::string::npos
+					? fullPath
+					: fullPath.substr(0, packageEnd),
+				.Kind = kind
+			});
+			nodes.emplace(fullPath, FixtureNode{&block, identity.Index});
+			return block;
+		};
+		const auto addPropertyClass = [&](const std::uint64_t castFlags)
+			-> FixtureBlock& {
+			FixtureBlock& block = allocateBlock();
+			write(block, 0x38, castFlags);
+			return block;
+		};
+		const auto initializeProperty = [&](FixtureBlock& property,
+			const std::int32_t index,
+			FixtureBlock& propertyClass) {
+			write(property, 0x0C, index);
+			write(property, 0x10, propertyClass.Address());
+		};
+
+		struct RequiredObject final
+		{
+			std::string_view Path;
+			EngineObjectKind Kind;
+		};
+		constexpr std::array requiredObjects{
+			RequiredObject{"/Script/CoreUObject.Struct", EngineObjectKind::Class},
+			RequiredObject{"/Script/CoreUObject.Field", EngineObjectKind::Class},
+			RequiredObject{"/Script/CoreUObject.Class", EngineObjectKind::Class},
+			RequiredObject{"/Script/CoreUObject.Guid", EngineObjectKind::Struct},
+			RequiredObject{"/Script/CoreUObject.Color", EngineObjectKind::Struct},
+			RequiredObject{"/Script/CoreUObject.Vector", EngineObjectKind::Struct},
+			RequiredObject{"/Script/CoreUObject.TwoVectors", EngineObjectKind::Struct},
+			RequiredObject{"/Script/Engine.Engine", EngineObjectKind::Class},
+			RequiredObject{"/Script/Engine.PlayerController", EngineObjectKind::Class},
+			RequiredObject{"/Script/Engine.CollisionResponseContainer", EngineObjectKind::Struct},
+			RequiredObject{"/Script/Engine.Controller", EngineObjectKind::Class},
+			RequiredObject{"/Script/Engine.PlayerState", EngineObjectKind::Class},
+			RequiredObject{"/Script/Engine.Pawn", EngineObjectKind::Class},
+			RequiredObject{"/Script/Engine.GameViewportClient", EngineObjectKind::Class},
+			RequiredObject{"/Script/Engine.UserDefinedEnum", EngineObjectKind::Class},
+			RequiredObject{"/Script/Engine.LevelCollection", EngineObjectKind::Struct},
+			RequiredObject{"/Script/Engine.ActorComponent", EngineObjectKind::Class},
+			RequiredObject{"/Script/Engine.DebugDisplayProperty", EngineObjectKind::Struct},
+			RequiredObject{"/Script/Engine.Level", EngineObjectKind::Class},
+			RequiredObject{"/Script/Engine.ECollisionResponse", EngineObjectKind::Enum},
+			RequiredObject{"/Script/Engine.EComponentCreationMethod", EngineObjectKind::Enum},
+			RequiredObject{"/Script/Engine.EAutoPossessAI", EngineObjectKind::Enum}
+		};
+		for (const RequiredObject& required : requiredObjects)
+			(void)addSnapshotObject(required.Path, required.Kind);
+
+		FixtureBlock& intClass = addPropertyClass(
+			castProperty | castNumeric | castInt);
+		FixtureBlock& byteClass = addPropertyClass(
+			castProperty | castNumeric | castByte);
+		FixtureBlock& boolClass = addPropertyClass(castProperty | castBool);
+		FixtureBlock& objectClass = addPropertyClass(castProperty | castObject);
+		FixtureBlock& structClass = addPropertyClass(castProperty | castStruct);
+		FixtureBlock& arrayClass = addPropertyClass(castProperty | castArray);
+		FixtureBlock& mapClass = addPropertyClass(castProperty | castMap);
+		FixtureBlock& setClass = addPropertyClass(castProperty | castSet);
+		FixtureBlock& enumClass = addPropertyClass(castProperty | castEnum);
+		FixtureBlock& nameClass = addPropertyClass(castProperty | castName);
+		FixtureBlock& textClass = addPropertyClass(castProperty | castText);
+
+		const auto addSnapshotProperty = [&](const std::string_view path,
+			FixtureBlock& propertyClass) -> FixtureBlock& {
+			FixtureBlock& property = addSnapshotObject(path, EngineObjectKind::Object);
+			initializeProperty(property, snapshot.Objects.back().Handle.Index, propertyClass);
+			return property;
+		};
+		FixtureBlock& guidA = addSnapshotProperty("/Script/CoreUObject.Guid.A", intClass);
+		FixtureBlock& guidC = addSnapshotProperty("/Script/CoreUObject.Guid.C", intClass);
+		FixtureBlock& guidD = addSnapshotProperty("/Script/CoreUObject.Guid.D", intClass);
+		FixtureBlock& colorR = addSnapshotProperty("/Script/CoreUObject.Color.R", byteClass);
+		FixtureBlock& colorB = addSnapshotProperty("/Script/CoreUObject.Color.B", byteClass);
+		FixtureBlock& colorG = addSnapshotProperty("/Script/CoreUObject.Color.G", byteClass);
+		FixtureBlock& engineBool = addSnapshotProperty(
+			"/Script/Engine.Engine.bIsOverridingSelectedColor", boolClass);
+		FixtureBlock& controllerBool = addSnapshotProperty(
+			"/Script/Engine.PlayerController.bAutoManageActiveCameraTarget", boolClass);
+		FixtureBlock& traceChannel1 = addSnapshotProperty(
+			"/Script/Engine.CollisionResponseContainer.GameTraceChannel1", byteClass);
+		FixtureBlock& traceChannel2 = addSnapshotProperty(
+			"/Script/Engine.CollisionResponseContainer.GameTraceChannel2", byteClass);
+		FixtureBlock& controllerPlayerState = addSnapshotProperty(
+			"/Script/Engine.Controller.PlayerState", objectClass);
+		FixtureBlock& controllerPawn = addSnapshotProperty(
+			"/Script/Engine.Controller.Pawn", objectClass);
+		FixtureBlock& twoVectorsV1 = addSnapshotProperty(
+			"/Script/CoreUObject.TwoVectors.v1", structClass);
+		FixtureBlock& twoVectorsV2 = addSnapshotProperty(
+			"/Script/CoreUObject.TwoVectors.v2", structClass);
+		FixtureBlock& debugProperties = addSnapshotProperty(
+			"/Script/Engine.GameViewportClient.DebugProperties", arrayClass);
+		FixtureBlock& displayNameMap = addSnapshotProperty(
+			"/Script/Engine.UserDefinedEnum.DisplayNameMap", mapClass);
+		FixtureBlock& levels = addSnapshotProperty(
+			"/Script/Engine.LevelCollection.Levels", setClass);
+		FixtureBlock& creationMethod = addSnapshotProperty(
+			"/Script/Engine.ActorComponent.CreationMethod", enumClass);
+		FixtureBlock& autoPossessAi = addSnapshotProperty(
+			"/Script/Engine.Pawn.AutoPossessAI", enumClass);
+
+		const auto addInnerProperty = [&](FixtureBlock& propertyClass)
+			-> FixtureBlock& {
+			FixtureBlock& property = allocateBlock();
+			const ObjectIdentity identity = addIdentity(property);
+			initializeProperty(property, identity.Index, propertyClass);
+			return property;
+		};
+		FixtureBlock& arrayInner = addInnerProperty(structClass);
+		FixtureBlock& mapKey = addInnerProperty(nameClass);
+		FixtureBlock& mapValue = addInnerProperty(textClass);
+		FixtureBlock& setElement = addInnerProperty(objectClass);
+		FixtureBlock& enumUnderlying1 = addInnerProperty(byteClass);
+		FixtureBlock& enumUnderlying2 = addInnerProperty(byteClass);
+
+		const auto addressOf = [&](const std::string_view path) {
+			const auto found = nodes.find(std::string(path));
+			Require(found != nodes.end() && found->second.Memory,
+				"Reflection fixture object path is missing");
+			return found->second.Memory->Address();
+		};
+		FixtureBlock& ueStruct = *nodes.at("/Script/CoreUObject.Struct").Memory;
+		FixtureBlock& ueField = *nodes.at("/Script/CoreUObject.Field").Memory;
+		FixtureBlock& ueClass = *nodes.at("/Script/CoreUObject.Class").Memory;
+		FixtureBlock& guid = *nodes.at("/Script/CoreUObject.Guid").Memory;
+		FixtureBlock& color = *nodes.at("/Script/CoreUObject.Color").Memory;
+
+		write(ueStruct, structPropertiesSizeOffset, structContainerSize);
+		write(guid, structPropertiesSizeOffset, std::int32_t{16});
+		write(color, structPropertiesSizeOffset, std::int32_t{4});
+		write(guid, structMinAlignmentOffset, std::int32_t{4});
+		write(color, structMinAlignmentOffset, std::int32_t{1});
+		write(ueStruct, structSuperOffset, ueField.Address());
+		write(ueClass, structSuperOffset, ueStruct.Address());
+		write(guid, structChildrenOffset, guidA.Address());
+		write(color, structChildrenOffset, colorR.Address());
+		write(guidA, fieldNextOffset, guidC.Address());
+		write(colorR, fieldNextOffset, colorG.Address());
+
+		for (FixtureBlock* property : std::array{&guidA, &guidC, &guidD})
+		{
+			write(*property, propertyArrayDimOffset, std::int32_t{1});
+			write(*property, propertyElementSizeOffset, std::int32_t{4});
+		}
+		constexpr std::uint64_t propertyEdit = 0x0000000000000001;
+		constexpr std::uint64_t propertyBlueprintVisible = 0x0000000000000004;
+		constexpr std::uint64_t propertyZeroConstructor = 0x0000000000000200;
+		constexpr std::uint64_t propertySaveGame = 0x0000000001000000;
+		constexpr std::uint64_t propertyPlainOldData = 0x0000000040000000;
+		constexpr std::uint64_t propertyNoDestructor = 0x0000001000000000;
+		constexpr std::uint64_t propertyHasHash = 0x0008000000000000;
+		constexpr std::uint64_t guidFlags = propertyEdit
+			| propertyZeroConstructor | propertySaveGame | propertyPlainOldData
+			| propertyNoDestructor | propertyHasHash;
+		constexpr std::uint64_t colorFlags = guidFlags | propertyBlueprintVisible;
+		write(guidA, propertyFlagsOffset, guidFlags);
+		write(colorR, propertyFlagsOffset, colorFlags);
+		write(guidA, propertyOffsetOffset, std::int32_t{0});
+		write(guidC, propertyOffsetOffset, std::int32_t{8});
+		write(colorB, propertyOffsetOffset, std::int32_t{0});
+		write(colorG, propertyOffsetOffset, std::int32_t{1});
+
+		const std::array<std::uint8_t, 4> nativeBoolLayout{1, 0, 1, 0xFF};
+		std::memcpy(
+			engineBool.Bytes.data() + derivedPropertyOffset,
+			nativeBoolLayout.data(),
+			nativeBoolLayout.size());
+		std::memcpy(
+			controllerBool.Bytes.data() + derivedPropertyOffset,
+			nativeBoolLayout.data(),
+			nativeBoolLayout.size());
+		write(traceChannel1, derivedPropertyOffset,
+			addressOf("/Script/Engine.ECollisionResponse"));
+		write(traceChannel2, derivedPropertyOffset,
+			addressOf("/Script/Engine.ECollisionResponse"));
+		write(controllerPlayerState, derivedPropertyOffset,
+			addressOf("/Script/Engine.PlayerState"));
+		write(controllerPawn, derivedPropertyOffset,
+			addressOf("/Script/Engine.Pawn"));
+		write(twoVectorsV1, derivedPropertyOffset,
+			addressOf("/Script/CoreUObject.Vector"));
+		write(twoVectorsV2, derivedPropertyOffset,
+			addressOf("/Script/CoreUObject.Vector"));
+		write(debugProperties, derivedPropertyOffset, arrayInner.Address());
+		write(arrayInner, derivedPropertyOffset,
+			addressOf("/Script/Engine.DebugDisplayProperty"));
+		write(displayNameMap, derivedPropertyOffset, mapKey.Address());
+		write(displayNameMap, derivedPropertyOffset + sizeof(std::uintptr_t),
+			mapValue.Address());
+		write(levels, derivedPropertyOffset, setElement.Address());
+		write(setElement, derivedPropertyOffset,
+			addressOf("/Script/Engine.Level"));
+		write(creationMethod, derivedPropertyOffset, enumUnderlying1.Address());
+		write(creationMethod, derivedPropertyOffset + sizeof(std::uintptr_t),
+			addressOf("/Script/Engine.EComponentCreationMethod"));
+		write(autoPossessAi, derivedPropertyOffset, enumUnderlying2.Address());
+		write(autoPossessAi, derivedPropertyOffset + sizeof(std::uintptr_t),
+			addressOf("/Script/Engine.EAutoPossessAI"));
+
+		identitySource.ObjectCount = nextIndex;
+		snapshot.SourceObjectCount = nextIndex;
+		snapshot.SkippedSlots = static_cast<std::uint32_t>(
+			static_cast<std::size_t>(nextIndex) - snapshot.Objects.size());
+
+		const auto mismatchedContext = MakeEngineContext(
+			contextGeneration, true, true, nullptr, 4242, true);
+		EngineFacade mismatchedFacade(
+			mismatchedContext,
+			std::string(sessionId),
+			identitySource);
+		Require(
+			mismatchedFacade.Snapshots().Publish(snapshot).Ok(),
+			"Reflection mismatch fixture snapshot was rejected");
+		ObjectSnapshotReflectionCandidateSource mismatchedSource(
+			mismatchedContext,
+			mismatchedFacade);
+		const ReflectionCandidatePreparationResult mismatch =
+			mismatchedSource.Prepare();
+		Require(
+			mismatch.Error == ReflectionCandidatePreparationError::PropertySystemMismatch
+				&& !mismatchedSource.IsConfigured()
+				&& mismatchedFacade.Stop(),
+			"Reflection source ignored the immutable property-system profile");
+
+		const auto context = MakeEngineContext(
+			contextGeneration, true, true, nullptr, 4242, false);
+		EngineFacade facade(context, std::string(sessionId), identitySource);
+		Require(
+			facade.Snapshots().Publish(std::move(snapshot)).Ok(),
+			"Production reflection source fixture snapshot was rejected");
+		ObjectSnapshotReflectionCandidateSource source(context, facade);
+		const ReflectionCandidatePreparationResult prepared = source.Prepare();
+		Require(
+			prepared.Ok()
+				&& prepared.SnapshotGeneration == 1
+				&& prepared.PropertySystem == ReflectionPropertySystem::UProperty
+				&& source.IsConfigured()
+				&& facade.ConfigureReflectionCapture(source),
+			"Production reflection source did not prepare one immutable snapshot plan");
+		ReflectionLayoutCapture* capture = facade.ReflectionCapture();
+		Require(
+			capture
+				&& capture->RequestCapture() == ReflectionLayoutCaptureError::None
+				&& capture->Pump(1).Status == ReflectionLayoutPumpStatus::Progress
+				&& !facade.Reflection(),
+			"Production reflection source published before bounded discovery completed");
+
+		ReflectionLayoutPumpResult finalPump;
+		for (std::size_t pump = 0; pump < 64; ++pump)
+		{
+			finalPump = capture->Pump(ReflectionLayoutCapture::kMaxPumpBudget);
+			if (finalPump.Status == ReflectionLayoutPumpStatus::Published
+				|| finalPump.Status == ReflectionLayoutPumpStatus::Failed)
+			{
+				break;
+			}
+		}
+		const ReflectionLayoutCaptureDiagnostics captureDiagnostics =
+			capture->Diagnostics();
+		const ObjectSnapshotReflectionSourceDiagnostics sourceDiagnostics =
+			source.Diagnostics();
+		const std::shared_ptr<const ReflectionRuntimeSnapshot> reflection =
+			facade.Reflection();
+		const auto hasOffset = [&](const ReflectionField field,
+			const std::int32_t expected) {
+			const ReflectionFieldReport* report = reflection && reflection->Layout
+				? reflection->Layout->Find(field)
+				: nullptr;
+			return report && report->Offset == expected && report->Validated;
+		};
+		if (finalPump.Status != ReflectionLayoutPumpStatus::Published)
+		{
+			std::ostringstream detail;
+			detail << "Production reflection source failed: pump="
+				<< static_cast<int>(finalPump.Status)
+				<< ", capture_state=" << static_cast<int>(captureDiagnostics.State)
+				<< ", capture_error=" << ToString(captureDiagnostics.Error)
+				<< ", source_error=" << ToString(captureDiagnostics.SourceError)
+				<< ", validation_error=" << ToString(captureDiagnostics.ValidationError)
+				<< ", phase=" << sourceDiagnostics.DiscoveryPhase
+				<< ", steps=" << sourceDiagnostics.SourceSteps
+				<< ", fields=" << sourceDiagnostics.EmittedFields;
+			throw std::runtime_error(detail.str());
+		}
+		Require(
+			captureDiagnostics.State == ReflectionLayoutCaptureState::Completed
+				&& captureDiagnostics.Error == ReflectionLayoutCaptureError::None
+				&& captureDiagnostics.SourceSteps <= ReflectionLayoutCapture::kMaxSourceSteps
+				&& sourceDiagnostics.PreparationError
+					== ReflectionCandidatePreparationError::None
+				&& sourceDiagnostics.SourceError == ReflectionCandidateSourceError::None
+				&& sourceDiagnostics.PropertySystem == ReflectionPropertySystem::UProperty
+				&& sourceDiagnostics.EmittedFields == 22
+				&& !sourceDiagnostics.Active
+				&& reflection
+				&& reflection->Layout
+				&& reflection->Layout->PropertySystem() == ReflectionPropertySystem::UProperty
+				&& hasOffset(ReflectionField::StructSuper, structSuperOffset)
+				&& hasOffset(ReflectionField::StructChildren, structChildrenOffset)
+				&& hasOffset(ReflectionField::StructPropertiesSize, structPropertiesSizeOffset)
+				&& hasOffset(ReflectionField::StructMinAlignment, structMinAlignmentOffset)
+				&& hasOffset(ReflectionField::UFieldNext, fieldNextOffset)
+				&& hasOffset(ReflectionField::PropertyArrayDim, propertyArrayDimOffset)
+				&& hasOffset(ReflectionField::PropertyElementSize, propertyElementSizeOffset)
+				&& hasOffset(ReflectionField::PropertyFlags, propertyFlagsOffset)
+				&& hasOffset(ReflectionField::PropertyOffset, propertyOffsetOffset)
+				&& hasOffset(ReflectionField::BoolFieldSize, derivedPropertyOffset)
+				&& hasOffset(ReflectionField::MapPropertyValue,
+					derivedPropertyOffset + static_cast<std::int32_t>(sizeof(std::uintptr_t)))
+				&& source.ReleasePreparedPlan()
+				&& !source.IsConfigured()
+				&& facade.Stop(),
+			"Production reflection source did not publish the witnessed immutable layout");
+	}
+
+	void TestFPropertySnapshotReflectionCandidateSource()
+	{
+		using namespace UExplorer::Runtime;
+
+		constexpr std::uint64_t contextGeneration = 78;
+		constexpr std::string_view sessionId = "fixture-fproperty-reflection-source";
+		constexpr std::int32_t structSuperOffset = 0x40;
+		constexpr std::int32_t structChildPropertiesOffset = 0x60;
+		constexpr std::int32_t structPropertiesSizeOffset = 0x58;
+		constexpr std::int32_t structMinAlignmentOffset = 0x5C;
+		constexpr std::int32_t fieldClassOffset = 0x08;
+		constexpr std::int32_t fieldNextOffset = 0x20;
+		constexpr std::int32_t fieldNameOffset = 0x28;
+		constexpr std::int32_t fieldClassCastFlagsOffset = 0x08;
+		constexpr std::int32_t propertyArrayDimOffset = 0x38;
+		constexpr std::int32_t propertyElementSizeOffset = 0x3C;
+		constexpr std::int32_t propertyFlagsOffset = 0x40;
+		constexpr std::int32_t propertyOffsetOffset = 0x4C;
+		constexpr std::int32_t derivedPropertyOffset = 0x70;
+
+		constexpr std::uint64_t castField = 0x0000000000000001;
+		constexpr std::uint64_t castByte = 0x0000000000000040;
+		constexpr std::uint64_t castInt = 0x0000000000000080;
+		constexpr std::uint64_t castName = 0x0000000000002000;
+		constexpr std::uint64_t castProperty = 0x0000000000008000;
+		constexpr std::uint64_t castObject = 0x0000000000010000;
+		constexpr std::uint64_t castBool = 0x0000000000020000;
+		constexpr std::uint64_t castStruct = 0x0000000000100000;
+		constexpr std::uint64_t castArray = 0x0000000000200000;
+		constexpr std::uint64_t castNumeric = 0x0000000001000000;
+		constexpr std::uint64_t castText = 0x0000000040000000;
+		constexpr std::uint64_t castMap = 0x0000400000000000;
+		constexpr std::uint64_t castSet = 0x0000800000000000;
+		constexpr std::uint64_t castEnum = 0x0001000000000000;
+
+		struct alignas(16) FixtureBlock final
+		{
+			std::array<std::byte, 0x240> Bytes{};
+
+			std::uintptr_t Address() noexcept
+			{
+				return reinterpret_cast<std::uintptr_t>(Bytes.data());
+			}
+		};
+		struct FixtureNode final
+		{
+			FixtureBlock* Memory = nullptr;
+			std::int32_t Index = -1;
+		};
+
+		std::vector<std::unique_ptr<FixtureBlock>> memory;
+		const auto allocateBlock = [&]() -> FixtureBlock& {
+			memory.push_back(std::make_unique<FixtureBlock>());
+			return *memory.back();
+		};
+		const auto write = []<typename T>(
+			FixtureBlock& block,
+			const std::size_t offset,
+			const T& value) {
+			static_assert(std::is_trivially_copyable_v<T>);
+			Require(
+				offset <= block.Bytes.size()
+					&& sizeof(T) <= block.Bytes.size() - offset,
+				"FProperty fixture write exceeded its backing block");
+			std::memcpy(block.Bytes.data() + offset, &value, sizeof(T));
+		};
+
+		std::array<std::byte, 64> namePool{};
+		std::array<std::byte, 4096> nameBlock{};
+		const auto writeNameBytes = [](auto& buffer,
+			const std::size_t offset,
+			const void* value,
+			const std::size_t size) {
+			Require(
+				offset <= buffer.size() && size <= buffer.size() - offset,
+				"FProperty name fixture exceeded its backing block");
+			std::memcpy(buffer.data() + offset, value, size);
+		};
+		std::size_t nextNameOffset = 2;
+		std::unordered_map<std::string, std::uint32_t> nameIndexes;
+		const auto addName = [&](const std::string_view name) {
+			const auto existing = nameIndexes.find(std::string(name));
+			if (existing != nameIndexes.end())
+				return existing->second;
+			Require(name.size() <= 1024,
+				"FProperty fixture name exceeds the runtime name bound");
+			const std::uint16_t header = static_cast<std::uint16_t>(name.size() << 6);
+			writeNameBytes(nameBlock, nextNameOffset, &header, sizeof(header));
+			writeNameBytes(nameBlock, nextNameOffset + 2, name.data(), name.size());
+			const std::uint32_t index = static_cast<std::uint32_t>(nextNameOffset / 2);
+			nextNameOffset += 2 + name.size();
+			if ((nextNameOffset & 1u) != 0)
+				++nextNameOffset;
+			nameIndexes.emplace(std::string(name), index);
+			return index;
+		};
+		const std::uintptr_t nameBlockAddress =
+			reinterpret_cast<std::uintptr_t>(nameBlock.data());
+		std::memcpy(namePool.data() + 16, &nameBlockAddress, sizeof(nameBlockAddress));
+
+		FakeHandleIdentitySource identitySource;
+		identitySource.Generation = contextGeneration;
+		std::int32_t nextIndex = 1;
+		EngineSnapshot snapshot{
+			.SessionId = std::string(sessionId),
+			.ContextGeneration = contextGeneration,
+			.Generation = 1,
+			.CapturedAtMonotonicUs = 2000,
+			.CaptureDurationUs = 10
+		};
+		std::unordered_map<std::string, FixtureNode> nodes;
+
+		const auto addSnapshotObject = [&](const std::string_view path,
+			const EngineObjectKind kind) -> FixtureBlock& {
+			FixtureBlock& block = allocateBlock();
+			const std::int32_t index = nextIndex++;
+			const ObjectIdentity identity{
+				.Index = index,
+				.SerialNumber = 2000 + index,
+				.Address = block.Address(),
+				.ClassFingerprint = 0xB000u + static_cast<std::uint64_t>(index)
+			};
+			identitySource.Objects.emplace(index, identity);
+			const std::string fullPath(path);
+			const std::size_t nameStart = fullPath.find_last_of('.');
+			const std::size_t packageEnd = fullPath.find('.');
+			snapshot.Objects.push_back({
+				.Handle = {
+					.SessionId = std::string(sessionId),
+					.ContextGeneration = contextGeneration,
+					.Index = identity.Index,
+					.SerialNumber = identity.SerialNumber,
+					.Address = identity.Address,
+					.ClassFingerprint = identity.ClassFingerprint
+				},
+				.Name = fullPath.substr(nameStart + 1),
+				.FullPath = fullPath,
+				.ClassPath = "/Script/CoreUObject.Class",
+				.PackagePath = fullPath.substr(0, packageEnd),
+				.Kind = kind
+			});
+			nodes.emplace(fullPath, FixtureNode{&block, index});
+			return block;
+		};
+
+		struct RequiredObject final
+		{
+			std::string_view Path;
+			EngineObjectKind Kind;
+		};
+		constexpr std::array requiredObjects{
+			RequiredObject{"/Script/CoreUObject.Struct", EngineObjectKind::Class},
+			RequiredObject{"/Script/CoreUObject.Field", EngineObjectKind::Class},
+			RequiredObject{"/Script/CoreUObject.Class", EngineObjectKind::Class},
+			RequiredObject{"/Script/CoreUObject.Guid", EngineObjectKind::Struct},
+			RequiredObject{"/Script/CoreUObject.Color", EngineObjectKind::Struct},
+			RequiredObject{"/Script/CoreUObject.Vector", EngineObjectKind::Struct},
+			RequiredObject{"/Script/CoreUObject.TwoVectors", EngineObjectKind::Struct},
+			RequiredObject{"/Script/Engine.Engine", EngineObjectKind::Class},
+			RequiredObject{"/Script/Engine.PlayerController", EngineObjectKind::Class},
+			RequiredObject{"/Script/Engine.CollisionResponseContainer", EngineObjectKind::Struct},
+			RequiredObject{"/Script/Engine.Controller", EngineObjectKind::Class},
+			RequiredObject{"/Script/Engine.PlayerState", EngineObjectKind::Class},
+			RequiredObject{"/Script/Engine.Pawn", EngineObjectKind::Class},
+			RequiredObject{"/Script/Engine.GameViewportClient", EngineObjectKind::Class},
+			RequiredObject{"/Script/Engine.UserDefinedEnum", EngineObjectKind::Class},
+			RequiredObject{"/Script/Engine.LevelCollection", EngineObjectKind::Struct},
+			RequiredObject{"/Script/Engine.ActorComponent", EngineObjectKind::Class},
+			RequiredObject{"/Script/Engine.DebugDisplayProperty", EngineObjectKind::Struct},
+			RequiredObject{"/Script/Engine.Level", EngineObjectKind::Class},
+			RequiredObject{"/Script/Engine.ECollisionResponse", EngineObjectKind::Enum},
+			RequiredObject{"/Script/Engine.EComponentCreationMethod", EngineObjectKind::Enum},
+			RequiredObject{"/Script/Engine.EAutoPossessAI", EngineObjectKind::Enum}
+		};
+		for (const RequiredObject& required : requiredObjects)
+			(void)addSnapshotObject(required.Path, required.Kind);
+
+		const auto addFieldClass = [&](const std::uint64_t castFlags)
+			-> FixtureBlock& {
+			FixtureBlock& block = allocateBlock();
+			write(block, fieldClassCastFlagsOffset, castFlags);
+			return block;
+		};
+		FixtureBlock& intClass = addFieldClass(
+			castField | castProperty | castNumeric | castInt);
+		FixtureBlock& byteClass = addFieldClass(
+			castField | castProperty | castNumeric | castByte);
+		FixtureBlock& boolClass = addFieldClass(castField | castProperty | castBool);
+		FixtureBlock& objectClass = addFieldClass(castField | castProperty | castObject);
+		FixtureBlock& structClass = addFieldClass(castField | castProperty | castStruct);
+		FixtureBlock& arrayClass = addFieldClass(castField | castProperty | castArray);
+		FixtureBlock& mapClass = addFieldClass(castField | castProperty | castMap);
+		FixtureBlock& setClass = addFieldClass(castField | castProperty | castSet);
+		FixtureBlock& enumClass = addFieldClass(castField | castProperty | castEnum);
+		FixtureBlock& nameClass = addFieldClass(castField | castProperty | castName);
+		FixtureBlock& textClass = addFieldClass(castField | castProperty | castText);
+
+		std::unordered_map<std::string, FixtureBlock*> fields;
+		const auto addField = [&](const std::string_view path,
+			const std::string_view name,
+			FixtureBlock& fieldClass) -> FixtureBlock& {
+			FixtureBlock& field = allocateBlock();
+			write(field, fieldClassOffset, fieldClass.Address());
+			const std::array<std::uint32_t, 2> fname{addName(name), 0};
+			write(field, fieldNameOffset, fname);
+			fields.emplace(std::string(path), &field);
+			return field;
+		};
+		FixtureBlock& guidA = addField("Guid.A", "A", intClass);
+		FixtureBlock& guidC = addField("Guid.C", "C", intClass);
+		FixtureBlock& guidD = addField("Guid.D", "D", intClass);
+		FixtureBlock& colorR = addField("Color.R", "R", byteClass);
+		FixtureBlock& colorB = addField("Color.B", "B", byteClass);
+		FixtureBlock& colorG = addField("Color.G", "G", byteClass);
+		FixtureBlock& engineBool = addField(
+			"Engine.bIsOverridingSelectedColor",
+			"bIsOverridingSelectedColor",
+			boolClass);
+		FixtureBlock& controllerBool = addField(
+			"PlayerController.bAutoManageActiveCameraTarget",
+			"bAutoManageActiveCameraTarget",
+			boolClass);
+		FixtureBlock& traceChannel1 = addField(
+			"CollisionResponseContainer.GameTraceChannel1",
+			"GameTraceChannel1",
+			byteClass);
+		FixtureBlock& traceChannel2 = addField(
+			"CollisionResponseContainer.GameTraceChannel2",
+			"GameTraceChannel2",
+			byteClass);
+		FixtureBlock& controllerPlayerState = addField(
+			"Controller.PlayerState", "PlayerState", objectClass);
+		FixtureBlock& controllerPawn = addField(
+			"Controller.Pawn", "Pawn", objectClass);
+		FixtureBlock& twoVectorsV1 = addField("TwoVectors.v1", "v1", structClass);
+		FixtureBlock& twoVectorsV2 = addField("TwoVectors.v2", "v2", structClass);
+		FixtureBlock& debugProperties = addField(
+			"GameViewportClient.DebugProperties", "DebugProperties", arrayClass);
+		FixtureBlock& displayNameMap = addField(
+			"UserDefinedEnum.DisplayNameMap", "DisplayNameMap", mapClass);
+		FixtureBlock& levels = addField("LevelCollection.Levels", "Levels", setClass);
+		FixtureBlock& creationMethod = addField(
+			"ActorComponent.CreationMethod", "CreationMethod", enumClass);
+		FixtureBlock& autoPossessAi = addField(
+			"Pawn.AutoPossessAI", "AutoPossessAI", enumClass);
+		FixtureBlock& arrayInner = addField("Inner.DebugProperty", "Inner", structClass);
+		FixtureBlock& mapKey = addField("Inner.DisplayNameKey", "Key", nameClass);
+		FixtureBlock& mapValue = addField("Inner.DisplayNameValue", "Value", textClass);
+		FixtureBlock& setElement = addField("Inner.Level", "Element", objectClass);
+		FixtureBlock& enumUnderlying1 = addField("Inner.CreationMethod", "Underlying", byteClass);
+		FixtureBlock& enumUnderlying2 = addField("Inner.AutoPossessAI", "Underlying2", byteClass);
+
+		const auto link = [&](FixtureBlock& left, FixtureBlock* right) {
+			write(left, fieldNextOffset, right ? right->Address() : std::uintptr_t{0});
+		};
+		link(guidA, &guidC);
+		link(guidC, &guidD);
+		link(guidD, nullptr);
+		link(colorR, &colorB);
+		link(colorB, &colorG);
+		link(colorG, nullptr);
+		link(engineBool, nullptr);
+		link(controllerBool, nullptr);
+		link(traceChannel1, &traceChannel2);
+		link(traceChannel2, nullptr);
+		link(controllerPlayerState, &controllerPawn);
+		link(controllerPawn, nullptr);
+		link(twoVectorsV1, &twoVectorsV2);
+		link(twoVectorsV2, nullptr);
+		link(debugProperties, nullptr);
+		link(displayNameMap, nullptr);
+		link(levels, nullptr);
+		link(creationMethod, nullptr);
+		link(autoPossessAi, nullptr);
+
+		const auto object = [&](const std::string_view path) -> FixtureBlock& {
+			return *nodes.at(std::string(path)).Memory;
+		};
+		FixtureBlock& ueStruct = object("/Script/CoreUObject.Struct");
+		FixtureBlock& ueField = object("/Script/CoreUObject.Field");
+		FixtureBlock& ueClass = object("/Script/CoreUObject.Class");
+		FixtureBlock& guid = object("/Script/CoreUObject.Guid");
+		FixtureBlock& color = object("/Script/CoreUObject.Color");
+		write(ueStruct, structPropertiesSizeOffset, std::int32_t{0xA0});
+		write(guid, structPropertiesSizeOffset, std::int32_t{16});
+		write(color, structPropertiesSizeOffset, std::int32_t{4});
+		write(guid, structMinAlignmentOffset, std::int32_t{4});
+		write(color, structMinAlignmentOffset, std::int32_t{1});
+		write(ueStruct, structSuperOffset, ueField.Address());
+		write(ueClass, structSuperOffset, ueStruct.Address());
+		write(guid, structChildPropertiesOffset, guidA.Address());
+		write(color, structChildPropertiesOffset, colorR.Address());
+		write(object("/Script/Engine.Engine"),
+			structChildPropertiesOffset, engineBool.Address());
+		write(object("/Script/Engine.PlayerController"),
+			structChildPropertiesOffset, controllerBool.Address());
+		write(object("/Script/Engine.CollisionResponseContainer"),
+			structChildPropertiesOffset, traceChannel1.Address());
+		write(object("/Script/Engine.Controller"),
+			structChildPropertiesOffset, controllerPlayerState.Address());
+		write(object("/Script/CoreUObject.TwoVectors"),
+			structChildPropertiesOffset, twoVectorsV1.Address());
+		write(object("/Script/Engine.GameViewportClient"),
+			structChildPropertiesOffset, debugProperties.Address());
+		write(object("/Script/Engine.UserDefinedEnum"),
+			structChildPropertiesOffset, displayNameMap.Address());
+		write(object("/Script/Engine.LevelCollection"),
+			structChildPropertiesOffset, levels.Address());
+		write(object("/Script/Engine.ActorComponent"),
+			structChildPropertiesOffset, creationMethod.Address());
+		write(object("/Script/Engine.Pawn"),
+			structChildPropertiesOffset, autoPossessAi.Address());
+
+		for (FixtureBlock* property : std::array{&guidA, &guidC, &guidD})
+		{
+			write(*property, propertyArrayDimOffset, std::int32_t{1});
+			write(*property, propertyElementSizeOffset, std::int32_t{4});
+		}
+		constexpr std::uint64_t propertyEdit = 0x0000000000000001;
+		constexpr std::uint64_t propertyBlueprintVisible = 0x0000000000000004;
+		constexpr std::uint64_t propertyZeroConstructor = 0x0000000000000200;
+		constexpr std::uint64_t propertySaveGame = 0x0000000001000000;
+		constexpr std::uint64_t propertyPlainOldData = 0x0000000040000000;
+		constexpr std::uint64_t propertyNoDestructor = 0x0000001000000000;
+		constexpr std::uint64_t propertyHasHash = 0x0008000000000000;
+		constexpr std::uint64_t guidFlags = propertyEdit
+			| propertyZeroConstructor | propertySaveGame | propertyPlainOldData
+			| propertyNoDestructor | propertyHasHash;
+		constexpr std::uint64_t colorFlags = guidFlags | propertyBlueprintVisible;
+		write(guidA, propertyFlagsOffset, guidFlags);
+		write(colorR, propertyFlagsOffset, colorFlags);
+		write(guidA, propertyOffsetOffset, std::int32_t{0});
+		write(guidC, propertyOffsetOffset, std::int32_t{8});
+		write(colorB, propertyOffsetOffset, std::int32_t{0});
+		write(colorG, propertyOffsetOffset, std::int32_t{1});
+
+		const std::array<std::uint8_t, 4> nativeBoolLayout{1, 0, 1, 0xFF};
+		std::memcpy(engineBool.Bytes.data() + derivedPropertyOffset,
+			nativeBoolLayout.data(), nativeBoolLayout.size());
+		std::memcpy(controllerBool.Bytes.data() + derivedPropertyOffset,
+			nativeBoolLayout.data(), nativeBoolLayout.size());
+		write(traceChannel1, derivedPropertyOffset,
+			object("/Script/Engine.ECollisionResponse").Address());
+		write(traceChannel2, derivedPropertyOffset,
+			object("/Script/Engine.ECollisionResponse").Address());
+		write(controllerPlayerState, derivedPropertyOffset,
+			object("/Script/Engine.PlayerState").Address());
+		write(controllerPawn, derivedPropertyOffset,
+			object("/Script/Engine.Pawn").Address());
+		write(twoVectorsV1, derivedPropertyOffset,
+			object("/Script/CoreUObject.Vector").Address());
+		write(twoVectorsV2, derivedPropertyOffset,
+			object("/Script/CoreUObject.Vector").Address());
+		write(debugProperties, derivedPropertyOffset, arrayInner.Address());
+		write(arrayInner, derivedPropertyOffset,
+			object("/Script/Engine.DebugDisplayProperty").Address());
+		write(displayNameMap, derivedPropertyOffset, mapKey.Address());
+		write(displayNameMap, derivedPropertyOffset + sizeof(std::uintptr_t),
+			mapValue.Address());
+		write(levels, derivedPropertyOffset, setElement.Address());
+		write(setElement, derivedPropertyOffset,
+			object("/Script/Engine.Level").Address());
+		write(creationMethod, derivedPropertyOffset, enumUnderlying1.Address());
+		write(creationMethod, derivedPropertyOffset + sizeof(std::uintptr_t),
+			object("/Script/Engine.EComponentCreationMethod").Address());
+		write(autoPossessAi, derivedPropertyOffset, enumUnderlying2.Address());
+		write(autoPossessAi, derivedPropertyOffset + sizeof(std::uintptr_t),
+			object("/Script/Engine.EAutoPossessAI").Address());
+
+		const std::int32_t currentBlock = 0;
+		const std::int32_t byteCursor = static_cast<std::int32_t>(nextNameOffset);
+		std::memcpy(namePool.data(), &currentBlock, sizeof(currentBlock));
+		std::memcpy(namePool.data() + 4, &byteCursor, sizeof(byteCursor));
+		const EngineNameProfile nameProfile{
+			.Storage = EngineNameStorageKind::NamePool,
+			.StorageAddress = reinterpret_cast<std::uintptr_t>(namePool.data()),
+			.FNameSize = 8,
+			.ComparisonIndexOffset = 0,
+			.NumberOffset = 4,
+			.BlockOffsetBits = 14,
+			.EntryStride = 2,
+			.ChunksStart = 16,
+			.MaxChunkIndexOffset = 0,
+			.ByteCursorOffset = 4,
+			.EntryStringOffset = 2,
+			.EntryHeaderOffset = 0,
+			.EntryLengthShift = 6,
+			.Validated = true,
+			.Source = "fproperty-reflection-fixture"
+		};
+		identitySource.ObjectCount = nextIndex;
+		snapshot.SourceObjectCount = nextIndex;
+		snapshot.SkippedSlots = static_cast<std::uint32_t>(
+			static_cast<std::size_t>(nextIndex) - snapshot.Objects.size());
+
+		const auto context = MakeEngineContext(
+			contextGeneration, true, true, &nameProfile, 4242, true);
+		EngineFacade facade(context, std::string(sessionId), identitySource);
+		Require(
+			facade.Snapshots().Publish(std::move(snapshot)).Ok(),
+			"FProperty reflection fixture snapshot was rejected");
+		ObjectSnapshotReflectionCandidateSource source(context, facade);
+		const ReflectionCandidatePreparationResult prepared = source.Prepare();
+		Require(
+			prepared.Ok()
+				&& prepared.PropertySystem == ReflectionPropertySystem::FProperty
+				&& facade.ConfigureReflectionCapture(source),
+			"FProperty reflection source did not prepare its immutable plan");
+		ReflectionLayoutCapture* capture = facade.ReflectionCapture();
+		Require(capture
+				&& capture->RequestCapture() == ReflectionLayoutCaptureError::None,
+			"FProperty reflection capture request was rejected");
+		ReflectionLayoutPumpResult finalPump;
+		for (std::size_t pump = 0; pump < 64; ++pump)
+		{
+			finalPump = capture->Pump(ReflectionLayoutCapture::kMaxPumpBudget);
+			if (finalPump.Status == ReflectionLayoutPumpStatus::Published
+				|| finalPump.Status == ReflectionLayoutPumpStatus::Failed)
+			{
+				break;
+			}
+		}
+		const ReflectionLayoutCaptureDiagnostics captureDiagnostics =
+			capture->Diagnostics();
+		const ObjectSnapshotReflectionSourceDiagnostics sourceDiagnostics =
+			source.Diagnostics();
+		if (finalPump.Status != ReflectionLayoutPumpStatus::Published)
+		{
+			std::ostringstream detail;
+			detail << "FProperty reflection source failed: capture_error="
+				<< ToString(captureDiagnostics.Error)
+				<< ", source_error=" << ToString(captureDiagnostics.SourceError)
+				<< ", validation_error=" << ToString(captureDiagnostics.ValidationError)
+				<< ", phase=" << sourceDiagnostics.DiscoveryPhase
+				<< ", steps=" << sourceDiagnostics.SourceSteps
+				<< ", fields=" << sourceDiagnostics.EmittedFields;
+			throw std::runtime_error(detail.str());
+		}
+		const std::shared_ptr<const ReflectionRuntimeSnapshot> reflection =
+			facade.Reflection();
+		const auto hasOffset = [&](const ReflectionField field,
+			const std::int32_t expected) {
+			const ReflectionFieldReport* report = reflection && reflection->Layout
+				? reflection->Layout->Find(field)
+				: nullptr;
+			return report && report->Offset == expected && report->Validated;
+		};
+		Require(
+			captureDiagnostics.State == ReflectionLayoutCaptureState::Completed
+				&& sourceDiagnostics.EmittedFields == 25
+				&& reflection
+				&& reflection->Layout
+				&& reflection->Layout->PropertySystem() == ReflectionPropertySystem::FProperty
+				&& hasOffset(ReflectionField::StructSuper, structSuperOffset)
+				&& hasOffset(ReflectionField::StructChildProperties,
+					structChildPropertiesOffset)
+				&& hasOffset(ReflectionField::FFieldClass, fieldClassOffset)
+				&& hasOffset(ReflectionField::FFieldNext, fieldNextOffset)
+				&& hasOffset(ReflectionField::FFieldName, fieldNameOffset)
+				&& hasOffset(ReflectionField::FFieldClassCastFlags,
+					fieldClassCastFlagsOffset)
+				&& hasOffset(ReflectionField::PropertyArrayDim, propertyArrayDimOffset)
+				&& hasOffset(ReflectionField::PropertyFlags, propertyFlagsOffset)
+				&& hasOffset(ReflectionField::BoolFieldSize, derivedPropertyOffset)
+				&& source.ReleasePreparedPlan()
+				&& !source.IsConfigured()
+				&& facade.Stop(),
+			"FProperty reflection source did not publish the witnessed layout");
+	}
+
 	class FakeCoreStatusDiagnostics final : public UExplorer::Services::ICoreStatusDiagnosticsSource
 	{
 	public:
@@ -3377,7 +4282,13 @@ namespace
 		});
 		FakeCoreStatusDiagnostics diagnostics;
 		EngineFacade engine(context, "fixture-command-session", source);
-		CoreCommandService service(runtime, executor, engine, diagnostics);
+		ObjectSnapshotReflectionCandidateSource reflectionSource(context, engine);
+		CoreCommandService service(
+			runtime,
+			executor,
+			engine,
+			diagnostics,
+			&reflectionSource);
 		Require(service.IsConfigured(), "Core domain command service was not configured");
 
 		const CoreCommandResponse status = service.Execute({
@@ -3395,7 +4306,11 @@ namespace
 				&& status.Data.at("name_profile").at("storage") == "name_pool"
 				&& !status.Data.at("object_snapshot").at("published").get<bool>()
 				&& !status.Data.at("object_snapshot").at("capture_configured").get<bool>()
-				&& status.Data.at("object_snapshot").at("retired_snapshot_count") == 0,
+				&& status.Data.at("object_snapshot").at("retired_snapshot_count") == 0
+				&& !status.Data.at("reflection").at("layout_published").get<bool>()
+				&& !status.Data.at("reflection").at("capture_configured").get<bool>()
+				&& status.Data.at("reflection").at("source").at("property_system")
+					== "unavailable",
 			"Status domain command did not serialize the immutable runtime/name profile");
 
 		CoreCommandRequest objectRequest{
@@ -5165,6 +6080,8 @@ int main(const int argc, char** argv)
 		TestStableObjectAndFunctionHandles();
 		TestProductionSnapshotMetadataSource();
 		TestEngineFacadeAndImmutableSnapshots();
+		TestObjectSnapshotReflectionCandidateSource();
+		TestFPropertySnapshotReflectionCandidateSource();
 		TestIncrementalSnapshotCapture();
 		TestCoreDomainCommandsAndHandleExecution();
 		TestNamedPipeRpcServerLifecycle();

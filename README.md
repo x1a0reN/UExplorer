@@ -47,18 +47,23 @@ not yet implemented return a stable capability error instead of reaching legacy 
 Baseline Core initialization is also separated from optional reflection/generator
 activation: unknown property, FText, GWorld, or generator layouts cannot make the pipe
 runtime pretend to be unsupported or execute ProcessEvent from the startup worker.
-The `engine.reflection` capability remains unavailable until a complete immutable
-`ReflectionLayout` passes per-field semantic witnesses. Type metadata no longer depends
-on unrelated FText/container value codecs: a matching `PropertyCodec` upgrades the same
-atomic snapshot later and opens `engine.property_codec` independently. Range-valid
-legacy offsets or boolean probe claims are insufficient.
-The Core now also contains a transport-neutral, SafeMemory-only `PropertyCodec` with
+The Core now prepares a production reflection candidate from one complete immutable
+object-snapshot generation. It locates an exact canonical fixture set, requires the
+observed UProperty/FProperty system to match the immutable engine profile, and scans
+checked live memory through the shared PostRender scheduler. `engine.reflection` opens
+only after every required field and semantic witness publishes one immutable
+`ReflectionLayout`; missing/ambiguous fixtures, dependency drift, or validation failure
+remain explicit. Type metadata no longer depends on unrelated FText/container value
+codecs: a matching `PropertyCodec` upgrades the same atomic snapshot later and opens
+`engine.property_codec` independently. Range-valid legacy offsets or boolean probe
+claims are insufficient.
+The Core also contains a transport-neutral, SafeMemory-only `PropertyCodec` with
 explicit `ok/empty/unsupported/unavailable/error` states, stable-handle references,
 recursive budgets, coherent FString/array/sparse-container reads, and an atomic immutable
 upgrade of the published `ReflectionRuntimeSnapshot`. Resolver success is rejected unless its handle is complete and matches the
-resolver session/context and observed reference. The codec is deliberately
-not exposed until a real target reflection/profile witness configures
-`engine.property_codec`; the current synthetic witness suite is boundary evidence only.
+resolver session/context and observed reference. The codec is deliberately not exposed
+because no production PropertyCodec profile source is registered yet; the current
+synthetic witness suite is boundary evidence only.
 Object/type/package/instance collections now use exact full-path filters and
 generation/query-bound cursor pages capped at 128 records; the Host reuses its snapshot
 indexes instead of rescanning the snapshot or accepting legacy offset pagination.
@@ -78,13 +83,19 @@ PostRender now drives one `GameThreadFrameScheduler` rather than giving the obje
 snapshot producer an exclusive callback slot. The scheduler supports at most eight
 clients, shares a 32-unit frame budget in four-unit round-robin quanta, stops further
 dispatch after 2 ms, and quiet-drains each client independently. Frame clients are not
-called after a pump-thread mismatch. Production reflection/type/watch collectors must
-join this scheduler rather than add another Hook or unbounded per-frame loop.
+called after a pump-thread mismatch. Production object-snapshot and reflection capture
+both use this scheduler; future type/watch collectors must do the same rather than add
+another Hook or unbounded per-frame loop. Reflection capture temporarily pauses periodic
+object-snapshot replacement so its exact generation dependency cannot drift before
+validation/publication, then releases the retained plan on every terminal path.
 The release DLL has no WinSock/WinHTTP/WinINet import or legacy HTTP marker according
 to the transport cutover contract.
 
-No Unreal Engine version is currently claimed as verified because the required target
-fixtures have not yet been added. A successful build does not establish runtime safety.
+The production reflection path is covered by complete synthetic UProperty and FProperty
+memory graphs, including fail-closed profile mismatch, bounded field chains, no partial
+publication, and shutdown ownership. No Unreal Engine version is currently claimed as
+verified because the required target fixtures have not yet been added. A successful
+build or synthetic fixture does not establish target runtime safety.
 
 ## Repository layout
 

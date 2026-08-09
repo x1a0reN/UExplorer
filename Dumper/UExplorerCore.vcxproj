@@ -132,6 +132,7 @@
 	<ClCompile Include="Runtime\GameThreadExecutor.cpp" />
 	<ClCompile Include="Runtime\ObjectArrayIdentitySource.cpp" />
 	<ClCompile Include="Runtime\ObjectArraySnapshotSource.cpp" />
+	<ClCompile Include="Runtime\ObjectSnapshotReflectionCandidateSource.cpp" />
     <ClCompile Include="Runtime\ObjectHandle.cpp" />
 	<ClCompile Include="Runtime\PostRenderHook.cpp" />
 	<ClCompile Include="Runtime\PropertyCodec.cpp" />
@@ -219,6 +220,7 @@
 	<ClInclude Include="Runtime\GameThreadExecutor.h" />
 	<ClInclude Include="Runtime\ObjectArrayIdentitySource.h" />
 	<ClInclude Include="Runtime\ObjectArraySnapshotSource.h" />
+	<ClInclude Include="Runtime\ObjectSnapshotReflectionCandidateSource.h" />
     <ClInclude Include="Runtime\ObjectHandle.h" />
 	<ClInclude Include="Runtime\ObjectIdentityContext.h" />
 	<ClInclude Include="Runtime\ObjectSnapshotIdentitySource.h" />

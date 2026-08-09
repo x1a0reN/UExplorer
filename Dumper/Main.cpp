@@ -19,6 +19,7 @@
 #include "Runtime/GameThreadFrameScheduler.h"
 #include "Runtime/ObjectArrayIdentitySource.h"
 #include "Runtime/ObjectArraySnapshotSource.h"
+#include "Runtime/ObjectSnapshotReflectionCandidateSource.h"
 #include "Runtime/PostRenderHook.h"
 #include "Runtime/ShutdownCoordinator.h"
 #include "Services/CoreCommandService.h"
@@ -34,10 +35,13 @@ static std::unique_ptr<UExplorer::IPC::NamedPipeRpcServer> g_PipeServer;
 static std::unique_ptr<UExplorer::Runtime::ObjectArrayIdentitySource> g_IdentitySource;
 static std::unique_ptr<UExplorer::Runtime::EngineFacade> g_EngineFacade;
 static std::unique_ptr<UExplorer::Runtime::ObjectArraySnapshotSource> g_SnapshotSource;
+static std::unique_ptr<UExplorer::Runtime::ObjectSnapshotReflectionCandidateSource>
+	g_ReflectionSource;
 static std::unique_ptr<UExplorer::Services::CoreCommandService> g_CommandService;
 static std::unique_ptr<UExplorer::Runtime::PostRenderHook> g_PostRenderHook;
 static bool g_FrameSchedulerPumpAttached = false;
 static bool g_SnapshotFrameClientAttached = false;
+static bool g_ReflectionFrameClientAttached = false;
 
 namespace
 {
@@ -98,6 +102,171 @@ namespace
 		return g_PipeServer->OpenAdmissions();
 	}
 
+	bool IsReflectionCaptureActive(
+		const UExplorer::Runtime::ReflectionLayoutCaptureState state) noexcept
+	{
+		using UExplorer::Runtime::ReflectionLayoutCaptureState;
+		return state == ReflectionLayoutCaptureState::Requested
+			|| state == ReflectionLayoutCaptureState::Capturing
+			|| state == ReflectionLayoutCaptureState::Validating
+			|| state == ReflectionLayoutCaptureState::Publishing;
+	}
+
+	bool IsSnapshotCaptureActive(
+		const UExplorer::Runtime::SnapshotCaptureState state) noexcept
+	{
+		using UExplorer::Runtime::SnapshotCaptureState;
+		return state == SnapshotCaptureState::Requested
+			|| state == SnapshotCaptureState::Capturing
+			|| state == SnapshotCaptureState::Validating
+			|| state == SnapshotCaptureState::Publishing;
+	}
+
+	bool DetachReflectionFrameClient(const std::chrono::milliseconds timeout)
+	{
+		if (!g_ReflectionFrameClientAttached)
+			return true;
+		UExplorer::Runtime::ReflectionLayoutCapture* capture =
+			g_EngineFacade ? g_EngineFacade->ReflectionCapture() : nullptr;
+		if (!capture
+			|| !UExplorer::Runtime::GetGameThreadFrameScheduler().DetachClient(
+				*capture,
+				timeout))
+		{
+			return false;
+		}
+		g_ReflectionFrameClientAttached = false;
+		return true;
+	}
+
+	bool ReflectionCaptureBlocksSnapshotRefresh() noexcept
+	{
+		const UExplorer::Runtime::ReflectionLayoutCapture* capture =
+			g_EngineFacade ? g_EngineFacade->ReflectionCapture() : nullptr;
+		return capture
+			&& IsReflectionCaptureActive(capture->Diagnostics().State);
+	}
+
+	bool DriveReflectionDiscovery(
+		std::uint64_t& lastPreparationGeneration,
+		std::uint64_t& lastReportedFailureGeneration)
+	{
+		if (!g_EngineFacade || !g_ReflectionSource)
+			return true;
+
+		UExplorer::Runtime::ReflectionLayoutCapture* capture =
+			g_EngineFacade->ReflectionCapture();
+		if (g_EngineFacade->Reflection())
+		{
+			if (!DetachReflectionFrameClient(std::chrono::milliseconds(5000)))
+				return false;
+			return g_ReflectionSource->ReleasePreparedPlan();
+		}
+
+		if (capture)
+		{
+			const UExplorer::Runtime::ReflectionLayoutCaptureDiagnostics diagnostics =
+				capture->Diagnostics();
+			if (IsReflectionCaptureActive(diagnostics.State))
+				return true;
+			if (diagnostics.State == UExplorer::Runtime::ReflectionLayoutCaptureState::Failed)
+			{
+				const auto sourceDiagnostics = g_ReflectionSource->Diagnostics();
+				const std::uint64_t failedGeneration =
+					sourceDiagnostics.PreparedSnapshotGeneration != 0
+						? sourceDiagnostics.PreparedSnapshotGeneration
+						: lastPreparationGeneration;
+				if (lastReportedFailureGeneration != failedGeneration)
+				{
+					std::cerr << "[UExplorer] Reflection capture failed: capture="
+						<< UExplorer::Runtime::ToString(diagnostics.Error)
+						<< " source=" << UExplorer::Runtime::ToString(diagnostics.SourceError)
+						<< " validation="
+						<< UExplorer::Runtime::ToString(diagnostics.ValidationError)
+						<< " snapshot_generation=" << failedGeneration << "\n";
+					lastReportedFailureGeneration = failedGeneration;
+				}
+				if (!DetachReflectionFrameClient(std::chrono::milliseconds(5000))
+					|| !g_ReflectionSource->ReleasePreparedPlan())
+				{
+					return false;
+				}
+			}
+			else if (diagnostics.State
+				== UExplorer::Runtime::ReflectionLayoutCaptureState::Completed)
+			{
+				if (!DetachReflectionFrameClient(std::chrono::milliseconds(5000))
+					|| !g_ReflectionSource->ReleasePreparedPlan())
+				{
+					return false;
+				}
+				return true;
+			}
+		}
+
+		const UExplorer::Runtime::EngineSnapshotCapture* snapshotCapture =
+			g_EngineFacade->SnapshotCapture();
+		if (snapshotCapture
+			&& IsSnapshotCaptureActive(snapshotCapture->Diagnostics().State))
+		{
+			return true;
+		}
+		const std::shared_ptr<const UExplorer::Runtime::EngineSnapshot> snapshot =
+			g_EngineFacade->Snapshots().Current();
+		if (!snapshot || snapshot->Generation == lastPreparationGeneration)
+			return true;
+
+		lastPreparationGeneration = snapshot->Generation;
+		const UExplorer::Runtime::ReflectionCandidatePreparationResult prepared =
+			g_ReflectionSource->Prepare();
+		if (!prepared.Ok())
+		{
+			std::cerr << "[UExplorer] Reflection preparation unavailable: code="
+				<< UExplorer::Runtime::ToString(prepared.Error)
+				<< " snapshot_generation=" << snapshot->Generation;
+			if (!prepared.EvidencePath.empty())
+				std::cerr << " evidence=" << prepared.EvidencePath;
+			std::cerr << "\n";
+			return prepared.Error == UExplorer::Runtime::ReflectionCandidatePreparationError::Busy
+				|| g_ReflectionSource->ReleasePreparedPlan();
+		}
+
+		capture = g_EngineFacade->ReflectionCapture();
+		if (!capture)
+		{
+			if (!g_EngineFacade->ConfigureReflectionCapture(*g_ReflectionSource))
+			{
+				std::cerr << "[UExplorer] Reflection capture ownership configuration failed.\n";
+				return g_ReflectionSource->ReleasePreparedPlan();
+			}
+			capture = g_EngineFacade->ReflectionCapture();
+		}
+		if (!capture)
+			return false;
+
+		if (!g_ReflectionFrameClientAttached)
+		{
+			if (!UExplorer::Runtime::GetGameThreadFrameScheduler().AttachClient(*capture))
+			{
+				std::cerr << "[UExplorer] Reflection frame-client attachment failed.\n";
+				return g_ReflectionSource->ReleasePreparedPlan();
+			}
+			g_ReflectionFrameClientAttached = true;
+		}
+		const UExplorer::Runtime::ReflectionLayoutCaptureError requested =
+			capture->RequestCapture();
+		if (requested != UExplorer::Runtime::ReflectionLayoutCaptureError::None)
+		{
+			std::cerr << "[UExplorer] Reflection capture request failed: "
+				<< UExplorer::Runtime::ToString(requested) << "\n";
+			if (IsReflectionCaptureActive(capture->Diagnostics().State))
+				return true;
+			return DetachReflectionFrameClient(std::chrono::milliseconds(5000))
+				&& g_ReflectionSource->ReleasePreparedPlan();
+		}
+		return true;
+	}
+
 	void ReclaimSnapshotStorage()
 	{
 		if (!g_EngineFacade)
@@ -112,6 +281,8 @@ namespace
 
 	bool DetachFrameScheduling(const std::chrono::milliseconds timeout)
 	{
+		if (!DetachReflectionFrameClient(timeout))
+			return false;
 		if (g_SnapshotFrameClientAttached)
 		{
 			UExplorer::Runtime::EngineSnapshotCapture* capture =
@@ -194,6 +365,7 @@ namespace
 			ExitThread(1);
 		}
 		g_EngineFacade.reset();
+		g_ReflectionSource.reset();
 		g_SnapshotSource.reset();
 		g_IdentitySource.reset();
 		g_Runtime.MarkFailed(code, message);
@@ -320,6 +492,10 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 			{
 				throw std::runtime_error("Production object snapshot source rejected the immutable context");
 			}
+			g_ReflectionSource = std::make_unique<
+				UExplorer::Runtime::ObjectSnapshotReflectionCandidateSource>(
+					runtimeSnapshot.Context,
+					*g_EngineFacade);
 		}
 		else
 		{
@@ -329,7 +505,8 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 			g_Runtime,
 			UExplorer::Runtime::GetGameThreadExecutor(),
 			*g_EngineFacade,
-			g_StatusDiagnostics);
+			g_StatusDiagnostics,
+			g_ReflectionSource.get());
 		if (!g_CommandService->IsConfigured())
 			throw std::runtime_error("Core command service rejected the runtime session/context");
 		UExplorer::Services::SetCoreCommandService(g_CommandService.get());
@@ -417,9 +594,19 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 
 	// Keep alive only after every required startup stage succeeds.
 	auto nextSnapshotRefresh = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+	std::uint64_t lastReflectionPreparationGeneration = 0;
+	std::uint64_t lastReportedReflectionFailureGeneration = 0;
 	while (startupReady && g_Running.load())
 	{
 		ReclaimSnapshotStorage();
+		if (!DriveReflectionDiscovery(
+			lastReflectionPreparationGeneration,
+			lastReportedReflectionFailureGeneration))
+		{
+			std::cerr << "[UExplorer] Reflection lifecycle could not release its frame/snapshot ownership.\n";
+			g_Running.store(false, std::memory_order_release);
+			break;
+		}
 		RefreshRuntimeCapabilities();
 		if (!EnsurePipeAdmissions())
 		{
@@ -428,7 +615,9 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 			break;
 		}
 		const auto now = std::chrono::steady_clock::now();
-		if (g_SnapshotFrameClientAttached && now >= nextSnapshotRefresh)
+		if (g_SnapshotFrameClientAttached
+			&& !ReflectionCaptureBlocksSnapshotRefresh()
+			&& now >= nextSnapshotRefresh)
 		{
 			if (UExplorer::Runtime::EngineSnapshotCapture* capture =
 				g_EngineFacade ? g_EngineFacade->SnapshotCapture() : nullptr)
@@ -463,6 +652,7 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 	UExplorer::Services::SetCoreCommandService(nullptr);
 	bool pipeStopped = true;
 	bool hooksStopped = true;
+	bool reflectionFrameStopped = true;
 	bool snapshotFrameStopped = true;
 	bool frameSchedulerStopped = true;
 	UExplorer::Runtime::ShutdownCoordinator shutdown;
@@ -475,6 +665,11 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 		hooksStopped = !g_PostRenderHook
 			|| g_PostRenderHook->Stop(std::chrono::milliseconds(5000));
 		return hooksStopped;
+	});
+	shutdown.AddStage("reflection_frame_client", [&] {
+		reflectionFrameStopped = DetachReflectionFrameClient(
+			std::chrono::milliseconds(5000));
+		return reflectionFrameStopped;
 	});
 	shutdown.AddStage("snapshot_frame_client", [&] {
 		if (!g_SnapshotFrameClientAttached)
@@ -502,7 +697,8 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 		return frameSchedulerStopped;
 	});
 	shutdown.AddStage("engine_facade", [&] {
-		return snapshotFrameStopped
+		return reflectionFrameStopped
+			&& snapshotFrameStopped
 			&& (!g_EngineFacade
 				|| g_EngineFacade->Stop(std::chrono::milliseconds(5000)));
 	});
@@ -528,6 +724,7 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 	}
 	g_CommandService.reset();
 	g_EngineFacade.reset();
+	g_ReflectionSource.reset();
 	g_SnapshotSource.reset();
 	g_IdentitySource.reset();
 	if (!g_Runtime.MarkStopped())

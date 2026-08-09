@@ -94,7 +94,9 @@ if ($sendCalls -ne 1) {
 
 Assert-Contains $main 'if (!unloadSafe)' 'Unsafe shutdown must refuse DLL unload.'
 foreach ($token in @('g_PostRenderHook->Install()', 'shutdown.AddStage("post_render_hook"',
-        'g_PostRenderHook->Stop(std::chrono::milliseconds(5000))')) {
+		'g_PostRenderHook->Stop(std::chrono::milliseconds(5000))',
+		'shutdown.AddStage("reflection_frame_client"',
+		'DetachReflectionFrameClient(std::chrono::milliseconds(5000))')) {
     Assert-Contains $main $token 'Production PostRender lifecycle is not explicitly owned by Main.'
 }
 foreach ($token in @('HttpServer', 'RegisterAllRoutes', 'SetServer(', 'runtime.ini', 'connection.ini')) {

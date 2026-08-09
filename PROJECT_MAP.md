@@ -25,7 +25,7 @@ UExplorer 是一个面向 Unreal Engine 的 **SDK Dump + 实时游戏内省工�
 └──────────────────────────────────────────────┘
 ```
 
-当前分支已完成 R4 原子通信切换并进入 R5.1。`CoreRuntime`、不可变 `EngineContext`/名称布局、`EngineFacade`、稳定 Handle、不可变 Snapshot/Host 索引、安全关闭边界、Named Pipe RPC、Rust `CoreRpcClient`、EventHub、多 PID `SessionManager`、`DomainService` 与 Tauri Channel bridge 已形成唯一桌面主链路。React 不再直接使用 HTTP/SSE/WebSocket；Core release project 不编译 `Dumper/Server` 或 `Dumper/API`，也不链接 WinSock。旧网络/API 源文件按“不删除”约束保留为历史证据，不能从其推断当前行为。当前 Host 实现 status 与 snapshot-backed Object/Type 列表查询；集合查询复用 Host 索引，使用 full path 和 generation/query-bound cursor，单页上限 128。Core 的 `ReflectionLayout` 已验证完整字段集与 `UStruct` 尺寸/对齐，`ReflectionLayoutCapture` 进一步约束逐字段 source step、同线程最终验证、依赖复核、原子发布和可 drain 生命周期；layout 与 codec 分阶段原子发布并分别驱动 capability。新增的 immutable `TypeSnapshotStore` 绑定 exact object generation + layout fingerprint，要求完整 type/function 覆盖、deep-frozen descriptor、direct/inherited 显式语义、真实 CDO handle 和有界无环 super graph。PostRender 只挂一个长期存活的 `GameThreadFrameScheduler`，Snapshot 及后续 reflection/type/watch collector 通过 8-client、32-unit、4-unit quantum、2ms 截止的公平调度层接入；错误 pump thread 不再派发领域工作。Object Snapshot 使用分段记录、逐条 publication validation 和固定容量 Worker retirement，最终帧不再连续分配/扫描/析构整代记录。production 尚无真实 UE reflection/type candidate source，capture client 也未在 Main 附加，详细 type command 亦未注册，因此相关 capability 仍关闭。Memory/Call/World/Watch/Hook/Blueprint/Dump 等命令明确返回 capability unavailable，继续进入 R5 领域正确性阶段。UE 版本、GC、PostRender/Hook、目标规模与卸载证据仍属于 R7，不由通用进程 fixture 代替。功能真实性与未完成项以 `DESIGN.md` 和 `docs/issue-status.json` 为准。
+当前分支已完成 R4 原子通信切换并进入 R5.1。`CoreRuntime`、不可变 `EngineContext`/名称布局、`EngineFacade`、稳定 Handle、不可变 Snapshot/Host 索引、安全关闭边界、Named Pipe RPC、Rust `CoreRpcClient`、EventHub、多 PID `SessionManager`、`DomainService` 与 Tauri Channel bridge 已形成唯一桌面主链路。React 不再直接使用 HTTP/SSE/WebSocket；Core release project 不编译 `Dumper/Server` 或 `Dumper/API`，也不链接 WinSock。旧网络/API 源文件按“不删除”约束保留为历史证据，不能从其推断当前行为。当前 Host 实现 status 与 snapshot-backed Object/Type 列表查询；集合查询复用 Host 索引，使用 full path 和 generation/query-bound cursor，单页上限 128。Core 的 `ObjectSnapshotReflectionCandidateSource` 已从单代 immutable Object Snapshot 和 SafeMemory 构造完整 UProperty/FProperty witness，并由 Main 接入共享 `ReflectionLayoutCapture`/PostRender scheduler；只有 canonical fixture、immutable property-system profile、完整字段和依赖复核全部成立才原子发布 layout。capture 期间暂停周期 snapshot 替换，终态 quiet-detach 并释放大 snapshot plan，失败只在新 generation 重试。layout 与 codec 仍分阶段发布并分别驱动 capability。新增的 immutable `TypeSnapshotStore` 绑定 exact object generation + layout fingerprint，要求完整 type/function 覆盖、deep-frozen descriptor、direct/inherited 显式语义、真实 CDO handle 和有界无环 super graph。PostRender 只挂一个长期存活的 `GameThreadFrameScheduler`，Snapshot、reflection 及后续 type/watch collector 通过 8-client、32-unit、4-unit quantum、2ms 截止的公平调度层接入；错误 pump thread 不再派发领域工作。Object Snapshot 使用分段记录、逐条 publication validation 和固定容量 Worker retirement，最终帧不再连续分配/扫描/析构整代记录。生产 PropertyCodec/type candidate source 和详细 type command 仍未实现；真实 UE reflection profile 也没有目标 fixture，所以支持矩阵不变。Memory/Call/World/Watch/Hook/Blueprint/Dump 等命令明确返回 capability unavailable，继续进入 R5 领域正确性阶段。UE 版本、GC、PostRender/Hook、目标规模与卸载证据仍属于 R7，不由通用进程 fixture 代替。功能真实性与未完成项以 `DESIGN.md` 和 `docs/issue-status.json` 为准。
 
 ---
 
@@ -62,6 +62,7 @@ UExplorer/
 │   │   ├── PropertyCodec.h/.cpp      #   显式状态、完整 profile、稳定句柄与精确值树预算
 │   │   ├── ReflectionLayout.h/.cpp   #   U/FProperty 字段 witness、尺寸边界与分阶段原子 snapshot
 │   │   ├── ReflectionLayoutCapture.* #   单条 evidence/预检预算、依赖复核、同线程发布与 drain owner
+│   │   ├── ObjectSnapshotReflectionCandidateSource.* # snapshot + SafeMemory 的生产反射候选源
 │   │   ├── TypeSnapshot.h/.cpp       #   完整类型覆盖、冻结 descriptor、继承/CDO 语义
 │   │   ├── EngineVersionProbe.h/.cpp #   只扫描已验证 PE 可读节的版本标记探测
 │   │   ├── EngineSnapshot.h/.cpp     #   分段记录、validated publish、旧代 Worker retirement
@@ -245,7 +246,7 @@ React pages -> api/client.ts -> Tauri invoke / Channel
                                   v
 Main.cpp -> NamedPipeRpcServer -> CoreCommandService -> EngineFacade
     |                                      |               |
-    +-> PostRenderHook -> GameThreadExecutor -> FrameScheduler -> Snapshot / future collectors
+    +-> PostRenderHook -> GameThreadExecutor -> FrameScheduler -> Snapshot / Reflection capture
     +-> CoreRuntime / CapabilityRegistry                  SafeMemory / PropertyCodec
     +-> Generator / Engine / Platform
 ```
@@ -269,24 +270,29 @@ DllMain(DLL_PROCESS_ATTACH)
        │   └─ Off::InitPostRender_Windows() 定位 PostRender VTable
        │
        ├─ Publish EngineContext / EngineFacade / CoreCommandService
+       ├─ Create ObjectSnapshotReflectionCandidateSource from immutable Context
        ├─ NamedPipeRpcServer::Start()      绑定 PID-scoped Pipe，尚未开放 admission
        ├─ PostRenderHook::Install()        安装生产 game-thread pump
        ├─ AttachFrameClient()              Backend 接入唯一 FrameScheduler
-       ├─ FrameScheduler::AttachClient()   按能力接入 snapshot producer
+       ├─ FrameScheduler::AttachClient()   接入 snapshot producer
        ├─ Publish capabilities / Ready
-       └─ OpenAdmissions()                 仅在事实 Ready 后接收 Host
+       ├─ OpenAdmissions()                 仅在事实 Ready 后接收 Host
+       └─ [稳定 Object Snapshot generation]
+           └─ Prepare/attach witnessed reflection capture；终态 detach/release
        │
        └─ [Host Shutdown RPC 或当前 legacy F6 触发退出]
             ├─ Stop Named Pipe / settle requests
             ├─ Restore PostRender Hook
-            ├─ Detach snapshot client / FrameScheduler / stop facade
+            ├─ Detach reflection/snapshot clients / FrameScheduler / stop facade
             ├─ Drain CoreRuntime request leases
             └─ 安全性可证明时 FreeLibraryAndExitThread()
 ```
 
 `Off::InitReflection()`、GWorld/GEngine/FText/PropertySizes 探测和
-`Generator::InitInternal()` 不属于基础启动；它们只能由后续具备能力 witness、
-游戏线程约束和独立失败状态的领域/生成任务显式激活。当前 release 未开放该入口。
+`Generator::InitInternal()` 不属于基础启动；当前 release 不开放旧反射入口。
+ReflectionLayout 由上述 immutable snapshot + SafeMemory 候选源独立采集，不会
+回退到 legacy 全局 offset 初始化。其余可选领域只能由具备 capability witness、
+游戏线程约束和独立失败状态的领域/生成任务显式激活。
 
 ### 3.3 Engine 层内部依赖
 

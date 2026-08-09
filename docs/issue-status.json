@@ -55,6 +55,7 @@
 	  "verification": [
 		"2026-08-09: DESIGN uses evidence-driven R0-R7 status and explicitly lists disabled/unverified capabilities",
 		"2026-08-09: DESIGN, README, PROJECT_MAP, and AGENTS now describe the completed R4 Tauri/Named-Pipe-only desktop boundary and label retained HTTP/API material as non-release history",
+		"2026-08-10: DESIGN, README, PROJECT_MAP, AGENTS, and SUPPORT_MATRIX now distinguish the attached production reflection source from still-missing target-profile, PropertyCodec, and type-capture evidence",
 		"R5 domain behavior and final R7 target evidence still require documentation reconciliation"
 	  ]
 	},
@@ -82,6 +83,7 @@
 		"2026-08-10: GameThreadFrameScheduler replaces the exclusive domain frame slot with one backend-owned, eight-client bounded scheduler; per-client pointer withdrawal and callback barriers preserve explicit lifetime ownership",
 		"2026-08-10: production EngineSnapshot publication now uses an unforgeable validated token, segmented records, atomic ownership transfer, and fixed-capacity worker reclamation instead of a final game-thread O(N) scan/allocation/destruction",
 		"2026-08-10: EngineFacade now owns a drainable ReflectionLayoutCapture; capture exclusively owns the mutable candidate, sources return at most one bounded same-field evidence per work unit, and dependency revalidation, same-thread validation, and atomic publication reject partial, mutated, or changed evidence",
+		"2026-08-10: ObjectSnapshotReflectionCandidateSource is the production immutable-snapshot/SafeMemory boundary for complete UProperty/FProperty evidence; Main owns its scheduler attachment, snapshot-refresh exclusion, terminal plan release, diagnostics, and shutdown drain",
 		"2026-08-09: Rust DomainService and the split TypeScript Tauri client replace the frontend REST/SSE/WebSocket/configuration monolith at the process boundary",
         "Remaining legacy domain/API monoliths and direct Off/Settings consumers still require migration"
       ]
@@ -300,7 +302,8 @@
 		"2026-08-09: FFieldClass::CastFlags no longer returns guessed 0x10 and DataTable::RowMap no longer derives a layout from UObject::Outer when reflection evidence is absent",
 		"2026-08-10: ReflectionLayout now rejects partial, overlapping, record-size-inconsistent, unreadable, semantically invalid, or wrong-name UProperty/FProperty field sets and publishes no partial layout",
 		"2026-08-10: UStruct PropertiesSize and MinAlignment are required witnessed int32 fields rather than implicit legacy globals or the legacy int16 MinAlignment truncation; type metadata and value-codec readiness now have separate fail-closed capabilities",
-		"Remaining hard-coded FField/FName/property-size layouts must still be replaced or semantically validated before this issue can be verified"
+		"2026-08-10: the production reflection source semantically discovers all 22 UProperty or 25 FProperty fields from exact object/name/value relationships without importing legacy Off, Settings, ObjectArray, NameArray, or Unreal enum state",
+		"Real target profiles plus remaining non-reflection hard-coded FName/value-codec layouts must still be replaced or semantically validated before this issue can be verified"
 	  ]
 	},
 	"OFF-002": {
@@ -314,8 +317,9 @@
 		"2026-08-09: offset reports now expose confidence and candidate offsets; GWorld/GEngine reports preserve every observed module-relative candidate and the full validation checklist",
 		"2026-08-09: ProcessEvent discovery now reads the first-object VTable and manual slot through SafeMemory, bounds the VTable index, and rejects module offsets that do not fit the published int32 contract",
 		"2026-08-09: Off::InitRuntime is now separate from explicit Off::InitReflection; optional UStruct/property offsets no longer block EngineContext publication, and engine.reflection remains unavailable without a semantic witness plus a complete immutable offset set",
-		"2026-08-10: every required ReflectionLayout field carries source, structural checks, semantic witness IDs and a stable failure; successful layouts freeze context generation, validation thread and fingerprint, while production remains unavailable without a target candidate source",
+		"2026-08-10: every required ReflectionLayout field carries source, structural checks, unique semantic witness IDs and a stable failure; successful layouts freeze context generation, validation thread and fingerprint",
 		"2026-08-10: ReflectionRuntimeSnapshot publishes the witnessed layout first and only atomically upgrades with a fingerprint-matched codec, so engine.reflection cannot be forged by codec booleans or blocked by unrelated value layouts",
+		"2026-08-10: the production source requires one complete immutable object generation, exact canonical fixtures, a property-system match, stable SafeMemory reads, bounded field chains, and dependency revalidation before publishing; status commands expose preparation/source/validation failures",
         "Required offset validation blocks context publication; candidate lists and deeper semantic validation remain incomplete"
       ]
     },
@@ -365,7 +369,7 @@
         "2026-08-09: IGameThreadPump and the explicit PostRenderPumpBackend move pump ownership out of API code",
 		"2026-08-10: PostRenderPumpBackend now refuses all frame-client dispatch unless IsCurrentPumpThread() remains true; the harness reproduces a second-thread tick and proves zero domain callbacks after mismatch",
 		"2026-08-10: the backend owns one detachable GameThreadFrameScheduler; it round-robins at most eight clients under a shared 32-work-unit/2ms frame bound, detects 0-progress and budget-contract violations, and independently withdraws/quiet-drains every client",
-		"2026-08-10: ReflectionLayoutCapture implements the next scheduler client contract with exact work accounting, single-owner requests, concurrent-pump rejection, callback-barrier drain, and separate Begin/field/validate/publish units; production source attachment remains pending",
+		"2026-08-10: ReflectionLayoutCapture implements exact work accounting, single-owner requests, concurrent-pump rejection, callback-barrier drain, and separate Begin/field/validate/publish units; Main now attaches the production source to the shared scheduler, excludes object-generation replacement while active, and quiet-detaches on every terminal path",
         "Live minimized/loading fixtures remain pending"
       ]
     },
@@ -424,6 +428,7 @@
 		"2026-08-09: production snapshot metadata revalidates every referenced live object through a typed serial-backed slot and performs all field reads through SafeMemory without legacy UE wrappers",
 		"2026-08-09: the new PropertyCodec consumes only immutable descriptors/profiles and SafeMemory; its contract forbids Off, Settings, ObjectArray, legacy UE wrappers, and IsBadReadPtr; FString content/header and recursive container reads have explicit coherence/cycle guards",
 		"2026-08-10: reflection metadata validation uses only immutable EngineNameCodec plus SafeMemory stable reads; scalar, pointer, and FName witnesses are required before a layout can be frozen",
+		"2026-08-10: the production reflection candidate source follows the same boundary, uses stable handles and checked name/field chains, and is contract-checked against legacy global/wrapper imports",
         "Legacy object/world route reads still contain direct live-memory traversal and require snapshot/codec migration"
       ]
     },
@@ -464,6 +469,7 @@
 		"2026-08-09: PropertyCodec validates full array/sparse ranges, header/content coherence, allocation bits, address/multiplication overflow, disjoint layout fields, recursion depth, exact output-node count including Map/Set wrappers, and descriptor/address cycles",
 		"2026-08-10: TypeSnapshot deep-clones descriptor DAGs with node/depth/field limits, rejects descriptor cycles, checks every property/parameter range against the witnessed owner size, and rejects hierarchy cycles/depth overflow",
 		"2026-08-10: production object snapshot completion no longer performs a contiguous vector allocation or second record scan; old and failed generations are retained under bounded retirement until worker-thread reclamation",
+		"2026-08-10: reflection discovery processes one outer offset per source step and at most eight FField nodes per step with a 512-node owner-chain/cycle bound; the capture hard cap is 4096 steps",
 		"Real reflection descriptors and target-scale container fixtures remain pending"
 	  ]
 	},

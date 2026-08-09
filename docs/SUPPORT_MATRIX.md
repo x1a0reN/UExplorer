@@ -48,25 +48,27 @@ latency remain unverified until the R7 UE fixtures exist.
 
 The generic Core harness now exercises a synthetic, explicitly validated x64 property
 profile for scalar, FName/FString/FText, object/weak/soft reference, enum, struct,
-array, map, and set decoding. It also supplies the exact FProperty field set with
-per-field stable scalar/pointer/FName witnesses, including exact int32 UStruct property
-size and minimum alignment, then verifies generation/fingerprint binding. The candidate is
-fed through the owned `ReflectionLayoutCapture` one field at a time; the fixture verifies
-bounded work accounting, no partial visibility, dependency revalidation, source-contract
-failure, same-thread validation/publication, and drain. Layout publication and
+array, map, and set decoding. It also feeds complete UProperty and FProperty live-memory
+graphs through the production `ObjectSnapshotReflectionCandidateSource`, including exact
+int32 UStruct property size/minimum alignment and per-field stable scalar/pointer/FName
+witnesses. The candidate enters the owned `ReflectionLayoutCapture` one field at a time;
+the fixtures verify immutable-profile mismatch, bounded offset/field-chain work, no
+partial visibility, dependency revalidation, source-contract failure, same-thread
+validation/publication, prepared-plan release, and drain. Layout publication and
 the fingerprint-matched codec upgrade replace the same immutable reflection runtime
 snapshot atomically, while reflection and property-codec capabilities remain independent. This proves
-validator, codec-boundary, and result-state behavior only; it is not evidence that the
-same offsets/layouts apply to any engine row above. Production remains unavailable until
-a target-specific candidate/witness source passes the same boundary and is attached to the
-runtime scheduler.
+validator, production-source boundary, and result-state behavior only; it is not evidence
+that the same offsets/layouts apply to any engine row above. The production source is
+attached to the runtime scheduler and fails closed when its exact fixtures or witnesses
+do not match, but no engine row can become supported until the same path passes that
+row's target-process fixture.
 
 The generic harness also publishes a synthetic immutable type snapshot only after exact
 Class/Struct/Enum and Function coverage matches one object-snapshot generation. It proves
 deep-frozen descriptor graphs, bounded property/parameter ranges, explicit direct versus
 inherited member order, exact CDO handle/class matching, hierarchy cycle/depth rejection,
-and stale-generation capability closure. It does not provide a production reflection or
-type capture source and therefore does not change any support row.
+and stale-generation capability closure. It does not provide a production type capture
+source or target-process reflection evidence and therefore does not change any support row.
 
 ## Generic boundary evidence (not an engine support claim)
 

@@ -54,6 +54,10 @@ $propertyCodecHeader = Read-ProjectFile 'Dumper\Runtime\PropertyCodec.h'
 $propertyCodec = Read-ProjectFile 'Dumper\Runtime\PropertyCodec.cpp'
 $reflectionLayoutHeader = Read-ProjectFile 'Dumper\Runtime\ReflectionLayout.h'
 $reflectionLayout = Read-ProjectFile 'Dumper\Runtime\ReflectionLayout.cpp'
+$reflectionCaptureHeader = Read-ProjectFile 'Dumper\Runtime\ReflectionLayoutCapture.h'
+$reflectionCapture = Read-ProjectFile 'Dumper\Runtime\ReflectionLayoutCapture.cpp'
+$reflectionSourceHeader = Read-ProjectFile 'Dumper\Runtime\ObjectSnapshotReflectionCandidateSource.h'
+$reflectionSource = Read-ProjectFile 'Dumper\Runtime\ObjectSnapshotReflectionCandidateSource.cpp'
 $typeSnapshotHeader = Read-ProjectFile 'Dumper\Runtime\TypeSnapshot.h'
 $typeSnapshot = Read-ProjectFile 'Dumper\Runtime\TypeSnapshot.cpp'
 $callbackBarrier = Read-ProjectFile 'Dumper\Runtime\CallbackBarrier.h'
@@ -280,6 +284,22 @@ foreach ($token in @('Off::', 'Settings::', 'ObjectArray::', '#include "Unreal/'
 		'Platform::IsBadReadPtr')) {
 	Assert-NotContains $reflectionLayout $token 'Reflection layout validation bypassed SafeMemory or immutable profiles.'
 }
+foreach ($token in @('IReflectionCandidateSource', 'kMaxSourceSteps = 4096',
+		'CaptureNext()', 'ValidateDependencies()', 'm_Source.Cancel()',
+		'SourceContractViolation', 'StopAndDrain')) {
+	Assert-Contains ($reflectionCaptureHeader + $reflectionCapture) $token 'Bounded reflection capture ownership regressed.'
+}
+foreach ($token in @('ObjectSnapshotReflectionCandidateSource', 'Prepare() noexcept',
+		'ReleasePreparedPlan', 'PropertySystemMismatch', 'kOffsetCandidatesPerStep = 1',
+		'kMaximumFieldChainDepth = 512', 'ReadStable', 'ValidateObjectHandle',
+		'ValidateRelations', 'BuildEvidence', 'ValidateDependencies',
+		'/Script/CoreUObject.Guid', '/Script/Engine.GameViewportClient')) {
+	Assert-Contains ($reflectionSourceHeader + $reflectionSource) $token 'Production reflection source evidence boundary regressed.'
+}
+foreach ($token in @('Off::', 'Settings::', 'ObjectArray::', 'NameArray::',
+		'#include "Unreal/', 'UEObject ', 'UEStruct ', 'UEProperty ')) {
+	Assert-NotContains $reflectionSource $token 'Production reflection discovery reached mutable legacy wrappers or offsets.'
+}
 foreach ($token in @('TypeSnapshotCandidate', 'TypeSnapshotStore',
 		'ReflectedMemberState', 'ClassDefaultObjectState', 'TypeMemberScope',
 		'QueryTypeProperties', 'QueryTypeFunctions', 'DescriptorCycle',
@@ -308,6 +328,16 @@ foreach ($token in @('std::shared_ptr<const ReflectionRuntimeSnapshot> Reflectio
 }
 foreach ($token in @('ReflectionLayoutValidated', 'PropertyCodecEnabled')) {
 	Assert-NotContains $capabilities $token 'A forgeable reflection boolean probe reopened the capability path.'
+}
+foreach ($token in @('DriveReflectionDiscovery', 'ReflectionCaptureBlocksSnapshotRefresh',
+		'g_ReflectionFrameClientAttached', 'DetachReflectionFrameClient',
+		'ObjectSnapshotReflectionCandidateSource',
+		'shutdown.AddStage("reflection_frame_client"')) {
+	Assert-Contains $main $token 'Main no longer owns the production reflection/snapshot exclusion lifecycle.'
+}
+foreach ($token in @('SerializeReflectionDiagnostics', 'preparation_error_code',
+		'validation_error_code', 'prepared_snapshot_generation', 'layout_fingerprint')) {
+	Assert-Contains $commandService $token 'Reflection preparation/capture diagnostics are no longer observable.'
 }
 foreach ($token in @('EngineSnapshotObject', 'SessionId', 'ContextGeneration', 'Generation',
 		'SourceObjectCount', 'SkippedSlots', 'std::deque<EngineSnapshotObject>',
@@ -393,6 +423,10 @@ foreach ($token in @('TestEngineContextAndCapabilities', 'TestCoreRuntimeStateAn
 		'TestEngineNameCodec', 'Invalid UTF-8 FName entry was accepted',
 		'TestPropertyCodec', 'Property value states are not explicit and stable',
 		'TestReflectionLayout', 'A partial reflection field set was accepted',
+		'TestObjectSnapshotReflectionCandidateSource',
+		'TestFPropertySnapshotReflectionCandidateSource',
+		'Production reflection source did not publish the witnessed immutable layout',
+		'FProperty reflection source did not publish the witnessed layout',
 		'A non-power-of-two UStruct minimum alignment was accepted',
 		'Layout-only reflection publication was not immutable or fingerprint-bound',
 		'A validated layout did not open reflection independently from property decoding',

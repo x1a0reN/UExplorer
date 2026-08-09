@@ -1,5 +1,7 @@
 #include "CoreCommandService.h"
 
+#include "Runtime/ObjectSnapshotReflectionCandidateSource.h"
+
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
@@ -138,6 +140,87 @@ json SerializeSnapshotDiagnostics(const Runtime::EngineFacade& engine)
 	else
 	{
 		data["capture"] = nullptr;
+	}
+	return data;
+}
+
+json SerializeReflectionDiagnostics(
+	const Runtime::EngineFacade& engine,
+	const Runtime::ObjectSnapshotReflectionCandidateSource* source)
+{
+	const std::shared_ptr<const Runtime::ReflectionRuntimeSnapshot> reflection =
+		engine.Reflection();
+	json data = {
+		{"layout_published", reflection && reflection->Layout},
+		{"property_codec_published", reflection && reflection->Properties}
+	};
+	if (reflection && reflection->Layout)
+	{
+		data["property_system"] = Runtime::ToString(
+			reflection->Layout->PropertySystem());
+		data["layout_fingerprint"] = std::format(
+			"0x{:016X}", reflection->Layout->Fingerprint());
+	}
+	else
+	{
+		data["property_system"] = nullptr;
+		data["layout_fingerprint"] = nullptr;
+	}
+
+	const Runtime::ReflectionLayoutCapture* capture = engine.ReflectionCapture();
+	data["capture_configured"] = capture != nullptr;
+	if (capture)
+	{
+		const Runtime::ReflectionLayoutCaptureDiagnostics diagnostics =
+			capture->Diagnostics();
+		data["capture"] = {
+			{"state", Runtime::ToString(diagnostics.State)},
+			{"error_code", diagnostics.Error == Runtime::ReflectionLayoutCaptureError::None
+				? json(nullptr)
+				: json(Runtime::ToString(diagnostics.Error))},
+			{"source_error_code", diagnostics.SourceError
+					== Runtime::ReflectionCandidateSourceError::None
+				? json(nullptr)
+				: json(Runtime::ToString(diagnostics.SourceError))},
+			{"validation_error_code", diagnostics.ValidationError
+					== Runtime::ReflectionValidationError::None
+				? json(nullptr)
+				: json(Runtime::ToString(diagnostics.ValidationError))},
+			{"captured_fields", diagnostics.CapturedFields},
+			{"captured_witnesses", diagnostics.CapturedWitnesses},
+			{"source_steps", diagnostics.SourceSteps},
+			{"pump_in_flight", diagnostics.PumpInFlight}
+		};
+	}
+	else
+	{
+		data["capture"] = nullptr;
+	}
+
+	if (source)
+	{
+		const Runtime::ObjectSnapshotReflectionSourceDiagnostics diagnostics =
+			source->Diagnostics();
+		data["source"] = {
+			{"preparation_error_code", diagnostics.PreparationError
+					== Runtime::ReflectionCandidatePreparationError::None
+				? json(nullptr)
+				: json(Runtime::ToString(diagnostics.PreparationError))},
+			{"source_error_code", diagnostics.SourceError
+					== Runtime::ReflectionCandidateSourceError::None
+				? json(nullptr)
+				: json(Runtime::ToString(diagnostics.SourceError))},
+			{"prepared_snapshot_generation", diagnostics.PreparedSnapshotGeneration},
+			{"property_system", Runtime::ToString(diagnostics.PropertySystem)},
+			{"discovery_phase", diagnostics.DiscoveryPhase},
+			{"source_steps", diagnostics.SourceSteps},
+			{"emitted_fields", diagnostics.EmittedFields},
+			{"active", diagnostics.Active}
+		};
+	}
+	else
+	{
+		data["source"] = nullptr;
 	}
 	return data;
 }
@@ -437,11 +520,13 @@ CoreCommandService::CoreCommandService(
 	Runtime::CoreRuntime& runtime,
 	Runtime::GameThreadExecutor& gameThread,
 	Runtime::EngineFacade& engine,
-	ICoreStatusDiagnosticsSource& statusDiagnostics)
+	ICoreStatusDiagnosticsSource& statusDiagnostics,
+	const Runtime::ObjectSnapshotReflectionCandidateSource* reflectionSource)
 	: m_Runtime(runtime),
 	  m_GameThread(gameThread),
 	  m_Engine(engine),
-	  m_StatusDiagnostics(statusDiagnostics)
+	  m_StatusDiagnostics(statusDiagnostics),
+	  m_ReflectionSource(reflectionSource)
 {
 	const Runtime::CoreRuntimeSnapshot snapshot = m_Runtime.Snapshot();
 	m_SessionId = snapshot.SessionId;
@@ -455,7 +540,9 @@ bool CoreCommandService::IsConfigured() const noexcept
 		&& m_ContextGeneration != 0
 		&& m_Engine.IsConfigured()
 		&& m_Engine.SessionId() == m_SessionId
-		&& m_Engine.ContextGeneration() == m_ContextGeneration;
+		&& m_Engine.ContextGeneration() == m_ContextGeneration
+		&& (!m_ReflectionSource
+			|| m_ReflectionSource->ContextGeneration() == m_ContextGeneration);
 }
 
 CoreCommandResponse CoreCommandService::Execute(
@@ -695,6 +782,8 @@ CoreCommandResponse CoreCommandService::ExecuteStatus(const CoreCommandRequest& 
 		data["alive"] = snapshot.IsLive();
 		data["game_thread"] = SerializeGameThreadDiagnostics(m_GameThread);
 		data["object_snapshot"] = SerializeSnapshotDiagnostics(m_Engine);
+		data["reflection"] = SerializeReflectionDiagnostics(
+			m_Engine, m_ReflectionSource);
 		return Success(request, std::move(data), {.ExecuteUs = ElapsedMicroseconds(started)});
 	}
 	if (!snapshot.Context)
@@ -718,6 +807,8 @@ CoreCommandResponse CoreCommandService::ExecuteStatus(const CoreCommandRequest& 
 		data["capabilities"] = SerializeCapabilities(snapshot);
 		data["game_thread"] = SerializeGameThreadDiagnostics(m_GameThread);
 		data["object_snapshot"] = SerializeSnapshotDiagnostics(m_Engine);
+		data["reflection"] = SerializeReflectionDiagnostics(
+			m_Engine, m_ReflectionSource);
 		return Success(request, std::move(data), {.ExecuteUs = ElapsedMicroseconds(started)});
 	}
 
@@ -763,6 +854,8 @@ CoreCommandResponse CoreCommandService::ExecuteStatus(const CoreCommandRequest& 
 	data["capabilities"] = SerializeCapabilities(snapshot);
 	data["game_thread"] = SerializeGameThreadDiagnostics(m_GameThread);
 	data["object_snapshot"] = SerializeSnapshotDiagnostics(m_Engine);
+	data["reflection"] = SerializeReflectionDiagnostics(
+		m_Engine, m_ReflectionSource);
 	return Success(request, std::move(data), {.ExecuteUs = ElapsedMicroseconds(started)});
 }
 
