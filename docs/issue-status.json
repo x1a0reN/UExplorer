@@ -225,6 +225,14 @@
 		"The incorrect x86 FindStringInRange branch was removed; project and CI matrices expose x64 configurations only"
 	  ]
 	},
+	"OFF-001": {
+	  "status": "in_progress",
+	  "verification": [
+		"2026-08-09: the four original OverwriteIfInvalidOffset property-offset substitutions were removed and required property offsets now fail initialization instead of inheriting PropertySize",
+		"2026-08-09: FFieldClass::CastFlags no longer returns guessed 0x10 and DataTable::RowMap no longer derives a layout from UObject::Outer when reflection evidence is absent",
+		"Remaining hard-coded FField/FName/property-size layouts must still be replaced or semantically validated before this issue can be verified"
+	  ]
+	},
     "OFF-002": {
       "status": "in_progress",
       "verification": [
@@ -233,9 +241,19 @@
         "2026-08-09: FName size/comparison/number and UClass cast-flags now have bounded validation reports and are frozen into the handle identity context",
 		"2026-08-09: initialized NamePool/chunked-array addresses and entry fields are frozen into EngineNameProfile and require index zero to decode exactly as None before engine.names is available",
 		"2026-08-09: production object snapshot metadata consumes only the frozen UObject index/class/name/outer and UClass cast-flags profile; runtime source code is contract-checked against Off/Settings access",
+		"2026-08-09: offset reports now expose confidence and candidate offsets; GWorld/GEngine reports preserve every observed module-relative candidate and the full validation checklist",
+		"2026-08-09: ProcessEvent discovery now reads the first-object VTable and manual slot through SafeMemory, bounds the VTable index, and rejects module offsets that do not fit the published int32 contract",
         "Required offset validation blocks context publication; candidate lists and deeper semantic validation remain incomplete"
       ]
     },
+	"OFF-003": {
+	  "status": "in_progress",
+	  "verification": [
+		"2026-08-09: GWorld and GEngine aggregate candidates instead of selecting a first result or using the former GActiveLogWorld timing heuristic",
+		"A candidate now requires an object-array/type witness, a writable non-executable main-image slot, two checked stable reads, an exact target cross-reference, and uniqueness; ambiguity returns GLOBAL_POINTER_CANDIDATES_AMBIGUOUS",
+		"CoreHarness covers unique, duplicate, ambiguous, executable-section, and unstable candidates; a real injected-target fixture is still required"
+	  ]
+	},
     "GT-001": {
       "status": "verified",
       "verification": [

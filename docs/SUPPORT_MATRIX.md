@@ -17,7 +17,8 @@ fails at compile time; there is no 32-bit runtime capability or fallback path.
 Each fixture must record:
 
 1. Exact engine version and executable identity.
-2. Expected GObjects, GNames/FNamePool, GWorld, ProcessEvent, and critical offsets.
+2. Expected GObjects, GNames/FNamePool, ProcessEvent, and critical offsets; GWorld/GEngine
+   must also prove one unique writable data-slot candidate with stable typed object-array witnesses.
 3. Stable object/function handles including session, context generation, index,
    serial, address, class/owner, path, and signature validation.
 4. Representative scalar, string, object, struct, array, map, set, delegate, soft

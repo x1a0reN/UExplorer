@@ -22,6 +22,7 @@ jobs:
           ./tests/contracts/verify-core-safety.ps1
           ./tests/contracts/verify-core-runtime.ps1
           ./tests/contracts/verify-platform-safety.ps1
+          ./tests/contracts/verify-offset-discovery.ps1
           Get-Content ./protocol/v1/protocol.json -Raw -Encoding UTF8 | ConvertFrom-Json | Out-Null
           Get-Content ./protocol/v1/schema/payload.schema.json -Raw -Encoding UTF8 | ConvertFrom-Json | Out-Null
 

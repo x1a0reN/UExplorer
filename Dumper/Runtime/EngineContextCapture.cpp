@@ -1,6 +1,7 @@
 #include "EngineContextCapture.h"
 
 #include "EngineNameCodec.h"
+#include "OffsetFinder/OffsetDiscovery.h"
 #include "OffsetFinder/OffsetFinder.h"
 #include "OffsetFinder/Offsets.h"
 #include "Settings.h"
@@ -9,6 +10,7 @@
 
 #include <Windows.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <utility>
@@ -38,6 +40,7 @@ OffsetReport MakeOffsetReport(
 		.Source = std::move(source),
 		.Checks = std::move(checks)
 	};
+	report.Confidence = validated ? "medium" : (discovered ? "low" : "none");
 	if (!validated)
 	{
 		report.ReasonCode = discovered ? "OFFSET_VALIDATION_FAILED" : "OFFSET_NOT_FOUND";
@@ -84,6 +87,44 @@ OffsetReport VTableIndex(
 	return MakeOffsetReport(
 		std::move(name), value, required, discovered, validated, std::move(source),
 		{"positive_vtable_index", "vtable_index_at_most_512"});
+}
+
+OffsetReport GlobalPointerOffset(
+	std::string name,
+	const std::int32_t value,
+	const bool required,
+	const OffsetFinder::GlobalPointerDiscoveryReport& discovery)
+{
+	const bool discovered = !discovery.Candidates.empty();
+	const bool validated = discovery.Ok()
+		&& value == discovery.SelectedOffset;
+	OffsetReport report = MakeOffsetReport(
+		std::move(name),
+		value,
+		required,
+		discovered,
+		validated,
+		discovery.Source,
+		discovery.Checks);
+	for (const OffsetFinder::GlobalPointerCandidateEvidence& candidate : discovery.Candidates)
+	{
+		if (candidate.ModuleOffset < 0
+			|| std::ranges::find(report.Candidates, candidate.ModuleOffset)
+				!= report.Candidates.end())
+		{
+			continue;
+		}
+		report.Candidates.push_back(candidate.ModuleOffset);
+	}
+	report.Confidence = discovery.Confidence;
+	if (!validated)
+	{
+		report.ReasonCode = OffsetFinder::ToString(discovery.Error);
+		report.Reason = discovery.Error == OffsetFinder::GlobalPointerDiscoveryError::AmbiguousCandidates
+			? "More than one stable, typed module-data cross-reference remained"
+			: "No unique stable, typed module-data cross-reference passed validation";
+	}
+	return report;
 }
 
 EngineNameProfile CaptureNameProfile()
@@ -240,8 +281,16 @@ std::shared_ptr<const EngineContext> CaptureEngineContext(const std::uint64_t ge
 		"runtime_name_layout",
 		{"non_negative_field_offset", "field_within_fname"}));
 	builder.AddOffset(ModuleOffset("gnames", Off::InSDK::NameArray::GNames, false, "name_array_scan"));
-	builder.AddOffset(ModuleOffset("gworld", Off::InSDK::World::GWorld, false, "reference_scan"));
-	builder.AddOffset(ModuleOffset("gengine", Off::InSDK::Engine::GEngine, false, "reference_scan"));
+	builder.AddOffset(GlobalPointerOffset(
+		"gworld",
+		Off::InSDK::World::GWorld,
+		false,
+		Off::InSDK::World::GetDiscoveryReport()));
+	builder.AddOffset(GlobalPointerOffset(
+		"gengine",
+		Off::InSDK::Engine::GEngine,
+		false,
+		Off::InSDK::Engine::GetDiscoveryReport()));
 
 	builder.AddOffset(MemberOffset("uobject.flags", Off::UObject::Flags, true));
 	builder.AddOffset(MemberOffset("uobject.index", Off::UObject::Index, true));

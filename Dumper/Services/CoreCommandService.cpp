@@ -173,6 +173,8 @@ json SerializeOffsetReports(const Runtime::EngineContext& context)
 			{"required", report.Required},
 			{"state", Runtime::ToString(report.State)},
 			{"source", report.Source},
+			{"confidence", report.Confidence},
+			{"candidates", report.Candidates},
 			{"checks", report.Checks},
 			{"reason_code", report.ReasonCode.empty() ? json(nullptr) : json(report.ReasonCode)},
 			{"reason", report.Reason.empty() ? json(nullptr) : json(report.Reason)}

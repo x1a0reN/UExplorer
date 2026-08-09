@@ -36,6 +36,7 @@ struct PeSectionView
 
 	std::string_view NameView() const noexcept;
 	bool IsReadable() const noexcept;
+	bool IsWritable() const noexcept;
 	bool IsExecutable() const noexcept;
 };
 

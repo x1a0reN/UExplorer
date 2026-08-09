@@ -96,6 +96,7 @@ UExplorer/
 │   │   │   ├── ObjectArray.h         #   GObjects 遍历 (ObjectArray, ObjectsIterator, AllFieldIterator)
 │   │   │   └── NameArray.h           #   GNames 解析 (NameArray, FNameEntry)
 │   │   ├── Public/OffsetFinder/
+│   │   │   ├── OffsetDiscovery.h     #   GWorld/GEngine 候选证据与唯一性错误模型
 │   │   │   ├── Offsets.h             #   Off::* 全部偏移定义 (30+ 命名空间)
 │   │   │   └── OffsetFinder.h        #   自动偏移探测函数 (FindUObjectClassOffset 等)
 │   │   ├── Public/Blueprint/
@@ -103,7 +104,7 @@ UExplorer/
 │   │   │   └── BlueprintDecompiler.h #   字节码反编译器 (Decompile/ParseExpression)
 │   │   └── Private/                  #   对应 .cpp 实现
 │   │       ├── Blueprint/BlueprintDecompiler.cpp
-│   │       ├── OffsetFinder/OffsetFinder.cpp, Offsets.cpp
+│   │       ├── OffsetFinder/OffsetDiscovery.cpp, OffsetFinder.cpp, Offsets.cpp
 │   │       └── Unreal/NameArray.cpp, ObjectArray.cpp, UnrealObjects.cpp, UnrealTypes.cpp
 │   │
 │   ├── Generator/                     ★ SDK 生成器（源自 Dumper-7）

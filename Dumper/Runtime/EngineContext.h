@@ -42,6 +42,8 @@ struct OffsetReport
 	std::vector<std::string> Checks;
 	std::string ReasonCode;
 	std::string Reason;
+	std::vector<std::int64_t> Candidates;
+	std::string Confidence = "none";
 
 	bool IsValidated() const noexcept
 	{

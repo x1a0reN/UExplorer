@@ -87,6 +87,7 @@
   <ItemGroup>
     <!-- Engine -->
     <ClCompile Include="Engine\Private\Blueprint\BlueprintDecompiler.cpp" />
+	<ClCompile Include="Engine\Private\OffsetFinder\OffsetDiscovery.cpp" />
     <ClCompile Include="Engine\Private\OffsetFinder\OffsetFinder.cpp" />
     <ClCompile Include="Engine\Private\OffsetFinder\Offsets.cpp" />
     <ClCompile Include="Engine\Private\Unreal\NameArray.cpp" />
@@ -162,6 +163,7 @@
     <!-- Engine Headers -->
     <ClInclude Include="Engine\Public\Blueprint\BlueprintDecompiler.h" />
     <ClInclude Include="Engine\Public\Blueprint\EExprToken.h" />
+	<ClInclude Include="Engine\Public\OffsetFinder\OffsetDiscovery.h" />
     <ClInclude Include="Engine\Public\OffsetFinder\OffsetFinder.h" />
     <ClInclude Include="Engine\Public\OffsetFinder\Offsets.h" />
     <ClInclude Include="Engine\Public\Unreal\Enums.h" />

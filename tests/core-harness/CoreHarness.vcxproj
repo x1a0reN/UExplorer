@@ -44,7 +44,7 @@
       <SDLCheck>true</SDLCheck>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(ProjectDir)..\..\Dumper;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\..\Dumper;$(ProjectDir)..\..\Dumper\Engine\Public;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <AdditionalDependencies>bcrypt.lib;%(AdditionalDependencies)</AdditionalDependencies>
@@ -52,6 +52,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp" />
+	<ClCompile Include="..\..\Dumper\Engine\Private\OffsetFinder\OffsetDiscovery.cpp" />
 	<ClCompile Include="..\..\Dumper\Platform\Private\PeImage.cpp" />
 	<ClCompile Include="..\..\Dumper\Runtime\CoreSession.cpp" />
 	<ClCompile Include="..\..\Dumper\Runtime\EngineFacade.cpp" />
@@ -70,6 +71,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\Dumper\IPC\Protocol.h" />
+	<ClInclude Include="..\..\Dumper\Engine\Public\OffsetFinder\OffsetDiscovery.h" />
 	<ClInclude Include="..\..\Dumper\Platform\Public\BytePattern.h" />
 	<ClInclude Include="..\..\Dumper\Platform\Public\PeImage.h" />
     <ClInclude Include="..\..\Dumper\Runtime\BoundedQueue.h" />

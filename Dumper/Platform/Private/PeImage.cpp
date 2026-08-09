@@ -73,6 +73,11 @@ bool PeSectionView::IsReadable() const noexcept
 	return (Characteristics & IMAGE_SCN_MEM_READ) != 0;
 }
 
+bool PeSectionView::IsWritable() const noexcept
+{
+	return (Characteristics & IMAGE_SCN_MEM_WRITE) != 0;
+}
+
 bool PeSectionView::IsExecutable() const noexcept
 {
 	return (Characteristics & IMAGE_SCN_MEM_EXECUTE) != 0;

@@ -6,6 +6,7 @@
 #include <Windows.h>
 
 #include "IPC/Protocol.h"
+#include "OffsetFinder/OffsetDiscovery.h"
 #include "Platform/Public/BytePattern.h"
 #include "Platform/Public/PeImage.h"
 #include "Runtime/BoundedQueue.h"
@@ -1987,6 +1988,90 @@ namespace
 			"Unreadable PE section did not return a typed probe error");
 	}
 
+	void TestGlobalPointerDiscovery()
+	{
+		using namespace OffsetFinder;
+		using namespace UExplorer::Platform;
+
+		constexpr std::uintptr_t base = 0x140000000;
+		constexpr std::uintptr_t expected = 0x000001F000100000;
+		PeImageView image{
+			.Base = base,
+			.Size = 0x10000,
+			.Sections = {
+				{
+					.Name = {'.', 't', 'e', 'x', 't'},
+					.Address = base + 0x1000,
+					.Size = 0x1000,
+					.Characteristics = IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_EXECUTE
+				},
+				{
+					.Name = {'.', 'd', 'a', 't', 'a'},
+					.Address = base + 0x3000,
+					.Size = 0x1000,
+					.Characteristics = IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE
+				}
+			}
+		};
+
+		const GlobalPointerCandidateObservation valid{
+			.SlotAddress = base + 0x3010,
+			.ExpectedTarget = expected,
+			.FirstValue = expected,
+			.SecondValue = expected,
+			.ExpectedTargetFromObjectArray = true,
+			.ExpectedTargetTypeValidated = true,
+			.FirstReadSucceeded = true,
+			.SecondReadSucceeded = true
+		};
+		const GlobalPointerDiscoveryReport selected =
+			ResolveGlobalPointerCandidates(image, std::span(&valid, 1));
+		Require(selected.Ok()
+			&& selected.SelectedOffset == 0x3010
+			&& selected.Confidence == "high"
+			&& selected.Candidates.size() == 1
+			&& selected.Candidates.front().Accepted,
+			"Unique stable typed global-pointer candidate was rejected");
+
+		const std::array duplicate{valid, valid};
+		Require(ResolveGlobalPointerCandidates(image, duplicate).Ok(),
+			"Duplicate observations of one slot were treated as ambiguity");
+
+		GlobalPointerCandidateObservation second = valid;
+		second.SlotAddress = base + 0x3020;
+		const std::array ambiguous{valid, second};
+		Require(ResolveGlobalPointerCandidates(image, ambiguous).Error
+			== GlobalPointerDiscoveryError::AmbiguousCandidates,
+			"Multiple validated global-pointer slots did not fail closed");
+
+		GlobalPointerCandidateObservation executable = valid;
+		executable.SlotAddress = base + 0x1010;
+		const GlobalPointerDiscoveryReport executableRejected =
+			ResolveGlobalPointerCandidates(image, std::span(&executable, 1));
+		Require(executableRejected.Error == GlobalPointerDiscoveryError::NoValidatedCandidate
+			&& executableRejected.Candidates.front().RejectionCode
+				== "GLOBAL_POINTER_SLOT_NOT_WRITABLE_DATA",
+			"Executable-section pointer candidate was accepted as mutable engine state");
+
+		GlobalPointerCandidateObservation unaligned = valid;
+		unaligned.SlotAddress = base + 0x3011;
+		const GlobalPointerDiscoveryReport unalignedRejected =
+			ResolveGlobalPointerCandidates(image, std::span(&unaligned, 1));
+		Require(unalignedRejected.Error == GlobalPointerDiscoveryError::NoValidatedCandidate
+			&& unalignedRejected.Candidates.front().RejectionCode
+				== "GLOBAL_POINTER_SLOT_UNALIGNED",
+			"Unaligned global-pointer slot was accepted");
+
+		GlobalPointerCandidateObservation changed = valid;
+		changed.SecondValue = expected + 8;
+		const GlobalPointerDiscoveryReport unstable =
+			ResolveGlobalPointerCandidates(image, std::span(&changed, 1));
+		Require(unstable.Error == GlobalPointerDiscoveryError::NoValidatedCandidate
+			&& unstable.Candidates.front().RejectionCode
+				== "GLOBAL_POINTER_TARGET_UNSTABLE",
+			"Changing global-pointer candidate did not fail closed");
+	}
+
 	void TestSafeMemory()
 	{
 		using namespace UExplorer::Runtime;
@@ -2476,6 +2561,7 @@ int main(const int argc, char** argv)
 		TestFUObjectItemIdentityLayout();
 		TestBytePatternScanner();
 		TestPeImageInspectionAndEngineVersionProbe();
+		TestGlobalPointerDiscovery();
 		TestHookOwnershipAndCallbackDrain();
 		TestSafeMemory();
 		TestQueueOwnershipAndBackpressure();
@@ -2485,7 +2571,7 @@ int main(const int argc, char** argv)
 		TestPostRenderFrameClientOwnershipAndDrain();
 		TestGameThreadMpscCapacity();
 		TestHttpServerLifecycle();
-		std::cout << "Core harness passed: framing, secure sessions, runtime/capabilities, EngineFacade/immutable budgeted snapshots, domain commands, stable handles/FUObjectItem layout, bounded PE/version probing, pattern scanning, Hook RAII/drain, SafeMemory, USMAP consumer, bounded queues, cancellable owned game-thread/frame-client work, SEH, HTTP lifecycle, and shutdown.\n";
+		std::cout << "Core harness passed: framing, secure sessions, runtime/capabilities, EngineFacade/immutable budgeted snapshots, domain commands, stable handles/FUObjectItem layout, bounded PE/version/global-pointer probing, pattern scanning, Hook RAII/drain, SafeMemory, USMAP consumer, bounded queues, cancellable owned game-thread/frame-client work, SEH, HTTP lifecycle, and shutdown.\n";
 		return 0;
 	}
 	catch (const std::exception& error)

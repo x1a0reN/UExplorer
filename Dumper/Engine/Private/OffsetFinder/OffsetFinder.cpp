@@ -787,7 +787,7 @@ int32_t OffsetFinder::FindFieldClassCastFlagsOffset()
 
 	const int32_t Offset = FindOffset(Infos, sizeof(void*), 0x30);
 
-	return Offset != OffsetNotFound ? Offset : 0x10;
+	return Offset;
 }
 
 /* UEnum */
@@ -807,6 +807,9 @@ int32_t OffsetFinder::FindEnumNamesOffset()
 
 		UEnumNumValuesOffset = FindOffset(Infos);
 	}
+
+	if (UEnumNumValuesOffset == OffsetNotFound)
+		return OffsetNotFound;
 
 	InializeUEnumSettings(Infos[0].first, UEnumNumValuesOffset);
 
@@ -2221,21 +2224,18 @@ int32_t OffsetFinder::FindDatatableRowMapOffset()
 {
 	const UEClass DataTable = ObjectArray::FindClassFast("DataTable");
 
-	constexpr int32 UObjectOuterSize = sizeof(void*);
-	constexpr int32 RowStructSize = sizeof(void*);
-
 	if (!DataTable)
 	{
-		std::cerr << "\nDumper-7: [DataTable] Couldn't find \"DataTable\" class, assuming default layout.\n" << std::endl;
-		return (Off::UObject::Outer + UObjectOuterSize + RowStructSize);
+		std::cerr << "\nDumper-7: [DataTable] Couldn't find \"DataTable\" class; RowMap is unavailable.\n" << std::endl;
+		return OffsetNotFound;
 	}
 
 	UEProperty RowStructProp = DataTable.FindMember("RowStruct", EClassCastFlags::ObjectProperty);
 
 	if (!RowStructProp)
 	{
-		std::cerr << "\nDumper-7: [DataTable] Couldn't find \"RowStruct\" property, assuming default layout.\n" << std::endl;
-		return (Off::UObject::Outer + UObjectOuterSize + RowStructSize);
+		std::cerr << "\nDumper-7: [DataTable] Couldn't find \"RowStruct\" property; RowMap is unavailable.\n" << std::endl;
+		return OffsetNotFound;
 	}
 
 	return RowStructProp.GetOffset() + RowStructProp.GetSize();

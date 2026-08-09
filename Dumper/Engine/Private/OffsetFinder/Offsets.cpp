@@ -6,19 +6,147 @@
 
 #include "OffsetFinder/Offsets.h"
 #include "OffsetFinder/OffsetFinder.h"
+#include "OffsetFinder/OffsetDiscovery.h"
 
 #include "Unreal/ObjectArray.h"
 #include "Unreal/NameArray.h"
 
 #include "Platform.h"
 #include "Architecture.h"
+#include "Platform/Public/PeImage.h"
+#include "Runtime/SafeMemory.h"
+
+#include <limits>
+#include <mutex>
+#include <vector>
+
+namespace
+{
+	constexpr std::size_t MaximumGlobalPointerTargets = 32;
+	constexpr std::size_t MaximumGlobalPointerCandidates = 4096;
+
+	struct GlobalPointerDiagnostics
+	{
+		std::mutex Mutex;
+		OffsetFinder::GlobalPointerDiscoveryReport GWorld;
+		OffsetFinder::GlobalPointerDiscoveryReport GEngine;
+	};
+
+	GlobalPointerDiagnostics& GetGlobalPointerDiagnostics()
+	{
+		// First use is on MainThread, not while DllMain holds the loader lock.
+		static GlobalPointerDiagnostics Diagnostics;
+		return Diagnostics;
+	}
+
+	bool TryReadFirstObjectVTable(void**& VTable)
+	{
+		VTable = nullptr;
+		const void* FirstObject = ObjectArray::GetByIndex(0).GetAddress();
+		return FirstObject
+			&& UExplorer::Runtime::ReadValue(
+				reinterpret_cast<std::uintptr_t>(FirstObject),
+				VTable).Ok()
+			&& VTable;
+	}
+
+	bool TryNarrowModuleOffset(const std::uintptr_t Value, int32& Offset)
+	{
+		if (Value == 0 || Value > static_cast<std::uintptr_t>((std::numeric_limits<int32>::max)()))
+			return false;
+		Offset = static_cast<int32>(Value);
+		return true;
+	}
+
+	OffsetFinder::GlobalPointerDiscoveryReport DiscoverGlobalPointer(const UEClass& ExpectedClass)
+	{
+		if (!ExpectedClass)
+		{
+			return OffsetFinder::MakeGlobalPointerDiscoveryFailure(
+				OffsetFinder::GlobalPointerDiscoveryError::ExpectedTypeUnavailable);
+		}
+
+		UExplorer::Platform::PeImageView Image;
+		if (!UExplorer::Platform::InspectLoadedPeImage(nullptr, Image).Ok())
+		{
+			return OffsetFinder::MakeGlobalPointerDiscoveryFailure(
+				OffsetFinder::GlobalPointerDiscoveryError::InvalidImage);
+		}
+
+		std::vector<OffsetFinder::GlobalPointerCandidateObservation> Observations;
+		std::size_t TargetCount = 0;
+		for (UEObject Obj : ObjectArray())
+		{
+			if (!Obj
+				|| Obj.HasAnyFlags(EObjectFlags::ClassDefaultObject)
+				|| !Obj.IsA(ExpectedClass))
+			{
+				continue;
+			}
+
+			if (++TargetCount > MaximumGlobalPointerTargets)
+			{
+				return OffsetFinder::MakeGlobalPointerDiscoveryFailure(
+					OffsetFinder::GlobalPointerDiscoveryError::CandidateLimitExceeded);
+			}
+
+			const std::uintptr_t ExpectedTarget =
+				reinterpret_cast<std::uintptr_t>(Obj.GetAddress());
+			const auto Results = Platform::FindAllAlignedValuesInProcess(Obj.GetAddress());
+			if (Results.size() > MaximumGlobalPointerCandidates - Observations.size())
+			{
+				return OffsetFinder::MakeGlobalPointerDiscoveryFailure(
+					OffsetFinder::GlobalPointerDiscoveryError::CandidateLimitExceeded);
+			}
+
+			for (const auto Candidate : Results)
+			{
+				OffsetFinder::GlobalPointerCandidateObservation Observation{
+					.SlotAddress = reinterpret_cast<std::uintptr_t>(Candidate),
+					.ExpectedTarget = ExpectedTarget,
+					.ExpectedTargetFromObjectArray = true,
+					.ExpectedTargetTypeValidated = true
+				};
+				Observation.FirstReadSucceeded = UExplorer::Runtime::ReadValue(
+					Observation.SlotAddress,
+					Observation.FirstValue).Ok();
+				if (Observation.FirstReadSucceeded)
+				{
+					::Sleep(1);
+					Observation.SecondReadSucceeded = UExplorer::Runtime::ReadValue(
+						Observation.SlotAddress,
+						Observation.SecondValue).Ok();
+				}
+				Observations.push_back(Observation);
+			}
+		}
+
+		return OffsetFinder::ResolveGlobalPointerCandidates(Image, Observations);
+	}
+
+	void PublishGlobalPointerDiscovery(
+		const bool IsWorld,
+		OffsetFinder::GlobalPointerDiscoveryReport Report)
+	{
+		GlobalPointerDiagnostics& Diagnostics = GetGlobalPointerDiagnostics();
+		std::lock_guard<std::mutex> Lock(Diagnostics.Mutex);
+		(IsWorld ? Diagnostics.GWorld : Diagnostics.GEngine) = std::move(Report);
+	}
+}
 
 
 void Off::InSDK::ProcessEvent::InitPE_Windows()
 {
 #ifdef PLATFORM_WINDOWS
 
-	void** Vft = *(void***)ObjectArray::GetByIndex(0).GetAddress();
+	Off::InSDK::ProcessEvent::PEIndex = 0;
+	Off::InSDK::ProcessEvent::PEOffset = 0;
+	void** Vft = nullptr;
+	if (!TryReadFirstObjectVTable(Vft))
+	{
+		std::cerr << "\nCouldn't read the first UObject VTable while discovering ProcessEvent.\n\n";
+		return;
+	}
 
 #if defined(_WIN64)
 	/* Primary, and more reliable, check for ProcessEvent */
@@ -48,22 +176,31 @@ void Off::InSDK::ProcessEvent::InitPE_Windows()
 	{
 		const void* StringRefAddr = Platform::FindByStringInAllSections(L"Accessed None", 0x0, 0x0, Settings::General::bSearchOnlyExecutableSectionsForStrings);
 		/* ProcessEvent is sometimes located right after a func with the string L"Accessed None. Might as well check for it, because else we're going to crash anyways. */
-		const void* PossiblePEAddr = reinterpret_cast<void*>(Architecture_x86_64::FindNextFunctionStart(StringRefAddr));
+		const void* PossiblePEAddr = StringRefAddr
+			? reinterpret_cast<void*>(Architecture_x86_64::FindNextFunctionStart(StringRefAddr))
+			: nullptr;
 
 		auto IsSameAddr = [PossiblePEAddr](const uint8_t* FuncAddress, [[maybe_unused]] int32_t Index) -> bool
 		{
 			return FuncAddress == PossiblePEAddr;
 		};
 
-		const auto [FuncPtr2, FuncIdx2] = Platform::IterateVTableFunctions(Vft, IsSameAddr);
-		ProcessEventAddr = FuncPtr2;
-		ProcessEventIdx = FuncIdx2;
+		if (PossiblePEAddr)
+		{
+			const auto [FuncPtr2, FuncIdx2] = Platform::IterateVTableFunctions(Vft, IsSameAddr);
+			ProcessEventAddr = FuncPtr2;
+			ProcessEventIdx = FuncIdx2;
+		}
 	}
 
-	if (ProcessEventAddr)
+	int32 ProcessEventOffset = 0;
+	if (ProcessEventAddr
+		&& ProcessEventIdx > 0
+		&& ProcessEventIdx <= 512
+		&& TryNarrowModuleOffset(Platform::GetOffset(ProcessEventAddr), ProcessEventOffset))
 	{
 		Off::InSDK::ProcessEvent::PEIndex = ProcessEventIdx;
-		Off::InSDK::ProcessEvent::PEOffset = Platform::GetOffset(ProcessEventAddr);
+		Off::InSDK::ProcessEvent::PEOffset = ProcessEventOffset;
 
 		std::cerr << std::format("PE-Offset: 0x{:X}\n", Off::InSDK::ProcessEvent::PEOffset);
 		std::cerr << std::format("PE-Index: 0x{:X}\n\n", ProcessEventIdx);
@@ -77,114 +214,84 @@ void Off::InSDK::ProcessEvent::InitPE_Windows()
 
 void Off::InSDK::ProcessEvent::InitPE(const int32 Index, const char* const ModuleName)
 {
+	Off::InSDK::ProcessEvent::PEIndex = 0;
+	Off::InSDK::ProcessEvent::PEOffset = 0;
+	if (Index <= 0 || Index > 512)
+		throw std::invalid_argument("ProcessEvent VTable index is outside the validated range");
+
+	void** VFT = nullptr;
+	if (!TryReadFirstObjectVTable(VFT))
+		throw std::runtime_error("Could not read the first UObject VTable");
+	void* ProcessEventAddress = nullptr;
+	if (!UExplorer::Runtime::ReadValue(
+		reinterpret_cast<std::uintptr_t>(VFT) + static_cast<std::uintptr_t>(Index) * sizeof(void*),
+		ProcessEventAddress).Ok())
+	{
+		throw std::runtime_error("Could not read the requested ProcessEvent VTable slot");
+	}
+	int32 ProcessEventOffset = 0;
+	if (!TryNarrowModuleOffset(
+		Platform::GetOffset(ProcessEventAddress, ModuleName),
+		ProcessEventOffset))
+	{
+		throw std::runtime_error("ProcessEvent address is not a valid 32-bit module offset");
+	}
 	Off::InSDK::ProcessEvent::PEIndex = Index;
-
-	void** VFT = *reinterpret_cast<void***>(ObjectArray::GetByIndex(0).GetAddress());
-
-	Off::InSDK::ProcessEvent::PEOffset = Platform::GetOffset(VFT[Off::InSDK::ProcessEvent::PEIndex], ModuleName);
+	Off::InSDK::ProcessEvent::PEOffset = ProcessEventOffset;
 
 	std::cerr << std::format("PE-Offset: 0x{:X}\n", Off::InSDK::ProcessEvent::PEOffset);
 }
 
 /* UWorld */
+OffsetFinder::GlobalPointerDiscoveryReport Off::InSDK::World::GetDiscoveryReport()
+{
+	GlobalPointerDiagnostics& Diagnostics = GetGlobalPointerDiagnostics();
+	std::lock_guard<std::mutex> Lock(Diagnostics.Mutex);
+	return Diagnostics.GWorld;
+}
+
 void Off::InSDK::World::InitGWorld()
 {
-	UEClass UWorld = ObjectArray::FindClassFast("World");
-
-	for (UEObject Obj : ObjectArray())
+	Off::InSDK::World::GWorld = 0;
+	auto Report = DiscoverGlobalPointer(ObjectArray::FindClassFast("World"));
+	if (Report.Ok())
 	{
-		if (Obj.HasAnyFlags(EObjectFlags::ClassDefaultObject) || !Obj.IsA(UWorld))
-			continue;
-
-		/* Try to find a pointer to the word, aka UWorld** GWorld */
-		auto Results = Platform::FindAllAlignedValuesInProcess(Obj.GetAddress());
-
-		void* Result = nullptr;
-		if (Results.size())
-		{
-			if (Results.size() == 1)
-			{
-				Result = Results[0];
-			}
-			else if (Results.size() == 2)
-			{
-				auto ObjAddress = reinterpret_cast<uintptr_t>(Obj.GetAddress());
-				auto PossibleGWorld = reinterpret_cast<volatile uintptr_t*>(Results[0]);
-				auto CurrentValue = *PossibleGWorld;
-
-				for (int i = 0; CurrentValue == ObjAddress && i < 50; ++i)
-				{
-					::Sleep(1);
-					CurrentValue = *PossibleGWorld;
-				}
-				if (CurrentValue == ObjAddress)
-				{
-					Result = Results[0];
-				}
-				else
-				{
-					Result = Results[1];
-					std::cerr << std::format("Filter GActiveLogWorld at 0x{:X}\n\n", reinterpret_cast<uintptr_t>(PossibleGWorld));
-				}
-			}
-			else
-			{
-				std::cerr << std::format("Detected {} GWorld \n\n", Results.size());
-			}
-		}
-
-		/* Pointer to UWorld* couldn't be found */
-		if (Result)
-		{
-			Off::InSDK::World::GWorld = Platform::GetOffset(Result);
-			std::cerr << std::format("GWorld-Offset: 0x{:X}\n\n", Off::InSDK::World::GWorld);
-			break;
-		}
+		Off::InSDK::World::GWorld = Report.SelectedOffset;
+		std::cerr << std::format("GWorld-Offset: 0x{:X}\n\n", Off::InSDK::World::GWorld);
 	}
-
-	if (Off::InSDK::World::GWorld == 0x0)
-		std::cerr << std::format("\nGWorld WAS NOT FOUND!!!!!!!!!\n\n");
+	else
+	{
+		std::cerr << std::format(
+			"GWorld discovery failed closed: {}\n\n",
+			OffsetFinder::ToString(Report.Error));
+	}
+	PublishGlobalPointerDiscovery(true, std::move(Report));
 }
 
 /* UEngine* GEngine */
+OffsetFinder::GlobalPointerDiscoveryReport Off::InSDK::Engine::GetDiscoveryReport()
+{
+	GlobalPointerDiagnostics& Diagnostics = GetGlobalPointerDiagnostics();
+	std::lock_guard<std::mutex> Lock(Diagnostics.Mutex);
+	return Diagnostics.GEngine;
+}
+
 void Off::InSDK::Engine::InitGEngine()
 {
-	UEClass GameEngineClass = ObjectArray::FindClassFast("GameEngine");
-
-	if (!GameEngineClass)
+	Off::InSDK::Engine::GEngine = 0;
+	auto Report = DiscoverGlobalPointer(ObjectArray::FindClassFast("GameEngine"));
+	if (Report.Ok())
 	{
-		std::cerr << "GEngine: 'GameEngine' class not found, skipping.\n";
-		return;
+		Off::InSDK::Engine::GEngine = Report.SelectedOffset;
+		std::cerr << std::format("GEngine-Offset: 0x{:X}\n\n", Off::InSDK::Engine::GEngine);
 	}
-
-	for (UEObject Obj : ObjectArray())
+	else
 	{
-		if (Obj.HasAnyFlags(EObjectFlags::ClassDefaultObject) || !Obj.IsA(GameEngineClass))
-			continue;
-
-		auto Results = Platform::FindAllAlignedValuesInProcess(Obj.GetAddress());
-
-		void* Result = nullptr;
-		if (Results.size() == 1)
-		{
-			Result = Results[0];
-		}
-		else if (Results.size() >= 2)
-		{
-			/* GEngine is typically the only global pointer to the engine instance */
-			Result = Results[0];
-			std::cerr << std::format("GEngine: Found {} candidates, using first.\n", Results.size());
-		}
-
-		if (Result)
-		{
-			Off::InSDK::Engine::GEngine = Platform::GetOffset(Result);
-			std::cerr << std::format("GEngine-Offset: 0x{:X}\n\n", Off::InSDK::Engine::GEngine);
-			return;
-		}
+		std::cerr << std::format(
+			"GEngine discovery failed closed: {}\n\n",
+			OffsetFinder::ToString(Report.Error));
 	}
-
-	std::cerr << "GEngine: Could not find GEngine pointer.\n\n";
+	PublishGlobalPointerDiscovery(false, std::move(Report));
 }
 
 /* FText */
@@ -542,7 +649,7 @@ void Off::Init()
 {
 	auto RequireDiscoveredOffset = [](int32 Offset, const char* Name)
 	{
-		if (Offset == OffsetFinder::OffsetNotFound)
+		if (Offset <= 0)
 			throw std::runtime_error(std::string("Required offset was not discovered: ") + Name);
 	};
 
@@ -630,6 +737,7 @@ void Off::Init()
 			std::cerr << std::format("Off::FField::EditorOnlyMetadata: 0x{:X}\n", Off::FField::EditorOnlyMetadata);
 
 		Off::FFieldClass::CastFlags = OffsetFinder::FindFieldClassCastFlagsOffset();
+		RequireDiscoveredOffset(Off::FFieldClass::CastFlags, "FFieldClass::CastFlags");
 		std::cerr << std::format("Off::FFieldClass::CastFlags: 0x{:X}\n\n", Off::FFieldClass::CastFlags);
 	}
 

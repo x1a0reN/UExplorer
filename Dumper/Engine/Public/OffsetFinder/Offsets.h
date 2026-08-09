@@ -3,6 +3,11 @@
 #include "Unreal/Enums.h"
 #include "../Settings.h"
 
+namespace OffsetFinder
+{
+	struct GlobalPointerDiscoveryReport;
+}
+
 struct FFixedUObjectArrayLayout
 {
 	int32 ObjectsOffset = -1;
@@ -50,6 +55,7 @@ namespace Off
 			inline int32 GWorld = 0x0;
 
 			void InitGWorld();
+			OffsetFinder::GlobalPointerDiscoveryReport GetDiscoveryReport();
 		}
 
 		namespace ObjArray
@@ -109,6 +115,7 @@ namespace Off
 			inline int32 GEngine = 0x0;
 
 			void InitGEngine();
+			OffsetFinder::GlobalPointerDiscoveryReport GetDiscoveryReport();
 		}
 
 		namespace PostRender
