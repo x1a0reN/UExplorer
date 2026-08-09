@@ -93,7 +93,7 @@ bool IsExecutableProtection(const DWORD protection) noexcept
 MemoryResult QuerySegments(
 	const std::uintptr_t address,
 	const std::size_t size,
-	std::vector<RegionSegment>& segments) noexcept
+	std::vector<RegionSegment>& segments)
 {
 	std::uintptr_t endExclusive = 0;
 	if (!CheckedAddressRange(address, size, endExclusive))
@@ -156,7 +156,7 @@ bool RestoreProtections(
 MemoryResult MakeWritable(
 	const std::vector<RegionSegment>& segments,
 	const bool allowProtectionChange,
-	std::vector<ChangedProtection>& changes) noexcept
+	std::vector<ChangedProtection>& changes)
 {
 	for (const RegionSegment& segment : segments)
 	{
@@ -247,6 +247,7 @@ const char* ToString(const MemoryError error) noexcept
 	case MemoryError::InstructionCacheFlushRequired: return "INSTRUCTION_CACHE_FLUSH_REQUIRED";
 	case MemoryError::InstructionCacheFlushFailed: return "INSTRUCTION_CACHE_FLUSH_FAILED";
 	case MemoryError::ValueMismatch: return "VALUE_MISMATCH";
+	case MemoryError::AllocationFailed: return "MEMORY_ALLOCATION_FAILED";
 	}
 	return "UNKNOWN";
 }
@@ -265,21 +266,45 @@ bool CheckedAddressRange(
 	return true;
 }
 
+MemoryResult ValidateReadableMemory(
+	const std::uintptr_t address,
+	const std::size_t size) noexcept
+{
+	try
+	{
+		std::vector<RegionSegment> segments;
+		MemoryResult query = QuerySegments(address, size, segments);
+		if (!query.Ok())
+			return query;
+		for (const RegionSegment& segment : segments)
+		{
+			if (!IsReadableProtection(segment.Protection))
+				return Failure(MemoryError::AccessDenied);
+		}
+		return {.BytesProcessed = size};
+	}
+	catch (...)
+	{
+		return Failure(MemoryError::AllocationFailed);
+	}
+}
+
 MemoryResult ReadMemory(const std::uintptr_t address, const std::span<std::byte> output) noexcept
 {
-	std::vector<RegionSegment> segments;
-	MemoryResult query = QuerySegments(address, output.size(), segments);
-	if (!query.Ok())
-		return query;
-	for (const RegionSegment& segment : segments)
+	try
 	{
-		if (!IsReadableProtection(segment.Protection))
-			return Failure(MemoryError::AccessDenied);
+		MemoryResult readable = ValidateReadableMemory(address, output.size());
+		if (!readable.Ok())
+			return readable;
+		DWORD exceptionCode = 0;
+		if (!CopyWithSeh(output.data(), reinterpret_cast<const void*>(address), output.size(), exceptionCode))
+			return Failure(MemoryError::AccessViolation, exceptionCode);
+		return {.BytesProcessed = output.size()};
 	}
-	DWORD exceptionCode = 0;
-	if (!CopyWithSeh(output.data(), reinterpret_cast<const void*>(address), output.size(), exceptionCode))
-		return Failure(MemoryError::AccessViolation, exceptionCode);
-	return {.BytesProcessed = output.size()};
+	catch (...)
+	{
+		return Failure(MemoryError::AllocationFailed);
+	}
 }
 
 MemoryResult WriteMemory(
@@ -287,39 +312,47 @@ MemoryResult WriteMemory(
 	const std::span<const std::byte> input,
 	const MemoryWriteOptions options) noexcept
 {
-	std::vector<RegionSegment> segments;
-	MemoryResult query = QuerySegments(address, input.size(), segments);
-	if (!query.Ok())
-		return query;
-	const bool touchesExecutableMemory = std::ranges::any_of(
-		segments,
-		[](const RegionSegment& segment) { return IsExecutableProtection(segment.Protection); });
-	if (touchesExecutableMemory && !options.AllowExecutableWrite)
-		return Failure(MemoryError::ExecutableWriteDenied);
-	if (touchesExecutableMemory && !options.FlushInstructionCache)
-		return Failure(MemoryError::InstructionCacheFlushRequired);
-
-	std::vector<ChangedProtection> changes;
-	MemoryResult writable = MakeWritable(segments, options.AllowProtectionChange, changes);
-	if (!writable.Ok())
-		return writable;
-
-	MemoryResult result{.BytesProcessed = input.size()};
-	DWORD exceptionCode = 0;
-	if (!CopyWithSeh(reinterpret_cast<void*>(address), input.data(), input.size(), exceptionCode))
-		result = Failure(MemoryError::AccessViolation, exceptionCode);
-
-	DWORD restoreError = 0;
-	if (!RestoreProtections(changes, restoreError))
-		return Failure(MemoryError::ProtectionRestoreFailed, restoreError);
-	if (!result.Ok())
-		return result;
-	if (options.FlushInstructionCache
-		&& !FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<const void*>(address), input.size()))
+	try
 	{
-		return Failure(MemoryError::InstructionCacheFlushFailed, GetLastError());
+		std::vector<RegionSegment> segments;
+		MemoryResult query = QuerySegments(address, input.size(), segments);
+		if (!query.Ok())
+			return query;
+		const bool touchesExecutableMemory = std::ranges::any_of(
+			segments,
+			[](const RegionSegment& segment) { return IsExecutableProtection(segment.Protection); });
+		if (touchesExecutableMemory && !options.AllowExecutableWrite)
+			return Failure(MemoryError::ExecutableWriteDenied);
+		if (touchesExecutableMemory && !options.FlushInstructionCache)
+			return Failure(MemoryError::InstructionCacheFlushRequired);
+
+		std::vector<ChangedProtection> changes;
+		changes.reserve(segments.size());
+		MemoryResult writable = MakeWritable(segments, options.AllowProtectionChange, changes);
+		if (!writable.Ok())
+			return writable;
+
+		MemoryResult result{.BytesProcessed = input.size()};
+		DWORD exceptionCode = 0;
+		if (!CopyWithSeh(reinterpret_cast<void*>(address), input.data(), input.size(), exceptionCode))
+			result = Failure(MemoryError::AccessViolation, exceptionCode);
+
+		DWORD restoreError = 0;
+		if (!RestoreProtections(changes, restoreError))
+			return Failure(MemoryError::ProtectionRestoreFailed, restoreError);
+		if (!result.Ok())
+			return result;
+		if (options.FlushInstructionCache
+			&& !FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<const void*>(address), input.size()))
+		{
+			return Failure(MemoryError::InstructionCacheFlushFailed, GetLastError());
+		}
+		return result;
 	}
-	return result;
+	catch (...)
+	{
+		return Failure(MemoryError::AllocationFailed);
+	}
 }
 
 MemoryResult CompareExchangePointer(
@@ -328,45 +361,53 @@ MemoryResult CompareExchangePointer(
 	void* replacement,
 	void** observed) noexcept
 {
-	if (!slot || reinterpret_cast<std::uintptr_t>(slot) % alignof(void*) != 0)
-		return Failure(MemoryError::InvalidRange);
-
-	std::vector<RegionSegment> segments;
-	MemoryResult query = QuerySegments(
-		reinterpret_cast<std::uintptr_t>(slot), sizeof(void*), segments);
-	if (!query.Ok())
-		return query;
-	if (std::ranges::any_of(
-		segments,
-		[](const RegionSegment& segment) { return IsExecutableProtection(segment.Protection); }))
+	try
 	{
-		return Failure(MemoryError::ExecutableWriteDenied);
+		if (!slot || reinterpret_cast<std::uintptr_t>(slot) % alignof(void*) != 0)
+			return Failure(MemoryError::InvalidRange);
+
+		std::vector<RegionSegment> segments;
+		MemoryResult query = QuerySegments(
+			reinterpret_cast<std::uintptr_t>(slot), sizeof(void*), segments);
+		if (!query.Ok())
+			return query;
+		if (std::ranges::any_of(
+			segments,
+			[](const RegionSegment& segment) { return IsExecutableProtection(segment.Protection); }))
+		{
+			return Failure(MemoryError::ExecutableWriteDenied);
+		}
+
+		std::vector<ChangedProtection> changes;
+		changes.reserve(segments.size());
+		MemoryResult writable = MakeWritable(segments, true, changes);
+		if (!writable.Ok())
+			return writable;
+
+		void* actual = nullptr;
+		DWORD exceptionCode = 0;
+		const bool exchanged = CompareExchangePointerWithSeh(
+			reinterpret_cast<void* volatile*>(slot),
+			expected,
+			replacement,
+			actual,
+			exceptionCode);
+		if (observed)
+			*observed = actual;
+
+		DWORD restoreError = 0;
+		if (!RestoreProtections(changes, restoreError))
+			return Failure(MemoryError::ProtectionRestoreFailed, restoreError);
+		if (!exchanged)
+			return Failure(MemoryError::AccessViolation, exceptionCode);
+		if (actual != expected)
+			return Failure(MemoryError::ValueMismatch);
+		return {.BytesProcessed = sizeof(void*)};
 	}
-
-	std::vector<ChangedProtection> changes;
-	MemoryResult writable = MakeWritable(segments, true, changes);
-	if (!writable.Ok())
-		return writable;
-
-	void* actual = nullptr;
-	DWORD exceptionCode = 0;
-	const bool exchanged = CompareExchangePointerWithSeh(
-		reinterpret_cast<void* volatile*>(slot),
-		expected,
-		replacement,
-		actual,
-		exceptionCode);
-	if (observed)
-		*observed = actual;
-
-	DWORD restoreError = 0;
-	if (!RestoreProtections(changes, restoreError))
-		return Failure(MemoryError::ProtectionRestoreFailed, restoreError);
-	if (!exchanged)
-		return Failure(MemoryError::AccessViolation, exceptionCode);
-	if (actual != expected)
-		return Failure(MemoryError::ValueMismatch);
-	return {.BytesProcessed = sizeof(void*)};
+	catch (...)
+	{
+		return Failure(MemoryError::AllocationFailed);
+	}
 }
 
 } // namespace UExplorer::Runtime

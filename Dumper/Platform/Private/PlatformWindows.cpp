@@ -2,8 +2,21 @@
 #include "TmpUtils.h"
 #include "PlatformWindows.h"
 #include "Arch_x86.h"
+#include "Platform/Public/BytePattern.h"
+#include "Platform/Public/PeImage.h"
+#include "Runtime/SafeMemory.h"
 
 #include <windows.h>
+
+#include <algorithm>
+#include <array>
+#include <cstddef>
+#include <cstring>
+#include <limits>
+#include <optional>
+#include <span>
+#include <string_view>
+#include <vector>
 
 // Private implementation to ensure that there is no accidental usage of platform-specific functions
 namespace
@@ -99,25 +112,20 @@ namespace
 	{
 		LIST_ENTRY InLoadOrderLinks;
 		LIST_ENTRY InMemoryOrderLinks;
-		//union
-		//{
-		//	LIST_ENTRY InInitializationOrderLinks;
-		//	LIST_ENTRY InProgressLinks;
-		//};
+		LIST_ENTRY InInitializationOrderLinks;
 		PVOID DllBase;
 		PVOID EntryPoint;
 		ULONG SizeOfImage;
 		UNICODE_STRING FullDllName;
 		UNICODE_STRING BaseDllName;
 	};
+	static_assert(offsetof(LDR_DATA_TABLE_ENTRY, InMemoryOrderLinks) == 0x10);
+	static_assert(offsetof(LDR_DATA_TABLE_ENTRY, DllBase) == 0x30);
+	static_assert(offsetof(LDR_DATA_TABLE_ENTRY, SizeOfImage) == 0x40);
 
 	inline _TEB* _NtCurrentTeb()
 	{
-#if defined(_WIN64)
 		return reinterpret_cast<struct _TEB*>(__readgsqword(((LONG)__builtin_offsetof(NT_TIB, Self))));
-#elif defined(_WIN32)
-		return reinterpret_cast<struct _TEB*>(__readfsdword(((LONG)__builtin_offsetof(NT_TIB, Self))));
-#endif // _WIN32
 	}
 
 	inline PEB* GetPEB()
@@ -125,76 +133,148 @@ namespace
 		return reinterpret_cast<TEB*>(_NtCurrentTeb())->ProcessEnvironmentBlock;
 	}
 
-	inline const LDR_DATA_TABLE_ENTRY* GetModuleLdrTableEntry(const char* SearchModuleName)
+	bool TryAddAddress(
+		const uintptr_t base,
+		const std::size_t offset,
+		uintptr_t& result) noexcept
+	{
+		if (base == 0 || offset > (std::numeric_limits<uintptr_t>::max)() - base)
+			return false;
+		result = base + offset;
+		return true;
+	}
+
+	bool TryApplySignedDisplacement(
+		const uintptr_t instructionEnd,
+		const int32_t displacement,
+		uintptr_t& target) noexcept
+	{
+		if (displacement >= 0)
+			return TryAddAddress(instructionEnd, static_cast<std::size_t>(displacement), target);
+		const std::uint64_t magnitude = static_cast<std::uint64_t>(
+			-static_cast<std::int64_t>(displacement));
+		if (magnitude > instructionEnd)
+			return false;
+		target = instructionEnd - static_cast<uintptr_t>(magnitude);
+		return target != 0;
+	}
+
+	bool CompareMemoryValueWithSeh(
+		bool(*comparison)(const void*, const void*),
+		const void* expected,
+		const void* candidate,
+		bool& equal) noexcept
+	{
+#if defined(_MSC_VER)
+		__try
+		{
+			equal = comparison(expected, candidate);
+			return true;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			equal = false;
+			return false;
+		}
+#else
+		equal = comparison(expected, candidate);
+		return true;
+#endif
+	}
+
+	template<typename Callback>
+	bool VisitLoadedModules(Callback&& callback)
 	{
 		const PEB* Peb = GetPEB();
-		const PEB_LDR_DATA* Ldr = Peb->Ldr;
-
-		const std::string LowercaseSearchModuleName = Utils::StrToLower(SearchModuleName);
-
-		const LIST_ENTRY* FirstEntry = &Ldr->InMemoryOrderModuleList;
-		for (const LIST_ENTRY* P = Ldr->InMemoryOrderModuleList.Flink; P && P != FirstEntry; P = P->Flink)
+		if (!Peb)
+			return false;
+		PEB_LDR_DATA* Ldr = nullptr;
+		if (!UExplorer::Runtime::ReadValue(
+			reinterpret_cast<uintptr_t>(Peb) + offsetof(PEB, Ldr),
+			Ldr).Ok()
+			|| !Ldr)
 		{
-			const LDR_DATA_TABLE_ENTRY* Entry = reinterpret_cast<const LDR_DATA_TABLE_ENTRY*>(P);
-
-			const std::wstring WideModuleName(Entry->BaseDllName.Buffer, Entry->BaseDllName.Length >> 1);
-			const std::string ModuleName = std::string(WideModuleName.begin(), WideModuleName.end());
-
-			if (Utils::StrToLower(ModuleName) == LowercaseSearchModuleName)
-				return Entry;
+			return false;
 		}
 
-		return nullptr;
+		const uintptr_t headAddress = reinterpret_cast<uintptr_t>(Ldr)
+			+ offsetof(PEB_LDR_DATA, InMemoryOrderModuleList);
+		LIST_ENTRY head{};
+		if (!UExplorer::Runtime::ReadValue(headAddress, head).Ok())
+			return false;
+		if (!head.Flink || !head.Blink)
+			return false;
+		const LIST_ENTRY* current = head.Flink;
+		uintptr_t previousLinkAddress = headAddress;
+		for (std::size_t visited = 0;
+			current && reinterpret_cast<uintptr_t>(current) != headAddress && visited < 4096;
+			++visited)
+		{
+			const uintptr_t linkAddress = reinterpret_cast<uintptr_t>(current);
+			if (linkAddress < offsetof(LDR_DATA_TABLE_ENTRY, InMemoryOrderLinks))
+				return false;
+			const uintptr_t entryAddress =
+				linkAddress - offsetof(LDR_DATA_TABLE_ENTRY, InMemoryOrderLinks);
+			LDR_DATA_TABLE_ENTRY entry{};
+			if (!UExplorer::Runtime::ReadValue(entryAddress, entry).Ok())
+				return false;
+			if (reinterpret_cast<uintptr_t>(entry.InMemoryOrderLinks.Blink) != previousLinkAddress)
+				return false;
+			if (entry.DllBase && entry.SizeOfImage != 0)
+			{
+				uintptr_t moduleEnd = 0;
+				if (!UExplorer::Runtime::CheckedAddressRange(
+					reinterpret_cast<uintptr_t>(entry.DllBase),
+					entry.SizeOfImage,
+					moduleEnd))
+				{
+					return false;
+				}
+			}
+			if (callback(entry))
+				return true;
+			previousLinkAddress = linkAddress;
+			current = entry.InMemoryOrderLinks.Flink;
+		}
+		return false;
 	}
 
 	inline std::pair<uintptr_t, uintptr_t> GetImageBaseAndSize(const char* const ModuleName = Settings::General::DefaultModuleName)
 	{
 		const uintptr_t ImageBase = GetModuleBase(ModuleName);
-		const PIMAGE_NT_HEADERS NtHeader = reinterpret_cast<PIMAGE_NT_HEADERS>(ImageBase + reinterpret_cast<PIMAGE_DOS_HEADER>(ImageBase)->e_lfanew);
-
-		return { ImageBase, NtHeader->OptionalHeader.SizeOfImage };
+		UExplorer::Platform::PeImageView image;
+		if (!UExplorer::Platform::InspectPeImage(ImageBase, image).Ok())
+			return {0, 0};
+		return {image.Base, image.Size};
 	}
 
 	inline const IMAGE_SECTION_HEADER* IterateAllSectionObjects(const uintptr_t ImageBase, const std::function<bool(const IMAGE_SECTION_HEADER*)>& Callback)
 	{
-		if (ImageBase == 0)
+		if (ImageBase == 0 || !Callback)
 			return nullptr;
-
-		const PIMAGE_DOS_HEADER DosHeader = reinterpret_cast<PIMAGE_DOS_HEADER>(ImageBase);
-		const PIMAGE_NT_HEADERS NtHeaders = reinterpret_cast<PIMAGE_NT_HEADERS>(ImageBase + DosHeader->e_lfanew);
-
-		if (NtHeaders->Signature != IMAGE_NT_SIGNATURE)
+		UExplorer::Platform::PeImageView image;
+		if (!UExplorer::Platform::InspectPeImage(ImageBase, image).Ok())
 			return nullptr;
-
-		PIMAGE_SECTION_HEADER Sections = IMAGE_FIRST_SECTION(NtHeaders);
-
-		DWORD TextSize = 0;
-
-		for (int i = 0; i < NtHeaders->FileHeader.NumberOfSections; i++)
+		for (const UExplorer::Platform::PeSectionView& section : image.Sections)
 		{
-			const IMAGE_SECTION_HEADER* CurrentSection = &Sections[i];
-
-			if ((CurrentSection->Characteristics & IMAGE_SCN_MEM_READ) == 0)
+			if (!section.IsReadable() || section.HeaderAddress == 0)
 				continue;
-
-			if (Callback(CurrentSection))
-				return CurrentSection;
+			const auto* header = reinterpret_cast<const IMAGE_SECTION_HEADER*>(section.HeaderAddress);
+			if (Callback(header))
+				return header;
 		}
-
 		return nullptr;
 	}
 
 	/* Returns the base address of the section and it's size */
 	inline std::pair<uintptr_t, DWORD> GetSectionByName(uintptr_t ImageBase, const std::string& ReqestedSectionName)
 	{
-		const IMAGE_SECTION_HEADER* Section = IterateAllSectionObjects(ImageBase, [ReqestedSectionName](const IMAGE_SECTION_HEADER* Section) -> bool
-			{
-				return reinterpret_cast<const char*>(Section->Name) == ReqestedSectionName;
-			});
-
-		if (Section)
-			return { (ImageBase + Section->VirtualAddress), Section->Misc.VirtualSize };
-		
+		UExplorer::Platform::PeImageView image;
+		if (!UExplorer::Platform::InspectPeImage(ImageBase, image).Ok())
+			return {NULL, 0};
+		const UExplorer::Platform::PeSectionView* section = image.FindSection(ReqestedSectionName);
+		if (section && section->Size <= (std::numeric_limits<DWORD>::max)())
+			return {section->Address, static_cast<DWORD>(section->Size)};
 		return { NULL, 0 };
 	}
 
@@ -209,131 +289,380 @@ namespace
 		return Align(ValueToAlign, Alignment);
 	}
 
-	inline const PIMAGE_THUNK_DATA GetImportAddress(const uintptr_t ModuleBase, const char* ModuleToImportFrom, const char* SearchFunctionName)
+	bool TryImageAddress(
+		const UExplorer::Platform::PeImageView& image,
+		const std::uint32_t rva,
+		const std::size_t size,
+		uintptr_t& address) noexcept
 	{
-		/* Get the module importing the function */
-		const PIMAGE_DOS_HEADER DosHeader = reinterpret_cast<PIMAGE_DOS_HEADER>(ModuleBase);
-
-		if (ModuleBase == 0x0 || DosHeader->e_magic != IMAGE_DOS_SIGNATURE)
-			return nullptr;
-
-		PIMAGE_NT_HEADERS NtHeader = reinterpret_cast<PIMAGE_NT_HEADERS>(ModuleBase + reinterpret_cast<const PIMAGE_DOS_HEADER>(ModuleBase)->e_lfanew);
-
-		if (!NtHeader)
-			return nullptr;
-
-		const PIMAGE_IMPORT_DESCRIPTOR ImportTable = reinterpret_cast<const PIMAGE_IMPORT_DESCRIPTOR>(ModuleBase + NtHeader->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress);
-
-		//std::cerr << "ModuleName: " << (SearchModuleName ? SearchModuleName : "Default") << std::endl;
-
-		const std::string LowercaseSearchModuleName = Utils::StrToLower(ModuleToImportFrom);
-
-		/* Loop all modules and if we found the right one, loop all imports to get the one we need */
-		for (const IMAGE_IMPORT_DESCRIPTOR* Import = ImportTable; Import && Import->Characteristics != 0x0; Import++)
+		if (image.Base == 0 || image.Size == 0 || rva >= image.Size
+			|| size > image.Size - rva)
 		{
-			if (Import->Name == 0xFFFF)
-				continue;
+			return false;
+		}
+		return TryAddAddress(image.Base, rva, address);
+	}
 
-			const char* Name = reinterpret_cast<const char*>(ModuleBase + Import->Name);
+	bool TryReadImageAsciiString(
+		const UExplorer::Platform::PeImageView& image,
+		const std::uint32_t rva,
+		std::string& value)
+	{
+		value.clear();
+		if (rva >= image.Size)
+			return false;
+		constexpr std::size_t kMaxImageStringBytes = 512;
+		const std::size_t available = (std::min)(
+			image.Size - rva,
+			kMaxImageStringBytes);
+		uintptr_t address = 0;
+		if (!TryImageAddress(image, rva, 1, address))
+			return false;
+		value.reserve((std::min)(available, std::size_t{64}));
+		for (std::size_t index = 0; index < available; ++index)
+		{
+			char current = '\0';
+			if (!UExplorer::Runtime::ReadValue(address + index, current).Ok())
+				return false;
+			if (current == '\0')
+				return true;
+			value.push_back(current);
+		}
+		value.clear();
+		return false;
+	}
 
-			//std::cerr << "Name: " << str_tolower(Name) << std::endl;
-
-			if (Utils::StrToLower(Name) != LowercaseSearchModuleName)
-				continue;
-
-			PIMAGE_THUNK_DATA NameThunk = reinterpret_cast<PIMAGE_THUNK_DATA>(ModuleBase + Import->OriginalFirstThunk);
-			PIMAGE_THUNK_DATA FuncThunk = reinterpret_cast<PIMAGE_THUNK_DATA>(ModuleBase + Import->FirstThunk);
-
-			while (!IsBadReadPtr(NameThunk)
-				&& !IsBadReadPtr(FuncThunk)
-				&& !IsBadReadPtr(ModuleBase + NameThunk->u1.AddressOfData)
-				&& !IsBadReadPtr(FuncThunk->u1.AddressOfData))
-			{
-				/*
-				* A functin might be imported using the Ordinal (Index) of this function in the modules export-table
-				*
-				* The name could probably be retrieved by looking up this Ordinal in the Modules export-name-table
-				*/
-				if ((NameThunk->u1.Ordinal & IMAGE_ORDINAL_FLAG) != 0) // No ordinal
-				{
-					NameThunk++;
-					FuncThunk++;
-					continue; // Maybe Handle this in the future
-				}
-
-				/* Get Import data for this function */
-				PIMAGE_IMPORT_BY_NAME NameData = reinterpret_cast<PIMAGE_IMPORT_BY_NAME>(ModuleBase + NameThunk->u1.ForwarderString);
-				PIMAGE_IMPORT_BY_NAME FunctionData = reinterpret_cast<PIMAGE_IMPORT_BY_NAME>(FuncThunk->u1.AddressOfData);
-
-				//std::cerr << "IMPORT: " << std::string(NameData->Name) << std::endl;
-
-				if (std::string(NameData->Name) == SearchFunctionName)
-					return FuncThunk;
-
-				NameThunk++;
-				FuncThunk++;
-			}
+	inline const PIMAGE_THUNK_DATA GetImportAddress(
+		const uintptr_t ModuleBase,
+		const char* ModuleToImportFrom,
+		const char* SearchFunctionName)
+	{
+		if (ModuleBase == 0 || !ModuleToImportFrom || !*ModuleToImportFrom
+			|| !SearchFunctionName || !*SearchFunctionName)
+		{
+			return nullptr;
 		}
 
+		UExplorer::Platform::PeImageView image;
+		if (!UExplorer::Platform::InspectPeImage(ModuleBase, image).Ok())
+			return nullptr;
+		IMAGE_DOS_HEADER dos{};
+		if (!UExplorer::Runtime::ReadValue(ModuleBase, dos).Ok())
+			return nullptr;
+		uintptr_t ntAddress = 0;
+		if (!TryAddAddress(ModuleBase, static_cast<std::size_t>(dos.e_lfanew), ntAddress))
+			return nullptr;
+		IMAGE_NT_HEADERS64 nt{};
+		if (!UExplorer::Runtime::ReadValue(ntAddress, nt).Ok())
+			return nullptr;
+		const IMAGE_DATA_DIRECTORY directory =
+			nt.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+		uintptr_t tableAddress = 0;
+		if (directory.VirtualAddress == 0
+			|| directory.Size < sizeof(IMAGE_IMPORT_DESCRIPTOR)
+			|| !TryImageAddress(image, directory.VirtualAddress, directory.Size, tableAddress))
+		{
+			return nullptr;
+		}
+
+		const std::size_t descriptorCount = directory.Size / sizeof(IMAGE_IMPORT_DESCRIPTOR);
+		for (std::size_t descriptorIndex = 0; descriptorIndex < descriptorCount; ++descriptorIndex)
+		{
+			IMAGE_IMPORT_DESCRIPTOR descriptor{};
+			if (!UExplorer::Runtime::ReadValue(
+				tableAddress + descriptorIndex * sizeof(descriptor),
+				descriptor).Ok())
+			{
+				return nullptr;
+			}
+			if (descriptor.Characteristics == 0 && descriptor.FirstThunk == 0)
+				break;
+			std::string importedModule;
+			if (!TryReadImageAsciiString(image, descriptor.Name, importedModule)
+				|| _stricmp(importedModule.c_str(), ModuleToImportFrom) != 0)
+			{
+				continue;
+			}
+
+			const std::uint32_t nameThunkRva = descriptor.OriginalFirstThunk != 0
+				? descriptor.OriginalFirstThunk
+				: descriptor.FirstThunk;
+			if (nameThunkRva >= image.Size || descriptor.FirstThunk >= image.Size)
+				return nullptr;
+			const std::size_t nameThunkCount =
+				(image.Size - nameThunkRva) / sizeof(IMAGE_THUNK_DATA64);
+			const std::size_t functionThunkCount =
+				(image.Size - descriptor.FirstThunk) / sizeof(IMAGE_THUNK_DATA64);
+			const std::size_t thunkCount = (std::min)(nameThunkCount, functionThunkCount);
+			for (std::size_t thunkIndex = 0; thunkIndex < thunkCount; ++thunkIndex)
+			{
+				uintptr_t nameThunkAddress = 0;
+				uintptr_t functionThunkAddress = 0;
+				if (!TryImageAddress(
+					image,
+					nameThunkRva + static_cast<std::uint32_t>(thunkIndex * sizeof(IMAGE_THUNK_DATA64)),
+					sizeof(IMAGE_THUNK_DATA64),
+					nameThunkAddress)
+					|| !TryImageAddress(
+						image,
+						descriptor.FirstThunk + static_cast<std::uint32_t>(thunkIndex * sizeof(IMAGE_THUNK_DATA64)),
+						sizeof(IMAGE_THUNK_DATA64),
+						functionThunkAddress))
+				{
+					return nullptr;
+				}
+				IMAGE_THUNK_DATA64 nameThunk{};
+				if (!UExplorer::Runtime::ReadValue(nameThunkAddress, nameThunk).Ok())
+					return nullptr;
+				if (nameThunk.u1.AddressOfData == 0)
+					break;
+				if (IMAGE_SNAP_BY_ORDINAL64(nameThunk.u1.Ordinal))
+					continue;
+				if (nameThunk.u1.AddressOfData > (std::numeric_limits<std::uint32_t>::max)() - sizeof(WORD))
+					return nullptr;
+				std::string importedFunction;
+				if (!TryReadImageAsciiString(
+					image,
+					static_cast<std::uint32_t>(nameThunk.u1.AddressOfData) + sizeof(WORD),
+					importedFunction))
+				{
+					return nullptr;
+				}
+				if (importedFunction == SearchFunctionName)
+					return reinterpret_cast<PIMAGE_THUNK_DATA>(functionThunkAddress);
+			}
+		}
 		return nullptr;
 	}
 
 	std::pair<uintptr_t, uint32_t> GetSearchStartAndRangeBasedOnOverrides(const uintptr_t ModuleBase, const IMAGE_SECTION_HEADER* SectionHeader, const uintptr_t StartAddress, int32_t Range)
 	{
-		if (SectionHeader->VirtualAddress == NULL || SectionHeader->Misc.VirtualSize == 0x0)
+		if (ModuleBase == 0 || !SectionHeader
+			|| SectionHeader->VirtualAddress == 0
+			|| SectionHeader->Misc.VirtualSize == 0)
 			return { NULL, 0x0 };
 
-		const uintptr_t SectionStartAddress = ModuleBase + SectionHeader->VirtualAddress;
-		const uintptr_t SectionEndAddress = SectionStartAddress + SectionHeader->Misc.VirtualSize;
-
-		uint32_t SearchRange = (Range > 0x0 && Range < SectionHeader->Misc.VirtualSize) ? Range : SectionHeader->Misc.VirtualSize;
+		uintptr_t SectionStartAddress = 0;
+		uintptr_t SectionEndAddress = 0;
+		if (!TryAddAddress(ModuleBase, SectionHeader->VirtualAddress, SectionStartAddress)
+			|| !TryAddAddress(SectionStartAddress, SectionHeader->Misc.VirtualSize, SectionEndAddress))
+		{
+			return {NULL, 0};
+		}
 		uintptr_t SearchStartAddress = SectionStartAddress;
 
 		// Check if this section contains the StartAddress
-		if (StartAddress != NULL && StartAddress > SectionStartAddress)
+		if (StartAddress != 0 && StartAddress > SectionStartAddress)
 		{
 			// This section does not contain any address greater than StartAddress
 			if (StartAddress >= SectionEndAddress)
 				return { NULL, 0x0 };
 
 			SearchStartAddress = StartAddress;
-			SearchRange = SectionEndAddress - StartAddress;
+		}
+		const std::size_t available = static_cast<std::size_t>(SectionEndAddress - SearchStartAddress);
+		const std::size_t requested = Range > 0
+			? (std::min)(available, static_cast<std::size_t>(Range))
+			: available;
+		if (requested == 0 || requested > (std::numeric_limits<uint32_t>::max)())
+			return {NULL, 0};
+
+		return { SearchStartAddress, static_cast<uint32_t>(requested) };
+	}
+
+	void* ResolvePatternAddress(
+		const uintptr_t start,
+		const std::size_t range,
+		const std::size_t matchOffset,
+		const std::size_t patternSize,
+		const bool relative,
+		const uint32_t relativeOffset) noexcept
+	{
+		uintptr_t matchAddress = 0;
+		if (!TryAddAddress(start, matchOffset, matchAddress))
+			return nullptr;
+		if (!relative)
+			return reinterpret_cast<void*>(matchAddress);
+
+		const std::size_t displacementOffset = relativeOffset
+			== (std::numeric_limits<uint32_t>::max)()
+			? patternSize
+			: static_cast<std::size_t>(relativeOffset);
+		if (matchOffset > range
+			|| displacementOffset > range - matchOffset
+			|| sizeof(int32_t) > range - matchOffset - displacementOffset)
+		{
+			return nullptr;
+		}
+		uintptr_t displacementAddress = 0;
+		uintptr_t instructionEnd = 0;
+		if (!TryAddAddress(matchAddress, displacementOffset, displacementAddress)
+			|| !TryAddAddress(displacementAddress, sizeof(int32_t), instructionEnd))
+		{
+			return nullptr;
+		}
+		int32_t displacement = 0;
+		if (!UExplorer::Runtime::ReadValue(displacementAddress, displacement).Ok())
+			return nullptr;
+		uintptr_t target = 0;
+		return TryApplySignedDisplacement(instructionEnd, displacement, target)
+			? reinterpret_cast<void*>(target)
+			: nullptr;
+	}
+
+	void* FindPatternInReadableRange(
+		const std::span<const int> pattern,
+		const uintptr_t start,
+		const std::size_t range,
+		const bool relative,
+		const uint32_t relativeOffset,
+		const std::size_t skipCount) noexcept
+	{
+		if (pattern.empty() || pattern.size() > range)
+			return nullptr;
+		uintptr_t ignoredEnd = 0;
+		if (!UExplorer::Runtime::CheckedAddressRange(start, range, ignoredEnd))
+			return nullptr;
+		for (const int value : pattern)
+		{
+			if (value < -1 || value > 0xFF)
+				return nullptr;
 		}
 
-		return { SearchStartAddress, SearchRange };
-	}
-
-	bool IsInAnySection(const uintptr_t Address, const DWORD OptionalRequiredCharacteristics = 0)
-	{
-		const auto ModuleBase = PlatformWindows::GetModuleBase();
-
-		bool bFound = false;
-		IterateAllSectionObjects(ModuleBase, [&bFound, Address, ModuleBase, OptionalRequiredCharacteristics](const IMAGE_SECTION_HEADER* SectionHeader) -> bool
+		constexpr std::size_t kReadChunkSize = 64 * 1024;
+		const std::size_t overlap = pattern.size() - 1;
+		if (overlap > (std::numeric_limits<std::size_t>::max)() - kReadChunkSize)
+			return nullptr;
+		try
+		{
+			std::vector<std::byte> window((std::min)(range, kReadChunkSize + overlap));
+			std::size_t remainingSkips = skipCount;
+			for (std::size_t globalOffset = 0; globalOffset < range;)
 			{
-				const uintptr_t SectionStart = ModuleBase + SectionHeader->VirtualAddress;
-				const uintptr_t SectionEnd = SectionStart + SectionHeader->Misc.VirtualSize;
-
-				if (Address >= SectionStart && Address < SectionEnd)
+				const std::size_t remaining = range - globalOffset;
+				const std::size_t primarySize = (std::min)(remaining, kReadChunkSize);
+				const std::size_t readSize = (std::min)(
+					remaining,
+					primarySize + overlap);
+				uintptr_t readAddress = 0;
+				if (!TryAddAddress(start, globalOffset, readAddress)
+					|| !UExplorer::Runtime::ReadMemory(
+						readAddress,
+						std::span<std::byte>(window.data(), readSize)).Ok())
 				{
-					bFound = (SectionHeader->Characteristics & OptionalRequiredCharacteristics) == OptionalRequiredCharacteristics;
-					return true;
+					return nullptr;
 				}
+				if (readSize < pattern.size())
+					break;
 
-				return false;
-			});
-
-		return bFound;
+				const std::span<const uint8_t> bytes(
+					reinterpret_cast<const uint8_t*>(window.data()),
+					readSize);
+				const bool finalWindow = primarySize == remaining;
+				const std::size_t candidateLimit = finalWindow
+					? readSize - pattern.size() + 1
+					: primarySize;
+				std::size_t searchBase = 0;
+				while (searchBase < candidateLimit)
+				{
+					const std::optional<std::size_t> found =
+						UExplorer::Platform::FindBytePatternOffset(
+							bytes.subspan(searchBase),
+							pattern);
+					if (!found)
+						break;
+					const std::size_t localOffset = searchBase + *found;
+					if (localOffset >= candidateLimit)
+						break;
+					if (remainingSkips == 0)
+					{
+						return ResolvePatternAddress(
+							start,
+							range,
+							globalOffset + localOffset,
+							pattern.size(),
+							relative,
+							relativeOffset);
+					}
+					--remainingSkips;
+					searchBase = localOffset + 1;
+				}
+				globalOffset += primarySize;
+			}
+		}
+		catch (...)
+		{
+			return nullptr;
+		}
+		return nullptr;
 	}
 
-	bool IsInAnySection(const void* Address, const DWORD OptionalRequiredCharacteristics = 0)
+	template<typename CharType>
+	bool TryMeasureStringWithSeh(
+		const CharType* value,
+		std::size_t& length) noexcept
 	{
-		return IsInAnySection(reinterpret_cast<uintptr_t>(Address), OptionalRequiredCharacteristics);
+		if (!value)
+			return false;
+		constexpr std::size_t kMaxReferenceCharacters = 64 * 1024;
+#if defined(_MSC_VER)
+		__try
+		{
+#endif
+			for (length = 0; length < kMaxReferenceCharacters; ++length)
+			{
+				if (value[length] == CharType{})
+					return true;
+			}
+#if defined(_MSC_VER)
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			length = 0;
+			return false;
+		}
+#endif
+		length = 0;
+		return false;
+	}
+
+	template<typename CharType>
+	bool SafeStringEquals(
+		const CharType* expected,
+		const uintptr_t address,
+		const std::size_t characterCount) noexcept
+	{
+		if (!expected || address == 0 || characterCount == 0
+			|| characterCount > (std::numeric_limits<std::size_t>::max)() / sizeof(CharType))
+		{
+			return false;
+		}
+		try
+		{
+			std::vector<CharType> actual(characterCount);
+			if (!UExplorer::Runtime::ReadMemory(
+				address,
+				std::as_writable_bytes(std::span<CharType>(actual))).Ok())
+			{
+				return false;
+			}
+			return std::equal(actual.begin(), actual.end(), expected);
+		}
+		catch (...)
+		{
+			return false;
+		}
 	}
 }
 
 
 void* WindowsPrivateImplHelper::FinAlignedValueInRangeImpl(const void* ValuePtr, ValueCompareFuncType ComparisonFunction, const int32_t ValueTypeSize, const int32_t Alignment, uintptr_t StartAddress, uint32_t Range)
 {
+	if (!ValuePtr || !ComparisonFunction || ValueTypeSize <= 0 || Alignment <= 0
+		|| !UExplorer::Runtime::ValidateReadableMemory(StartAddress, Range).Ok())
+	{
+		return nullptr;
+	}
 	const auto SizeFromEnd = GetAlignedSizeWithOffsetFromEnd(Range, Alignment, ValueTypeSize);
 
 	if (SizeFromEnd == -1)
@@ -342,8 +671,10 @@ void* WindowsPrivateImplHelper::FinAlignedValueInRangeImpl(const void* ValuePtr,
 	for (int64_t i = 0x0; i <= SizeFromEnd; i += Alignment)
 	{
 		void* TypedPtr = reinterpret_cast<void*>(StartAddress + i);
-
-		if (ComparisonFunction(ValuePtr, TypedPtr))
+		bool equal = false;
+		if (!CompareMemoryValueWithSeh(ComparisonFunction, ValuePtr, TypedPtr, equal))
+			return nullptr;
+		if (equal)
 			return TypedPtr;
 	}
 
@@ -353,9 +684,18 @@ void* WindowsPrivateImplHelper::FinAlignedValueInRangeImpl(const void* ValuePtr,
 void* WindowsPrivateImplHelper::FindAlignedValueInSectionImpl(const SectionInfo& Info, const void* ValuePtr, ValueCompareFuncType ComparisonFunction, const int32_t ValueTypeSize, const int32_t Alignment)
 {
 	const WindowsSectionInfo WinSectionInfo = SectionInfoToWinSectionInfo(Info);
+	if (!WinSectionInfo.IsValid())
+		return nullptr;
 
 	const uint32_t Range = WinSectionInfo.SectionHeader->Misc.VirtualSize;
-	const uintptr_t SectionBaseAddrss = WinSectionInfo.Imagebase + WinSectionInfo.SectionHeader->VirtualAddress;
+	uintptr_t SectionBaseAddrss = 0;
+	if (!TryAddAddress(
+		WinSectionInfo.Imagebase,
+		WinSectionInfo.SectionHeader->VirtualAddress,
+		SectionBaseAddrss))
+	{
+		return nullptr;
+	}
 
 	return FinAlignedValueInRangeImpl(ValuePtr, ComparisonFunction, ValueTypeSize, Alignment, SectionBaseAddrss, Range);
 }
@@ -363,6 +703,11 @@ void* WindowsPrivateImplHelper::FindAlignedValueInSectionImpl(const SectionInfo&
 void* WindowsPrivateImplHelper::FindAlignedValueInAllSectionsImpl(const void* ValuePtr, ValueCompareFuncType ComparisonFunction, const int32_t ValueTypeSize, const int32_t Alignment, const uintptr_t StartAddress, int32_t Range, const char* const ModuleName)
 {
 	const auto ModuleBase = GetModuleBase(ModuleName);
+	if (ModuleBase == 0 || !ValuePtr || !ComparisonFunction
+		|| ValueTypeSize <= 0 || Alignment <= 0)
+	{
+		return nullptr;
+	}
 
 	void* Result = nullptr;
 	auto FindStringInSection = [&Result, &Range, StartAddress, ModuleBase, ValuePtr, ComparisonFunction, ValueTypeSize, Alignment](const IMAGE_SECTION_HEADER* SectionHeader) -> bool
@@ -389,15 +734,18 @@ void* WindowsPrivateImplHelper::FindAlignedValueInAllSectionsImpl(const void* Va
 
 uintptr_t PlatformWindows::GetModuleBase(const char* const ModuleName)
 {
-	if (ModuleName == nullptr)
-		return reinterpret_cast<uintptr_t>(GetPEB()->ImageBaseAddress);
-
-	return reinterpret_cast<uintptr_t>(GetModuleLdrTableEntry(ModuleName)->DllBase);
+	const HMODULE module = ModuleName
+		? GetModuleHandleA(ModuleName)
+		: GetModuleHandleW(nullptr);
+	return reinterpret_cast<uintptr_t>(module);
 }
 
 uintptr_t PlatformWindows::GetOffset(const uintptr_t Address, const char* const ModuleName)
 {
-	return (Address - GetModuleBase(ModuleName));
+	const uintptr_t moduleBase = GetModuleBase(ModuleName);
+	if (Address == 0 || moduleBase == 0 || Address < moduleBase)
+		return 0;
+	return Address - moduleBase;
 }
 
 uintptr_t PlatformWindows::GetOffset(const void* Address, const char* const ModuleName)
@@ -435,13 +783,17 @@ std::pair<std::string, uintptr_t> PlatformWindows::GetModuleAndOffset(const void
 SectionInfo PlatformWindows::GetSectionInfo(const std::string& SectionName, const char* const ModuleName)
 {
 	const uintptr_t ModuleBase = GetModuleBase(ModuleName);
-
 	WindowsSectionInfo WinSectionInfo = { .Imagebase = ModuleBase };
-
-	WinSectionInfo.SectionHeader = IterateAllSectionObjects(ModuleBase, [SectionName](const IMAGE_SECTION_HEADER* Section) -> bool
+	UExplorer::Platform::PeImageView image;
+	if (!SectionName.empty() && UExplorer::Platform::InspectPeImage(ModuleBase, image).Ok())
+	{
+		const UExplorer::Platform::PeSectionView* section = image.FindSection(SectionName);
+		if (section)
 		{
-			return reinterpret_cast<const char*>(Section->Name) == SectionName;
-		});
+			WinSectionInfo.SectionHeader =
+				reinterpret_cast<const IMAGE_SECTION_HEADER*>(section->HeaderAddress);
+		}
+	}
 	
 	return WinSectionInfoToSectionInfo(WinSectionInfo);
 }
@@ -450,16 +802,34 @@ void* PlatformWindows::IterateSectionWithCallback(const SectionInfo& Info, const
 {
 	const WindowsSectionInfo WinSectionInfo = SectionInfoToWinSectionInfo(Info);
 
-	if (!WinSectionInfo.IsValid())
+	if (!WinSectionInfo.IsValid() || !Callback || Granularity == 0)
 		return nullptr;
 
-	const uintptr_t SectionBaseAddrss = WinSectionInfo.Imagebase + WinSectionInfo.SectionHeader->VirtualAddress;
-	const uint32_t SectionIterationSize = GetAlignedSizeWithOffsetFromEnd(WinSectionInfo.SectionHeader->Misc.VirtualSize, Granularity, OffsetFromEnd);
+	uintptr_t SectionBaseAddrss = 0;
+	if (!TryAddAddress(
+		WinSectionInfo.Imagebase,
+		WinSectionInfo.SectionHeader->VirtualAddress,
+		SectionBaseAddrss))
+	{
+		return nullptr;
+	}
+	const int64_t SectionIterationSize = GetAlignedSizeWithOffsetFromEnd(
+		WinSectionInfo.SectionHeader->Misc.VirtualSize,
+		Granularity,
+		OffsetFromEnd);
 
 	if (SectionIterationSize == -1)
 		return nullptr;
+	if (!UExplorer::Runtime::ValidateReadableMemory(
+		SectionBaseAddrss,
+		static_cast<std::size_t>(SectionIterationSize) + OffsetFromEnd).Ok())
+	{
+		return nullptr;
+	}
 
-	for (uintptr_t CurrentAddress = SectionBaseAddrss; CurrentAddress < (SectionBaseAddrss + SectionIterationSize); CurrentAddress += Granularity)
+	for (uintptr_t CurrentAddress = SectionBaseAddrss;
+		CurrentAddress - SectionBaseAddrss < static_cast<uintptr_t>(SectionIterationSize);
+		CurrentAddress += Granularity)
 	{
 		if (Callback(reinterpret_cast<void*>(CurrentAddress)))
 			return reinterpret_cast<void*>(CurrentAddress);
@@ -500,36 +870,24 @@ bool PlatformWindows::IsAddressInAnyModule(const void* Address)
 {
 	if (!Address)
 		return false;
-
-	const PEB* Peb = GetPEB();
-	if (!Peb || !Peb->Ldr)
-		return false;
-
-	const PEB_LDR_DATA* Ldr = Peb->Ldr;
-	const LIST_ENTRY* Head = &Ldr->InMemoryOrderModuleList;
-	const LIST_ENTRY* P = Head->Flink;
-	int SafetyCounter = 0;
-
-	while (P && P != Head && SafetyCounter++ < 4096)
-	{
-		const auto* Entry = reinterpret_cast<const LDR_DATA_TABLE_ENTRY*>(
-			reinterpret_cast<const uint8_t*>(P) - offsetof(LDR_DATA_TABLE_ENTRY, InMemoryOrderLinks));
-		if (!Entry->DllBase || Entry->SizeOfImage == 0)
+	const uintptr_t target = reinterpret_cast<uintptr_t>(Address);
+	bool found = false;
+	VisitLoadedModules([target, &found](const LDR_DATA_TABLE_ENTRY& entry) {
+		if (!entry.DllBase || entry.SizeOfImage == 0)
+			return false;
+		const uintptr_t moduleBegin = reinterpret_cast<uintptr_t>(entry.DllBase);
+		uintptr_t moduleEnd = 0;
+		if (!UExplorer::Runtime::CheckedAddressRange(
+			moduleBegin,
+			entry.SizeOfImage,
+			moduleEnd))
 		{
-			P = P->Flink;
-			continue;
+			return false;
 		}
-
-		const uintptr_t ModuleBegin = reinterpret_cast<uintptr_t>(Entry->DllBase);
-		const uintptr_t ModuleEnd = ModuleBegin + static_cast<uintptr_t>(Entry->SizeOfImage);
-		const uintptr_t Addr = reinterpret_cast<uintptr_t>(Address);
-		if (Addr >= ModuleBegin && Addr < ModuleEnd)
-			return true;
-
-		P = P->Flink;
-	}
-
-	return false;
+		found = target >= moduleBegin && target < moduleEnd;
+		return found;
+	});
+	return found;
 }
 
 bool PlatformWindows::IsAddressInProcessRange(const uintptr_t Address)
@@ -545,7 +903,7 @@ bool PlatformWindows::IsAddressInProcessRange(const uintptr_t Address)
 
 	// Keep this as a pure "currently readable" probe.
 	// Do not mix in module-range heuristics here.
-	return !IsBadReadPtr(reinterpret_cast<const void*>(Address));
+	return !IsBadReadPtr(reinterpret_cast<const void*>(Address), 1);
 }
 bool PlatformWindows::IsAddressInProcessRange(const void* Address)
 {
@@ -553,136 +911,137 @@ bool PlatformWindows::IsAddressInProcessRange(const void* Address)
 }
 bool PlatformWindows::IsBadReadPtr(const uintptr_t Address)
 {
-	return IsBadReadPtr(reinterpret_cast<const void*>(Address));
+	return IsBadReadPtr(Address, sizeof(void*));
 }
 bool PlatformWindows::IsBadReadPtr(const void* Address)
 {
-	if (!Address)
-		return true;
+	return IsBadReadPtr(Address, sizeof(void*));
+}
 
-	if constexpr (!Is32Bit())
-	{
-		if (!Architecture_x86_64::IsValid64BitVirtualAddress(Address))
-			return true;
-	}
+bool PlatformWindows::IsBadReadPtr(const uintptr_t Address, const std::size_t Size)
+{
+	return IsBadReadPtr(reinterpret_cast<const void*>(Address), Size);
+}
 
-	// Use SEH probing instead of C++ exceptions. C++ catch(...) does not catch
-	// access violations under /EHsc, which caused startup crashes on nullptr.
-	__try
-	{
-		const volatile uint8_t* first = static_cast<const volatile uint8_t*>(Address);
-		volatile uint8_t firstVal = *first;
-		(void)firstVal;
-
-		const uintptr_t tailAddr = reinterpret_cast<uintptr_t>(Address) + sizeof(void*) - 1;
-		const volatile uint8_t* tail = reinterpret_cast<const volatile uint8_t*>(tailAddr);
-		volatile uint8_t tailVal = *tail;
-		(void)tailVal;
-	}
-	__except (EXCEPTION_EXECUTE_HANDLER)
+bool PlatformWindows::IsBadReadPtr(const void* Address, const std::size_t Size)
+{
+	const uintptr_t begin = reinterpret_cast<uintptr_t>(Address);
+	uintptr_t endExclusive = 0;
+	if (!Address || !UExplorer::Runtime::CheckedAddressRange(begin, Size, endExclusive)
+		|| !Architecture_x86_64::IsValid64BitVirtualAddress(Address)
+		|| !Architecture_x86_64::IsValid64BitVirtualAddress(
+			reinterpret_cast<const void*>(endExclusive - 1)))
 	{
 		return true;
 	}
-
-	return false;
+	if (!UExplorer::Runtime::ValidateReadableMemory(begin, Size).Ok())
+		return true;
+	std::uint8_t probe = 0;
+	if (!UExplorer::Runtime::ReadValue(begin, probe).Ok())
+		return true;
+	return !UExplorer::Runtime::ReadValue(endExclusive - 1, probe).Ok();
 }
 
 const void* PlatformWindows::GetAddressOfImportedFunction(const char* SearchModuleName, const char* ModuleToImportFrom, const char* SearchFunctionName)
 {
+	if (!ModuleToImportFrom || !*ModuleToImportFrom
+		|| !SearchFunctionName || !*SearchFunctionName)
+	{
+		return nullptr;
+	}
 	const uintptr_t SearchModule = GetModuleBase(SearchModuleName);
-
+	if (SearchModule == 0)
+		return nullptr;
 	return GetImportAddress(SearchModule, ModuleToImportFrom, SearchFunctionName);
 }
 const void* PlatformWindows::GetAddressOfImportedFunctionFromAnyModule(const char* ModuleToImportFrom, const char* SearchFunctionName)
 {
-	const PEB* Peb = GetPEB();
-	const PEB_LDR_DATA* Ldr = Peb->Ldr;
-
-	int NumEntriesLeft = Ldr->Length;
-
-	for (const LIST_ENTRY* P = Ldr->InMemoryOrderModuleList.Flink; P && NumEntriesLeft-- > 0; P = P->Flink)
+	if (!ModuleToImportFrom || !*ModuleToImportFrom
+		|| !SearchFunctionName || !*SearchFunctionName)
 	{
-		const LDR_DATA_TABLE_ENTRY* Entry = reinterpret_cast<const LDR_DATA_TABLE_ENTRY*>(P);
-
-		const PIMAGE_THUNK_DATA Import = GetImportAddress(reinterpret_cast<uintptr_t>(Entry->DllBase), ModuleToImportFrom, SearchFunctionName);
-
-		if (Import)
-			return reinterpret_cast<const void*>(Import->u1.AddressOfData);
+		return nullptr;
 	}
-
-	return nullptr;
+	const void* result = nullptr;
+	VisitLoadedModules([&result, ModuleToImportFrom, SearchFunctionName](
+		const LDR_DATA_TABLE_ENTRY& entry) {
+		const PIMAGE_THUNK_DATA slot = GetImportAddress(
+			reinterpret_cast<uintptr_t>(entry.DllBase),
+			ModuleToImportFrom,
+			SearchFunctionName);
+		if (!slot)
+			return false;
+		IMAGE_THUNK_DATA thunk{};
+		if (!UExplorer::Runtime::ReadValue(reinterpret_cast<uintptr_t>(slot), thunk).Ok()
+			|| thunk.u1.Function == 0)
+		{
+			return false;
+		}
+		result = reinterpret_cast<const void*>(thunk.u1.Function);
+		return true;
+	});
+	return result;
 }
 
 const void* PlatformWindows::GetAddressOfExportedFunction(const char* SearchModuleName, const char* SearchFunctionName)
 {
-	/* Get the module the function was exported from */
-	const uintptr_t ModuleBase = GetModuleBase(SearchModuleName);
-	const IMAGE_DOS_HEADER* DosHeader = reinterpret_cast<PIMAGE_DOS_HEADER>(ModuleBase);
-
-	if (ModuleBase == 0x0 || DosHeader->e_magic != IMAGE_DOS_SIGNATURE)
+	if (!SearchFunctionName || !*SearchFunctionName)
 		return nullptr;
-
-	const IMAGE_NT_HEADERS* NtHeader = reinterpret_cast<PIMAGE_NT_HEADERS>(ModuleBase + reinterpret_cast<PIMAGE_DOS_HEADER>(ModuleBase)->e_lfanew);
-
-	if (!NtHeader)
+	const HMODULE module = reinterpret_cast<HMODULE>(GetModuleBase(SearchModuleName));
+	if (!module)
 		return nullptr;
-
-	/* Get the table of functions exported by the module */
-	const IMAGE_EXPORT_DIRECTORY* ExportTable = reinterpret_cast<PIMAGE_EXPORT_DIRECTORY>(ModuleBase + NtHeader->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress);
-
-	const DWORD* NameOffsets = reinterpret_cast<const DWORD*>(ModuleBase + ExportTable->AddressOfNames);
-	const DWORD* FunctionOffsets = reinterpret_cast<const DWORD*>(ModuleBase + ExportTable->AddressOfFunctions);
-
-	const WORD* Ordinals = reinterpret_cast<const WORD*>(ModuleBase + ExportTable->AddressOfNameOrdinals);
-
-	/* Iterate all names and return the function if the name matches what we're looking for */
-	for (int i = 0; i < ExportTable->NumberOfNames; i++)
-	{
-		const WORD NameIndex = Ordinals[i];
-		const char* Name = reinterpret_cast<const char*>(ModuleBase + NameOffsets[i]);
-
-		if (strcmp(SearchFunctionName, Name) == 0)
-			return reinterpret_cast<void*>(ModuleBase + FunctionOffsets[NameIndex]);
-	}
-
-	return nullptr;
+	return reinterpret_cast<const void*>(GetProcAddress(module, SearchFunctionName));
 }
 
 template<bool bShouldResolve32BitJumps>
 std::pair<const void*, int32_t> PlatformWindows::IterateVTableFunctions(void** VTable, const std::function<bool(const uint8_t* Address, int32_t Index)>& CallBackForEachFunc, int32_t NumFunctions, int32_t OffsetFromStart)
 {
-	[[maybe_unused]] auto Resolve32BitRelativeJump = [](const void* FunctionPtr) -> const uint8_t*
+	if (!VTable || !CallBackForEachFunc || NumFunctions <= 0
+		|| OffsetFromStart < 0 || OffsetFromStart >= NumFunctions)
+		return { nullptr, -1 };
+
+	for (int32_t i = OffsetFromStart; i < NumFunctions; ++i)
 	{
+		void* currentFunction = nullptr;
+		uintptr_t slotAddress = 0;
+		if (!TryAddAddress(
+			reinterpret_cast<uintptr_t>(VTable),
+			static_cast<std::size_t>(i) * sizeof(void*),
+			slotAddress))
+		{
+			break;
+		}
+		if (!UExplorer::Runtime::ReadValue(slotAddress, currentFunction).Ok())
+			break;
+		const uintptr_t currentAddress = reinterpret_cast<uintptr_t>(currentFunction);
+		if (currentAddress == 0 || !IsAddressInProcessRange(currentAddress))
+			break;
+
+		uintptr_t resolvedAddress = currentAddress;
 		if constexpr (bShouldResolve32BitJumps)
 		{
-			const uint8_t* Address = reinterpret_cast<const uint8_t*>(FunctionPtr);
-			if (*Address == 0xE9)
+			uint8_t opcode = 0;
+			if (!UExplorer::Runtime::ReadValue(currentAddress, opcode).Ok())
+				break;
+			if (opcode == 0xE9)
 			{
-				const uint8_t* Ret = ((Address + 5) + *reinterpret_cast<const int32_t*>(Address + 1));
-
-				if (IsAddressInProcessRange(Ret))
-					return Ret;
+				int32_t displacement = 0;
+				uintptr_t displacementAddress = 0;
+				uintptr_t instructionEnd = 0;
+				uintptr_t jumpTarget = 0;
+				if (TryAddAddress(currentAddress, 1, displacementAddress)
+					&& UExplorer::Runtime::ReadValue(displacementAddress, displacement).Ok()
+					&& TryAddAddress(currentAddress, 5, instructionEnd)
+					&& TryApplySignedDisplacement(instructionEnd, displacement, jumpTarget)
+					&& IsAddressInProcessRange(jumpTarget))
+				{
+					resolvedAddress = jumpTarget;
+				}
 			}
 		}
 
-		return reinterpret_cast<const uint8_t*>(FunctionPtr);
-	};
-
-
-	if (!CallBackForEachFunc)
-		return { nullptr, -1 };
-
-	for (int i = 0; i < 0x150; i++)
-	{
-		const uintptr_t CurrentFuncAddress = reinterpret_cast<uintptr_t>(VTable[i]);
-
-		if (CurrentFuncAddress == NULL || !IsAddressInProcessRange(CurrentFuncAddress))
-			break;
-
-		const uint8_t* ResolvedAddress = Resolve32BitRelativeJump(reinterpret_cast<const uint8_t*>(CurrentFuncAddress));
-
-		if (CallBackForEachFunc(ResolvedAddress, i))
-			return { ResolvedAddress, i };
+		const auto* resolved = reinterpret_cast<const uint8_t*>(resolvedAddress);
+		if (CallBackForEachFunc(resolved, i))
+			return { resolved, i };
 	}
 
 	return { nullptr, -1 };
@@ -692,6 +1051,8 @@ std::pair<const void*, int32_t> PlatformWindows::IterateVTableFunctions(void** V
 void* PlatformWindows::FindPattern(const char* Signature, const uint32_t Offset, const bool bSearchAllSections, const uintptr_t StartAddress, const char* const ModuleName)
 {
 	const auto ModuleBase = GetModuleBase(ModuleName);
+	if (ModuleBase == 0 || !Signature || !*Signature)
+		return nullptr;
 
 	void* Result = nullptr;
 	auto FindPatternInRangeLambda = [&Result, ModuleBase, Signature, Offset, StartAddress](const IMAGE_SECTION_HEADER* SectionHeader) -> bool
@@ -713,9 +1074,18 @@ void* PlatformWindows::FindPattern(const char* Signature, const uint32_t Offset,
 	else
 	{
 		const WindowsSectionInfo WinSectionInfo = SectionInfoToWinSectionInfo(GetSectionInfo(".text", ModuleName));
+		if (!WinSectionInfo.IsValid())
+			return nullptr;
 
 		const uint32_t Range = WinSectionInfo.SectionHeader->Misc.VirtualSize;
-		const uintptr_t SectionBaseAddrss = WinSectionInfo.Imagebase + WinSectionInfo.SectionHeader->VirtualAddress;
+		uintptr_t SectionBaseAddrss = 0;
+		if (!TryAddAddress(
+			WinSectionInfo.Imagebase,
+			WinSectionInfo.SectionHeader->VirtualAddress,
+			SectionBaseAddrss))
+		{
+			return nullptr;
+		}
 
 		return FindPatternInRange(Signature, reinterpret_cast<const uint8_t*>(SectionBaseAddrss), Range, Offset != 0x0, Offset);
 	}
@@ -725,34 +1095,18 @@ void* PlatformWindows::FindPattern(const char* Signature, const uint32_t Offset,
 
 void* PlatformWindows::FindPatternInRange(const char* Signature, const void* Start, const uintptr_t Range, const bool bRelative, const uint32_t Offset)
 {
-	static auto PatternToByte = [](const char* pattern) -> std::vector<int>
-	{
-		std::vector<int> Bytes;
-
-		const auto Start = const_cast<char*>(pattern);
-		const auto End = const_cast<char*>(pattern) + strlen(pattern);
-
-		for (auto Current = Start; Current < End; ++Current)
-		{
-			if (*Current == '?')
-			{
-				++Current;
-
-				if (*Current == '?')
-					++Current;
-
-				Bytes.push_back(-1);
-			}
-			else
-			{
-				Bytes.push_back(strtoul(Current, &Current, 16));
-			}
-		}
-
-		return Bytes;
-	};
-
-	return FindPatternInRange(PatternToByte(Signature), Start, Range, bRelative, Offset);
+	if (!Signature || !Start || Range == 0)
+		return nullptr;
+	std::vector<int> pattern;
+	if (!UExplorer::Platform::TryParseBytePattern(Signature, pattern))
+		return nullptr;
+	return FindPatternInReadableRange(
+		pattern,
+		reinterpret_cast<uintptr_t>(Start),
+		static_cast<std::size_t>(Range),
+		bRelative,
+		Offset,
+		0);
 }
 
 void* PlatformWindows::FindPatternInRange(const char* Signature, const uintptr_t Start, const uintptr_t Range, const bool bRelative, const uint32_t Offset)
@@ -762,43 +1116,15 @@ void* PlatformWindows::FindPatternInRange(const char* Signature, const uintptr_t
 
 void* PlatformWindows::FindPatternInRange(std::vector<int>&& Signature, const void* Start, const uintptr_t Range, const bool bRelative, uint32_t Offset, const uint32_t SkipCount)
 {
-	const auto PatternLength = static_cast<int64_t>(Signature.size());
-	const auto PatternBytes = Signature.data();
-
-	for (int i = 0; i < (static_cast<int64_t>(Range) - PatternLength); i++)
-	{
-		bool bFound = true;
-		int CurrentSkips = 0;
-
-		for (auto j = 0ul; j < PatternLength; ++j)
-		{
-			if (static_cast<const uint8_t*>(Start)[i + j] != PatternBytes[j] && PatternBytes[j] != -1)
-			{
-				bFound = false;
-				break;
-			}
-		}
-		if (bFound)
-		{
-			if (CurrentSkips != SkipCount)
-			{
-				CurrentSkips++;
-				continue;
-			}
-
-			uintptr_t Address = reinterpret_cast<uintptr_t>(Start) + i;
-			if (bRelative)
-			{
-				if (Offset == -1)
-					Offset = PatternLength;
-
-				Address = ((Address + Offset + 4) + *reinterpret_cast<int32_t*>(Address + Offset));
-			}
-			return reinterpret_cast<void*>(Address);
-		}
-	}
-
-	return nullptr;
+	if (!Start || Range == 0)
+		return nullptr;
+	return FindPatternInReadableRange(
+		Signature,
+		reinterpret_cast<uintptr_t>(Start),
+		static_cast<std::size_t>(Range),
+		bRelative,
+		Offset,
+		SkipCount);
 }
 
 /* Slower than FindByString */
@@ -806,8 +1132,9 @@ template<bool bCheckIfLeaIsStrPtr, typename CharType>
 void* PlatformWindows::FindByStringInAllSections(const CharType* RefStr,const uintptr_t StartAddress, int32_t Range, const bool bSearchOnlyExecutableSections, const char* const ModuleName)
 {
 	static_assert(std::is_same_v<CharType, char> || std::is_same_v<CharType, wchar_t>, "FindByStringInAllSections only supports 'char' and 'wchar_t', but was called with other type.");
-
 	const auto ModuleBase = GetModuleBase(ModuleName);
+	if (!RefStr || ModuleBase == 0)
+		return nullptr;
 
 	void* Result = nullptr;
 	auto FindStringInSection = [&Result, &Range, StartAddress, ModuleBase, bSearchOnlyExecutableSections, RefStr](const IMAGE_SECTION_HEADER* SectionHeader) -> bool
@@ -817,16 +1144,22 @@ void* PlatformWindows::FindByStringInAllSections(const CharType* RefStr,const ui
 
 		const auto [SearchStartAddress, SearchRange] = GetSearchStartAndRangeBasedOnOverrides(ModuleBase, SectionHeader, StartAddress, Range);
 
-		if (SearchStartAddress == NULL || SearchRange == 0x0)
+		constexpr uint32_t InstructionBytesLength = 0x7;
+		if (SearchStartAddress == NULL || SearchRange <= InstructionBytesLength)
 			return false;
 
 		if (Range > 0x0)
-			Range -= SearchRange;
+			Range -= static_cast<int32_t>(SearchRange);
+		if (SearchRange - InstructionBytesLength
+			> static_cast<uint32_t>((std::numeric_limits<int32_t>::max)()))
+		{
+			return false;
+		}
 
-		// Make sure we don't try to read beyond the limit. This might cause string refs at the very end of a search Range not to be found.
-		constexpr auto InstructionBytesLength = 0x7;
-
-		Result = FindStringInRange<bCheckIfLeaIsStrPtr, CharType>(RefStr, SearchStartAddress, (SearchRange - InstructionBytesLength));
+		Result = FindStringInRange<bCheckIfLeaIsStrPtr, CharType>(
+			RefStr,
+			SearchStartAddress,
+			static_cast<int32_t>(SearchRange - InstructionBytesLength));
 
 		return Result != nullptr;
 	};
@@ -839,58 +1172,69 @@ void* PlatformWindows::FindByStringInAllSections(const CharType* RefStr,const ui
 template<bool bCheckIfLeaIsStrPtr, typename CharType>
 inline void* PlatformWindows::FindStringInRange(const CharType* RefStr, const uintptr_t StartAddress, const int32_t Range)
 {
-	uint8_t* const SearchStart = reinterpret_cast<uint8_t*>(StartAddress);
-
+	if (!RefStr || StartAddress == 0 || Range <= 0)
+		return nullptr;
 	// Ensure the null-terminator is also compared, else strings that are substrings of other strings might be falsely matched.
-	const int32_t RefStrLen = StrlenHelper(RefStr) + 1;
+	std::size_t rawLength = 0;
+	if (!TryMeasureStringWithSeh(RefStr, rawLength)
+		|| rawLength == (std::numeric_limits<std::size_t>::max)())
+		return nullptr;
+	const std::size_t RefStrLen = rawLength + 1;
+	constexpr std::size_t InstructionBytesLength = 0x7;
+	const std::size_t searchBytes = static_cast<std::size_t>(Range) + InstructionBytesLength;
+	std::vector<uint8_t> instructions;
+	try
+	{
+		instructions.resize(searchBytes);
+	}
+	catch (...)
+	{
+		return nullptr;
+	}
+	if (!UExplorer::Runtime::ReadMemory(
+		StartAddress,
+		std::as_writable_bytes(std::span<uint8_t>(instructions))).Ok())
+	{
+		return nullptr;
+	}
 
 	for (int32 i = 0; i < Range; i++)
 	{
-#if defined(_WIN64)
 		// opcode: lea
-		if ((SearchStart[i] == uint8_t(0x4C) || SearchStart[i] == uint8_t(0x48)) && SearchStart[i + 1] == uint8_t(0x8D))
+		if ((instructions[i] == uint8_t(0x4C) || instructions[i] == uint8_t(0x48))
+			&& instructions[i + 1] == uint8_t(0x8D))
 		{
-			const uintptr_t StrPtr = Architecture_x86_64::Resolve32BitRelativeLea(reinterpret_cast<uintptr_t>(SearchStart + i));
-
-			if (!IsAddressInProcessRange(StrPtr))
+			int32_t displacement = 0;
+			std::memcpy(&displacement, instructions.data() + i + 3, sizeof(displacement));
+			uintptr_t instructionAddress = 0;
+			uintptr_t instructionEnd = 0;
+			uintptr_t StrPtr = 0;
+			if (!TryAddAddress(StartAddress, static_cast<std::size_t>(i), instructionAddress)
+				|| !TryAddAddress(instructionAddress, InstructionBytesLength, instructionEnd)
+				|| !TryApplySignedDisplacement(instructionEnd, displacement, StrPtr))
+			{
 				continue;
-
-			if (!IsInAnySection(StrPtr, IMAGE_SCN_MEM_READ) && IsBadReadPtr(StrPtr))
-				continue;
-
-
-			if (StrnCmpHelper(RefStr, reinterpret_cast<const CharType*>(StrPtr), RefStrLen))
-				return { SearchStart + i };
+			}
+			if (SafeStringEquals(RefStr, StrPtr, RefStrLen))
+				return reinterpret_cast<void*>(instructionAddress);
 
 			if constexpr (bCheckIfLeaIsStrPtr)
 			{
-				const CharType* StrPtrContentFirst8Bytes = *reinterpret_cast<const CharType* const*>(StrPtr);
-
-				if (!IsAddressInProcessRange(StrPtrContentFirst8Bytes))
+				const CharType* indirectString = nullptr;
+				if (!UExplorer::Runtime::ReadValue(StrPtr, indirectString).Ok()
+					|| !indirectString)
+				{
 					continue;
-
-				if (StrnCmpHelper(RefStr, StrPtrContentFirst8Bytes, RefStrLen))
-					return { SearchStart + i };
+				}
+				if (SafeStringEquals(
+					RefStr,
+					reinterpret_cast<uintptr_t>(indirectString),
+					RefStrLen))
+				{
+					return reinterpret_cast<void*>(instructionAddress);
+				}
 			}
 		}
-#elif defined(_WIN32)
-		// opcode: push
-		if ((SearchStart[i] == uint8_t(0x68)))
-		{
-			const uintptr_t StrPtr = Architecture_x86_64::Resolve32BitRelativePush(reinterpret_cast<uintptr_t>(SearchStart + i));
-
-			if (!IsAddressInProcessRange(StrPtr))
-				continue;
-
-			if (!IsBadReadPtr(StrPtr))
-				continue;
-
-			if (StrnCmpHelper(RefStr, reinterpret_cast<const CharType*>(StrPtr), RefStrLen))
-			{
-				return { SearchStart + i };
-			}
-		}
-#endif
 	}
 
 	return nullptr;

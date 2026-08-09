@@ -179,6 +179,52 @@
         "Game metadata command and target-process fixture remain pending"
       ]
     },
+	"LIFE-008": {
+	  "status": "verified",
+	  "verification": [
+		"2026-08-09: startup version detection now inspects a validated AMD64 PE image and scans only PE sections marked readable",
+		"2026-08-09: bounded 64 KiB SafeMemory windows with overlap replace the raw SizeOfImage pointer walk and return layered probe/PE/memory/native errors",
+		"Core harness covers a marker crossing a read-window boundary, malformed markers, invalid PE bounds, and a no-access readable-section failure"
+	  ]
+	},
+	"PLATFORM-001": {
+	  "status": "verified",
+	  "verification": [
+		"2026-08-09: byte-pattern scanning owns remainingSkips outside the candidate loop and includes the final legal start offset",
+		"Core harness verifies first/second/final matches, wildcard parsing, skip exhaustion, and malformed tokens"
+	  ]
+	},
+	"PLATFORM-002": {
+	  "status": "in_progress",
+	  "verification": [
+		"2026-08-09: both module-range and import-from-any-module paths use one bounded SafeMemory LDR walker that subtracts offsetof(InMemoryOrderLinks), validates Blink continuity, and freezes the x64 DllBase/SizeOfImage offsets with static_assert",
+		"Static contract and x64 Core compilation pass; injected-target module-list traversal fixture remains pending"
+	  ]
+	},
+	"PLATFORM-003": {
+	  "status": "in_progress",
+	  "verification": [
+		"2026-08-09: GetModuleBase uses a nullable GetModuleHandle result; offset, section, import/export, aligned scan, and pattern paths reject missing modules/sections before dereference",
+		"Validated PeImageView provides typed missing-module, header, architecture, image-size, section-table, section-bound, read, and allocation errors",
+		"Core harness verifies current/missing modules plus invalid DOS and out-of-image section fixtures",
+		"Legacy GetModuleBase/GetSectionInfo/FindPattern signatures still expose sentinel values rather than typed Result and must be retired during the remaining R2 migration"
+	  ]
+	},
+	"PLATFORM-004": {
+	  "status": "in_progress",
+	  "verification": [
+		"2026-08-09: IsBadReadPtr now accepts the real byte length, validates every VirtualQuery region, checks canonical first/last addresses, and performs final SafeMemory/SEH probes",
+		"Pattern and string scanners copy bounded input through SafeMemory before parsing; reference strings are SEH-bounded, targets and indirect pointers use SafeMemory, VTable entries use typed reads, and aligned comparisons are SEH-isolated",
+		"Core harness verifies a range crossing from readable into PAGE_NOACCESS; remaining legacy pointer consumers must still migrate before R2 closes"
+	  ]
+	},
+	"PLATFORM-005": {
+	  "status": "verified",
+	  "verification": [
+		"2026-08-09: Platform.h and PlatformWindows.h fail compilation outside _WIN64 with an explicit Windows x64-only error",
+		"The incorrect x86 FindStringInRange branch was removed; project and CI matrices expose x64 configurations only"
+	  ]
+	},
     "OFF-002": {
       "status": "in_progress",
       "verification": [
@@ -381,7 +427,8 @@
       "status": "in_progress",
       "verification": [
         "2026-08-09: SafeMemory validates every region, performs SEH-isolated copies, checks protection changes, and restores original protections in reverse order",
-        "Core harness verifies read-only restoration, no-access rejection, overflow rejection, and compare-exchange mismatch behavior",
+		"2026-08-09: public noexcept memory operations convert allocation failures to a stable MEMORY_ALLOCATION_FAILED result and reserve protection-owner storage before any page mutation",
+		"Core harness verifies read-only restoration, no-access and cross-region rejection, overflow rejection, and compare-exchange mismatch behavior",
         "Protection-failure target fixture remains pending"
       ]
     },

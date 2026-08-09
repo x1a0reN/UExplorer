@@ -2,6 +2,10 @@
 
 #if defined(_WIN32) || defined(_WIN64)
 
+#if !defined(_WIN64)
+#error "UExplorer Core supports Windows x64 only."
+#endif
+
 #include "Platform/Private/PlatformWindows.h"
 
 namespace Platform = PlatformWindows;
@@ -11,11 +15,7 @@ namespace Platform = PlatformWindows;
 // A macro to append the correct postfix for this platform to a function name and call the function with the supplied parameters.
 #define CALL_PLATFORM_SPECIFIC_FUNCTION(FunctionName, ...) FunctionName##_Windows(__VA_ARGS__)
 
-#if defined(_WIN64)
 #define PLATFORM_WINDOWS64
-#else
-#define PLATFORM_WINDOWS32
-#endif
 
 #elif defined (__ANDROID__)
 #error "The dumper does not support android."

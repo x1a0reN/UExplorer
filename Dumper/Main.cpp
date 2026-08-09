@@ -3,7 +3,6 @@
 #include <chrono>
 #include <thread>
 #include <atomic>
-#include <cstring>
 #include <filesystem>
 #include <algorithm>
 #include <cctype>
@@ -24,6 +23,7 @@
 #include "Runtime/CoreSession.h"
 #include "Runtime/EngineContextCapture.h"
 #include "Runtime/EngineFacade.h"
+#include "Runtime/EngineVersionProbe.h"
 #include "Runtime/GameThreadExecutor.h"
 #include "Runtime/ObjectArrayIdentitySource.h"
 #include "Runtime/ObjectArraySnapshotSource.h"
@@ -229,86 +229,25 @@ namespace
 	}
 }
 
-static std::string TryProbeEngineVersionFromImage()
-{
-	HMODULE exeModule = GetModuleHandleW(nullptr);
-	if (!exeModule)
-		return "";
-
-	const uint8* base = reinterpret_cast<const uint8*>(exeModule);
-	const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
-	if (!dos || dos->e_magic != IMAGE_DOS_SIGNATURE)
-		return "";
-
-	if (dos->e_lfanew <= 0 || dos->e_lfanew > 0x10000)
-		return "";
-
-	const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
-	if (!nt || nt->Signature != IMAGE_NT_SIGNATURE || nt->OptionalHeader.SizeOfImage == 0)
-		return "";
-
-	const char* begin = reinterpret_cast<const char*>(base);
-	const char* end = begin + nt->OptionalHeader.SizeOfImage;
-
-	auto ScanWithTag = [begin, end](const char* tag) -> std::string
-	{
-		const size_t tagLen = std::strlen(tag);
-		if (tagLen == 0 || static_cast<size_t>(end - begin) <= tagLen)
-			return "";
-
-		for (const char* p = begin; p + static_cast<ptrdiff_t>(tagLen + 4) < end; ++p)
-		{
-			if (std::memcmp(p, tag, tagLen) != 0)
-				continue;
-
-			const char* v = p + tagLen;
-			std::string parsed;
-			while (v < end)
-			{
-				const char ch = *v;
-				if ((ch >= '0' && ch <= '9') || ch == '.')
-				{
-					parsed.push_back(ch);
-					if (parsed.size() >= 16)
-						break;
-					++v;
-					continue;
-				}
-				break;
-			}
-
-			if (parsed.find('.') != std::string::npos)
-				return parsed;
-		}
-
-		return "";
-	};
-
-	std::string version = ScanWithTag("++UE4+Release-");
-	if (version.empty())
-		version = ScanWithTag("++UE5+Release-");
-	if (version.empty())
-		version = ScanWithTag("UE4+Release-");
-	if (version.empty())
-		version = ScanWithTag("UE5+Release-");
-
-	return version;
-}
-
 static void PrimeGameVersionBeforeOffsetInit()
 {
 	if (!Settings::Generator::GameVersion.empty())
 		return;
 
-	const std::string probed = TryProbeEngineVersionFromImage();
-	if (!probed.empty())
+	const UExplorer::Runtime::EngineVersionProbeResult probe =
+		UExplorer::Runtime::ProbeLoadedEngineVersion();
+	if (probe.Ok())
 	{
-		Settings::Generator::GameVersion = probed;
+		Settings::Generator::GameVersion = probe.Version;
 		std::cerr << "[UExplorer] Pre-init engine version probe: " << Settings::Generator::GameVersion << "\n";
 	}
 	else
 	{
-		std::cerr << "[UExplorer] Pre-init engine version probe: not found\n";
+		std::cerr << "[UExplorer] Pre-init engine version probe failed: code="
+			<< UExplorer::Runtime::ToString(probe.Error)
+			<< " image=" << UExplorer::Platform::ToString(probe.ImageError)
+			<< " memory=" << UExplorer::Runtime::ToString(probe.MemoryFailure)
+			<< " native=" << probe.NativeError << "\n";
 	}
 }
 

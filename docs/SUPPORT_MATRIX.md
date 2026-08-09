@@ -3,6 +3,9 @@
 Support is evidence-based. A version is supported only after its fixture suite and a
 target-process run pass. Source compatibility or a successful build is not sufficient.
 
+The Core build target is Windows x64 only. x86/Win32 is intentionally unsupported and
+fails at compile time; there is no 32-bit runtime capability or fallback path.
+
 | Engine profile | Fixture | Current status | Enabled capabilities | Required evidence |
 |---|---|---|---|---|
 | UE 4.26 x64 | Missing | Not supported | None claimed | Object/name arrays, offsets, ProcessEvent, bytecode, property codecs, SDK/USMAP consumer, clean unload |

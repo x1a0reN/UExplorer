@@ -6,6 +6,8 @@
 #include <Windows.h>
 
 #include "IPC/Protocol.h"
+#include "Platform/Public/BytePattern.h"
+#include "Platform/Public/PeImage.h"
 #include "Runtime/BoundedQueue.h"
 #include "Runtime/CallbackBarrier.h"
 #include "Runtime/CoreCapabilities.h"
@@ -15,6 +17,7 @@
 #include "Runtime/EngineNameCodec.h"
 #include "Runtime/EngineSnapshot.h"
 #include "Runtime/EngineSnapshotCapture.h"
+#include "Runtime/EngineVersionProbe.h"
 #include "Runtime/FUObjectItemLayout.h"
 #include "Runtime/GameThreadExecutor.h"
 #include "Runtime/ObjectHandle.h"
@@ -28,6 +31,7 @@
 #include "Generator/Public/Generators/UsmapContainer.h"
 #include "Server/HttpServer.h"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cctype>
@@ -44,8 +48,11 @@
 #include <stdexcept>
 #include <string>
 #include <sstream>
+#include <span>
 #include <thread>
+#include <type_traits>
 #include <unordered_map>
+#include <vector>
 
 namespace
 {
@@ -58,6 +65,18 @@ namespace
 	{
 		if (!condition)
 			throw std::runtime_error(message);
+	}
+
+	template<typename T>
+	void StoreFixtureValue(
+		std::vector<std::byte>& bytes,
+		const std::size_t offset,
+		const T& value)
+	{
+		static_assert(std::is_trivially_copyable_v<T>);
+		Require(offset <= bytes.size() && sizeof(T) <= bytes.size() - offset,
+			"Fixture write exceeded its backing buffer");
+		std::memcpy(bytes.data() + offset, &value, sizeof(T));
 	}
 
 	void WaitUntil(const std::function<bool()>& predicate, const char* message)
@@ -1799,6 +1818,175 @@ namespace
 			"Slot/InternalIndex mismatch was accepted");
 	}
 
+	void TestBytePatternScanner()
+	{
+		using UExplorer::Platform::FindBytePatternOffset;
+		using UExplorer::Platform::TryParseBytePattern;
+
+		std::vector<int> pattern;
+		Require(TryParseBytePattern("AA BB ? DD", pattern),
+			"Valid byte pattern was rejected");
+		Require(pattern == std::vector<int>({0xAA, 0xBB, -1, 0xDD}),
+			"Byte pattern parser changed wildcard semantics");
+		const std::array<std::uint8_t, 12> bytes{
+			0xAA, 0xBB, 0x01, 0xDD,
+			0xAA, 0xBB, 0x02, 0xDD,
+			0xAA, 0xBB, 0x03, 0xDD
+		};
+		Require(FindBytePatternOffset(bytes, pattern, 0) == 0,
+			"Pattern scanner missed the first match");
+		Require(FindBytePatternOffset(bytes, pattern, 1) == 4,
+			"Pattern scanner did not retain one skipped match");
+		Require(FindBytePatternOffset(bytes, pattern, 2) == 8,
+			"Pattern scanner missed a match at the final candidate offset");
+		Require(!FindBytePatternOffset(bytes, pattern, 3),
+			"Pattern scanner returned a match past the skip count");
+		const std::array<int, 1> invalidPattern{-2};
+		Require(!FindBytePatternOffset(bytes, invalidPattern),
+			"Pattern scanner accepted an invalid byte token");
+
+		for (const std::string_view malformed : {
+			std::string_view{},
+			std::string_view{"A"},
+			std::string_view{"GG"},
+			std::string_view{"AA BBX"},
+			std::string_view{"?A"}
+		})
+		{
+			Require(!TryParseBytePattern(malformed, pattern),
+				"Malformed byte pattern was accepted");
+			Require(pattern.empty(),
+				"Failed byte-pattern parsing exposed a partial result");
+		}
+	}
+
+	void TestPeImageInspectionAndEngineVersionProbe()
+	{
+		using namespace UExplorer::Platform;
+		using namespace UExplorer::Runtime;
+
+		constexpr std::size_t imageSize = 0x12000;
+		constexpr std::size_t ntOffset = 0x80;
+		constexpr std::size_t sectionVirtualAddress = 0x200;
+		std::vector<std::byte> imageBytes(imageSize);
+
+		IMAGE_DOS_HEADER dos{};
+		dos.e_magic = IMAGE_DOS_SIGNATURE;
+		dos.e_lfanew = static_cast<LONG>(ntOffset);
+		StoreFixtureValue(imageBytes, 0, dos);
+
+		IMAGE_NT_HEADERS64 nt{};
+		nt.Signature = IMAGE_NT_SIGNATURE;
+		nt.FileHeader.Machine = IMAGE_FILE_MACHINE_AMD64;
+		nt.FileHeader.NumberOfSections = 1;
+		nt.FileHeader.SizeOfOptionalHeader = sizeof(IMAGE_OPTIONAL_HEADER64);
+		nt.OptionalHeader.Magic = IMAGE_NT_OPTIONAL_HDR64_MAGIC;
+		nt.OptionalHeader.SizeOfImage = static_cast<DWORD>(imageSize);
+		nt.OptionalHeader.SizeOfHeaders = static_cast<DWORD>(sectionVirtualAddress);
+		StoreFixtureValue(imageBytes, ntOffset, nt);
+
+		IMAGE_SECTION_HEADER section{};
+		constexpr std::array<std::uint8_t, 6> sectionName{
+			'.', 'r', 'd', 'a', 't', 'a'
+		};
+		std::copy(sectionName.begin(), sectionName.end(), section.Name);
+		section.VirtualAddress = static_cast<DWORD>(sectionVirtualAddress);
+		section.Misc.VirtualSize = static_cast<DWORD>(imageSize - sectionVirtualAddress);
+		section.Characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ;
+		const std::size_t sectionHeaderOffset = ntOffset + sizeof(IMAGE_NT_HEADERS64);
+		StoreFixtureValue(imageBytes, sectionHeaderOffset, section);
+
+		constexpr std::string_view marker = "++UE5+Release-5.4.2";
+		const std::size_t markerOffset = sectionVirtualAddress + 64 * 1024 - 8;
+		Require(markerOffset + marker.size() < imageBytes.size(),
+			"Engine version fixture marker is out of bounds");
+		std::memcpy(imageBytes.data() + markerOffset, marker.data(), marker.size());
+
+		PeImageView image;
+		const PeImageResult inspected = InspectPeImage(
+			reinterpret_cast<std::uintptr_t>(imageBytes.data()),
+			image);
+		Require(inspected.Ok(), "Valid synthetic PE image was rejected");
+		const PeSectionView* rdata = image.FindSection(".rdata");
+		Require(rdata != nullptr
+			&& rdata->Address == reinterpret_cast<std::uintptr_t>(imageBytes.data())
+				+ sectionVirtualAddress
+			&& rdata->IsReadable(),
+			"Synthetic PE section metadata was not preserved");
+		const EngineVersionProbeResult version = ProbeEngineVersion(image);
+		Require(version.Ok() && version.Version == "5.4.2",
+			"Bounded readable-section engine version probe failed");
+
+		const auto MarkerBytes = [](const std::string_view text) {
+			return std::span<const std::byte>(
+				reinterpret_cast<const std::byte*>(text.data()),
+				text.size());
+		};
+		Require(ParseEngineVersionMarkers(MarkerBytes("UE4+Release-4.27.2")).Ok(),
+			"Valid UE4 marker was rejected");
+		Require(ParseEngineVersionMarkers(MarkerBytes("++UE5+Release-5..4")).Error
+			== EngineVersionProbeError::MarkerNotFound,
+			"Malformed engine version marker was accepted");
+		Require(ParseEngineVersionMarkers(MarkerBytes("++UE5+Release-6.0")).Error
+			== EngineVersionProbeError::MarkerNotFound,
+			"Unsupported engine major version marker was accepted");
+
+		std::vector<std::byte> invalidDos = imageBytes;
+		IMAGE_DOS_HEADER brokenDos = dos;
+		brokenDos.e_magic = 0;
+		StoreFixtureValue(invalidDos, 0, brokenDos);
+		Require(InspectPeImage(
+			reinterpret_cast<std::uintptr_t>(invalidDos.data()), image).Error
+			== PeImageError::InvalidDosHeader,
+			"Invalid DOS header was accepted");
+
+		std::vector<std::byte> invalidSection = imageBytes;
+		IMAGE_SECTION_HEADER brokenSection = section;
+		brokenSection.Misc.VirtualSize = static_cast<DWORD>(imageSize);
+		StoreFixtureValue(invalidSection, sectionHeaderOffset, brokenSection);
+		Require(InspectPeImage(
+			reinterpret_cast<std::uintptr_t>(invalidSection.data()), image).Error
+			== PeImageError::InvalidSection,
+			"Out-of-image PE section was accepted");
+
+		PeImageView loadedImage;
+		Require(InspectLoadedPeImage(nullptr, loadedImage).Ok(),
+			"Current x64 executable PE image could not be inspected");
+		Require(InspectLoadedPeImage(
+			L"UExplorer-fixture-module-that-does-not-exist.dll", loadedImage).Error
+			== PeImageError::ModuleNotLoaded,
+			"Missing module lookup did not return an explicit error");
+
+		SYSTEM_INFO systemInfo{};
+		GetSystemInfo(&systemInfo);
+		void* noAccess = VirtualAlloc(
+			nullptr,
+			systemInfo.dwPageSize,
+			MEM_RESERVE | MEM_COMMIT,
+			PAGE_NOACCESS);
+		Require(noAccess != nullptr, "Engine version no-access fixture allocation failed");
+		struct NoAccessGuard
+		{
+			void* Address;
+			~NoAccessGuard() { if (Address) VirtualFree(Address, 0, MEM_RELEASE); }
+		} noAccessGuard{noAccess};
+		PeImageView inaccessible{
+			.Base = reinterpret_cast<std::uintptr_t>(noAccess),
+			.Size = systemInfo.dwPageSize,
+			.Sections = {{
+				.Name = {},
+				.HeaderAddress = 0,
+				.Address = reinterpret_cast<std::uintptr_t>(noAccess),
+				.Size = systemInfo.dwPageSize,
+				.Characteristics = IMAGE_SCN_MEM_READ
+			}}
+		};
+		const EngineVersionProbeResult inaccessibleResult = ProbeEngineVersion(inaccessible);
+		Require(inaccessibleResult.Error == EngineVersionProbeError::MemoryReadFailed
+			&& inaccessibleResult.MemoryFailure == MemoryError::AccessDenied,
+			"Unreadable PE section did not return a typed probe error");
+	}
+
 	void TestSafeMemory()
 	{
 		using namespace UExplorer::Runtime;
@@ -1813,7 +2001,7 @@ namespace
 		GetSystemInfo(&systemInfo);
 		void* allocation = VirtualAlloc(
 			nullptr,
-			systemInfo.dwPageSize,
+			static_cast<std::size_t>(systemInfo.dwPageSize) * 2,
 			MEM_RESERVE | MEM_COMMIT,
 			PAGE_READWRITE);
 		Require(allocation != nullptr, "SafeMemory fixture allocation failed");
@@ -1824,6 +2012,30 @@ namespace
 		} allocationGuard{allocation};
 
 		const auto address = reinterpret_cast<std::uintptr_t>(allocation);
+		Require(ValidateReadableMemory(
+			address,
+			static_cast<std::size_t>(systemInfo.dwPageSize) * 2).Ok(),
+			"SafeMemory rejected a committed readable range");
+		Require(ValidateReadableMemory(0, 1).Error == MemoryError::InvalidRange,
+			"SafeMemory readable-range validation accepted nullptr");
+		DWORD boundaryProtection = 0;
+		Require(VirtualProtect(
+			reinterpret_cast<void*>(address + systemInfo.dwPageSize),
+			systemInfo.dwPageSize,
+			PAGE_NOACCESS,
+			&boundaryProtection) != FALSE,
+			"SafeMemory boundary fixture setup failed");
+		Require(ValidateReadableMemory(
+			address + systemInfo.dwPageSize - 1,
+			2).Error == MemoryError::AccessDenied,
+			"SafeMemory missed a no-access page inside the requested range");
+		DWORD restoredBoundaryProtection = 0;
+		Require(VirtualProtect(
+			reinterpret_cast<void*>(address + systemInfo.dwPageSize),
+			systemInfo.dwPageSize,
+			boundaryProtection,
+			&restoredBoundaryProtection) != FALSE,
+			"SafeMemory boundary fixture cleanup failed");
 		const std::uint32_t initial = 0x11223344;
 		Require(WriteValue(address, initial).Ok(), "SafeMemory initial write failed");
 		std::uint32_t readBack = 0;
@@ -2262,6 +2474,8 @@ int main(const int argc, char** argv)
 		TestIncrementalSnapshotCapture();
 		TestCoreDomainCommandsAndHandleExecution();
 		TestFUObjectItemIdentityLayout();
+		TestBytePatternScanner();
+		TestPeImageInspectionAndEngineVersionProbe();
 		TestHookOwnershipAndCallbackDrain();
 		TestSafeMemory();
 		TestQueueOwnershipAndBackpressure();
@@ -2271,7 +2485,7 @@ int main(const int argc, char** argv)
 		TestPostRenderFrameClientOwnershipAndDrain();
 		TestGameThreadMpscCapacity();
 		TestHttpServerLifecycle();
-		std::cout << "Core harness passed: framing, secure sessions, runtime/capabilities, EngineFacade/immutable budgeted snapshots, domain commands, stable handles/FUObjectItem layout, Hook RAII/drain, SafeMemory, USMAP consumer, bounded queues, cancellable owned game-thread/frame-client work, SEH, HTTP lifecycle, and shutdown.\n";
+		std::cout << "Core harness passed: framing, secure sessions, runtime/capabilities, EngineFacade/immutable budgeted snapshots, domain commands, stable handles/FUObjectItem layout, bounded PE/version probing, pattern scanning, Hook RAII/drain, SafeMemory, USMAP consumer, bounded queues, cancellable owned game-thread/frame-client work, SEH, HTTP lifecycle, and shutdown.\n";
 		return 0;
 	}
 	catch (const std::exception& error)

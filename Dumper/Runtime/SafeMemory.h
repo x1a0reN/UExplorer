@@ -21,7 +21,8 @@ enum class MemoryError : std::uint8_t
 	ExecutableWriteDenied,
 	InstructionCacheFlushRequired,
 	InstructionCacheFlushFailed,
-	ValueMismatch
+	ValueMismatch,
+	AllocationFailed
 };
 
 const char* ToString(MemoryError error) noexcept;
@@ -47,6 +48,7 @@ bool CheckedAddressRange(
 	std::size_t size,
 	std::uintptr_t& endExclusive) noexcept;
 
+MemoryResult ValidateReadableMemory(std::uintptr_t address, std::size_t size) noexcept;
 MemoryResult ReadMemory(std::uintptr_t address, std::span<std::byte> output) noexcept;
 MemoryResult WriteMemory(
 	std::uintptr_t address,

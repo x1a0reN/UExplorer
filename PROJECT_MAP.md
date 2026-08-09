@@ -25,7 +25,7 @@ UExplorer 是一个面向 Unreal Engine 的 **SDK Dump + 实时游戏内省工�
 └──────────────────────────────────────────────┘
 ```
 
-当前分支处于 R2：`CoreRuntime`、不可变 `EngineContext`/名称布局、`EngineFacade`、严格名称 codec、稳定 Handle、原子 `EngineSnapshotStore`、生产 object/path snapshot source、PostRender 有界帧泵和安全关闭边界已建立；Named Pipe 与 Rust Session Host 尚属 R3。`Dumper/Server` 和 `Dumper/API` 是 R4 前的 legacy HTTP 兼容层，不是目标架构，且不会与 IPC 形成长期双栈。Snapshot 目前是经二次验证后发布的完整 sweep，而非 UE 引擎时钟上的瞬时原子快照；功能真实性与未完成项以 `DESIGN.md` 和 `docs/issue-status.json` 为准。
+当前分支处于 R2：`CoreRuntime`、不可变 `EngineContext`/名称布局、`EngineFacade`、严格名称 codec、稳定 Handle、原子 `EngineSnapshotStore`、生产 object/path snapshot source、PostRender 有界帧泵、安全关闭边界，以及有界 x64 PE/pattern/版本探测已经建立；Named Pipe 与 Rust Session Host 尚属 R3。`Dumper/Server` 和 `Dumper/API` 是 R4 前的 legacy HTTP 兼容层，不是目标架构，且不会与 IPC 形成长期双栈。Snapshot 目前是经二次验证后发布的完整 sweep，而非 UE 引擎时钟上的瞬时原子快照；功能真实性与未完成项以 `DESIGN.md` 和 `docs/issue-status.json` 为准。
 
 ---
 
@@ -49,6 +49,7 @@ UExplorer/
 │   │   ├── EngineContext*.h/.cpp     #   一次性发布的引擎 profile/offset report
 │   │   ├── EngineFacade.h/.cpp       #   session/context/identity 的单一领域入口
 │   │   ├── EngineNameCodec.h/.cpp    #   immutable layout + SafeMemory 的严格 FName 解码
+│   │   ├── EngineVersionProbe.h/.cpp #   只扫描已验证 PE 可读节的版本标记探测
 │   │   ├── EngineSnapshot.h/.cpp     #   严格校验并原子发布的不可变快照 store
 │   │   ├── EngineSnapshotCapture.*   #   budgeted capture/validate/publish producer
 │   │   ├── ObjectSnapshotIdentitySource.h # snapshot 所需的 typed slot identity 边界
@@ -138,9 +139,12 @@ UExplorer/
 │   ├── Platform/                      ★ 平台抽象层
 │   │   ├── Public/
 │   │   │   ├── Platform.h            #   平台选择器 (PLATFORM_WINDOWS → PlatformWindows)
-│   │   │   └── Architecture.h        #   架构选择器 (→ Arch_x86)
+│   │   │   ├── Architecture.h        #   架构选择器 (→ Arch_x86)
+│   │   │   ├── BytePattern.h         #   严格 pattern parser 与可测试 skip-aware scanner
+│   │   │   └── PeImage.h             #   typed AMD64 PE image/section view 与错误模型
 │   │   └── Private/
-│   │       ├── PlatformWindows.h/.cpp #   模式扫描, IsBadReadPtr, VTable 遍历, 内存地址校验
+│   │       ├── PlatformWindows.h/.cpp #   x64-only 模式扫描、范围校验、安全 LDR/模块访问
+│   │       ├── PeImage.cpp            #   SafeMemory 驱动的 PE header/section 边界验证
 │   │       └── Arch_x86.h/.cpp       #   x86-64 指令解析 (RIP 相对跳转/调用, 函数边界)
 │   │
 │   └── Utils/                         ★ 工具库

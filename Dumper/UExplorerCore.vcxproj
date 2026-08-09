@@ -113,6 +113,7 @@
   <ItemGroup>
     <!-- Platform -->
     <ClCompile Include="Platform\Private\Arch_x86.cpp" />
+    <ClCompile Include="Platform\Private\PeImage.cpp" />
     <ClCompile Include="Platform\Private\PlatformWindows.cpp" />
     <!-- Utils -->
     <ClCompile Include="Settings.cpp" />
@@ -120,6 +121,7 @@
 	<ClCompile Include="Runtime\CoreSession.cpp" />
 	<ClCompile Include="Runtime\EngineFacade.cpp" />
 	<ClCompile Include="Runtime\EngineNameCodec.cpp" />
+	<ClCompile Include="Runtime\EngineVersionProbe.cpp" />
 	<ClCompile Include="Runtime\EngineSnapshot.cpp" />
 	<ClCompile Include="Runtime\EngineSnapshotCapture.cpp" />
     <ClCompile Include="Runtime\EngineContextCapture.cpp" />
@@ -191,6 +193,8 @@
     <ClInclude Include="Platform\Private\Arch_x86.h" />
     <ClInclude Include="Platform\Private\PlatformWindows.h" />
     <ClInclude Include="Platform\Public\Architecture.h" />
+    <ClInclude Include="Platform\Public\BytePattern.h" />
+    <ClInclude Include="Platform\Public\PeImage.h" />
     <ClInclude Include="Platform\Public\Platform.h" />
     <!-- Utils Headers -->
     <ClInclude Include="Settings.h" />
@@ -213,6 +217,7 @@
     <ClInclude Include="Runtime\EngineContextCapture.h" />
 	<ClInclude Include="Runtime\EngineFacade.h" />
 	<ClInclude Include="Runtime\EngineNameCodec.h" />
+	<ClInclude Include="Runtime\EngineVersionProbe.h" />
 	<ClInclude Include="Runtime\EngineSnapshot.h" />
 	<ClInclude Include="Runtime\EngineSnapshotCapture.h" />
 	<ClInclude Include="Runtime\FUObjectItemLayout.h" />

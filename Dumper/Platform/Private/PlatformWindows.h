@@ -1,6 +1,11 @@
 #pragma once
 
+#if !defined(_WIN64)
+#error "UExplorer Core supports Windows x64 only."
+#endif
+
 #include <Windows.h>
+#include <cstddef>
 #include <iostream>
 #include <vector>
 #include <string>
@@ -112,11 +117,7 @@ namespace PlatformWindows
 {
 	consteval bool Is32Bit()
 	{
-#if defined(_WIN64)
 		return false;
-#elif defined(_WIN32)
-		return true;
-#endif
 	}
 
 	uintptr_t GetModuleBase(const char* const ModuleName = Settings::General::DefaultModuleName);
@@ -134,6 +135,8 @@ namespace PlatformWindows
 	bool IsAddressInProcessRange(const void* Address);
 	bool IsBadReadPtr(const uintptr_t Address);
 	bool IsBadReadPtr(const void* Address);
+	bool IsBadReadPtr(const uintptr_t Address, std::size_t Size);
+	bool IsBadReadPtr(const void* Address, std::size_t Size);
 
 	const void* GetAddressOfImportedFunction(const char* SearchModuleName, const char* ModuleToImportFrom, const char* SearchFunctionName);
 	const void* GetAddressOfImportedFunctionFromAnyModule(const char* ModuleToImportFrom, const char* SearchFunctionName);
