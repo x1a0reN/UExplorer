@@ -18,8 +18,8 @@ React -> Tauri invoke/event -> Rust Host -> Windows Named Pipe RPC -> Core DLL -
 
 | 重构阶段 | 当前状态 | 已有证据 | 未完成门槛 |
 |---|---|---|---|
-| R0 证据与测试地基 | 进行中 | 128 项问题可跟踪；65 条 API v1 路由快照；IPC v1 契约；C++ framing/queue/backpressure/shutdown harness；Rust protocol/Fake Core 测试；前端 lint/test/build 通过；Windows CI 三个 job 首次通过 | 三类 UE fixture、每个 P0 的回归测试 |
-| R1 安全止血 | 进行中 | 注入路径已完成首轮止血：PID/start-time/path 身份、Host/目标/DLL x64、PE32+、canonical path、重复模块、最小权限、remote exit code、模块回查、超时延迟释放；React 不再把 DLL loaded 当 Core ready | 目标进程注入/超时/重复加载 fixture；GameThread、Hook、HTTP worker、USMAP、reconnect、critical offset 修复 |
+| R0 证据与测试地基 | 已完成 | 128 项问题可跟踪；65 条 API v1 路由快照；IPC v1 契约；C++ framing/queue/backpressure/shutdown harness；Rust protocol/Fake Core 测试；前端 lint/test/build 通过；Windows CI 三个 job 通过 | 目标 UE fixture 属于 R7 发布门，不再阻塞测试地基本身 |
+| R1 安全止血 | 进行中 | 注入路径已止血；GameThread 使用拥有参数的 64 项有界 MPSC、单调 deadline、终态与 drain；ProcessEvent SEH 转结构化失败；Hook restore/in-flight/unload refusal；HTTP worker 全部 join、socket timeout、精确 bind、SendAll；危险 reconnect/raw transform/legacy Watch/假 WS Console 已禁用；critical guessed offsets 已移除；USMAP 头与未压缩载荷一致 | Hook/注入目标进程 fixture；独立 USMAP consumer；剩余 offset capability 验证与 dump 关闭边界 |
 | R2 CoreRuntime/能力模型 | 未开始 | 目标状态机已在重构计划定义 | CoreRuntime、EngineContext、CapabilityRegistry 实装 |
 | R3 Named Pipe/Rust Host | 未开始 | IPC v1 framing 与 Fake Core 地基已建立 | 真实 Pipe、PID/ACL 校验、SessionManager、deadline/cancel |
 | R4 通信原子切换 | 未开始 | ADR 已接受 | React 只走 Tauri，Core 发布构建不含可达网络栈 |
@@ -27,7 +27,7 @@ React -> Tauri invoke/event -> Rust Host -> Windows Named Pipe RPC -> Core DLL -
 | R6 前端状态重构 | 未开始 | UI lint 已清零，基础 Vitest 已建立 | session store、查询取消、BigInt 地址、真实能力 UI |
 | R7 发布硬化 | 未开始 | 无 | 性能、压力、目标 fixture、文档和发布门全部通过 |
 
-当前不能宣称“可用”的既有功能包括：假实时 Watch、占位 WebSocket Console、直接 Transform 内存写、带错误 Zstd 标记的 USMAP、未生效 Dump option、猜测 Offset 后继续 Ready，以及未证明可安全卸载的 Hook/HTTP worker。它们在修复或禁用前均视为已知缺陷。
+当前不能宣称“可用”的既有功能包括：Watch（旧 polling/SSE 路径已返回 unavailable）、WebSocket Console（端点已禁用）、Actor Transform 写入（已返回 unavailable）、未生效 Dump option、尚无独立消费者证据的 USMAP、未完成 capability 报告的 Offset，以及未经过真实目标进程卸载 fixture 的 Hook。旧 HTTP 仅作为 R4 切换前的临时兼容层，不是目标架构。
 
 ### 0.1 R1 注入止血状态
 
@@ -39,6 +39,18 @@ React -> Tauri invoke/event -> Rust Host -> Windows Named Pipe RPC -> Core DLL -
 - UI 将 dll_loaded、already_loaded、failed 分开显示，DLL load 后不再自动采用 runtime.ini 或关闭弹窗。IPC handshake 与 Core Ready 要到 R3 才能建立，因此当前不能把 DLL loaded 宣称为连接成功。
 
 当前证据为 Rust 单元测试、Clippy、静态安全契约和前端 lint/test/build；真实目标进程的成功、超时、错误架构、PID 复用与重复加载 fixture 尚未执行，所以对应注入问题仍标记为 in_progress。
+
+### 0.2 R1 Core 止血状态
+
+- `GameThreadQueue` 不再保存调用方裸缓冲区：任务拥有参数，使用 64 项有界 MPSC 队列和单调 deadline，区分排队超时与运行超时；停止会取消排队任务、唤醒 waiter 并等待执行中的任务。MSVC SEH 会转为 `ExecutionFailed`，不会遗留 processing 状态。
+- 所有公开函数调用拒绝 `use_game_thread=false`；参数结构大小和字段范围必须可验证，只开放当前明确支持的标量类型，batch 上限为 64。未找到真实 ProcessEvent 时初始化失败，不存在 no-op 或 Worker 线程 fallback。
+- PostRender/ProcessEvent VTable 修改会校验写保护恢复和最终指针，卸载前停止队列、恢复槽位并等待 callback in-flight 清零；任何恢复或 drain 失败都会阻止 `FreeLibraryAndExitThread`。ProcessEvent 监控改为按首次订阅延迟安装。
+- 临时 HTTP Server 不再创建 detached worker。接纳计数在建线程前原子保留，所有 worker 和 socket 有 owner；`Stop()` 中断慢连接并 join 全部线程后才允许析构，监听端口严格按配置 bind，不尝试替代端口，所有写入统一走 `SendAll`。
+- raw memory write 现在校验范围、`VirtualProtect`、SEH 写入和保护恢复；运行中 reconnect、raw Actor transform write、旧 Watch 和假 WebSocket Console 均明确返回 unavailable，前端也不再呈现其为已连接/实时功能。
+- USMAP 当前明确使用 `None` 压缩标记并写入等长原始 payload，检查 size/open/write/flush；这修复了“Zstd 标记 + 未压缩载荷”的确定性损坏，但在独立 consumer fixture 通过前仍不标记为 verified。
+- `CoreHarness` 已覆盖 framing、1-byte 分片、队列背压、GameThread 所有权/超时/取消/SEH、64 生产者容量、1000 次 HTTP connect/disconnect、占用端口无 fallback 和慢客户端 shutdown。`tests/contracts/verify-core-safety.ps1` 固化静态不变量。
+
+本阶段最新本地证据：VS2026 `Release|x64` Core 与 harness 构建通过，Core harness 通过，`npm run lint` 通过。真实 UE 目标的 Hook 恢复、注入超时和 USMAP consumer 仍是明确未执行项，不能用本地 harness 代替。
 
 ## Context
 

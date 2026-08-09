@@ -49,10 +49,13 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="..\..\Dumper\Server\HttpServer.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\Dumper\IPC\Protocol.h" />
     <ClInclude Include="..\..\Dumper\Runtime\BoundedQueue.h" />
+    <ClInclude Include="..\..\Dumper\API\GameThreadQueue.h" />
+    <ClInclude Include="..\..\Dumper\Server\HttpServer.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

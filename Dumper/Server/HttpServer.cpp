@@ -23,6 +23,7 @@
 #include <regex>
 #include <sstream>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
 namespace UExplorer
@@ -65,6 +66,11 @@ public:
 	std::thread ServerThread;
 	std::atomic<bool> Running{ false };
 	std::atomic<int> ActiveClients{ 0 };
+	bool WsaStarted = false;
+	std::mutex ClientThreadsMutex;
+	std::vector<std::thread> ClientThreads;
+	std::mutex ClientSocketsMutex;
+	std::unordered_set<SOCKET> ClientSockets;
 
 	// SSE support
 	std::mutex SSEClientsMutex;
@@ -81,6 +87,34 @@ public:
 
 	Impl(uint16_t port, const std::string& token)
 		: Port(port), Token(token) {}
+
+	bool ReserveClient(SOCKET client)
+	{
+		int count = ActiveClients.load(std::memory_order_relaxed);
+		while (count < kMaxConcurrentClients)
+		{
+			if (ActiveClients.compare_exchange_weak(
+				count,
+				count + 1,
+				std::memory_order_acq_rel,
+				std::memory_order_relaxed))
+			{
+				std::lock_guard<std::mutex> lock(ClientSocketsMutex);
+				ClientSockets.insert(client);
+				return true;
+			}
+		}
+		return false;
+	}
+
+	void ReleaseClient(SOCKET client)
+	{
+		{
+			std::lock_guard<std::mutex> lock(ClientSocketsMutex);
+			ClientSockets.erase(client);
+		}
+		ActiveClients.fetch_sub(1, std::memory_order_acq_rel);
+	}
 
 	void AddRoute(const std::string& method, const std::string& pattern, RouteHandler handler)
 	{
@@ -268,6 +302,9 @@ public:
 		case 400: oss << "Bad Request"; break;
 		case 401: oss << "Unauthorized"; break;
 		case 404: oss << "Not Found"; break;
+		case 409: oss << "Conflict"; break;
+		case 411: oss << "Length Required"; break;
+		case 413: oss << "Payload Too Large"; break;
 		case 500: oss << "Internal Server Error"; break;
 		default:  oss << "Unknown"; break;
 		}
@@ -498,11 +535,19 @@ public:
 	void HandleWebSocketClient(SOCKET clientSock, const HttpRequest& req)
 	{
 		const std::string path = req.Path;
-		if (path != "/api/v1/ws/console" && path != "/api/v1/ws/events")
+		if (path == "/api/v1/ws/console")
+		{
+			HttpResponse resp{ 409, "application/json", R"({"success":false,"error":"WS_CONSOLE_DISABLED"})" };
+			const std::string out = BuildResponse(resp);
+			SendAll(clientSock, out.c_str(), static_cast<int>(out.size()));
+			closesocket(clientSock);
+			return;
+		}
+		if (path != "/api/v1/ws/events")
 		{
 			HttpResponse resp{ 404, "application/json", R"({"success":false,"error":"WebSocket path not found"})" };
 			std::string out = BuildResponse(resp);
-			send(clientSock, out.c_str(), static_cast<int>(out.size()), 0);
+			SendAll(clientSock, out.c_str(), static_cast<int>(out.size()));
 			closesocket(clientSock);
 			return;
 		}
@@ -512,7 +557,7 @@ public:
 		{
 			HttpResponse resp{ 400, "application/json", R"({"success":false,"error":"Missing Sec-WebSocket-Key"})" };
 			std::string out = BuildResponse(resp);
-			send(clientSock, out.c_str(), static_cast<int>(out.size()), 0);
+			SendAll(clientSock, out.c_str(), static_cast<int>(out.size()));
 			closesocket(clientSock);
 			return;
 		}
@@ -522,7 +567,7 @@ public:
 		{
 			HttpResponse resp{ 500, "application/json", R"({"success":false,"error":"WebSocket handshake failed"})" };
 			std::string out = BuildResponse(resp);
-			send(clientSock, out.c_str(), static_cast<int>(out.size()), 0);
+			SendAll(clientSock, out.c_str(), static_cast<int>(out.size()));
 			closesocket(clientSock);
 			return;
 		}
@@ -583,14 +628,7 @@ public:
 			if (opcode != 0x1)
 				continue;
 
-			if (path == "/api/v1/ws/console")
-			{
-				std::string response = "{\"type\":\"console\",\"ok\":true,\"input\":\""
-					+ EscapeJson(payload)
-					+ "\",\"output\":\"Console bridge connected\"}";
-				SendWebSocketFrame(clientSock, 0x1, response);
-			}
-			else if (path == "/api/v1/ws/events")
+			if (path == "/api/v1/ws/events")
 			{
 				if (payload == "ping")
 					SendWebSocketFrame(clientSock, 0x1, "{\"type\":\"pong\"}");
@@ -606,8 +644,12 @@ public:
 
 	void HandleClient(SOCKET clientSock)
 	{
-		ActiveClients.fetch_add(1, std::memory_order_relaxed);
-		struct ClientGuard { std::atomic<int>& ref; ~ClientGuard() { ref.fetch_sub(1, std::memory_order_relaxed); } } clientGuard{ ActiveClients };
+		struct ClientGuard
+		{
+			Impl& Owner;
+			SOCKET Socket;
+			~ClientGuard() { Owner.ReleaseClient(Socket); }
+		} clientGuard{ *this, clientSock };
 
 		try {
 			char buf[65536];
@@ -636,7 +678,7 @@ public:
 			{
 				HttpResponse resp{ 204, "text/plain", "" };
 				std::string out = BuildResponse(resp);
-				send(clientSock, out.c_str(), static_cast<int>(out.size()), 0);
+				SendAll(clientSock, out.c_str(), static_cast<int>(out.size()));
 				closesocket(clientSock);
 				return;
 			}
@@ -644,8 +686,8 @@ public:
 			if (req.Path != "/api/v1/status/health")
 			{
 				bool authorized = false;
-				auto it = req.Headers.find("X-UExplorer-Token");
-				if (it != req.Headers.end() && ValidateToken(it->second))
+				const std::string tokenHeader = GetHeaderValue(req, "X-UExplorer-Token");
+				if (!tokenHeader.empty() && ValidateToken(tokenHeader))
 					authorized = true;
 
 				// Browser WebSocket clients usually cannot set custom headers; allow token query fallback.
@@ -660,7 +702,7 @@ public:
 				{
 					HttpResponse resp{ 401, "application/json", R"({"success":false,"error":"Unauthorized"})" };
 					std::string out = BuildResponse(resp);
-					send(clientSock, out.c_str(), static_cast<int>(out.size()), 0);
+					SendAll(clientSock, out.c_str(), static_cast<int>(out.size()));
 					closesocket(clientSock);
 					return;
 				}
@@ -672,7 +714,9 @@ public:
 				return;
 			}
 
-			if (req.Path.rfind("/api/v1/events/", 0) == 0)
+			if (req.Path == "/api/v1/events/stream"
+				|| req.Path == "/api/v1/events/watches"
+				|| req.Path == "/api/v1/events/hooks")
 			{
 				int clientIdNum = ++SSEClientCounter;
 				std::string clientId = "sse-" + std::to_string(clientIdNum);
@@ -760,7 +804,7 @@ public:
 
 			HttpResponse resp = MatchAndHandle(req);
 			std::string out = BuildResponse(resp);
-			send(clientSock, out.c_str(), static_cast<int>(out.size()), 0);
+			SendAll(clientSock, out.c_str(), static_cast<int>(out.size()));
 			closesocket(clientSock);
 		}
 		catch (...) {
@@ -776,55 +820,57 @@ public:
 			std::cerr << "[UExplorer] WSAStartup failed\n";
 			return false;
 		}
+		WsaStarted = true;
 
 		ListenSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 		if (ListenSocket == INVALID_SOCKET)
 		{
 			std::cerr << "[UExplorer] socket() failed\n";
 			WSACleanup();
+			WsaStarted = false;
 			return false;
 		}
 
 		int opt = 1;
-		setsockopt(ListenSocket, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&opt), sizeof(opt));
-
-		uint16_t ports[] = { Port, 27015, 27016, 27017, 27018, 0 };
-		bool bound = false;
-
-		for (uint16_t p : ports)
+		if (setsockopt(ListenSocket, SOL_SOCKET, SO_EXCLUSIVEADDRUSE,
+			reinterpret_cast<const char*>(&opt), sizeof(opt)) == SOCKET_ERROR)
 		{
-			sockaddr_in addr{};
-			addr.sin_family = AF_INET;
-			addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-			addr.sin_port = htons(p);
-
-			if (bind(ListenSocket, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != SOCKET_ERROR)
-			{
-				if (p == 0)
-				{
-					sockaddr_in boundAddr{};
-					int len = sizeof(boundAddr);
-					getsockname(ListenSocket, reinterpret_cast<sockaddr*>(&boundAddr), &len);
-					Port = ntohs(boundAddr.sin_port);
-				}
-				else
-				{
-					Port = p;
-				}
-				bound = true;
-				break;
-			}
-			std::cerr << "[UExplorer] bind() port " << p << " failed: 0x"
-				<< std::hex << WSAGetLastError() << std::dec << "\n";
-		}
-
-		if (!bound)
-		{
-			std::cerr << "[UExplorer] All ports failed\n";
+			std::cerr << "[UExplorer] SO_EXCLUSIVEADDRUSE failed\n";
 			closesocket(ListenSocket);
 			ListenSocket = INVALID_SOCKET;
 			WSACleanup();
+			WsaStarted = false;
 			return false;
+		}
+
+		sockaddr_in addr{};
+		addr.sin_family = AF_INET;
+		addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+		addr.sin_port = htons(Port);
+		if (bind(ListenSocket, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == SOCKET_ERROR)
+		{
+			std::cerr << "[UExplorer] bind() port " << Port << " failed: 0x"
+				<< std::hex << WSAGetLastError() << std::dec << "\n";
+			closesocket(ListenSocket);
+			ListenSocket = INVALID_SOCKET;
+			WSACleanup();
+			WsaStarted = false;
+			return false;
+		}
+		if (Port == 0)
+		{
+			sockaddr_in boundAddr{};
+			int len = sizeof(boundAddr);
+			if (getsockname(ListenSocket, reinterpret_cast<sockaddr*>(&boundAddr), &len) == SOCKET_ERROR)
+			{
+				std::cerr << "[UExplorer] getsockname() failed\n";
+				closesocket(ListenSocket);
+				ListenSocket = INVALID_SOCKET;
+				WSACleanup();
+				WsaStarted = false;
+				return false;
+			}
+			Port = ntohs(boundAddr.sin_port);
 		}
 
 		if (listen(ListenSocket, SOMAXCONN) == SOCKET_ERROR)
@@ -833,6 +879,7 @@ public:
 			closesocket(ListenSocket);
 			ListenSocket = INVALID_SOCKET;
 			WSACleanup();
+			WsaStarted = false;
 			return false;
 		}
 
@@ -850,6 +897,8 @@ public:
 			SOCKET client = accept(ListenSocket, nullptr, nullptr);
 			if (client == INVALID_SOCKET)
 			{
+				if (!Running.load(std::memory_order_acquire))
+					break;
 				if (WSAGetLastError() == WSAEWOULDBLOCK)
 				{
 					std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -858,24 +907,33 @@ public:
 				continue;
 			}
 
-			if (ActiveClients.load(std::memory_order_relaxed) >= kMaxConcurrentClients)
+			const DWORD timeoutMs = 2000;
+			if (setsockopt(client, SOL_SOCKET, SO_RCVTIMEO,
+				reinterpret_cast<const char*>(&timeoutMs), sizeof(timeoutMs)) == SOCKET_ERROR
+				|| setsockopt(client, SOL_SOCKET, SO_SNDTIMEO,
+					reinterpret_cast<const char*>(&timeoutMs), sizeof(timeoutMs)) == SOCKET_ERROR)
 			{
 				closesocket(client);
 				continue;
 			}
 
-			std::thread([this, client]() {
-				HandleClient(client);
-			}).detach();
+			if (!ReserveClient(client))
+			{
+				closesocket(client);
+				continue;
+			}
+
+			try
+			{
+				std::lock_guard<std::mutex> lock(ClientThreadsMutex);
+				ClientThreads.emplace_back([this, client]() { HandleClient(client); });
+			}
+			catch (...)
+			{
+				ReleaseClient(client);
+				closesocket(client);
+			}
 		}
-
-		closesocket(ListenSocket);
-		ListenSocket = INVALID_SOCKET;
-
-		for (int i = 0; i < 30 && ActiveClients.load() > 0; ++i)
-			std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-		WSACleanup();
 	}
 }; // end Impl
 
@@ -894,13 +952,42 @@ bool HttpServer::Start()
 	return true;
 }
 
-void HttpServer::Stop()
+bool HttpServer::Stop()
 {
-	m_Impl->Running.store(false);
+	m_Impl->Running.store(false, std::memory_order_release);
 	if (m_Impl->ListenSocket != INVALID_SOCKET)
+	{
+		shutdown(m_Impl->ListenSocket, SD_BOTH);
 		closesocket(m_Impl->ListenSocket);
+	}
 	if (m_Impl->ServerThread.joinable())
 		m_Impl->ServerThread.join();
+	m_Impl->ListenSocket = INVALID_SOCKET;
+
+	{
+		std::lock_guard<std::mutex> lock(m_Impl->ClientSocketsMutex);
+		for (const SOCKET client : m_Impl->ClientSockets)
+			shutdown(client, SD_BOTH);
+	}
+
+	std::vector<std::thread> workers;
+	{
+		std::lock_guard<std::mutex> lock(m_Impl->ClientThreadsMutex);
+		workers.swap(m_Impl->ClientThreads);
+	}
+	for (auto& worker : workers)
+	{
+		if (worker.joinable())
+			worker.join();
+	}
+
+	const bool drained = m_Impl->ActiveClients.load(std::memory_order_acquire) == 0;
+	if (m_Impl->WsaStarted)
+	{
+		WSACleanup();
+		m_Impl->WsaStarted = false;
+	}
+	return drained;
 }
 
 bool HttpServer::IsRunning() const { return m_Impl->Running.load(); }

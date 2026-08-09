@@ -8,6 +8,8 @@
 #include "Platform.h"
 
 #include <format>
+#include <array>
+#include <limits>
 #include <sstream>
 #include <iomanip>
 
@@ -68,6 +70,60 @@ static std::string SafeBytesToHex(uintptr_t addr, size_t size)
 	if (!SafeReadBytes(addr, buf.data(), size))
 		return "";
 	return BytesToHex(buf.data(), size);
+}
+
+enum class SafeWriteStatus
+{
+	Success,
+	InvalidRange,
+	ProtectFailed,
+	AccessViolation,
+	RestoreFailed
+};
+
+static SafeWriteStatus SafeWriteBytes(uintptr_t addr, const uint8* data, size_t size)
+{
+	if (!addr || !data || size == 0 || addr > (std::numeric_limits<uintptr_t>::max)() - size)
+		return SafeWriteStatus::InvalidRange;
+
+	DWORD oldProtect = 0;
+	if (!VirtualProtect(
+		reinterpret_cast<void*>(addr),
+		size,
+		PAGE_EXECUTE_READWRITE,
+		&oldProtect))
+	{
+		return SafeWriteStatus::ProtectFailed;
+	}
+
+	bool writeCompleted = false;
+	__try
+	{
+		memcpy(reinterpret_cast<void*>(addr), data, size);
+		writeCompleted = true;
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		writeCompleted = false;
+	}
+
+	DWORD ignored = 0;
+	if (!VirtualProtect(reinterpret_cast<void*>(addr), size, oldProtect, &ignored))
+		return SafeWriteStatus::RestoreFailed;
+	return writeCompleted ? SafeWriteStatus::Success : SafeWriteStatus::AccessViolation;
+}
+
+static const char* SafeWriteStatusName(SafeWriteStatus status)
+{
+	switch (status)
+	{
+	case SafeWriteStatus::Success: return "SUCCESS";
+	case SafeWriteStatus::InvalidRange: return "INVALID_RANGE";
+	case SafeWriteStatus::ProtectFailed: return "PROTECT_FAILED";
+	case SafeWriteStatus::AccessViolation: return "ACCESS_VIOLATION";
+	case SafeWriteStatus::RestoreFailed: return "RESTORE_PROTECTION_FAILED";
+	default: return "UNKNOWN";
+	}
 }
 
 void RegisterMemoryRoutes(HttpServer& server)
@@ -175,15 +231,20 @@ void RegisterMemoryRoutes(HttpServer& server)
 			if (bytes.size() > 4096)
 				return { 400, "application/json", MakeError("Too many bytes (max 4096)") };
 
-			if (!IsReadable(reinterpret_cast<const void*>(addr), bytes.size()))
-				return { 400, "application/json", MakeError("Access violation: cannot write at " + addrStr) };
+			std::vector<uint8> writeBytes;
+			writeBytes.reserve(bytes.size());
+			for (const int value : bytes)
+			{
+				if (value < 0 || value > 0xFF)
+					return { 400, "application/json", MakeError("Byte values must be in range 0..255") };
+				writeBytes.push_back(static_cast<uint8>(value));
+			}
 
-			uint8* ptr = reinterpret_cast<uint8*>(addr);
-			DWORD oldProtect;
-			VirtualProtect(ptr, bytes.size(), PAGE_EXECUTE_READWRITE, &oldProtect);
-			for (size_t i = 0; i < bytes.size(); i++)
-				ptr[i] = static_cast<uint8>(bytes[i] & 0xFF);
-			VirtualProtect(ptr, bytes.size(), oldProtect, &oldProtect);
+			const SafeWriteStatus writeStatus =
+				SafeWriteBytes(addr, writeBytes.data(), writeBytes.size());
+			if (writeStatus != SafeWriteStatus::Success)
+				return { 400, "application/json",
+					MakeError(std::string("MEMORY_WRITE_") + SafeWriteStatusName(writeStatus)) };
 
 			json data;
 			data["address"] = std::format("0x{:X}", addr);
@@ -207,6 +268,8 @@ void RegisterMemoryRoutes(HttpServer& server)
 			uintptr_t addr = std::stoull(addrStr, nullptr, 16);
 			if (!addr)
 				return { 400, "application/json", MakeError("Invalid address") };
+			if (!body.contains("value"))
+				return { 400, "application/json", MakeError("Missing value") };
 
 			size_t typeSize = 0;
 			if (type == "byte" || type == "uint8") typeSize = 1;
@@ -214,20 +277,34 @@ void RegisterMemoryRoutes(HttpServer& server)
 			else if (type == "double") typeSize = 8;
 			else return { 400, "application/json", MakeError("Unknown type: " + type) };
 
-			if (!IsReadable(reinterpret_cast<const void*>(addr), typeSize))
-				return { 400, "application/json", MakeError("Access violation: cannot write at " + addrStr) };
-
-			DWORD oldProtect;
-			VirtualProtect(reinterpret_cast<void*>(addr), typeSize, PAGE_EXECUTE_READWRITE, &oldProtect);
+			std::array<uint8, sizeof(double)> encoded{};
 			if (type == "byte" || type == "uint8")
-				*reinterpret_cast<uint8*>(addr) = static_cast<uint8>(body.value("value", 0));
+			{
+				const int value = body.at("value").get<int>();
+				if (value < 0 || value > 0xFF)
+					return { 400, "application/json", MakeError("Byte value must be in range 0..255") };
+				encoded[0] = static_cast<uint8>(value);
+			}
 			else if (type == "int32")
-				*reinterpret_cast<int32*>(addr) = body.value("value", 0);
+			{
+				const int32 value = body.at("value").get<int32>();
+				memcpy(encoded.data(), &value, sizeof(value));
+			}
 			else if (type == "float")
-				*reinterpret_cast<float*>(addr) = body.value("value", 0.0f);
+			{
+				const float value = body.at("value").get<float>();
+				memcpy(encoded.data(), &value, sizeof(value));
+			}
 			else if (type == "double")
-				*reinterpret_cast<double*>(addr) = body.value("value", 0.0);
-			VirtualProtect(reinterpret_cast<void*>(addr), typeSize, oldProtect, &oldProtect);
+			{
+				const double value = body.at("value").get<double>();
+				memcpy(encoded.data(), &value, sizeof(value));
+			}
+
+			const SafeWriteStatus writeStatus = SafeWriteBytes(addr, encoded.data(), typeSize);
+			if (writeStatus != SafeWriteStatus::Success)
+				return { 400, "application/json",
+					MakeError(std::string("MEMORY_WRITE_") + SafeWriteStatusName(writeStatus)) };
 
 			json data;
 			data["address"] = std::format("0x{:X}", addr);

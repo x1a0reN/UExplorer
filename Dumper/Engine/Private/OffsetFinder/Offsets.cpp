@@ -1,4 +1,6 @@
 #include <format>
+#include <stdexcept>
+#include <string>
 
 #include "Utils.h"
 
@@ -538,35 +540,31 @@ void Off::InSDK::PostRender::InitPostRender_Windows()
 
 void Off::Init()
 {
-	auto OverwriteIfInvalidOffset = [](int32& Offset, int32 DefaultValue)
+	auto RequireDiscoveredOffset = [](int32 Offset, const char* Name)
 	{
 		if (Offset == OffsetFinder::OffsetNotFound)
-		{
-			std::cerr << std::format("Defaulting to offset: 0x{:X}\n", DefaultValue);
-			Offset = DefaultValue;
-		}
+			throw std::runtime_error(std::string("Required offset was not discovered: ") + Name);
 	};
 
 	Off::UObject::Flags = OffsetFinder::FindUObjectFlagsOffset();
-	OverwriteIfInvalidOffset(Off::UObject::Flags, sizeof(void*)); // Default to right after VTable
+	RequireDiscoveredOffset(Off::UObject::Flags, "UObject::Flags");
 	std::cerr << std::format("Off::UObject::Flags: 0x{:X}\n", Off::UObject::Flags);
 
 	Off::UObject::Index = OffsetFinder::FindUObjectIndexOffset();
-	OverwriteIfInvalidOffset(Off::UObject::Index, (Off::UObject::Flags + sizeof(int32))); // Default to right after Flags
+	RequireDiscoveredOffset(Off::UObject::Index, "UObject::Index");
 	std::cerr << std::format("Off::UObject::Index: 0x{:X}\n", Off::UObject::Index);
 
 	Off::UObject::Class = OffsetFinder::FindUObjectClassOffset();
-	OverwriteIfInvalidOffset(Off::UObject::Class, (Off::UObject::Index + sizeof(int32))); // Default to right after Index
+	RequireDiscoveredOffset(Off::UObject::Class, "UObject::Class");
 	std::cerr << std::format("Off::UObject::Class: 0x{:X}\n", Off::UObject::Class);
 
 	Off::UObject::Outer = OffsetFinder::FindUObjectOuterOffset();
+	RequireDiscoveredOffset(Off::UObject::Outer, "UObject::Outer");
 	std::cerr << std::format("Off::UObject::Outer: 0x{:X}\n", Off::UObject::Outer);
 
 	Off::UObject::Name = OffsetFinder::FindUObjectNameOffset();
-	OverwriteIfInvalidOffset(Off::UObject::Name, (Off::UObject::Class + sizeof(void*))); // Default to right after Class
+	RequireDiscoveredOffset(Off::UObject::Name, "UObject::Name");
 	std::cerr << std::format("Off::UObject::Name: 0x{:X}\n\n", Off::UObject::Name);
-
-	OverwriteIfInvalidOffset(Off::UObject::Outer, (Off::UObject::Name + sizeof(int32) + sizeof(int32)));  // Default to right after Name
 
 	OffsetFinder::InitFNameSettings();
 
@@ -690,18 +688,18 @@ void Off::Init()
 
 	Off::ObjectProperty::PropertyClass = OffsetFinder::FindObjectPropertyClassOffset();
 	std::cerr << std::format("Off::ObjectProperty::PropertyClass: 0x{:X}", Off::ObjectProperty::PropertyClass) << std::endl;
-	OverwriteIfInvalidOffset(Off::ObjectProperty::PropertyClass, Off::InSDK::Properties::PropertySize);
+	RequireDiscoveredOffset(Off::ObjectProperty::PropertyClass, "ObjectProperty::PropertyClass");
 
 	Off::ByteProperty::Enum = OffsetFinder::FindBytePropertyEnumOffset();
-	OverwriteIfInvalidOffset(Off::ByteProperty::Enum, Off::InSDK::Properties::PropertySize);
+	RequireDiscoveredOffset(Off::ByteProperty::Enum, "ByteProperty::Enum");
 	std::cerr << std::format("Off::ByteProperty::Enum: 0x{:X}", Off::ByteProperty::Enum) << std::endl;
 
 	Off::StructProperty::Struct = OffsetFinder::FindStructPropertyStructOffset();
-	OverwriteIfInvalidOffset(Off::StructProperty::Struct, Off::InSDK::Properties::PropertySize);
+	RequireDiscoveredOffset(Off::StructProperty::Struct, "StructProperty::Struct");
 	std::cerr << std::format("Off::StructProperty::Struct: 0x{:X}\n", Off::StructProperty::Struct) << std::endl;
 
 	Off::DelegateProperty::SignatureFunction = OffsetFinder::FindDelegatePropertySignatureFunctionOffset();
-	OverwriteIfInvalidOffset(Off::DelegateProperty::SignatureFunction, Off::InSDK::Properties::PropertySize);
+	RequireDiscoveredOffset(Off::DelegateProperty::SignatureFunction, "DelegateProperty::SignatureFunction");
 	std::cerr << std::format("Off::DelegateProperty::SignatureFunction: 0x{:X}\n", Off::DelegateProperty::SignatureFunction) << std::endl;
 
 	Off::ArrayProperty::Inner = OffsetFinder::FindInnerTypeOffset(Off::InSDK::Properties::PropertySize);

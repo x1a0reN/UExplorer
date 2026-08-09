@@ -42,6 +42,15 @@ static std::map<int, WatchEntry> g_Watches;
 static std::atomic<int> g_WatchCounter{0};
 static constexpr size_t kMaxHistoryEntries = 512;
 
+static HttpResponse LegacyWatchUnavailable()
+{
+	return {
+		409,
+		"application/json",
+		MakeError("WATCH_UNAVAILABLE: polling-driven legacy watches are disabled until WatchScheduler is active")
+	};
+}
+
 static int64_t WatchNowMs()
 {
 	return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -107,6 +116,7 @@ void RegisterWatchRoutes(HttpServer& server)
 {
 	// POST /api/v1/watch/add — add a property watch
 	server.Post("/api/v1/watch/add", [](const HttpRequest& req) -> HttpResponse {
+		if (req.Method == "POST") return LegacyWatchUnavailable();
 		try {
 			json body = json::parse(req.Body);
 			int32 objIdx = body.value("object_index", -1);
@@ -159,6 +169,7 @@ void RegisterWatchRoutes(HttpServer& server)
 
 	// DELETE /api/v1/watch/:id — remove a watch
 	server.Delete("/api/v1/watch/:id", [](const HttpRequest& req) -> HttpResponse {
+		if (req.Method == "DELETE") return LegacyWatchUnavailable();
 		try {
 			int id = std::stoi(GetPathSegment(req.Path, 3));
 			std::lock_guard<std::mutex> lk(g_WatchMutex);
@@ -175,7 +186,8 @@ void RegisterWatchRoutes(HttpServer& server)
 	});
 
 	// GET /api/v1/watch/list — list all watches with current values
-	server.Get("/api/v1/watch/list", [](const HttpRequest&) -> HttpResponse {
+	server.Get("/api/v1/watch/list", [](const HttpRequest& req) -> HttpResponse {
+		if (req.Method == "GET") return LegacyWatchUnavailable();
 		try {
 			std::lock_guard<std::mutex> lk(g_WatchMutex);
 			json items = json::array();
@@ -226,6 +238,7 @@ void RegisterWatchRoutes(HttpServer& server)
 
 	// GET /api/v1/watch/:id/history — value change history
 	server.Get("/api/v1/watch/:id/history", [](const HttpRequest& req) -> HttpResponse {
+		if (req.Method == "GET") return LegacyWatchUnavailable();
 		try {
 			int id = std::stoi(GetPathSegment(req.Path, 3));
 			auto params = ParseQuery(req.Query);

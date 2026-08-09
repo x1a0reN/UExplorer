@@ -100,6 +100,197 @@
         "React duplicate isUEProcessCandidate filter removed; Rust candidate evidence test passes"
       ]
     },
+    "LIFE-001": {
+      "status": "verified",
+      "verification": [
+        "2026-08-09: HTTP client workers are owned joinable threads and all active sockets are interrupted before join",
+        "Core harness completes 1000 connect/disconnect cycles plus a slow-client Stop and asserts zero retained workers"
+      ]
+    },
+    "LIFE-003": {
+      "status": "verified",
+      "verification": [
+        "2026-08-09: route registration has no hook side effect; exact communication bind succeeds before InitHooks",
+        "Startup failure follows the common drain path and refuses FreeLibraryAndExitThread when worker/hook drain cannot be proven"
+      ]
+    },
+    "LIFE-004": {
+      "status": "verified",
+      "verification": [
+        "2026-08-09: DllMain checks CreateThread, closes its handle, and calls DisableThreadLibraryCalls"
+      ]
+    },
+    "LIFE-007": {
+      "status": "in_progress",
+      "verification": [
+        "2026-08-09: direct startup-worker Kismet ProcessEvent calls removed",
+        "Game metadata command and target-process fixture remain pending"
+      ]
+    },
+    "GT-001": {
+      "status": "verified",
+      "verification": [
+        "2026-08-09: CallTask owns its parameter vector until a deterministic terminal state",
+        "Core harness verifies output copyback and that a running task retains parameters after caller timeout"
+      ]
+    },
+    "GT-002": {
+      "status": "verified",
+      "verification": [
+        "2026-08-09: bounded 64-entry MPSC queue replaces the single slot",
+        "Core harness fills the queue concurrently and verifies deadline backpressure"
+      ]
+    },
+    "GT-003": {
+      "status": "verified",
+      "verification": [
+        "2026-08-09: DisableAndDrain rejects new work, cancels queued tasks, wakes every waiter, and waits for the running task",
+        "Core harness covers queued cancellation and running drain"
+      ]
+    },
+    "GT-004": {
+      "status": "verified",
+      "verification": [
+        "2026-08-09: MSVC SEH wrapper converts a ProcessEvent access violation into ExecutionFailed and always clears processing state",
+        "Core harness raises EXCEPTION_ACCESS_VIOLATION and verifies subsequent drain"
+      ]
+    },
+    "GT-006": {
+      "status": "verified",
+      "verification": [
+        "2026-08-09: missing ProcessEvent rolls back PostRender and fails initialization; no no-op callback path remains"
+      ]
+    },
+    "GT-007": {
+      "status": "in_progress",
+      "verification": [
+        "2026-08-09: monotonic deadline and queued/running/completed/failed/cancelled/expired states implemented",
+        "IPC request ID and cancellation command remain R3 work"
+      ]
+    },
+    "HOOK-001": {
+      "status": "in_progress",
+      "verification": [
+        "2026-08-09: restore checks, callback in-flight counters, drain barriers, and unload refusal added",
+        "Injected target unload fixture remains pending"
+      ]
+    },
+    "HOOK-002": {
+      "status": "in_progress",
+      "verification": [
+        "2026-08-09: ProcessEvent monitoring hook is no longer installed by route registration and is lazy on first add",
+        "Last-subscription automatic uninstall remains pending"
+      ]
+    },
+    "CALL-001": {
+      "status": "verified",
+      "verification": [
+        "2026-08-09: every ProcessEvent call uses GameThread::Submit and unavailable scheduling returns an explicit error",
+        "Core safety contract forbids the direct-worker fallback"
+      ]
+    },
+    "CALL-002": {
+      "status": "verified",
+      "verification": [
+        "2026-08-09: missing/invalid parameter struct size is rejected and each scalar property range is checked before access"
+      ]
+    },
+    "CALL-004": {
+      "status": "verified",
+      "verification": [
+        "2026-08-09: required input and inout parameters are enforced and output/return fields are handled after execution"
+      ]
+    },
+    "CALL-005": {
+      "status": "in_progress",
+      "verification": [
+        "2026-08-09: use_game_thread=false is rejected on all legacy routes",
+        "Field removal from the v2 IPC schema remains pending"
+      ]
+    },
+    "CALL-006": {
+      "status": "in_progress",
+      "verification": [
+        "2026-08-09: legacy batch is capped at 64 items",
+        "Single total deadline and cancellation remain pending"
+      ]
+    },
+    "MEM-001": {
+      "status": "in_progress",
+      "verification": [
+        "2026-08-09: write path checks ranges and VirtualProtect, wraps memcpy in SEH, and verifies protection restoration",
+        "Protection-failure target fixture remains pending"
+      ]
+    },
+    "DUMP-001": {
+      "status": "in_progress",
+      "verification": [
+        "2026-08-09: USMAP header now declares None and writes the same uncompressed payload with checked size/I/O",
+        "Independent USMAP consumer fixture remains pending"
+      ]
+    },
+    "WORLD-001": {
+      "status": "verified",
+      "verification": [
+        "2026-08-09: raw actor transform route returns ACTOR_TRANSFORM_WRITE_DISABLED and the editor UI is read-only"
+      ]
+    },
+    "STATE-001": {
+      "status": "verified",
+      "verification": [
+        "2026-08-09: unsafe runtime reconnect returns RECONNECT_DISABLED and no longer mutates engine globals"
+      ]
+    },
+    "WATCH-002": {
+      "status": "verified",
+      "verification": [
+        "2026-08-09: frontend SSE/polling loop removed and legacy watch routes explicitly return WATCH_UNAVAILABLE"
+      ]
+    },
+    "NET-002": {
+      "status": "verified",
+      "verification": [
+        "2026-08-09: temporary HTTP authentication uses case-insensitive GetHeaderValue"
+      ]
+    },
+    "NET-003": {
+      "status": "verified",
+      "verification": [
+        "2026-08-09: admission uses atomic reservation before thread creation and every accepted socket has receive/send timeouts",
+        "Core harness verifies slow-client shutdown"
+      ]
+    },
+    "NET-005": {
+      "status": "verified",
+      "verification": [
+        "2026-08-09: all temporary HTTP writes use SendAll; static contract permits only its internal send call"
+      ]
+    },
+    "NET-006": {
+      "status": "verified",
+      "verification": [
+        "2026-08-09: only the three registered event paths enter the temporary SSE branch"
+      ]
+    },
+    "NET-012": {
+      "status": "verified",
+      "verification": [
+        "2026-08-09: Bind attempts exactly the configured port; port zero is accepted only when explicitly configured",
+        "Core harness proves an occupied exact port fails instead of changing ports"
+      ]
+    },
+    "NET-013": {
+      "status": "verified",
+      "verification": [
+        "2026-08-09: Stop is the single listener/WSA cleanup owner and joins the accept thread and every client worker"
+      ]
+    },
+    "UI-006": {
+      "status": "verified",
+      "verification": [
+        "2026-08-09: fake WS console endpoint returns WS_CONSOLE_DISABLED; UI no longer connects to it or bypasses real local commands"
+      ]
+    },
     "UI-016": {
       "status": "verified",
       "verification": [

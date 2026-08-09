@@ -84,12 +84,55 @@ static bool IsStaticFunction(const UEFunction& func)
 	return (flags & static_cast<uint64>(EFunctionFlags::Static)) != 0;
 }
 
+static bool IsSupportedParamType(const UEProperty& prop)
+{
+	const EClassCastFlags type = prop.GetCastFlags();
+	return (type & EClassCastFlags::BoolProperty)
+		|| (type & EClassCastFlags::ByteProperty)
+		|| (type & EClassCastFlags::IntProperty)
+		|| (type & EClassCastFlags::Int64Property)
+		|| (type & EClassCastFlags::FloatProperty)
+		|| (type & EClassCastFlags::DoubleProperty);
+}
+
+static bool ValidateParamBounds(
+	const UEProperty& prop,
+	size_t bufferSize,
+	std::string& outError)
+{
+	const int32 offset = prop.GetOffset();
+	const int32 elementSize = prop.GetSize();
+	const int32 arrayDim = prop.GetArrayDim();
+	if (offset < 0 || elementSize <= 0 || arrayDim != 1)
+	{
+		outError = "INVALID_PARAM_LAYOUT: " + prop.GetName();
+		return false;
+	}
+
+	const uint64 end = static_cast<uint64>(offset) + static_cast<uint64>(elementSize);
+	if (end > static_cast<uint64>(bufferSize))
+	{
+		outError = std::format(
+			"PARAM_OUT_OF_BOUNDS: {} offset={} size={} buffer={}",
+			prop.GetName(),
+			offset,
+			elementSize,
+			bufferSize);
+		return false;
+	}
+	return true;
+}
+
+static bool RejectsGameThreadBypass(const json& body)
+{
+	return body.contains("use_game_thread") && !body.value("use_game_thread", true);
+}
+
 static bool ExecuteFunctionCall(
 	UEObject targetObject,
 	UEClass ownerClass,
 	const UEFunction& func,
 	const json& params,
-	bool useGameThread,
 	bool forceStatic,
 	json& outResult,
 	std::string& outError)
@@ -102,20 +145,44 @@ static bool ExecuteFunctionCall(
 
 	const bool isStatic = forceStatic || IsStaticFunction(func);
 	const int32 paramSize = func.GetStructSize();
-	const int bufSize = paramSize > 0 ? paramSize : 256;
-	std::vector<uint8> paramBuf(bufSize, 0);
+	if (paramSize < 0 || paramSize > 1024 * 1024)
+	{
+		outError = std::format("INVALID_PARAM_SIZE: {}", paramSize);
+		return false;
+	}
+	const auto properties = func.GetProperties();
+	if (paramSize == 0 && !properties.empty())
+	{
+		outError = "INVALID_PARAM_SIZE: function has properties but zero parameter size";
+		return false;
+	}
+	std::vector<uint8> paramBuf(static_cast<size_t>(paramSize), 0);
 
-	for (const auto& prop : func.GetProperties())
+	for (const auto& prop : properties)
 	{
 		const uint64 flags = static_cast<uint64>(prop.GetPropertyFlags());
+		const bool isParam = (flags & static_cast<uint64>(EPropertyFlags::Parm)) != 0;
 		const bool isOut = (flags & static_cast<uint64>(EPropertyFlags::OutParm)) != 0;
 		const bool isReturn = (flags & static_cast<uint64>(EPropertyFlags::ReturnParm)) != 0;
-		if (isOut || isReturn)
+		const bool isReference = (flags & static_cast<uint64>(EPropertyFlags::ReferenceParm)) != 0;
+		if (!isParam)
+			continue;
+		if (!ValidateParamBounds(prop, paramBuf.size(), outError))
+			return false;
+		if (!IsSupportedParamType(prop))
+		{
+			outError = "UNSUPPORTED_PARAM_TYPE: " + prop.GetName() + " (" + prop.GetCppType() + ")";
+			return false;
+		}
+		if (isReturn || (isOut && !isReference))
 			continue;
 
 		const std::string pName = prop.GetName();
 		if (!params.contains(pName))
-			continue;
+		{
+			outError = "MISSING_REQUIRED_PARAM: " + pName;
+			return false;
+		}
 
 		if (!FillParam(paramBuf.data(), prop, params[pName]))
 		{
@@ -146,44 +213,38 @@ static bool ExecuteFunctionCall(
 		return false;
 	}
 
-	const int32 peIdx = Off::InSDK::ProcessEvent::PEIndex;
-	if (peIdx <= 0 || peIdx >= kMaxVTableIndex)
+	if (!GameThread::IsEnabled())
 	{
-		outError = "Invalid ProcessEvent index";
+		outError = "GAME_THREAD_UNAVAILABLE";
 		return false;
 	}
 
-	void** vft = *reinterpret_cast<void***>(objAddr);
-	if (!vft)
-	{
-		outError = "Target VTable is null";
-		return false;
-	}
-
-	void* procEvent = vft[peIdx];
-	if (!procEvent)
-	{
-		outError = "ProcessEvent not found";
-		return false;
-	}
 	void* funcAddr = const_cast<void*>(func.GetAddress());
-
-	if (useGameThread && GameThread::g_Enabled)
+	const GameThread::SubmitResult submitResult =
+		GameThread::Submit(objAddr, funcAddr, paramBuf, 10000);
+	switch (submitResult)
 	{
-		if (!GameThread::Submit(objAddr, funcAddr, paramBuf.data(), 10000))
-		{
-			outError = "Game thread call timed out";
-			return false;
-		}
-	}
-	else
-	{
-		auto PE = reinterpret_cast<void(*)(void*, void*, void*)>(procEvent);
-		PE(objAddr, funcAddr, paramBuf.data());
+	case GameThread::SubmitResult::Completed:
+		break;
+	case GameThread::SubmitResult::Disabled:
+		outError = "GAME_THREAD_UNAVAILABLE";
+		return false;
+	case GameThread::SubmitResult::QueueBusy:
+		outError = "GAME_THREAD_QUEUE_BUSY";
+		return false;
+	case GameThread::SubmitResult::TimedOutBeforeStart:
+		outError = "GAME_THREAD_TIMEOUT_BEFORE_START";
+		return false;
+	case GameThread::SubmitResult::TimedOutWhileRunning:
+		outError = "GAME_THREAD_TIMEOUT_WHILE_RUNNING: execution completion is unknown";
+		return false;
+	case GameThread::SubmitResult::ExecutionFailed:
+		outError = "GAME_THREAD_EXECUTION_FAILED";
+		return false;
 	}
 
 	json results;
-	for (const auto& prop : func.GetProperties())
+	for (const auto& prop : properties)
 	{
 		const uint64 flags = static_cast<uint64>(prop.GetPropertyFlags());
 		const bool isOut = (flags & static_cast<uint64>(EPropertyFlags::OutParm)) != 0;
@@ -280,12 +341,13 @@ void RegisterCallRoutes(HttpServer& server)
 			int32 objIdx = body.value("object_index", -1);
 			std::string funcName = body.value("function_name", "");
 			json params = body.value("params", json::object());
-			bool useGameThread = body.value("use_game_thread", true);
 
 			if (objIdx < 0 || objIdx >= ObjectArray::Num())
 				return { 400, "application/json", MakeError("Invalid object_index") };
 			if (funcName.empty())
 				return { 400, "application/json", MakeError("Missing function_name") };
+			if (RejectsGameThreadBypass(body))
+				return { 400, "application/json", MakeError("use_game_thread=false is disabled") };
 
 			UEObject obj = ObjectArray::GetByIndex(objIdx);
 			if (!obj)
@@ -304,7 +366,7 @@ void RegisterCallRoutes(HttpServer& server)
 
 			json result;
 			std::string err;
-			if (!ExecuteFunctionCall(obj, cls, func, params, useGameThread, false, result, err))
+			if (!ExecuteFunctionCall(obj, cls, func, params, false, result, err))
 				return { 500, "application/json", MakeError(err) };
 
 			json data;
@@ -329,10 +391,11 @@ void RegisterCallRoutes(HttpServer& server)
 			json body = json::parse(req.Body);
 			std::string funcName = body.value("function_name", "");
 			json params = body.value("params", json::object());
-			bool useGameThread = body.value("use_game_thread", true);
 
 			if (funcName.empty())
 				return { 400, "application/json", MakeError("Missing function_name") };
+			if (RejectsGameThreadBypass(body))
+				return { 400, "application/json", MakeError("use_game_thread=false is disabled") };
 
 			UEClass cls;
 			std::string resolveErr;
@@ -348,7 +411,7 @@ void RegisterCallRoutes(HttpServer& server)
 			UEObject classObj(cls.GetAddress());
 			json result;
 			std::string err;
-			if (!ExecuteFunctionCall(classObj, cls, func, params, useGameThread, true, result, err))
+			if (!ExecuteFunctionCall(classObj, cls, func, params, true, result, err))
 				return { 500, "application/json", MakeError(err) };
 
 			json data;
@@ -374,12 +437,15 @@ void RegisterCallRoutes(HttpServer& server)
 			std::vector<int32> objectIndices = body.value("object_indices", std::vector<int32>{});
 			std::string funcName = body.value("function_name", "");
 			json params = body.value("params", json::object());
-			bool useGameThread = body.value("use_game_thread", true);
 
 			if (objectIndices.empty())
 				return { 400, "application/json", MakeError("Missing object_indices") };
+			if (objectIndices.size() > 64)
+				return { 400, "application/json", MakeError("Too many object_indices (max 64)") };
 			if (funcName.empty())
 				return { 400, "application/json", MakeError("Missing function_name") };
+			if (RejectsGameThreadBypass(body))
+				return { 400, "application/json", MakeError("use_game_thread=false is disabled") };
 
 			json items = json::array();
 			int successCount = 0;
@@ -431,7 +497,7 @@ void RegisterCallRoutes(HttpServer& server)
 
 				json result;
 				std::string err;
-				if (!ExecuteFunctionCall(obj, cls, func, params, useGameThread, false, result, err))
+				if (!ExecuteFunctionCall(obj, cls, func, params, false, result, err))
 				{
 					item["called"] = false;
 					item["error"] = err;

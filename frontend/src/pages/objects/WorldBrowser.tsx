@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { t } from '../../i18n';
-import { Search, MapPin, Globe, ChevronDown, ChevronRight, Save } from 'lucide-react';
+import { Search, MapPin, Globe, ChevronDown, ChevronRight } from 'lucide-react';
 import api, {
     type WorldLevelItem,
     type WorldActorDetail,
@@ -17,12 +17,6 @@ type VecInput = { x: string; y: string; z: string };
 function toVecInput(vec?: Vec3Data): VecInput {
     if (!vec) return { x: '', y: '', z: '' };
     return { x: String(vec.x), y: String(vec.y), z: String(vec.z) };
-}
-
-function parseVecInput(input: VecInput): Vec3Data | null {
-    const x = Number(input.x), y = Number(input.y), z = Number(input.z);
-    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return null;
-    return { x, y, z };
 }
 
 // ─── Component ─────────────────────────────────────────────────
@@ -48,8 +42,6 @@ export default function WorldBrowser({ onSwitchMode }: BrowserPageProps) {
     const [location, setLocation] = useState<VecInput>({ x: '', y: '', z: '' });
     const [rotation, setRotation] = useState<VecInput>({ x: '', y: '', z: '' });
     const [scale, setScale] = useState<VecInput>({ x: '', y: '', z: '' });
-    const [transformSaving, setTransformSaving] = useState(false);
-    const [transformMsg, setTransformMsg] = useState<string | null>(null);
 
     // ─── Data Loading ──────────────────────────────────────────
 
@@ -100,28 +92,6 @@ export default function WorldBrowser({ onSwitchMode }: BrowserPageProps) {
         }
     };
 
-    const handleSaveTransform = async () => {
-        if (!selected) return;
-        setTransformSaving(true);
-        setTransformMsg(null);
-        const loc = parseVecInput(location);
-        const rot = parseVecInput(rotation);
-        const sc = parseVecInput(scale);
-        const payload: Record<string, Vec3Data> = {};
-        if (loc) payload.location = loc;
-        if (rot) payload.rotation = rot;
-        if (sc) payload.scale = sc;
-        try {
-            const res = await api.updateWorldActorTransform(selected.index, payload);
-            if (res.success) setTransformMsg(t('Transform applied!'));
-            else setTransformMsg(res.error || t('Failed'));
-        } catch (error) {
-            setTransformMsg(error instanceof Error ? error.message : String(error));
-        } finally {
-            setTransformSaving(false);
-        }
-    };
-
     useEffect(() => {
         const timer = window.setTimeout(() => void loadWorld(), 0);
         return () => window.clearTimeout(timer);
@@ -143,14 +113,14 @@ export default function WorldBrowser({ onSwitchMode }: BrowserPageProps) {
         });
     };
 
-    const VecEditor = ({ label, value, onChange }: { label: string; value: VecInput; onChange: (v: VecInput) => void }) => (
+    const VecEditor = ({ label, value }: { label: string; value: VecInput }) => (
         <div className="grid grid-cols-[80px_1fr_1fr_1fr] gap-2 items-center">
             <span className="text-white/50 text-xs">{label}</span>
             {(['x', 'y', 'z'] as const).map((axis) => (
                 <input key={axis} type="text" value={value[axis]}
-                    onChange={(e) => onChange({ ...value, [axis]: e.target.value })}
+                    readOnly
                     placeholder={axis.toUpperCase()}
-                    className="h-7 bg-white/5 border border-white/10 rounded text-xs text-white font-mono px-2 text-center focus:outline-none focus:border-white/20" />
+                    className="h-7 bg-white/[0.03] border border-white/5 rounded text-xs text-white/60 font-mono px-2 text-center cursor-not-allowed" />
             ))}
         </div>
     );
@@ -244,27 +214,12 @@ export default function WorldBrowser({ onSwitchMode }: BrowserPageProps) {
                         {detailTab === 'Transform' && (
                             <Panel title={t('Transform')}>
                                 <div className="space-y-3">
-                                    <VecEditor label="Location" value={location} onChange={setLocation} />
-                                    <VecEditor label="Rotation" value={rotation} onChange={setRotation} />
-                                    <VecEditor label="Scale" value={scale} onChange={setScale} />
-                                    <div className="flex gap-2 mt-4">
-                                        <button onClick={() => void handleSaveTransform()}
-                                            disabled={transformSaving}
-                                            className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-cyan-500/20 border border-cyan-500/30 text-cyan-400 text-xs font-medium hover:bg-cyan-500/30 disabled:opacity-50">
-                                            <Save className="w-3.5 h-3.5" />
-                                            {transformSaving ? t('Applying...') : t('Apply Transform')}
-                                        </button>
-                                        {actorDetail?.transform && (
-                                            <button onClick={() => {
-                                                setLocation(toVecInput(actorDetail.transform?.location));
-                                                setRotation(toVecInput(actorDetail.transform?.rotation));
-                                                setScale(toVecInput(actorDetail.transform?.scale));
-                                            }} className="px-4 py-1.5 rounded-lg bg-white/5 border border-white/10 text-white/50 text-xs hover:bg-white/10">
-                                                {t('Reset')}
-                                            </button>
-                                        )}
+                                    <VecEditor label="Location" value={location} />
+                                    <VecEditor label="Rotation" value={rotation} />
+                                    <VecEditor label="Scale" value={scale} />
+                                    <div className="mt-4 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                                        Transform editing is disabled until a verified game-thread Unreal setter is available.
                                     </div>
-                                    {transformMsg && <div className="text-xs text-green-400 mt-2">{transformMsg}</div>}
                                 </div>
                             </Panel>
                         )}

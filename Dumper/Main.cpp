@@ -264,7 +264,6 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 	catch (const std::exception& e)
 	{
 		std::cerr << "[UExplorer] FATAL: Engine init failed: " << e.what() << "\n";
-		std::cerr << "[UExplorer] DLL will remain loaded but non-functional.\n";
 		if (Dummy) fclose(Dummy);
 		FreeConsole();
 		FreeLibraryAndExitThread(Module, 1);
@@ -281,34 +280,8 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 
 	std::cerr << "[UExplorer] Engine core initialized.\n";
 
-	if (Settings::Generator::GameName.empty() && Settings::Generator::GameVersion.empty())
-	{
-		try
-		{
-			FString Name;
-			FString Version;
-			UEClass Kismet = ObjectArray::FindClassFast("KismetSystemLibrary");
-			if (Kismet)
-			{
-				UEFunction GetGameName = Kismet.GetFunction("KismetSystemLibrary", "GetGameName");
-				UEFunction GetEngineVersion = Kismet.GetFunction("KismetSystemLibrary", "GetEngineVersion");
-
-				if (GetGameName) Kismet.ProcessEvent(GetGameName, &Name);
-				if (GetEngineVersion) Kismet.ProcessEvent(GetEngineVersion, &Version);
-
-				Settings::Generator::GameName = Name.ToString();
-				Settings::Generator::GameVersion = Version.ToString();
-			}
-			else
-			{
-				std::cerr << "[UExplorer] Warning: KismetSystemLibrary not found, game info unavailable.\n";
-			}
-		}
-		catch (...)
-		{
-			std::cerr << "[UExplorer] Warning: Failed to query game info via ProcessEvent.\n";
-		}
-	}
+	// Startup runs on an owned worker thread. Do not call ProcessEvent here;
+	// unresolved metadata remains unavailable until a verified game-thread command exists.
 
 	std::cerr << "[UExplorer] Game: " << Settings::Generator::GameName << "\n";
 	std::cerr << "[UExplorer] Version: " << Settings::Generator::GameVersion << "\n";
@@ -324,23 +297,29 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 	const uint16_t port = configuredPort;
 	const std::string token = configuredToken;
 
+	bool startupReady = false;
+	bool unloadSafe = true;
 	try
 	{
 		g_Server = std::make_unique<UExplorer::HttpServer>(port, token);
 		UExplorer::API::RegisterAllRoutes(*g_Server);
 		if (!g_Server->Start())
 		{
-			std::cerr << "[UExplorer] Failed to start HTTP server (all ports failed)\n";
+			std::cerr << "[UExplorer] Failed to bind configured HTTP port " << port << "\n";
 		}
 		else
 		{
-			const uint16_t actualPort = g_Server->GetPort();
-			if (configuredPort != 0 && actualPort != configuredPort)
+			UExplorer::API::SetServer(g_Server.get());
+			if (!UExplorer::API::InitHooks())
 			{
-				std::cerr << "[UExplorer] Preferred port " << configuredPort
-					<< " unavailable, switched to " << actualPort << "\n";
+				std::cerr << "[UExplorer] Failed to initialize required game-thread hook\n";
 			}
-			WriteRuntimeState(actualPort, token, true);
+			else
+			{
+				const uint16_t actualPort = g_Server->GetPort();
+				WriteRuntimeState(actualPort, token, true);
+				startupReady = true;
+			}
 		}
 	}
 	catch (const std::exception& e)
@@ -348,8 +327,8 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 		std::cerr << "[UExplorer] Failed to start HTTP server: " << e.what() << "\n";
 	}
 
-	// Keep alive, F6 to unload
-	while (g_Running.load())
+	// Keep alive only after every required startup stage succeeds.
+	while (startupReady && g_Running.load())
 	{
 		if (GetAsyncKeyState(VK_F6) & 1)
 		{
@@ -361,13 +340,24 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 
 	std::cerr << "[UExplorer] Shutting down...\n";
 
-	UExplorer::API::ShutdownHooks();
-	UExplorer::API::ShutdownDumpJobs();
 	UExplorer::API::SetServer(nullptr);
-
-	if (g_Server) g_Server->Stop();
-	g_Server.reset();
+	bool serverStopped = true;
+	if (g_Server)
+		serverStopped = g_Server->Stop();
+	UExplorer::API::ShutdownDumpJobs();
+	const bool hooksStopped = UExplorer::API::ShutdownHooks();
+	unloadSafe = unloadSafe && serverStopped && hooksStopped;
+	if (serverStopped)
+		g_Server.reset();
 	WriteRuntimeState(0, token, false);
+
+	if (!unloadSafe)
+	{
+		std::cerr << "[UExplorer] Shutdown could not prove all workers/hooks drained; DLL remains loaded.\n";
+		if (Dummy) fclose(Dummy);
+		FreeConsole();
+		return 1;
+	}
 
 	if (Dummy) fclose(Dummy);
 	FreeConsole();
@@ -382,7 +372,11 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID lpReserved)
 	{
 	case DLL_PROCESS_ATTACH:
 		g_Module = hModule;
-		CreateThread(nullptr, 0, MainThread, hModule, 0, nullptr);
+		DisableThreadLibraryCalls(hModule);
+		if (HANDLE thread = CreateThread(nullptr, 0, MainThread, hModule, 0, nullptr))
+			CloseHandle(thread);
+		else
+			return FALSE;
 		break;
 	}
 	return TRUE;

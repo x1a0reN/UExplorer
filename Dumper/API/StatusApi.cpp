@@ -1,7 +1,6 @@
 #include "StatusApi.h"
 #include "ApiCommon.h"
 
-#include "Generators/Generator.h"
 #include "Unreal/ObjectArray.h"
 #include "Unreal/NameArray.h"
 #include "OffsetFinder/Offsets.h"
@@ -9,14 +8,11 @@
 
 #include <windows.h>
 #include <filesystem>
-#include <mutex>
 
 // Script offset externs and BuildScriptOffsetDiagnosticsJson now in ApiCommon.h
 
 namespace UExplorer::API
 {
-
-static std::mutex g_ReconnectMutex;
 
 static std::string GetProcessArchitecture()
 {
@@ -84,28 +80,8 @@ void RegisterStatusRoutes(HttpServer& server)
 
 	// POST /api/v1/status/reconnect — re-scan engine globals and offsets
 	server.Post("/api/v1/status/reconnect", [](const HttpRequest&) -> HttpResponse {
-		std::lock_guard<std::mutex> lk(g_ReconnectMutex);
-
-		try {
-			Generator::InitEngineCore();
-			Generator::InitInternal();
-
-			json data;
-			data["reconnected"] = true;
-			data["object_count"] = ObjectArray::Num();
-			data["game_name"] = Settings::Generator::GameName;
-			data["game_version"] = Settings::Generator::GameVersion;
-			data["gobjects_address"] = std::format("0x{:X}",
-				reinterpret_cast<uintptr_t>(ObjectArray::DEBUGGetGObjects()));
-			return { 200, "application/json", MakeResponse(data) };
-		}
-		catch (const std::exception& e) {
-			return { 500, "application/json",
-				MakeError(std::string("Reconnect failed: ") + e.what()) };
-		}
-		catch (...) {
-			return { 500, "application/json", MakeError("Reconnect failed") };
-		}
+		return { 409, "application/json",
+			MakeError("RECONNECT_DISABLED: engine globals cannot be mutated without an exclusive CoreRuntime transition") };
 	});
 
 	// GET /api/v1/status/health — heartbeat

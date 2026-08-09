@@ -17,9 +17,6 @@ namespace UExplorer::API
 
 void RegisterAllRoutes(HttpServer& server)
 {
-	// Set server instance for SSE broadcasting
-	SetServer(&server);
-
 	RegisterStatusRoutes(server);
 	RegisterObjectsRoutes(server);
 	RegisterClassesRoutes(server);
@@ -32,9 +29,6 @@ void RegisterAllRoutes(HttpServer& server)
 	RegisterWatchRoutes(server);
 	RegisterHookRoutes(server);
 	RegisterEventsRoutes(server);
-
-	// Initialize hooks (installs PostRender VTable hook for game thread dispatch)
-	InitHooks();
 }
 
 } // namespace UExplorer::API

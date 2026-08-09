@@ -41,7 +41,7 @@ public:
 	~HttpServer();
 
 	bool Start();
-	void Stop();
+	bool Stop();
 	bool IsRunning() const;
 	uint16_t GetPort() const;
 

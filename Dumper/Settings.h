@@ -98,7 +98,7 @@ R"(
 		constexpr bool bExcludeEditorOnlyProperties = true;
 
 		/* Which compression method to use when generating the file. */
-		constexpr EUsmapCompressionMethod CompressionMethod = EUsmapCompressionMethod::ZStandard;
+		constexpr EUsmapCompressionMethod CompressionMethod = EUsmapCompressionMethod::None;
 	}
 
 	/* Partially implemented  */

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Terminal, Binary, Bookmark, Search, ArrowRight, ArrowLeft, RefreshCw, Layers, Plus, Trash2 } from 'lucide-react';
+import { Terminal, Binary, Bookmark, Search, ArrowRight, ArrowLeft, RefreshCw, Layers } from 'lucide-react';
 import { t } from '../i18n';
-import api, { type WatchHistoryEntry, type WatchItem } from '../api';
+import api from '../api';
 
 const READ_SIZE = 256;
 
@@ -71,20 +71,9 @@ export default function Memory() {
 
   const [consoleInput, setConsoleInput] = useState('');
   const [consoleLogs, setConsoleLogs] = useState<string[]>([
-    'UExplorer Console [Connected]',
-    'Supported: get/set/call/watch/unwatch/instances/mem.read/mem.write',
+    'UExplorer local command adapter',
+    'Supported: get/set/call/instances/mem.read/mem.write',
   ]);
-  const [wsConsoleConnected, setWsConsoleConnected] = useState(false);
-  const consoleWsRef = useRef<ReturnType<typeof api.connectWebSocket> | null>(null);
-
-  const [watches, setWatches] = useState<WatchItem[]>([]);
-  const [watchHistory, setWatchHistory] = useState<Record<number, WatchHistoryEntry[]>>({});
-  const [expandedWatchId, setExpandedWatchId] = useState<number | null>(null);
-  const [watchHistoryLoading, setWatchHistoryLoading] = useState<Record<number, boolean>>({});
-  const watchPollTimerRef = useRef<number | null>(null);
-  const watchPollInFlightRef = useRef(false);
-  const watchReconnectTimerRef = useRef<number | null>(null);
-  const watchReconnectDelayRef = useRef(800);
 
   const rows = useMemo(() => {
     const result: Array<{ addr: string; chunk: string[]; ascii: string }> = [];
@@ -103,125 +92,6 @@ export default function Memory() {
     }
     return result;
   }, [hexBytes, currentAddress]);
-
-  const refreshWatches = useCallback(async () => {
-    const res = await api.listWatches();
-    if (res.success && res.data) {
-      setWatches(res.data.watches);
-    }
-  }, []);
-
-  const stopWatchPolling = useCallback(() => {
-    if (watchPollTimerRef.current !== null) {
-      window.clearInterval(watchPollTimerRef.current);
-      watchPollTimerRef.current = null;
-    }
-  }, []);
-
-  const runWatchFallbackTick = useCallback(async () => {
-    if (watchPollInFlightRef.current) return;
-    watchPollInFlightRef.current = true;
-    try {
-      await refreshWatches();
-    } finally {
-      watchPollInFlightRef.current = false;
-    }
-  }, [refreshWatches]);
-
-  const startWatchPolling = useCallback(
-    (immediate = true) => {
-      if (watchPollTimerRef.current !== null) return;
-      if (immediate) {
-        void runWatchFallbackTick();
-      }
-      watchPollTimerRef.current = window.setInterval(() => {
-        void runWatchFallbackTick();
-      }, 300);
-    },
-    [runWatchFallbackTick]
-  );
-
-  const clearWatchReconnectTimer = useCallback(() => {
-    if (watchReconnectTimerRef.current !== null) {
-      window.clearTimeout(watchReconnectTimerRef.current);
-      watchReconnectTimerRef.current = null;
-    }
-  }, []);
-
-  useEffect(() => {
-    const conn = api.connectWebSocket('/ws/console', {
-      onOpen: () => {
-        setWsConsoleConnected(true);
-        pushConsole('[WS] console connected');
-      },
-      onClose: () => {
-        setWsConsoleConnected(false);
-        pushConsole('[WS] console disconnected');
-      },
-      onError: () => {
-        setWsConsoleConnected(false);
-      },
-      onMessage: (payload) => {
-        if (typeof payload === 'string') {
-          pushConsole(`[WS] ${payload}`);
-          return;
-        }
-        pushConsole(`[WS] ${JSON.stringify(payload)}`);
-      },
-    });
-
-    consoleWsRef.current = conn;
-    return () => {
-      if (consoleWsRef.current === conn) {
-        consoleWsRef.current = null;
-      }
-      conn.close();
-    };
-  }, []);
-
-  useEffect(() => {
-    let disposed = false;
-    let unsubscribe: (() => void) | null = null;
-
-    const connect = () => {
-      if (disposed) return;
-      unsubscribe = api.subscribeEventStream('/events/watches', () => {
-        void refreshWatches();
-      }, {
-        onOpen: () => {
-          clearWatchReconnectTimer();
-          watchReconnectDelayRef.current = 800;
-          stopWatchPolling();
-          void refreshWatches();
-        },
-        onError: () => {
-          if (disposed) return;
-          startWatchPolling(true);
-        },
-        onClose: (reason) => {
-          if (disposed || reason === 'abort') return;
-          startWatchPolling(true);
-
-          if (watchReconnectTimerRef.current !== null) return;
-          const delay = watchReconnectDelayRef.current;
-          watchReconnectTimerRef.current = window.setTimeout(() => {
-            watchReconnectTimerRef.current = null;
-            connect();
-          }, delay);
-          watchReconnectDelayRef.current = Math.min(watchReconnectDelayRef.current * 2, 5000);
-        },
-      });
-    };
-
-    connect();
-    return () => {
-      disposed = true;
-      unsubscribe?.();
-      clearWatchReconnectTimer();
-      watchReconnectDelayRef.current = 800;
-      stopWatchPolling();
-    };
-  }, [clearWatchReconnectTimer, refreshWatches, startWatchPolling, stopWatchPolling]);
 
   const consoleEndRef = useRef<HTMLDivElement>(null);
 
@@ -334,11 +204,6 @@ export default function Memory() {
     setConsoleInput('');
     pushConsole(`> ${command}`);
 
-    if (wsConsoleConnected && consoleWsRef.current) {
-      consoleWsRef.current.send(command);
-      return;
-    }
-
     const parts = command.split(' ');
     const head = parts[0];
 
@@ -370,14 +235,6 @@ export default function Memory() {
         const params = jsonParams ? (JSON.parse(jsonParams) as Record<string, unknown>) : {};
         const out = await api.callFunction(objectIndex, functionName, params, true);
         pushConsole(JSON.stringify(out, null, 2));
-      } else if (head === 'watch' && parts.length >= 3) {
-        const objectIndex = Number(parts[1]);
-        const property = parts[2];
-        const out = await api.addWatch(objectIndex, property);
-        pushConsole(JSON.stringify(out, null, 2));
-      } else if (head === 'unwatch' && parts[1]) {
-        const out = await api.removeWatch(Number(parts[1]));
-        pushConsole(JSON.stringify(out, null, 2));
       } else if (head === 'instances' && parts[1]) {
         const out = await api.getClassInstances(parts[1], 0, 100);
         pushConsole(JSON.stringify(out, null, 2));
@@ -395,31 +252,6 @@ export default function Memory() {
     } catch (error) {
       pushConsole(`Error: ${error instanceof Error ? error.message : String(error)}`);
     }
-  };
-
-  const toggleWatchHistory = async (watchId: number) => {
-    if (expandedWatchId === watchId) {
-      setExpandedWatchId(null);
-      return;
-    }
-
-    setExpandedWatchId(watchId);
-    if (watchHistory[watchId]) return;
-
-    setWatchHistoryLoading((prev) => ({ ...prev, [watchId]: true }));
-    const res = await api.getWatchHistory(watchId, 100);
-    setWatchHistoryLoading((prev) => ({ ...prev, [watchId]: false }));
-
-    if (!res.success || !res.data) {
-      pushConsole(`[WatchHistory] ${res.error || 'load failed'}`);
-      return;
-    }
-    const historyData = res.data;
-
-    setWatchHistory((prev) => ({
-      ...prev,
-      [watchId]: historyData.history,
-    }));
   };
 
   return (
@@ -566,79 +398,13 @@ export default function Memory() {
         </div>
 
         <div className="w-[320px] flex-none bg-surface-dark flex flex-col">
-          <div className="h-8 border-b border-border-subtle flex items-center justify-between px-4 bg-surface-dark">
+          <div className="h-8 border-b border-border-subtle flex items-center px-4 bg-surface-dark">
             <span className="text-[10px] font-bold text-text-low uppercase tracking-widest font-display">{t('Watch Panel')}</span>
-            <button
-              onClick={() => void refreshWatches()}
-              className="w-6 h-6 rounded flex items-center justify-center hover:bg-surface-stripe transition-colors"
-            >
-              <RefreshCw className="w-3.5 h-3.5 text-text-low hover:text-text-high" />
-            </button>
           </div>
-          <div className="flex-1 overflow-auto p-2.5 space-y-2">
-            {watches.map((w) => (
-              <div key={w.id} className={`p-2.5 rounded-lg border text-sm ${w.changed ? 'border-accent-green/30 bg-accent-green/10' : 'border-border-subtle bg-background-base'}`}>
-                <div className="text-xs text-text-high font-mono">#{w.id} obj:{w.object_index}</div>
-                <div className="text-xs text-text-low font-display mt-0.5">{w.property}</div>
-                <div className="text-xs text-primary font-mono break-all mt-1">{String(w.value)}</div>
-                <div className="flex justify-end gap-1.5 mt-2 border-t border-border-subtle/50 pt-2">
-                  <button
-                    onClick={() => void toggleWatchHistory(w.id)}
-                    className="px-2 py-1 rounded bg-surface-stripe hover:bg-surface-stripe/80 text-[10px] text-text-high font-display border border-border-subtle transition-colors"
-                  >
-                    {t('History')}
-                  </button>
-                  <button
-                    onClick={() => {
-                      void (async () => {
-                        await api.removeWatch(w.id);
-                        setWatchHistory((prev) => {
-                          const next = { ...prev };
-                          delete next[w.id];
-                          return next;
-                        });
-                        if (expandedWatchId === w.id) {
-                          setExpandedWatchId(null);
-                        }
-                        await refreshWatches();
-                      })();
-                    }}
-                    className="w-6 h-6 rounded bg-accent-red/10 hover:bg-accent-red/20 flex items-center justify-center border border-accent-red/20 transition-colors"
-                  >
-                    <Trash2 className="w-3 h-3 text-accent-red" />
-                  </button>
-                </div>
-                {expandedWatchId === w.id && (
-                  <div className="mt-2 text-xs rounded border border-border-subtle bg-surface-dark p-2 max-h-36 overflow-auto space-y-1">
-                    {watchHistoryLoading[w.id] && <div className="text-[10px] text-text-low">{t('Loading...')}</div>}
-                    {!watchHistoryLoading[w.id] && (watchHistory[w.id] || []).length === 0 && (
-                      <div className="text-[10px] text-text-low font-display">{t('No history')}</div>
-                    )}
-                    {!watchHistoryLoading[w.id] &&
-                      (watchHistory[w.id] || []).map((entry, idx) => (
-                        <div key={`${entry.timestamp}-${idx}`} className="text-[10px] text-text-mid border-b border-border-subtle pb-1 last:border-b-0 space-y-0.5">
-                          <div className="text-text-low/60">{new Date(entry.timestamp).toLocaleString()}</div>
-                          <div className="font-mono break-all">{JSON.stringify(entry.value)}</div>
-                        </div>
-                      ))}
-                  </div>
-                )}
-              </div>
-            ))}
-            {watches.length === 0 && <div className="text-text-low text-xs text-center mt-4 font-display">{t('No watches active')}</div>}
-          </div>
-          <div className="p-2 border-t border-border-subtle bg-surface-dark">
-            <button
-              onClick={() => {
-                const base = Number.parseInt(currentAddress.replace(/^0x/i, ''), 16) || 0;
-                const at = `0x${(base + cursorOffset).toString(16).toUpperCase()}`;
-                setAddressInput(at);
-              }}
-              className="w-full flex items-center justify-center gap-2 py-1.5 rounded-lg bg-surface-stripe hover:bg-surface-stripe/80 text-text-high text-xs font-display border border-border-subtle transition-colors"
-            >
-              <Plus className="w-3.5 h-3.5 text-text-low" />
-              {t('Use Cursor Address')}
-            </button>
+          <div className="flex-1 p-4">
+            <div className="rounded-lg border border-accent-yellow/20 bg-accent-yellow/5 p-3 text-xs text-text-mid font-display leading-relaxed">
+              {t('Unavailable: legacy polling/SSE watches are disabled until the IPC WatchScheduler is active.')}
+            </div>
           </div>
         </div>
       </div>
@@ -648,8 +414,8 @@ export default function Memory() {
           <span className="text-[10px] font-bold text-text-low uppercase tracking-widest flex items-center gap-2 font-display">
             <Terminal className="w-3.5 h-3.5" /> {t('UExplorer Console')}
           </span>
-          <span className={`ml-auto text-[10px] font-mono font-medium px-2 py-0.5 rounded border ${wsConsoleConnected ? 'text-accent-green border-accent-green/20 bg-accent-green/10' : 'text-accent-yellow border-accent-yellow/20 bg-accent-yellow/10'}`}>
-            {wsConsoleConnected ? t('WS:CONNECTED') : t('WS:FALLBACK')}
+          <span className="ml-auto text-[10px] font-mono font-medium px-2 py-0.5 rounded border text-text-mid border-border-subtle bg-surface-stripe">
+            {t('LOCAL COMMANDS')}
           </span>
         </div>
         <div className="flex-1 overflow-auto p-4 font-mono text-xs space-y-1">

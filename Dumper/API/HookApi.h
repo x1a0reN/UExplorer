@@ -6,10 +6,10 @@ namespace UExplorer::API
 {
 void RegisterHookRoutes(HttpServer& server);
 
-// Initialize hooks on DLL load
-void InitHooks();
+// Initialize the game-thread pump. ProcessEvent monitoring remains lazy.
+bool InitHooks();
 
 // Cleanup hooks on DLL unload
-void ShutdownHooks();
+bool ShutdownHooks();
 
 } // namespace UExplorer::API
