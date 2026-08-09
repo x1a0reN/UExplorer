@@ -266,4 +266,21 @@ mod tests {
             Err(ProtocolError::PayloadTooLarge(MAX_PAYLOAD_SIZE + 1))
         );
     }
+
+    #[test]
+    fn independent_usmap_consumer_accepts_uncompressed_golden_container() {
+        let bytes = decode_hex(include_str!("../../v1/fixtures/usmap-none.hex"));
+        assert_eq!(&bytes[..2], &[0xC4, 0x30]);
+        assert_eq!(bytes[2], 4);
+        assert_eq!(u32::from_le_bytes(bytes[3..7].try_into().unwrap()), 0);
+        assert_eq!(bytes[7], 0);
+        let compressed_size = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+        let uncompressed_size = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+        assert_eq!(compressed_size, 12);
+        assert_eq!(uncompressed_size, compressed_size);
+        assert_eq!(bytes.len(), 16 + compressed_size);
+        assert_eq!(u32::from_le_bytes(bytes[16..20].try_into().unwrap()), 0);
+        assert_eq!(u32::from_le_bytes(bytes[20..24].try_into().unwrap()), 0);
+        assert_eq!(u32::from_le_bytes(bytes[24..28].try_into().unwrap()), 0);
+    }
 }

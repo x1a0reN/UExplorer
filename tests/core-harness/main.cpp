@@ -8,6 +8,7 @@
 #include "IPC/Protocol.h"
 #include "Runtime/BoundedQueue.h"
 #include "API/GameThreadQueue.h"
+#include "Generator/Public/Generators/UsmapContainer.h"
 #include "Server/HttpServer.h"
 
 #include <atomic>
@@ -22,6 +23,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <sstream>
 #include <thread>
 
 namespace
@@ -155,6 +157,37 @@ namespace
 		Detail::WriteU32(oversized.data() + 12, MaxPayloadSize + 1);
 		FrameDecoder sizeDecoder;
 		Require(sizeDecoder.Push(oversized).Error == ProtocolError::PayloadTooLarge, "Oversized payload was accepted");
+	}
+
+	std::uint32_t ReadU32LittleEndian(const std::vector<std::uint8_t>& bytes, const std::size_t offset)
+	{
+		Require(offset <= bytes.size() && bytes.size() - offset >= 4, "Independent USMAP consumer read past input");
+		return static_cast<std::uint32_t>(bytes[offset])
+			| (static_cast<std::uint32_t>(bytes[offset + 1]) << 8)
+			| (static_cast<std::uint32_t>(bytes[offset + 2]) << 16)
+			| (static_cast<std::uint32_t>(bytes[offset + 3]) << 24);
+	}
+
+	void TestUsmapContainer(const std::filesystem::path& fixtureDirectory)
+	{
+		const std::vector<std::uint8_t> payload(12, 0);
+		std::ostringstream output(std::ios::binary | std::ios::out);
+		UExplorer::Usmap::WriteUncompressed(output, payload);
+		const std::string encodedText = output.str();
+		const std::vector<std::uint8_t> encoded(encodedText.begin(), encodedText.end());
+		Require(encoded == ReadHex(fixtureDirectory / "usmap-none.hex"), "USMAP writer changed from the golden container");
+
+		// Parse independently from the production writer and validate a minimal payload.
+		Require(encoded.size() == 28, "Independent USMAP consumer rejected container length");
+		Require(encoded[0] == 0xC4 && encoded[1] == 0x30, "Independent USMAP consumer rejected magic");
+		Require(encoded[2] == 4, "Independent USMAP consumer rejected version");
+		Require(ReadU32LittleEndian(encoded, 3) == 0, "Independent USMAP consumer found unexpected package versioning");
+		Require(encoded[7] == 0, "Independent USMAP consumer found an unsupported compression method");
+		Require(ReadU32LittleEndian(encoded, 8) == 12, "Independent USMAP consumer rejected compressed size");
+		Require(ReadU32LittleEndian(encoded, 12) == 12, "Independent USMAP consumer rejected uncompressed size");
+		Require(ReadU32LittleEndian(encoded, 16) == 0, "Independent USMAP consumer rejected name count");
+		Require(ReadU32LittleEndian(encoded, 20) == 0, "Independent USMAP consumer rejected enum count");
+		Require(ReadU32LittleEndian(encoded, 24) == 0, "Independent USMAP consumer rejected struct count");
 	}
 
 	void TestQueueOwnershipAndBackpressure()
@@ -389,12 +422,13 @@ int main(const int argc, char** argv)
 		TestGoldenHello(fixtureDirectory);
 		TestMultipleFrames();
 		TestTerminalErrors();
+		TestUsmapContainer(fixtureDirectory);
 		TestQueueOwnershipAndBackpressure();
 		TestQueueShutdownWakesWaiters();
 		TestGameThreadTaskOwnershipAndTimeouts();
 		TestGameThreadMpscCapacity();
 		TestHttpServerLifecycle();
-		std::cout << "Core harness passed: framing, bounded queues, owned game-thread tasks, SEH, HTTP lifecycle, and shutdown.\n";
+		std::cout << "Core harness passed: framing, USMAP consumer, bounded queues, owned game-thread tasks, SEH, HTTP lifecycle, and shutdown.\n";
 		return 0;
 	}
 	catch (const std::exception& error)

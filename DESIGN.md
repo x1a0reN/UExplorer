@@ -19,7 +19,7 @@ React -> Tauri invoke/event -> Rust Host -> Windows Named Pipe RPC -> Core DLL -
 | 重构阶段 | 当前状态 | 已有证据 | 未完成门槛 |
 |---|---|---|---|
 | R0 证据与测试地基 | 已完成 | 128 项问题可跟踪；65 条 API v1 路由快照；IPC v1 契约；C++ framing/queue/backpressure/shutdown harness；Rust protocol/Fake Core 测试；前端 lint/test/build 通过；Windows CI 三个 job 通过 | 目标 UE fixture 属于 R7 发布门，不再阻塞测试地基本身 |
-| R1 安全止血 | 进行中 | 注入路径已止血；GameThread 使用拥有参数的 64 项有界 MPSC、单调 deadline、终态与 drain；ProcessEvent SEH 转结构化失败；Hook restore/in-flight/unload refusal；HTTP worker 全部 join、socket timeout、精确 bind、SendAll；危险 reconnect/raw transform/legacy Watch/假 WS Console 已禁用；critical guessed offsets 已移除；USMAP 头与未压缩载荷一致 | Hook/注入目标进程 fixture；独立 USMAP consumer；剩余 offset capability 验证与 dump 关闭边界 |
+| R1 安全止血 | 进行中 | 注入路径已止血；GameThread 使用拥有参数的 64 项有界 MPSC、单调 deadline、终态与 drain；ProcessEvent SEH 转结构化失败；Hook restore/in-flight/unload refusal；HTTP worker 全部 join、socket timeout、精确 bind、SendAll；危险 reconnect/raw transform/legacy Watch/假 WS Console 已禁用；critical guessed offsets 已移除；USMAP 容器通过 C++/Rust golden consumer | Hook/注入目标进程 fixture；剩余 offset capability 验证、目标生成 USMAP 语义验证与 dump 关闭边界 |
 | R2 CoreRuntime/能力模型 | 未开始 | 目标状态机已在重构计划定义 | CoreRuntime、EngineContext、CapabilityRegistry 实装 |
 | R3 Named Pipe/Rust Host | 未开始 | IPC v1 framing 与 Fake Core 地基已建立 | 真实 Pipe、PID/ACL 校验、SessionManager、deadline/cancel |
 | R4 通信原子切换 | 未开始 | ADR 已接受 | React 只走 Tauri，Core 发布构建不含可达网络栈 |
@@ -27,7 +27,7 @@ React -> Tauri invoke/event -> Rust Host -> Windows Named Pipe RPC -> Core DLL -
 | R6 前端状态重构 | 未开始 | UI lint 已清零，基础 Vitest 已建立 | session store、查询取消、BigInt 地址、真实能力 UI |
 | R7 发布硬化 | 未开始 | 无 | 性能、压力、目标 fixture、文档和发布门全部通过 |
 
-当前不能宣称“可用”的既有功能包括：Watch（旧 polling/SSE 路径已返回 unavailable）、WebSocket Console（端点已禁用）、Actor Transform 写入（已返回 unavailable）、未生效 Dump option、尚无独立消费者证据的 USMAP、未完成 capability 报告的 Offset，以及未经过真实目标进程卸载 fixture 的 Hook。旧 HTTP 仅作为 R4 切换前的临时兼容层，不是目标架构。
+当前不能宣称“可用”的既有功能包括：Watch（旧 polling/SSE 路径已返回 unavailable）、WebSocket Console（端点已禁用）、Actor Transform 写入（已返回 unavailable）、未生效 Dump option、尚未由目标进程生成并完成语义验证的完整 USMAP、未完成 capability 报告的 Offset，以及未经过真实目标进程卸载 fixture 的 Hook。旧 HTTP 仅作为 R4 切换前的临时兼容层，不是目标架构。
 
 ### 0.1 R1 注入止血状态
 
@@ -47,12 +47,12 @@ React -> Tauri invoke/event -> Rust Host -> Windows Named Pipe RPC -> Core DLL -
 - PostRender/ProcessEvent VTable 修改会校验写保护恢复和最终指针，卸载前停止队列、恢复槽位并等待 callback in-flight 清零；任何恢复或 drain 失败都会阻止 `FreeLibraryAndExitThread`。ProcessEvent 监控改为按首次订阅延迟安装。
 - 临时 HTTP Server 不再创建 detached worker。接纳计数在建线程前原子保留，所有 worker 和 socket 有 owner；`Stop()` 中断慢连接并 join 全部线程后才允许析构，监听端口严格按配置 bind，不尝试替代端口，所有写入统一走 `SendAll`。
 - raw memory write 现在校验范围、`VirtualProtect`、SEH 写入和保护恢复；运行中 reconnect、raw Actor transform write、旧 Watch 和假 WebSocket Console 均明确返回 unavailable，前端也不再呈现其为已连接/实时功能。
-- USMAP 当前明确使用 `None` 压缩标记并写入等长原始 payload，检查 size/open/write/flush；这修复了“Zstd 标记 + 未压缩载荷”的确定性损坏，但在独立 consumer fixture 通过前仍不标记为 verified。
+- USMAP 容器统一由 `UExplorer::Usmap::WriteUncompressed` 写入：`None` 压缩标记、compressed/uncompressed 等长、size/open/write/flush 均受检查。生产 writer 输出与 golden fixture 完全一致，C++ 与 Rust 独立解析器均验证通过，因此确定性的“Zstd 标记 + 未压缩载荷”问题 `DUMP-001` 已关闭；真实目标生成的完整 name/enum/struct 映射仍属于 `DUMP-007` 与 R7 fixture，不能由最小空 payload 测试替代。
 - Dump 启动改为单一显式线程 owner；运行中第二个任务返回 `DUMP_EXECUTOR_BUSY`，关闭等待有 5 秒边界，超时则拒绝 DLL 卸载并继续持有线程。旧 API 对任何非空 option 返回 `DUMP_OPTIONS_UNAVAILABLE`，UI 已移除未生效选项和伪 60% 进度，真实取消/阶段进度留待 R5 DumpService。
 - 旧 Hook monitoring 仍含锁、JSON 和网络热路径，因此当前 capability 被硬关闭，前端无可达入口；只有无监控逻辑的 PostRender game-thread pump 保留。它必须等 R5 的预分配有界 collector、drop 指标和 Host EventHub 完成后才能重新开放。
-- `CoreHarness` 已覆盖 framing、1-byte 分片、队列背压、GameThread 所有权/超时/取消/SEH、64 生产者容量、1000 次 HTTP connect/disconnect、占用端口无 fallback 和慢客户端 shutdown。`tests/contracts/verify-core-safety.ps1` 固化静态不变量。
+- `CoreHarness` 已覆盖 framing、1-byte 分片、USMAP production writer/golden/独立解析、队列背压、GameThread 所有权/超时/取消/SEH、64 生产者容量、1000 次 HTTP connect/disconnect、占用端口无 fallback 和慢客户端 shutdown；Rust protocol 测试从同一 fixture 独立验证 USMAP 容器。`tests/contracts/verify-core-safety.ps1` 固化静态不变量。
 
-本阶段最新本地证据：VS2026 `Release|x64` Core 与 harness 构建通过，Core harness 通过，`npm run lint` 通过。真实 UE 目标的 Hook 恢复、注入超时和 USMAP consumer 仍是明确未执行项，不能用本地 harness 代替。
+本阶段最新本地证据：VS2026 `Release|x64` Core 与 harness 构建通过，Core harness 与 Rust USMAP consumer 测试通过，`npm run lint` 通过。真实 UE 目标的 Hook 恢复、注入超时和完整目标生成 USMAP 语义验证仍是明确未执行项，不能用最小 golden harness 代替。
 
 ## Context
 

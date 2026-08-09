@@ -25,6 +25,7 @@ $dumpApi = Read-ProjectFile 'Dumper\API\DumpApi.cpp'
 $httpServer = Read-ProjectFile 'Dumper\Server\HttpServer.cpp'
 $main = Read-ProjectFile 'Dumper\Main.cpp'
 $mapping = Read-ProjectFile 'Dumper\Generator\Private\Generators\MappingGenerator.cpp'
+$usmapContainer = Read-ProjectFile 'Dumper\Generator\Public\Generators\UsmapContainer.h'
 $settings = Read-ProjectFile 'Dumper\Settings.h'
 $statusApi = Read-ProjectFile 'Dumper\API\StatusApi.cpp'
 $worldApi = Read-ProjectFile 'Dumper\API\WorldApi.cpp'
@@ -65,7 +66,11 @@ Assert-NotContains $main 'Kismet.ProcessEvent' 'Startup worker must not invoke P
 
 Assert-Contains $settings 'EUsmapCompressionMethod::None' 'USMAP compression header must match its payload.'
 Assert-NotContains $mapping 'ZSTD_compress' 'Disabled Zstd must not leave a partial compression path.'
-Assert-Contains $mapping 'static_assert(CompressionMethod == EUsmapCompressionMethod::None' 'USMAP payload/header invariant is missing.'
+Assert-Contains $mapping 'Usmap::WriteUncompressed' 'MappingGenerator must use the tested USMAP container writer.'
+foreach ($token in @('kCompressionNone = 0', 'WriteU32LittleEndian(header + 8, payloadSize)',
+        'WriteU32LittleEndian(header + 12, payloadSize)')) {
+    Assert-Contains $usmapContainer $token 'USMAP payload/header invariant is missing.'
+}
 
 Assert-Contains $statusApi 'RECONNECT_DISABLED' 'Unsafe global reconnect must remain disabled.'
 Assert-Contains $worldApi 'ACTOR_TRANSFORM_WRITE_DISABLED' 'Raw actor transform writes must remain disabled.'

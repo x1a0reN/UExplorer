@@ -55,6 +55,7 @@
     <ClInclude Include="..\..\Dumper\IPC\Protocol.h" />
     <ClInclude Include="..\..\Dumper\Runtime\BoundedQueue.h" />
     <ClInclude Include="..\..\Dumper\API\GameThreadQueue.h" />
+    <ClInclude Include="..\..\Dumper\Generator\Public\Generators\UsmapContainer.h" />
     <ClInclude Include="..\..\Dumper\Server\HttpServer.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

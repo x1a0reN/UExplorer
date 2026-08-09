@@ -66,31 +66,6 @@ private:
     using StreamType = std::ofstream;
 
 private:
-    enum class EUsmapVersion : uint8
-    {
-        /* Initial format. */
-        Initial,
-
-        /* Adds package versioning to aid with compatibility */
-        PackageVersioning,
-
-        /* Adds support for 16-bit wide name-lengths (ushort/uint16) */
-        LongFName,
-
-        /* Adds support for enums with more than 255 values */
-        LargeEnums,
-
-        /* Adds support for explicit enum values */
-        ExplicitEnumValues,
-
-        Latest,
-        LatestPlusOne,
-    };
-
-private:
-    static constexpr uint16 UsmapFileMagic = 0x30C4;
-
-private:
     static inline uint64 NameCounter = 0x0;
 
 public:
@@ -128,8 +103,6 @@ private:
     static void GenerateEnum(const EnumWrapper& Enum, std::stringstream& Data, std::stringstream& NameTable);
 
     static std::stringstream GenerateFileData();
-    static void GenerateFileHeader(StreamType& InUsmap, const std::stringstream& Data);
-
 public:
     static void Generate();
 

@@ -1,10 +1,9 @@
 
 #include <iostream>
-#include <limits>
-#include <stdexcept>
 #include <string>
 
 #include "Generators/MappingGenerator.h"
+#include "Generators/UsmapContainer.h"
 #include "Managers/PackageManager.h"
 #include "../Settings.h"
 #include "Utils.h"
@@ -401,50 +400,6 @@ std::stringstream MappingGenerator::GenerateFileData()
 }
 
 
-void MappingGenerator::GenerateFileHeader(StreamType& InUsmap, const std::stringstream& Data)
-{
-	const std::string Payload = Data.str();
-	if (Payload.size() > (std::numeric_limits<uint32>::max)())
-		throw std::runtime_error("USMAP payload exceeds uint32 size limit");
-
-	/* Write 2bytes unsigned */
-	WriteToStream(InUsmap, UsmapFileMagic);
-
-	/* Version: ExplicitEnumValues, adds support for enums with explicit values to fix mismatches */
-	WriteToStream(InUsmap, EUsmapVersion::ExplicitEnumValues);
-
-	/* We're on 'ExplicitEnumValues' version, we need to write 'bool' (aka int32) bHasVersioning. (NoVersioning = false) -> no [int32 UE4Version, int32 UE5Version] and no [uint32 NetCL] */
-	WriteToStream(InUsmap, static_cast<int32>(false));
-
-	const uint32 UncompressedSize = static_cast<uint32>(Payload.size());
-
-	constexpr auto CompressionMethod = Settings::MappingGenerator::CompressionMethod;
-
-	/* Write 'CompressionMethod' to the compression byte */
-	WriteToStream(InUsmap, static_cast<uint8>(CompressionMethod));
-
-	static_assert(CompressionMethod == EUsmapCompressionMethod::None,
-		"Compression must not be advertised unless the matching encoder is built");
-	const uint32 CompressedSize = UncompressedSize;
-
-	if constexpr (Settings::Debug::bShouldPrintMappingDebugData)
-	{
-		std::cerr << std::format("MappingGeneration: CompressedSize = 0x{0:X} (Dec: {0})\n", CompressedSize);
-		std::cerr << std::format("MappingGeneration: DecompressedSize = 0x{0:X} (Dec: {0})\n\n", UncompressedSize);
-	}
-
-	/* Write compressed size */
-	WriteToStream(InUsmap, CompressedSize);
-
-	/* Write uncompressed size */
-	WriteToStream(InUsmap, UncompressedSize);
-
-	/* Header is done, now write the payload to the file */
-	InUsmap.write(Payload.data(), static_cast<std::streamsize>(CompressedSize));
-	if (!InUsmap)
-		throw std::runtime_error("Failed to write USMAP header or payload");
-}
-
 void MappingGenerator::Generate()
 {
 	NameCounter = 0x0;
@@ -461,8 +416,11 @@ void MappingGenerator::Generate()
 	/* Generate the payload of the file, containing all of the names, enums and structs. */
 	std::stringstream FileData = GenerateFileData();
 
-	/* Generate the header, and write both header and payload into the file. */
-	GenerateFileHeader(UsmapFile, FileData);
+	/* Write a self-consistent uncompressed container around the generated payload. */
+	const std::string Payload = FileData.str();
+	UExplorer::Usmap::WriteUncompressed(
+		UsmapFile,
+		std::span<const uint8>(reinterpret_cast<const uint8*>(Payload.data()), Payload.size()));
 	UsmapFile.flush();
 	if (!UsmapFile)
 		throw std::runtime_error("Failed to flush USMAP output file");

@@ -156,6 +156,7 @@
     <ClInclude Include="Generator\Public\Generators\Generator.h" />
     <ClInclude Include="Generator\Public\Generators\IDAMappingGenerator.h" />
     <ClInclude Include="Generator\Public\Generators\MappingGenerator.h" />
+    <ClInclude Include="Generator\Public\Generators\UsmapContainer.h" />
     <ClInclude Include="Generator\Public\HashStringTable.h" />
     <ClInclude Include="Generator\Public\Managers\CollisionManager.h" />
     <ClInclude Include="Generator\Public\Managers\DependencyManager.h" />
