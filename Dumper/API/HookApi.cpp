@@ -8,18 +8,21 @@
 #include "Unreal/UnrealTypes.h"
 #include "Unreal/Enums.h"
 #include "OffsetFinder/Offsets.h"
+#include "Runtime/CallbackBarrier.h"
 #include "Runtime/SafeMemory.h"
+#include "Runtime/VTableHook.h"
 
+#include <algorithm>
 #include <format>
 #include <mutex>
 #include <shared_mutex>
 #include <map>
+#include <memory>
 #include <set>
 #include <atomic>
 #include <vector>
 #include <deque>
 #include <chrono>
-#include <condition_variable>
 #include <unordered_set>
 #include <cctype>
 
@@ -45,12 +48,6 @@ struct HookLogEntry
 	int64_t Timestamp;
 };
 
-struct PatchedPESlot
-{
-	void** Slot = nullptr;
-	void* Original = nullptr;
-};
-
 static std::mutex g_HookMutex;
 static std::map<int, HookEntry> g_Hooks;
 static std::atomic<int> g_HookCounter{ 0 };
@@ -65,53 +62,33 @@ static std::shared_mutex g_MonitorMutex;
 static std::set<void*> g_MonitoredFunctions;
 
 // PostRender vtable hook is only used for game-thread dispatch queue.
-static void* g_GVCPtr = nullptr;
-static void** g_GVCVft = nullptr;
-static void* g_OrigPostRender = nullptr;
-static bool g_PostRenderHookInstalled = false;
+static std::unique_ptr<Runtime::VTableHookToken> g_PostRenderPatch;
+static std::atomic<void*> g_OrigPostRender{nullptr};
+// Read-only diagnostic projections. Patch ownership remains exclusively in tokens.
+static std::atomic<bool> g_PostRenderPublishedActive{false};
 
 // ProcessEvent vtable-slot hook state (non-inline).
 static std::mutex g_PEVTableMutex;
-static std::vector<PatchedPESlot> g_PatchedPESlots;
-static void* g_OriginalPE = nullptr;
-static bool g_PEHookInstalled = false;
+static std::vector<std::unique_ptr<Runtime::VTableHookToken>> g_PEPatches;
+static std::atomic<void*> g_OriginalPE{nullptr};
+static std::atomic<bool> g_PEPublishedActive{false};
 static std::atomic<int64_t> g_TotalPECalls{ 0 };
-static std::atomic<uint32_t> g_PECallbacksInFlight{ 0 };
-static std::atomic<uint32_t> g_PostRenderCallbacksInFlight{ 0 };
+static Runtime::CallbackBarrier g_PECallbackBarrier;
+static Runtime::CallbackBarrier g_PostRenderCallbackBarrier;
 static std::atomic<bool> g_HookShutdownRequested{ false };
-static std::mutex g_CallbackDrainMutex;
-static std::condition_variable g_CallbackDrainCV;
 static constexpr bool kLegacyHookMonitoringEnabled = false;
 
 typedef void(*PostRenderFn)(void*, void*);
 typedef void(*ProcessEventFn)(void*, void*, void*);
 
-class CallbackGuard
+static bool IsPostRenderHookInstalled()
 {
-public:
-	explicit CallbackGuard(std::atomic<uint32_t>& counter)
-		: Counter(counter)
-	{
-		Counter.fetch_add(1, std::memory_order_acq_rel);
-	}
+	return g_PostRenderPublishedActive.load(std::memory_order_acquire);
+}
 
-	~CallbackGuard()
-	{
-		if (Counter.fetch_sub(1, std::memory_order_acq_rel) == 1)
-			g_CallbackDrainCV.notify_all();
-	}
-
-private:
-	std::atomic<uint32_t>& Counter;
-};
-
-static bool WaitForCallbacks(std::atomic<uint32_t>& counter, int timeoutMs)
+static bool IsPEHookInstalled()
 {
-	std::unique_lock<std::mutex> lk(g_CallbackDrainMutex);
-	return g_CallbackDrainCV.wait_for(
-		lk,
-		std::chrono::milliseconds(timeoutMs),
-		[&counter] { return counter.load(std::memory_order_acquire) == 0; });
+	return g_PEPublishedActive.load(std::memory_order_acquire);
 }
 
 static int64_t HookNowMs()
@@ -238,35 +215,14 @@ static bool ReadObjectVTable(void* object, void**& vtable)
 		&& vtable;
 }
 
-static bool PatchVTableSlot(void** slot, void* replacement, void** outOriginal = nullptr)
-{
-	if (!slot || !replacement)
-		return false;
-
-	void* original = nullptr;
-	if (!ReadPointerSlot(slot, original))
-		return false;
-	if (!Runtime::CompareExchangePointer(slot, original, replacement).Ok())
-		return false;
-	if (outOriginal)
-		*outOriginal = original;
-	return true;
-}
-
-static bool RestoreVTableSlot(void** slot, void* expectedHook, void* original)
-{
-	if (!slot || !expectedHook || !original)
-		return false;
-	return Runtime::CompareExchangePointer(slot, expectedHook, original).Ok();
-}
-
 static void HookedProcessEvent(void* Object, void* Function, void* Params)
 {
-	CallbackGuard callbackGuard(g_PECallbacksInFlight);
+	auto callbackLease = g_PECallbackBarrier.Enter();
 	g_TotalPECalls.fetch_add(1, std::memory_order_relaxed);
 
 	bool monitored = false;
-	if (!g_HookShutdownRequested.load(std::memory_order_acquire))
+	if (callbackLease.OwnedWorkAllowed()
+		&& !g_HookShutdownRequested.load(std::memory_order_acquire))
 	{
 		std::shared_lock<std::shared_mutex> lk(g_MonitorMutex);
 		monitored = g_MonitoredFunctions.count(Function) > 0;
@@ -330,7 +286,7 @@ static void HookedProcessEvent(void* Object, void* Function, void* Params)
 		catch (...) {}
 	}
 
-	auto orig = reinterpret_cast<ProcessEventFn>(g_OriginalPE);
+	auto orig = reinterpret_cast<ProcessEventFn>(g_OriginalPE.load(std::memory_order_acquire));
 	if (orig)
 	{
 		orig(Object, Function, Params);
@@ -340,9 +296,23 @@ static void HookedProcessEvent(void* Object, void* Function, void* Params)
 static bool InstallPEVTableHook()
 {
 	std::lock_guard<std::mutex> lk(g_PEVTableMutex);
-	if (g_PEHookInstalled)
+	if (!g_PEPatches.empty()
+		&& std::ranges::any_of(g_PEPatches, [](const auto& patch) {
+			return patch && patch->IsActive();
+		}))
 	{
 		return true;
+	}
+	if (!g_PEPatches.empty())
+	{
+		std::cerr << "[HookApi] ProcessEvent hook owner still has an incomplete shutdown" << std::endl;
+		return false;
+	}
+	g_PEPublishedActive.store(false, std::memory_order_release);
+	if (!g_PECallbackBarrier.Reset())
+	{
+		std::cerr << "[HookApi] ProcessEvent callback barrier is not drained" << std::endl;
+		return false;
 	}
 
 	const int32 peIdx = Off::InSDK::ProcessEvent::PEIndex;
@@ -380,67 +350,87 @@ static bool InstallPEVTableHook()
 		return false;
 	}
 
-	g_OriginalPE = targetPE;
-	g_PatchedPESlots.clear();
+	g_OriginalPE.store(targetPE, std::memory_order_release);
 
 	std::unordered_set<void**> visitedVTables;
+	std::vector<void**> candidateSlots;
 	int classCount = 0;
-	int patched = 0;
-
-	for (int i = 0; i < ObjectArray::Num(); ++i)
+	try
 	{
-		UEObject obj = ObjectArray::GetByIndex(i);
-		if (!obj || !obj.IsA(EClassCastFlags::Class))
+		for (int i = 0; i < ObjectArray::Num(); ++i)
+		{
+			UEObject obj = ObjectArray::GetByIndex(i);
+			if (!obj || !obj.IsA(EClassCastFlags::Class))
+			{
+				continue;
+			}
+
+			++classCount;
+			UEClass cls = obj.Cast<UEClass>();
+			UEObject cdo = cls.GetDefaultObject();
+			if (!cdo)
+			{
+				continue;
+			}
+
+			void* clsCdoAddr = cdo.GetAddress();
+			if (!clsCdoAddr)
+			{
+				continue;
+			}
+
+			void** vft = nullptr;
+			if (!ReadObjectVTable(clsCdoAddr, vft) || !visitedVTables.insert(vft).second)
+			{
+				continue;
+			}
+
+			void** slot = vft + peIdx;
+			void* current = nullptr;
+			if (!ReadPointerSlot(slot, current) || current != targetPE)
+			{
+				continue;
+			}
+			candidateSlots.push_back(slot);
+		}
+
+		// No vector growth may occur after a slot has been patched.
+		g_PEPatches.reserve(candidateSlots.size());
+	}
+	catch (...)
+	{
+		g_OriginalPE.store(nullptr, std::memory_order_release);
+		g_PEPublishedActive.store(false, std::memory_order_release);
+		std::cerr << "[HookApi] Failed to enumerate ProcessEvent patch candidates" << std::endl;
+		return false;
+	}
+
+	int patched = 0;
+	for (void** slot : candidateSlots)
+	{
+		Runtime::VTableHookInstallResult installed = Runtime::VTableHookToken::Install(
+			slot,
+			reinterpret_cast<void*>(&HookedProcessEvent),
+			targetPE);
+		if (!installed.Ok())
 		{
 			continue;
 		}
 
-		++classCount;
-		UEClass cls = obj.Cast<UEClass>();
-		UEObject cdo = cls.GetDefaultObject();
-		if (!cdo)
-		{
-			continue;
-		}
-
-		void* clsCdoAddr = cdo.GetAddress();
-		if (!clsCdoAddr)
-		{
-			continue;
-		}
-
-		void** vft = nullptr;
-		if (!ReadObjectVTable(clsCdoAddr, vft) || !visitedVTables.insert(vft).second)
-		{
-			continue;
-		}
-
-		void** slot = vft + peIdx;
-		void* current = nullptr;
-		if (!ReadPointerSlot(slot, current) || current != targetPE)
-		{
-			continue;
-		}
-
-		void* oldFunc = nullptr;
-		if (!PatchVTableSlot(slot, reinterpret_cast<void*>(&HookedProcessEvent), &oldFunc))
-		{
-			continue;
-		}
-
-		g_PatchedPESlots.push_back({ slot, oldFunc });
+		g_PEPatches.push_back(std::move(installed.Token));
 		++patched;
 	}
 
 	if (patched <= 0)
 	{
-		g_PatchedPESlots.clear();
-		g_OriginalPE = nullptr;
+		g_PEPatches.clear();
+		g_OriginalPE.store(nullptr, std::memory_order_release);
+		g_PEPublishedActive.store(false, std::memory_order_release);
 		std::cerr << "[HookApi] Failed to patch any ProcessEvent vtable slots" << std::endl;
 		return false;
 	}
+	g_PEPublishedActive.store(true, std::memory_order_release);
 
-	g_PEHookInstalled = true;
 	std::cerr << "[HookApi] ProcessEvent vtable hook installed: patched_slots=" << patched
 		<< " scanned_classes=" << classCount << " pe_index=" << peIdx << std::endl;
 	return true;
@@ -449,86 +439,111 @@ static bool InstallPEVTableHook()
 static bool UninstallPEVTableHook()
 {
 	std::lock_guard<std::mutex> lk(g_PEVTableMutex);
-	if (!g_PEHookInstalled)
+	if (g_PEPatches.empty())
 	{
+		g_PEPublishedActive.store(false, std::memory_order_release);
+		g_OriginalPE.store(nullptr, std::memory_order_release);
 		return true;
 	}
+	g_PECallbackBarrier.BeginStopping();
 
 	int restored = 0;
 	int failed = 0;
-	for (auto it = g_PatchedPESlots.rbegin(); it != g_PatchedPESlots.rend(); ++it)
+	for (auto it = g_PEPatches.rbegin(); it != g_PEPatches.rend(); ++it)
 	{
-		if (!it->Slot)
+		if (!*it || !(*it)->IsActive())
 		{
 			continue;
 		}
-
-		void* current = nullptr;
-		if (!ReadPointerSlot(it->Slot, current))
+		if ((*it)->Disable())
+		{
+			++restored;
+		}
+		else
 		{
 			++failed;
 		}
-		else if (current == reinterpret_cast<void*>(&HookedProcessEvent))
-		{
-			if (RestoreVTableSlot(
-				it->Slot,
-				reinterpret_cast<void*>(&HookedProcessEvent),
-				it->Original))
-			{
-				++restored;
-			}
-			else
-			{
-				++failed;
-			}
-		}
 	}
-
-	for (const auto& patch : g_PatchedPESlots)
-	{
-		void* current = nullptr;
-		if (!ReadPointerSlot(patch.Slot, current)
-			|| current == reinterpret_cast<void*>(&HookedProcessEvent))
-			++failed;
-	}
+	const bool anyActive = std::ranges::any_of(g_PEPatches, [](const auto& patch) {
+		return patch && patch->IsActive();
+	});
+	g_PEPublishedActive.store(anyActive, std::memory_order_release);
 	if (failed > 0)
 	{
 		std::cerr << "[HookApi] ProcessEvent hook restore failed: restored_slots=" << restored
 			<< " failed_checks=" << failed << std::endl;
 		return false;
 	}
-	if (!WaitForCallbacks(g_PECallbacksInFlight, 5000))
+	if (!g_PECallbackBarrier.WaitForDrain(std::chrono::milliseconds(5000)))
 	{
 		std::cerr << "[HookApi] ProcessEvent callback drain timed out: in_flight="
-			<< g_PECallbacksInFlight.load() << std::endl;
+			<< g_PECallbackBarrier.InFlight() << std::endl;
 		return false;
 	}
 
-	g_PatchedPESlots.clear();
-	g_PEHookInstalled = false;
-	g_OriginalPE = nullptr;
+	g_PEPatches.clear();
+	g_OriginalPE.store(nullptr, std::memory_order_release);
+	g_PEPublishedActive.store(false, std::memory_order_release);
 	std::cerr << "[HookApi] ProcessEvent vtable hook uninstalled: restored_slots=" << restored << std::endl;
 	return true;
 }
 
 static void HookedPostRender(void* InGVCCDO, void* InCanvas)
 {
-	CallbackGuard callbackGuard(g_PostRenderCallbacksInFlight);
-	if (!g_HookShutdownRequested.load(std::memory_order_acquire))
+	auto callbackLease = g_PostRenderCallbackBarrier.Enter();
+	if (callbackLease.OwnedWorkAllowed()
+		&& !g_HookShutdownRequested.load(std::memory_order_acquire))
 		GameThread::ProcessQueue();
 
-	auto orig = reinterpret_cast<PostRenderFn>(g_OrigPostRender);
+	auto orig = reinterpret_cast<PostRenderFn>(g_OrigPostRender.load(std::memory_order_acquire));
 	if (orig)
 	{
 		orig(InGVCCDO, InCanvas);
 	}
 }
 
+static bool DetachPostRenderPatch(const char* failureContext)
+{
+	if (!g_PostRenderPatch)
+	{
+		g_PostRenderPublishedActive.store(false, std::memory_order_release);
+		return true;
+	}
+	g_PostRenderCallbackBarrier.BeginStopping();
+	if (g_PostRenderPatch->IsActive() && !g_PostRenderPatch->Disable())
+	{
+		std::cerr << "[HookApi] " << failureContext
+			<< ": VTable restore failed; unload is unsafe" << std::endl;
+		return false;
+	}
+	g_PostRenderPublishedActive.store(false, std::memory_order_release);
+	if (!g_PostRenderCallbackBarrier.WaitForDrain(std::chrono::milliseconds(5000)))
+	{
+		std::cerr << "[HookApi] " << failureContext << ": callback drain timed out: in_flight="
+			<< g_PostRenderCallbackBarrier.InFlight() << std::endl;
+		return false;
+	}
+	g_PostRenderPatch.reset();
+	g_OrigPostRender.store(nullptr, std::memory_order_release);
+	return true;
+}
+
 static bool InstallPostRenderHook()
 {
-	if (g_PostRenderHookInstalled)
+	if (g_PostRenderPatch && g_PostRenderPatch->IsActive())
 	{
 		return true;
+	}
+	if (g_PostRenderPatch)
+	{
+		std::cerr << "[HookApi] PostRender hook owner still has an incomplete shutdown" << std::endl;
+		return false;
+	}
+	g_PostRenderPublishedActive.store(false, std::memory_order_release);
+	if (!g_PostRenderCallbackBarrier.Reset())
+	{
+		std::cerr << "[HookApi] PostRender callback barrier is not drained" << std::endl;
+		return false;
 	}
 
 	UEClass gvcClass = FindClassByName("GameViewportClient");
@@ -545,14 +560,15 @@ static bool InstallPostRenderHook()
 		return false;
 	}
 
-	g_GVCPtr = cdo.GetAddress();
-	if (!g_GVCPtr)
+	void* gvcPtr = cdo.GetAddress();
+	if (!gvcPtr)
 	{
 		std::cerr << "[HookApi] Invalid GVC pointer" << std::endl;
 		return false;
 	}
 
-	if (!ReadObjectVTable(g_GVCPtr, g_GVCVft))
+	void** gvcVft = nullptr;
+	if (!ReadObjectVTable(gvcPtr, gvcVft))
 	{
 		std::cerr << "[HookApi] Invalid GVC vtable" << std::endl;
 		return false;
@@ -565,21 +581,29 @@ static bool InstallPostRenderHook()
 		return false;
 	}
 
-	if (!ReadPointerSlot(g_GVCVft + postRenderIdx, g_OrigPostRender) || !g_OrigPostRender)
+	void* originalPostRender = nullptr;
+	void** postRenderSlot = gvcVft + postRenderIdx;
+	if (!ReadPointerSlot(postRenderSlot, originalPostRender) || !originalPostRender)
 	{
 		std::cerr << "[HookApi] Original PostRender not found" << std::endl;
 		return false;
 	}
 
-	if (!PatchVTableSlot(g_GVCVft + postRenderIdx, reinterpret_cast<void*>(&HookedPostRender)))
+	g_OrigPostRender.store(originalPostRender, std::memory_order_release);
+	Runtime::VTableHookInstallResult installed = Runtime::VTableHookToken::Install(
+		postRenderSlot,
+		reinterpret_cast<void*>(&HookedPostRender),
+		originalPostRender);
+	if (!installed.Ok())
 	{
+		g_OrigPostRender.store(nullptr, std::memory_order_release);
 		std::cerr << "[HookApi] Failed to patch PostRender vtable slot" << std::endl;
 		return false;
 	}
+	g_PostRenderPatch = std::move(installed.Token);
+	g_PostRenderPublishedActive.store(true, std::memory_order_release);
 
-	g_PostRenderHookInstalled = true;
-
-	void* globalPE = g_OriginalPE;
+	void* globalPE = g_OriginalPE.load(std::memory_order_acquire);
 	if (!globalPE)
 	{
 		UEClass uObjectClass = ObjectArray::FindClassFast("Object");
@@ -604,36 +628,20 @@ static bool InstallPostRenderHook()
 		std::cerr << "[HookApi] Global ProcessEvent: " << std::hex << globalPE << std::dec << std::endl;
 		if (!GameThread::Enable(reinterpret_cast<ProcessEventFn>(globalPE)))
 		{
-			if (!RestoreVTableSlot(
-				g_GVCVft + postRenderIdx,
-				reinterpret_cast<void*>(&HookedPostRender),
-				g_OrigPostRender))
+			if (!DetachPostRenderPatch("executor enable rollback"))
 			{
-				std::cerr << "[HookApi] Failed to roll back PostRender after executor enable failure; unload is unsafe" << std::endl;
 				return false;
 			}
-			g_PostRenderHookInstalled = false;
-			g_GVCPtr = nullptr;
-			g_GVCVft = nullptr;
-			g_OrigPostRender = nullptr;
 			std::cerr << "[HookApi] Failed to enable game-thread executor" << std::endl;
 			return false;
 		}
 	}
 	else
 	{
-		if (!RestoreVTableSlot(
-			g_GVCVft + postRenderIdx,
-			reinterpret_cast<void*>(&HookedPostRender),
-			g_OrigPostRender))
+		if (!DetachPostRenderPatch("missing ProcessEvent rollback"))
 		{
-			std::cerr << "[HookApi] Failed to roll back PostRender without ProcessEvent; unload is unsafe" << std::endl;
 			return false;
 		}
-		g_PostRenderHookInstalled = false;
-		g_GVCPtr = nullptr;
-		g_GVCVft = nullptr;
-		g_OrigPostRender = nullptr;
 		std::cerr << "[HookApi] Global ProcessEvent unavailable; game-thread executor disabled" << std::endl;
 		return false;
 	}
@@ -644,57 +652,22 @@ static bool InstallPostRenderHook()
 
 static bool UninstallPostRenderHook()
 {
-	if (!g_PostRenderHookInstalled)
+	if (!g_PostRenderPatch)
 	{
+		g_PostRenderPublishedActive.store(false, std::memory_order_release);
 		return true;
 	}
 
 	std::cerr << "[HookApi] Uninstalling PostRender hook..." << std::endl;
+	g_PostRenderCallbackBarrier.BeginStopping();
 	if (!GameThread::DisableAndDrain(5000))
 	{
 		std::cerr << "[HookApi] Game-thread executor drain timed out" << std::endl;
 		return false;
 	}
 
-	const int32 postRenderIdx = Off::InSDK::PostRender::GVCPostRenderIndex;
-	if (postRenderIdx >= 0 && g_GVCVft && g_OrigPostRender)
-	{
-		void** slot = g_GVCVft + postRenderIdx;
-		void* current = nullptr;
-		if (!ReadPointerSlot(slot, current))
-		{
-			std::cerr << "[HookApi] Failed to read PostRender vtable slot" << std::endl;
-			return false;
-		}
-		if (current == reinterpret_cast<void*>(&HookedPostRender)
-			&& !RestoreVTableSlot(
-				slot,
-				reinterpret_cast<void*>(&HookedPostRender),
-				g_OrigPostRender))
-		{
-			std::cerr << "[HookApi] Failed to restore PostRender vtable slot" << std::endl;
-			return false;
-		}
-		if (!ReadPointerSlot(slot, current)
-			|| current == reinterpret_cast<void*>(&HookedPostRender))
-			return false;
-	}
-	else
-	{
-		std::cerr << "[HookApi] PostRender restore state is invalid" << std::endl;
+	if (!DetachPostRenderPatch("PostRender shutdown"))
 		return false;
-	}
-	if (!WaitForCallbacks(g_PostRenderCallbacksInFlight, 5000))
-	{
-		std::cerr << "[HookApi] PostRender callback drain timed out: in_flight="
-			<< g_PostRenderCallbacksInFlight.load() << std::endl;
-		return false;
-	}
-
-	g_PostRenderHookInstalled = false;
-	g_GVCPtr = nullptr;
-	g_GVCVft = nullptr;
-	g_OrigPostRender = nullptr;
 
 	std::cerr << "[HookApi] PostRender hook uninstalled" << std::endl;
 	return true;
@@ -927,7 +900,7 @@ void RegisterHookRoutes(HttpServer& server)
 			data["hooks"] = json::array();
 			data["available"] = false;
 			data["reason"] = "BOUNDED_COLLECTOR_NOT_ACTIVE";
-			data["postrender_vtable_hook_installed"] = g_PostRenderHookInstalled;
+			data["postrender_vtable_hook_installed"] = IsPostRenderHookInstalled();
 			data["pe_vtable_hook_installed"] = false;
 			data["game_thread_enabled"] = GameThread::IsEnabled();
 			return { 200, "application/json", MakeResponse(data) };
@@ -952,9 +925,9 @@ void RegisterHookRoutes(HttpServer& server)
 			data["monitored_count"] = g_MonitoredFunctions.size();
 		}
 		data["total_pe_calls"] = g_TotalPECalls.load();
-		data["vtable_hook_installed"] = g_PEHookInstalled || g_PostRenderHookInstalled;
-		data["postrender_vtable_hook_installed"] = g_PostRenderHookInstalled;
-		data["pe_vtable_hook_installed"] = g_PEHookInstalled;
+		data["vtable_hook_installed"] = IsPEHookInstalled() || IsPostRenderHookInstalled();
+		data["postrender_vtable_hook_installed"] = IsPostRenderHookInstalled();
+		data["pe_vtable_hook_installed"] = IsPEHookInstalled();
 		data["game_thread_enabled"] = GameThread::IsEnabled();
 
 		return { 200, "application/json", MakeResponse(data) };

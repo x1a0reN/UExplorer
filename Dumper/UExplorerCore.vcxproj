@@ -120,6 +120,7 @@
     <ClCompile Include="Runtime\EngineContextCapture.cpp" />
     <ClCompile Include="Runtime\ObjectHandle.cpp" />
     <ClCompile Include="Runtime\SafeMemory.cpp" />
+    <ClCompile Include="Runtime\VTableHook.cpp" />
     <!-- Temporarily exclude zstd.c due to VS2026 STL compatibility issue -->
     <!-- <ClCompile Include="Utils\Compression\zstd.c" /> -->
     <ClCompile Include="Utils\Dumpspace\DSGen.cpp" />
@@ -194,11 +195,13 @@
     <ClInclude Include="Runtime\CoreCapabilities.h" />
     <ClInclude Include="Runtime\CoreRuntime.h" />
     <ClInclude Include="Runtime\CoreRuntimeAccess.h" />
+    <ClInclude Include="Runtime\CallbackBarrier.h" />
     <ClInclude Include="Runtime\EngineContext.h" />
     <ClInclude Include="Runtime\EngineContextCapture.h" />
     <ClInclude Include="Runtime\ObjectHandle.h" />
     <ClInclude Include="Runtime\SafeMemory.h" />
     <ClInclude Include="Runtime\ShutdownCoordinator.h" />
+    <ClInclude Include="Runtime\VTableHook.h" />
     <!-- New: Server Headers -->
     <ClInclude Include="Server\HttpServer.h" />
     <!-- New: API Headers -->

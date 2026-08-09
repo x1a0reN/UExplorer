@@ -25,8 +25,10 @@ $capabilities = Read-ProjectFile 'Dumper\Runtime\CoreCapabilities.h'
 $shutdown = Read-ProjectFile 'Dumper\Runtime\ShutdownCoordinator.h'
 $handleHeader = Read-ProjectFile 'Dumper\Runtime\ObjectHandle.h'
 $handleImplementation = Read-ProjectFile 'Dumper\Runtime\ObjectHandle.cpp'
+$callbackBarrier = Read-ProjectFile 'Dumper\Runtime\CallbackBarrier.h'
 $safeMemoryHeader = Read-ProjectFile 'Dumper\Runtime\SafeMemory.h'
 $safeMemory = Read-ProjectFile 'Dumper\Runtime\SafeMemory.cpp'
+$vtableHook = Read-ProjectFile 'Dumper\Runtime\VTableHook.cpp'
 $gameThread = Read-ProjectFile 'Dumper\API\GameThreadQueue.h'
 $memoryApi = Read-ProjectFile 'Dumper\API\MemoryApi.cpp'
 $objectsApi = Read-ProjectFile 'Dumper\API\ObjectsApi.cpp'
@@ -95,7 +97,9 @@ foreach ($token in @('std::from_chars', 'Too many offsets (max 64)', 'POINTER_CH
 }
 Assert-NotContains $memoryApi 'std::stoull' 'Memory API must fully parse addresses without exception-based partial conversion.'
 Assert-Contains $objectsApi 'OBJECT_PROPERTY_WRITE_DISABLED' 'Unsafe raw UObject property writes became reachable.'
-Assert-Contains $hookApi 'CompareExchangePointer' 'Hook patching bypasses the atomic SafeMemory path.'
+Assert-Contains $hookApi 'VTableHookToken::Install' 'Hook patching bypasses the RAII owner.'
+Assert-Contains $vtableHook 'CompareExchangePointer' 'VTable Hook patching bypasses atomic SafeMemory.'
+Assert-Contains $callbackBarrier 'WaitForDrain' 'Hook callback quiescence barrier is missing.'
 
 foreach ($apiFile in Get-ChildItem -LiteralPath (Join-Path $root 'Dumper\API') -Filter '*.cpp') {
     $apiSource = Get-Content -LiteralPath $apiFile.FullName -Raw -Encoding UTF8
@@ -118,6 +122,8 @@ Assert-NotContains $statusApi 'ObjectArray::' 'Status handlers must not query th
 foreach ($token in @('TestEngineContextAndCapabilities', 'TestCoreRuntimeStateAndShutdown',
         'TestStableObjectAndFunctionHandles', 'Object handle crossed a session boundary',
         'Recycled object slot retained a valid handle', 'Function handle ignored owner recycling',
+        'TestHookOwnershipAndCallbackDrain', 'Failed VTable restore discarded hook ownership',
+        'Post-stop callback was allowed to run owned work',
         'TestSafeMemory', 'ExecutableWriteDenied', 'InstructionCacheFlushRequired',
         'CoreRuntime became Ready without its pipe listener', 'Required capability loss left readiness true',
         'Shutdown coordinator ran twice')) {

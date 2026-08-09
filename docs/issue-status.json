@@ -52,6 +52,7 @@
       "verification": [
         "2026-08-09: CoreRuntime, immutable EngineContext, CapabilityRegistry, and ShutdownCoordinator establish explicit runtime ownership",
         "2026-08-09: SafeMemory centralizes guarded range validation, SEH copy, protection restoration, executable-write policy, and atomic hook pointer exchange",
+        "2026-08-09: VTableHookToken and CallbackBarrier replace manual Hook ownership flags and callback counters; ownership is allocated before CAS and status reads use atomic projections",
         "Legacy domain/API monoliths and remaining direct Off/Settings consumers still require migration"
       ]
     },
@@ -214,6 +215,8 @@
       "status": "in_progress",
       "verification": [
         "2026-08-09: restore checks, callback in-flight counters, drain barriers, and unload refusal added",
+        "2026-08-09: PostRender and ProcessEvent patches are owned by retryable VTableHookToken instances; token allocation and owner-container reservation precede patching, and failed restore retains the token and blocks unload",
+        "Core harness verifies RAII restore, enable/disable, external replacement preservation, restore-failure retry, post-stop callback suppression, and quiet drain",
         "Injected target unload fixture remains pending"
       ]
     },

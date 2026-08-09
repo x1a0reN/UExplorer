@@ -7,11 +7,13 @@
 
 #include "IPC/Protocol.h"
 #include "Runtime/BoundedQueue.h"
+#include "Runtime/CallbackBarrier.h"
 #include "Runtime/CoreCapabilities.h"
 #include "Runtime/CoreRuntime.h"
 #include "Runtime/ObjectHandle.h"
 #include "Runtime/SafeMemory.h"
 #include "Runtime/ShutdownCoordinator.h"
+#include "Runtime/VTableHook.h"
 #include "API/GameThreadQueue.h"
 #include "Generator/Public/Generators/UsmapContainer.h"
 #include "Server/HttpServer.h"
@@ -509,6 +511,92 @@ namespace
 			"Stable handle error code changed");
 	}
 
+	void TestHookOwnershipAndCallbackDrain()
+	{
+		using namespace UExplorer::Runtime;
+
+		int originalTarget = 1;
+		int replacementTarget = 2;
+		int externalTarget = 3;
+		void* slot = &originalTarget;
+		{
+			VTableHookInstallResult installed =
+				VTableHookToken::Install(&slot, &replacementTarget, &originalTarget);
+			Require(installed.Ok(), "VTable hook token did not install");
+			Require(slot == &replacementTarget && installed.Token->IsActive(), "VTable hook token lost ownership");
+			Require(installed.Token->Disable() && slot == &originalTarget, "VTable hook token did not restore");
+			Require(installed.Token->Enable() && slot == &replacementTarget, "VTable hook token did not re-enable");
+			slot = &externalTarget;
+			Require(
+				installed.Token->Disable() && slot == &externalTarget && installed.Token->SafeToUnload(),
+				"VTable hook token overwrote an external replacement");
+		}
+
+		slot = &originalTarget;
+		{
+			VTableHookInstallResult scoped =
+				VTableHookToken::Install(&slot, &replacementTarget, &originalTarget);
+			Require(scoped.Ok() && slot == &replacementTarget, "Scoped VTable hook setup failed");
+		}
+		Require(slot == &originalTarget, "VTable hook RAII destructor did not restore its slot");
+		Require(
+			VTableHookToken::Install(&slot, &replacementTarget, &externalTarget).Error
+				== VTableHookError::OriginalMismatch,
+			"VTable hook ignored its expected original function");
+
+		SYSTEM_INFO systemInfo{};
+		GetSystemInfo(&systemInfo);
+		void* page = VirtualAlloc(
+			nullptr,
+			systemInfo.dwPageSize,
+			MEM_RESERVE | MEM_COMMIT,
+			PAGE_READWRITE);
+		Require(page != nullptr, "VTable hook failure fixture allocation failed");
+		struct HookPageGuard
+		{
+			void* Address;
+			~HookPageGuard() { if (Address) VirtualFree(Address, 0, MEM_RELEASE); }
+		} pageGuard{page};
+		auto* protectedSlot = static_cast<void**>(page);
+		*protectedSlot = &originalTarget;
+		VTableHookInstallResult protectedHook =
+			VTableHookToken::Install(protectedSlot, &replacementTarget, &originalTarget);
+		Require(protectedHook.Ok(), "Protected VTable hook fixture did not install");
+		DWORD oldProtection = 0;
+		Require(
+			VirtualProtect(page, systemInfo.dwPageSize, PAGE_NOACCESS, &oldProtection) != FALSE,
+			"VTable hook restore-failure fixture setup failed");
+		Require(
+			!protectedHook.Token->Disable() && protectedHook.Token->IsActive(),
+			"Failed VTable restore discarded hook ownership");
+		DWORD ignoredProtection = 0;
+		Require(
+			VirtualProtect(page, systemInfo.dwPageSize, PAGE_READWRITE, &ignoredProtection) != FALSE,
+			"VTable hook restore-failure fixture cleanup failed");
+		Require(
+			protectedHook.Token->Disable() && protectedHook.Token->SafeToUnload()
+				&& *protectedSlot == &originalTarget,
+			"VTable hook restore was not retryable");
+
+		CallbackBarrier callbacks;
+		auto active = callbacks.Enter();
+		Require(active.OwnedWorkAllowed(), "Active callback was rejected before shutdown");
+		callbacks.BeginStopping();
+		auto late = callbacks.Enter();
+		Require(!late.OwnedWorkAllowed(), "Post-stop callback was allowed to run owned work");
+		Require(
+			!callbacks.WaitForDrain(std::chrono::milliseconds(1)),
+			"Callback barrier drained while callbacks were still active");
+		active = {};
+		late = {};
+		Require(
+			callbacks.WaitForDrain(std::chrono::milliseconds(100), std::chrono::milliseconds(1)),
+			"Callback barrier did not observe a quiet drained interval");
+		Require(callbacks.Reset(), "Drained callback barrier did not reset");
+		auto restarted = callbacks.Enter();
+		Require(restarted.OwnedWorkAllowed(), "Reset callback barrier remained stopped");
+	}
+
 	void TestSafeMemory()
 	{
 		using namespace UExplorer::Runtime;
@@ -840,13 +928,14 @@ int main(const int argc, char** argv)
 		TestEngineContextAndCapabilities();
 		TestCoreRuntimeStateAndShutdown();
 		TestStableObjectAndFunctionHandles();
+		TestHookOwnershipAndCallbackDrain();
 		TestSafeMemory();
 		TestQueueOwnershipAndBackpressure();
 		TestQueueShutdownWakesWaiters();
 		TestGameThreadTaskOwnershipAndTimeouts();
 		TestGameThreadMpscCapacity();
 		TestHttpServerLifecycle();
-		std::cout << "Core harness passed: framing, runtime/capabilities, stable handles, SafeMemory, USMAP consumer, bounded queues, owned game-thread tasks, SEH, HTTP lifecycle, and shutdown.\n";
+		std::cout << "Core harness passed: framing, runtime/capabilities, stable handles, Hook RAII/drain, SafeMemory, USMAP consumer, bounded queues, owned game-thread tasks, SEH, HTTP lifecycle, and shutdown.\n";
 		return 0;
 	}
 	catch (const std::exception& error)

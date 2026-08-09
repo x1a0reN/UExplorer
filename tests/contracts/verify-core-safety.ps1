@@ -21,6 +21,8 @@ function Assert-NotContains([string]$text, [string]$token, [string]$message) {
 $gameThread = Read-ProjectFile 'Dumper\API\GameThreadQueue.h'
 $callApi = Read-ProjectFile 'Dumper\API\CallApi.cpp'
 $hookApi = Read-ProjectFile 'Dumper\API\HookApi.cpp'
+$callbackBarrier = Read-ProjectFile 'Dumper\Runtime\CallbackBarrier.h'
+$vtableHook = Read-ProjectFile 'Dumper\Runtime\VTableHook.cpp'
 $dumpApi = Read-ProjectFile 'Dumper\API\DumpApi.cpp'
 $httpServer = Read-ProjectFile 'Dumper\Server\HttpServer.cpp'
 $main = Read-ProjectFile 'Dumper\Main.cpp'
@@ -44,9 +46,23 @@ foreach ($token in @('use_game_thread=false is disabled', 'INVALID_PARAM_SIZE', 
 }
 Assert-NotContains $callApi 'params.resize(256)' 'Parameter buffer size must never be guessed.'
 
-foreach ($token in @('WaitForCallbacks', 'DisableAndDrain', 'unload is unsafe',
-        'ProcessEvent monitoring is installed lazily', 'kLegacyHookMonitoringEnabled = false')) {
+foreach ($token in @('CallbackBarrier', 'BeginStopping', 'WaitForDrain', 'DisableAndDrain',
+        'VTableHookToken::Install', 'g_PEPatches', 'g_PostRenderPatch', 'DetachPostRenderPatch',
+        'unload is unsafe', 'ProcessEvent monitoring is installed lazily',
+        'kLegacyHookMonitoringEnabled = false')) {
     Assert-Contains $hookApi $token 'Hook lifecycle contract regressed.'
+}
+foreach ($token in @('OwnedWorkAllowed', 'm_InFlight.fetch_add', 'm_InFlight.fetch_sub',
+        'quietPeriod', 'm_ActivitySequence')) {
+    Assert-Contains $callbackBarrier $token 'Callback drain barrier regressed.'
+}
+foreach ($token in @('~VTableHookToken', 'CompareExchangePointer', 'MemoryError::ValueMismatch',
+        'm_Active = false', 'VTABLE_HOOK_RESTORE_FAILED')) {
+    Assert-Contains $vtableHook $token 'VTable Hook RAII ownership regressed.'
+}
+foreach ($token in @('g_PostRenderHookInstalled', 'g_PEHookInstalled', 'g_PatchedPESlots',
+        'CallbackGuard', 'WaitForCallbacks')) {
+    Assert-NotContains $hookApi $token 'Manual Hook ownership state must not return.'
 }
 
 Assert-NotContains $httpServer '.detach()' 'HTTP workers must remain joinable.'
