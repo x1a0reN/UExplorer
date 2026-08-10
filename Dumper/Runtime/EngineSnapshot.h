@@ -11,6 +11,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace UExplorer::Runtime
 {
@@ -47,6 +48,10 @@ struct EngineSnapshot
 	std::int32_t SourceObjectCount = 0;
 	std::uint32_t SkippedSlots = 0;
 	std::deque<EngineSnapshotObject> Objects;
+	std::vector<std::pair<std::uintptr_t, std::size_t>> AddressIndex;
+
+	const EngineSnapshotObject* FindByIndex(std::int32_t index) const noexcept;
+	const EngineSnapshotObject* FindByAddress(std::uintptr_t address) const noexcept;
 };
 
 enum class SnapshotPublishError : std::uint8_t

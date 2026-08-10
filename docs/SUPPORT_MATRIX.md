@@ -12,6 +12,22 @@ fails at compile time; there is no 32-bit runtime capability or fallback path.
 | UE 4.27 x64 | Missing | Not supported | None claimed | Object/name arrays, offsets, ProcessEvent, bytecode, property codecs, SDK/USMAP consumer, clean unload |
 | UE 5.x x64 with LWC | Missing | Not supported | None claimed | FName/ObjectArray profile, LWC FVector/FRotator codecs, ProcessEvent, bytecode, SDK/USMAP consumer, clean unload |
 
+## Local evidence inventory
+
+These assets are available for development, but none changes the support rows above:
+
+- `D:\Projects\UnrealEngine` contains source trees for UE 4.21.2, 4.24.3,
+  4.25.4, 4.26.2, 4.27.2, 5.0.3, 5.1.1, 5.2.1, 5.3.2, 5.4.4,
+  5.6.1, and 5.7.4. Source is used to derive candidate layouts, version transitions,
+  lifecycle semantics, and fixture expectations; runtime witnesses still decide whether
+  a candidate applies to a target binary.
+- `D:\Steam\steamapps\common\Wandering Sword` is the designated real-game fixture.
+  Passive inspection confirms an x64 UE4/PhysX Shipping layout and bundled engine-file
+  timestamps consistent with the UE 4.26 family. This is still an inference: the current
+  executable has `.uedbg`/`.bind` sections, a local `version.dll`, an IDA database, and
+  prior injection logs. Exact engine identity, loaded modules, offsets, GC behavior, and
+  clean unload must be captured from a controlled run before the UE 4.26 row changes.
+
 ## Fixture requirements
 
 Each fixture must record:
@@ -73,12 +89,18 @@ to the shared scheduler and performs worker-only publication after quiet detach.
 fixtures prove per-unit capture/validation, no partial visibility, exact dependency
 identity, mutation rejection, fixed-capacity retirement/backpressure, deep-frozen generic
 descriptor graphs, bounded member ranges, direct versus inherited ordering, exact
-CDO/owner matching, and hierarchy guards. Property descriptors, UEnum layout, and
-Blueprint bytecode are still explicitly unavailable in the production stream. The same
+CDO/owner matching, and hierarchy guards. The production stream now freezes flat
+descriptors for scalar/bool/FName/FString/FText/UObject/Weak/Soft properties and
+publishes a baseline codec that opens scalar/bool/FName/UObject only. Nested descriptor
+graphs, value-layout profiles for the remaining flat kinds, UEnum layout, and Blueprint
+bytecode are still explicitly unavailable. The same
 harness exercises the worker-only immutable `TypeCommandService` for exact-path
 Class/Struct/Enum/Function detail, explicit member scope, hierarchy/CDO metadata,
 session/context/generation/query-bound pagination, 128-record page limits, a 4 MiB command-data ceiling,
 hex 64-bit flags, decimal-string enum int64 values, and deterministic unavailable states.
+The exact `objects.property.read` path additionally binds an ObjectSnapshot handle,
+TypeSnapshot generation, declaring full path, property name, and array index, then
+revalidates the dependencies and handle on the game thread before SafeMemory decoding.
 Rust/schema fixtures and React builds cover their side of this contract. The real
 cross-language process fixture does not yet publish a production TypeSnapshot, and no
 target-process reflection/type run exists, so this does not change any support row.

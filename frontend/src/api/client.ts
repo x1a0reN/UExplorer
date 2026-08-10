@@ -42,6 +42,7 @@ import type {
   SessionEventSubscription,
   SnapshotObjectKind,
   SnapshotQueryCursor,
+  StableObjectHandle,
   StatusData,
   StructDetail,
   StructItem,
@@ -61,6 +62,7 @@ import type {
 } from './index';
 
 const SETTINGS_KEY = 'uexplorer.settings';
+const MAX_PROPERTY_ROWS = 8_192;
 
 const DEFAULT_SETTINGS: ApiClientSettings = {
   dllPath: 'D:\\Projects\\UExplorer\\Dumper\\x64\\Release\\UExplorerCore.dll',
@@ -123,6 +125,26 @@ class UExplorerApi {
         timestamp: Date.now(),
       };
     }
+  }
+
+  private failureFrom<T>(response: ApiResponse<unknown>): ApiResponse<T> {
+    return {
+      ...response,
+      success: false,
+      data: null,
+    };
+  }
+
+  private localFailure<T>(code: string, message: string, details?: unknown): ApiResponse<T> {
+    return {
+      success: false,
+      data: null,
+      error: `${code}: ${message}`,
+      error_code: code,
+      details,
+      timing: null,
+      timestamp: Date.now(),
+    };
   }
 
   async getStatus(): Promise<ApiResponse<StatusData>> {
@@ -200,7 +222,78 @@ class UExplorerApi {
   }
 
   async getObjectProperties(index: number): Promise<ApiResponse<ObjectProperty[]>> {
-    return this.command('objects.properties.list', { index });
+    const detailResponse = await this.getObjectByIndex(index);
+    if (!detailResponse.success || !detailResponse.data) {
+      return this.failureFrom(detailResponse);
+    }
+    const detail = detailResponse.data;
+    const object: StableObjectHandle | undefined = detail.handle;
+    if (!object) {
+      return this.localFailure(
+        'OBJECT_HANDLE_UNAVAILABLE',
+        'The current snapshot record does not contain a stable object handle',
+        { index },
+      );
+    }
+
+    const properties: ObjectProperty[] = [];
+    let cursor: TypeQueryCursor | null = null;
+    do {
+      const fieldsResponse = await this.getClassFields(
+        detail.class,
+        cursor,
+        128,
+        'include_inherited',
+      );
+      if (!fieldsResponse.success || !fieldsResponse.data) {
+        return this.failureFrom(fieldsResponse);
+      }
+      const page = fieldsResponse.data;
+      for (const field of page.items) {
+        for (let arrayIndex = 0; arrayIndex < field.array_dim; arrayIndex += 1) {
+          if (properties.length >= MAX_PROPERTY_ROWS) {
+            return this.localFailure(
+              'PROPERTY_LIST_LIMIT_EXCEEDED',
+              `The instance exposes more than ${MAX_PROPERTY_ROWS} fixed-array property rows`,
+              { index, class_path: detail.class },
+            );
+          }
+          properties.push({
+            name: field.array_dim > 1 ? `${field.name}[${arrayIndex}]` : field.name,
+            property_name: field.name,
+            type: field.type_name,
+            kind: field.kind,
+            offset: field.offset + arrayIndex * field.size,
+            size: field.size,
+            array_index: arrayIndex,
+            array_dim: field.array_dim,
+            object,
+            type_snapshot_generation: page.type_snapshot_generation,
+            declaring_type_path: field.declaring_type.full_path,
+            descriptor_available: field.descriptor_available,
+            value: null,
+            value_state: field.state === 'supported' ? 'not_loaded' : field.state,
+          });
+        }
+      }
+      if (page.has_more && !page.next_cursor) {
+        return this.localFailure(
+          'PROPERTY_METADATA_INVALID',
+          'The type field page reports more data without a continuation cursor',
+          { index, class_path: detail.class },
+        );
+      }
+      cursor = page.next_cursor;
+    } while (cursor);
+
+    return {
+      success: true,
+      data: properties,
+      error: null,
+      error_code: null,
+      timing: null,
+      timestamp: Date.now(),
+    };
   }
 
   async getObjectOuterChain(index: number): Promise<ApiResponse<ObjectOuterChainData>> {
@@ -208,10 +301,15 @@ class UExplorerApi {
   }
 
   async getObjectPropertyValue(
-    index: number,
-    property: string,
+    property: ObjectProperty,
   ): Promise<ApiResponse<ObjectPropertyValueData>> {
-    return this.command('objects.property.read', { index, property });
+    return this.command('objects.property.read', {
+      object: property.object,
+      type_snapshot_generation: property.type_snapshot_generation,
+      declaring_type_path: property.declaring_type_path,
+      property_name: property.property_name,
+      array_index: property.array_index,
+    });
   }
 
   async setObjectProperty(

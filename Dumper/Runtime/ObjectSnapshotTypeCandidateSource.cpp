@@ -69,6 +69,36 @@ constexpr std::uint64_t kPropertyFlagReturnParm = 0x0000000000000400ULL;
 constexpr std::uint64_t kPropertyFlagReferenceParm = 0x0000000008000000ULL;
 constexpr std::uint32_t kFunctionFlagNative = 0x00000400U;
 
+std::uint32_t ExactScalarSize(const PropertyKind kind) noexcept
+{
+	switch (kind)
+	{
+	case PropertyKind::Int8:
+	case PropertyKind::UInt8: return 1;
+	case PropertyKind::Int16:
+	case PropertyKind::UInt16: return 2;
+	case PropertyKind::Int32:
+	case PropertyKind::UInt32:
+	case PropertyKind::Float: return 4;
+	case PropertyKind::Int64:
+	case PropertyKind::UInt64:
+	case PropertyKind::Double: return 8;
+	default: return 0;
+	}
+}
+
+bool IsFlatDescriptorKind(const PropertyKind kind) noexcept
+{
+	return ExactScalarSize(kind) != 0
+		|| kind == PropertyKind::Bool
+		|| kind == PropertyKind::Name
+		|| kind == PropertyKind::String
+		|| kind == PropertyKind::Text
+		|| kind == PropertyKind::Object
+		|| kind == PropertyKind::WeakObject
+		|| kind == PropertyKind::SoftObject;
+}
+
 bool HasFlag(const std::uint64_t value, const std::uint64_t flag) noexcept
 {
 	return (value & flag) != 0;
@@ -292,6 +322,8 @@ public:
 		std::int32_t Offset = 0;
 		std::uint64_t Flags = 0;
 		std::uintptr_t ReferencedType = 0;
+		std::uint32_t BoolByteOffset = 0;
+		std::uint8_t BoolMask = 0;
 		std::uint32_t OwnerSize = 0;
 		std::string Name;
 		bool IsProperty = false;
@@ -448,6 +480,10 @@ public:
 		const EngineSnapshotObject& object,
 		const EngineSnapshotObject& owner,
 		FunctionEvidence& evidence);
+	TypeSnapshotSourceError BuildFlatDescriptor(
+		const FieldEvidence& evidence,
+		PropertyKind kind,
+		std::shared_ptr<const PropertyDescriptor>& descriptor) const;
 	TypeSnapshotSourceError CaptureType(TypeSnapshotSourceStepResult& result);
 	TypeSnapshotSourceError CaptureField(
 		bool directTypeProperty,
@@ -704,6 +740,61 @@ ObjectSnapshotTypeCandidateSource::Impl::ReadFieldEvidence(
 			return TypeSnapshotSourceError::MemoryUnavailable;
 		}
 	}
+	if (HasFlag(evidence.CastFlags, kCastBoolProperty))
+	{
+		const ReflectionFieldReport* byteOffset = Field(ReflectionField::BoolByteOffset);
+		const ReflectionFieldReport* fieldMask = Field(ReflectionField::BoolFieldMask);
+		std::uint8_t witnessedByteOffset = 0;
+		if (!byteOffset || !fieldMask
+			|| !ReadStable(address, byteOffset->Offset, witnessedByteOffset)
+			|| !ReadStable(address, fieldMask->Offset, evidence.BoolMask)
+			|| evidence.BoolMask == 0
+			|| witnessedByteOffset >= evidence.ElementSize)
+		{
+			return TypeSnapshotSourceError::EvidenceAmbiguous;
+		}
+		evidence.BoolByteOffset = witnessedByteOffset;
+	}
+	return TypeSnapshotSourceError::None;
+}
+
+TypeSnapshotSourceError
+ObjectSnapshotTypeCandidateSource::Impl::BuildFlatDescriptor(
+	const FieldEvidence& evidence,
+	const PropertyKind kind,
+	std::shared_ptr<const PropertyDescriptor>& descriptor) const
+{
+	descriptor.reset();
+	if (!IsFlatDescriptorKind(kind) || evidence.ElementSize <= 0)
+		return TypeSnapshotSourceError::None;
+	const auto size = static_cast<std::uint32_t>(evidence.ElementSize);
+	const std::uint32_t scalarSize = ExactScalarSize(kind);
+	if ((scalarSize != 0 && size != scalarSize)
+		|| (kind == PropertyKind::Bool
+			&& (evidence.BoolMask == 0 || evidence.BoolByteOffset >= size))
+		|| (kind == PropertyKind::Name
+			&& (Context->NameProfile().FNameSize <= 0
+				|| size != static_cast<std::uint32_t>(Context->NameProfile().FNameSize)))
+		|| (kind == PropertyKind::String && size < sizeof(std::uintptr_t) + 8)
+		|| (kind == PropertyKind::Text && size < sizeof(std::uintptr_t))
+		|| (kind == PropertyKind::Object && size != sizeof(std::uintptr_t))
+		|| (kind == PropertyKind::WeakObject && size < 8)
+		|| (kind == PropertyKind::SoftObject
+			&& (Context->NameProfile().FNameSize <= 0
+				|| size < static_cast<std::uint32_t>(Context->NameProfile().FNameSize))))
+	{
+		return TypeSnapshotSourceError::EvidenceAmbiguous;
+	}
+	auto mutableDescriptor = std::make_shared<PropertyDescriptor>();
+	mutableDescriptor->Kind = kind;
+	mutableDescriptor->TypeName = ToString(kind);
+	mutableDescriptor->Size = size;
+	if (kind == PropertyKind::Bool)
+	{
+		mutableDescriptor->BoolByteOffset = evidence.BoolByteOffset;
+		mutableDescriptor->BoolMask = evidence.BoolMask;
+	}
+	descriptor = std::shared_ptr<const PropertyDescriptor>(std::move(mutableDescriptor));
 	return TypeSnapshotSourceError::None;
 }
 
@@ -877,6 +968,19 @@ TypeSnapshotSourceError ObjectSnapshotTypeCandidateSource::Impl::CaptureField(
 		property.Reason =
 			"The witnessed property class has no supported immutable descriptor kind";
 	}
+	else if (IsFlatDescriptorKind(kind)
+		&& !HasFlag(evidence.CastFlags, kCastInterfaceProperty))
+	{
+		const TypeSnapshotSourceError descriptorResult = BuildFlatDescriptor(
+			evidence,
+			kind,
+			property.Descriptor);
+		if (descriptorResult != TypeSnapshotSourceError::None)
+			return descriptorResult;
+		if (!property.Descriptor)
+			return TypeSnapshotSourceError::ContractViolation;
+		property.State = ReflectedMemberState::Supported;
+	}
 	else
 	{
 		property.State = ReflectedMemberState::Unavailable;
@@ -1000,6 +1104,8 @@ TypeSnapshotSourceError ObjectSnapshotTypeCandidateSource::Impl::ValidateEvidenc
 			&& current.Offset == expected->Offset
 			&& current.Flags == expected->Flags
 			&& current.ReferencedType == expected->ReferencedType
+			&& current.BoolByteOffset == expected->BoolByteOffset
+			&& current.BoolMask == expected->BoolMask
 			&& current.OwnerSize == expected->OwnerSize
 			&& current.Name == expected->Name
 			&& current.IsProperty == expected->IsProperty

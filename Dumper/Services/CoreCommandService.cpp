@@ -2,6 +2,7 @@
 
 #include "Runtime/ObjectSnapshotReflectionCandidateSource.h"
 #include "Runtime/ObjectSnapshotTypeCandidateSource.h"
+#include "ObjectPropertyCommandService.h"
 #include "TypeCommandService.h"
 
 #include <algorithm>
@@ -26,6 +27,7 @@ constexpr std::string_view kStatusReconnect = "status.reconnect";
 constexpr std::string_view kObjectSnapshotPage = "objects.snapshot.page";
 constexpr std::string_view kObjectHandleIssue = "objects.handle.issue";
 constexpr std::string_view kFunctionHandleIssue = "functions.handle.issue";
+constexpr std::string_view kObjectPropertyRead = "objects.property.read";
 constexpr std::size_t kMaxSnapshotPageRecords = 128;
 
 std::uint64_t ElapsedMicroseconds(const std::chrono::steady_clock::time_point started) noexcept
@@ -716,6 +718,8 @@ CoreCommandResponse CoreCommandService::Execute(
 			return ExecuteHandleIssue(request, false, onGameThreadQueued);
 		if (request.Operation == kFunctionHandleIssue)
 			return ExecuteHandleIssue(request, true, onGameThreadQueued);
+		if (request.Operation == kObjectPropertyRead)
+			return ExecuteObjectPropertyRead(request, onGameThreadQueued);
 		if (TypeCommandService::Handles(request.Operation))
 			return ExecuteTypeCommand(request);
 		return Failure(
@@ -732,6 +736,120 @@ CoreCommandResponse CoreCommandService::Execute(
 	{
 		return Failure(request, "COMMAND_INTERNAL_ERROR", "Core command raised an unknown exception");
 	}
+}
+
+CoreCommandResponse CoreCommandService::ExecuteObjectPropertyRead(
+	const CoreCommandRequest& request,
+	const GameThreadQueuedCallback& onGameThreadQueued)
+{
+	std::string admissionError;
+	auto lease = m_Runtime.TryAcquireRequest(&admissionError);
+	if (!lease)
+	{
+		return Failure(
+			request,
+			admissionError.empty() ? "CORE_NOT_READY" : admissionError,
+			"CoreRuntime is not accepting property commands");
+	}
+	constexpr const char* capabilityName = "objects.properties";
+	const Runtime::CapabilityStatus* capability = lease->Capabilities()
+		? lease->Capabilities()->Find(capabilityName)
+		: nullptr;
+	if (!capability || !capability->Available)
+	{
+		return Failure(
+			request,
+			capability && !capability->ReasonCode.empty()
+				? capability->ReasonCode
+				: "OBJECT_PROPERTY_CAPABILITY_UNAVAILABLE",
+			capability && !capability->Reason.empty()
+				? capability->Reason
+				: "Validated reflected property reads are unavailable",
+			{{"capability", capabilityName}});
+	}
+
+	ObjectPropertyReadPreparation prepared = ObjectPropertyCommandService::PrepareRead(
+		request.Data,
+		std::move(*lease),
+		m_Engine);
+	if (!prepared.Ok())
+	{
+		return Failure(
+			request,
+			prepared.Error ? std::move(prepared.Error->Code) : "PROPERTY_PREPARATION_FAILED",
+			prepared.Error ? std::move(prepared.Error->Message) : "Property read preparation failed",
+			prepared.Error ? std::move(prepared.Error->Details) : json::object());
+	}
+
+	Runtime::GameThreadTicket ticket;
+	const Runtime::GameThreadQueueResult queued = m_GameThread.Enqueue(
+		prepared.Work,
+		std::chrono::steady_clock::now() + std::chrono::milliseconds(request.TimeoutMs),
+		ticket);
+	if (queued != Runtime::GameThreadQueueResult::Accepted)
+	{
+		switch (queued)
+		{
+		case Runtime::GameThreadQueueResult::Disabled:
+			return Failure(request, "GAME_THREAD_UNAVAILABLE", "Game-thread executor is disabled");
+		case Runtime::GameThreadQueueResult::QueueBusy:
+			return Failure(request, "GAME_THREAD_QUEUE_BUSY", "Game-thread queue capacity is exhausted");
+		case Runtime::GameThreadQueueResult::Invalid:
+			return Failure(request, "GAME_THREAD_TASK_INVALID", "Game-thread task or deadline is invalid");
+		case Runtime::GameThreadQueueResult::Accepted:
+			break;
+		}
+	}
+
+	if (onGameThreadQueued)
+	{
+		try
+		{
+			onGameThreadQueued(ticket);
+		}
+		catch (...)
+		{
+			m_GameThread.Cancel(ticket);
+			return Failure(request, "COMMAND_OBSERVER_FAILED", "Request task observer raised an exception");
+		}
+	}
+
+	const Runtime::GameThreadSubmitResult submitted = m_GameThread.Wait(ticket);
+	Runtime::GameThreadTaskTiming taskTiming;
+	m_GameThread.TryGetTiming(ticket, taskTiming);
+	const CoreCommandTiming timing = ToCommandTiming(taskTiming);
+	switch (submitted)
+	{
+	case Runtime::GameThreadSubmitResult::Completed:
+		break;
+	case Runtime::GameThreadSubmitResult::Disabled:
+		return Failure(request, "GAME_THREAD_UNAVAILABLE", "Game-thread executor is disabled", json::object(), timing);
+	case Runtime::GameThreadSubmitResult::Cancelled:
+		return Failure(request, "REQUEST_CANCELLED", "Queued property command was cancelled", json::object(), timing);
+	case Runtime::GameThreadSubmitResult::PumpThreadWaitDenied:
+		return Failure(request, "GAME_THREAD_REENTRANT_WAIT_DENIED", "Synchronous waits are forbidden on the pump thread", json::object(), timing);
+	case Runtime::GameThreadSubmitResult::QueueBusy:
+		return Failure(request, "GAME_THREAD_QUEUE_BUSY", "Game-thread queue capacity is exhausted", json::object(), timing);
+	case Runtime::GameThreadSubmitResult::TimedOutBeforeStart:
+		return Failure(request, "GAME_THREAD_TIMEOUT_BEFORE_START", "Property command expired before execution", json::object(), timing);
+	case Runtime::GameThreadSubmitResult::TimedOutWhileRunning:
+		return Failure(request, "GAME_THREAD_TIMEOUT_WHILE_RUNNING", "Property command is still running; completion is unknown", json::object(), timing);
+	case Runtime::GameThreadSubmitResult::ExecutionFailed:
+		return Failure(request, "GAME_THREAD_EXECUTION_FAILED", "Property command failed during guarded execution", json::object(), timing);
+	}
+
+	ObjectPropertyCommandResult result =
+		ObjectPropertyCommandService::CompleteRead(*prepared.Work);
+	if (!result.Ok())
+	{
+		return Failure(
+			request,
+			std::move(result.Error->Code),
+			std::move(result.Error->Message),
+			std::move(result.Error->Details),
+			timing);
+	}
+	return Success(request, std::move(result.Data), timing);
 }
 
 CoreCommandResponse CoreCommandService::ExecuteTypeCommand(

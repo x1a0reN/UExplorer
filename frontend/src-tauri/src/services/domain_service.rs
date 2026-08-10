@@ -325,10 +325,10 @@ fn resolve_operation(operation: &str) -> Option<DomainRoute> {
         "types.structs.list" => DomainRoute::TypeList(SnapshotObjectKind::Struct),
         "types.enums.list" => DomainRoute::TypeList(SnapshotObjectKind::Enum),
         "types.classes.instances" => DomainRoute::ClassInstances,
-        "objects.properties.list"
-        | "objects.outer_chain"
-        | "objects.property.read"
-        | "objects.property.write" => DomainRoute::Unavailable("objects.properties"),
+        "objects.property.read" => DomainRoute::Core("objects.property.read"),
+        "objects.properties.list" | "objects.outer_chain" | "objects.property.write" => {
+            DomainRoute::Unavailable("objects.properties")
+        }
         "types.classes.get" => DomainRoute::Core("types.classes.get"),
         "types.classes.fields" => DomainRoute::Core("types.classes.fields"),
         "types.classes.functions" => DomainRoute::Core("types.classes.functions"),
@@ -865,6 +865,10 @@ mod tests {
         assert_eq!(
             resolve_operation("types.enums.values"),
             Some(DomainRoute::Core("types.enums.values"))
+        );
+        assert_eq!(
+            resolve_operation("objects.property.read"),
+            Some(DomainRoute::Core("objects.property.read"))
         );
     }
 

@@ -80,6 +80,9 @@ private:
 	CoreCommandResponse ExecuteStatus(const CoreCommandRequest& request);
 	CoreCommandResponse ExecuteSnapshotPage(const CoreCommandRequest& request);
 	CoreCommandResponse ExecuteTypeCommand(const CoreCommandRequest& request);
+	CoreCommandResponse ExecuteObjectPropertyRead(
+		const CoreCommandRequest& request,
+		const GameThreadQueuedCallback& onGameThreadQueued);
 	CoreCommandResponse ExecuteHandleIssue(
 		const CoreCommandRequest& request,
 		bool functionHandle,

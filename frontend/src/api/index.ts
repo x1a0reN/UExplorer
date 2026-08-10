@@ -149,18 +149,26 @@ export interface ObjectDetail extends ObjectItem {
   outer_chain?: string[];
   package_path?: string;
   kind?: string;
-  handle?: unknown;
+  handle?: StableObjectHandle;
   flags?: string;
   flags_raw?: number;
 }
 
 export interface ObjectProperty {
   name: string;
+  property_name: string;
   type: string;
+  kind: string;
   offset: number;
   size: number;
+  array_index: number;
+  array_dim: number;
+  object: StableObjectHandle;
+  type_snapshot_generation: number;
+  declaring_type_path: string;
+  descriptor_available: boolean;
   value: unknown;
-  value_state?: string;
+  value_state: string;
 }
 
 export interface OuterChainItem {
@@ -177,13 +185,15 @@ export interface ObjectOuterChainData {
 }
 
 export interface ObjectPropertyValueData {
-  object_index: number;
-  property: string;
-  type: string;
+  object: StableObjectHandle;
+  type_snapshot_generation: number;
+  object_snapshot_generation: number;
+  declaring_type_path: string;
+  property_name: string;
+  array_index: number;
   offset: number;
   size: number;
   value: unknown;
-  value_state: string;
 }
 
 export interface SnapshotQueryCursor {

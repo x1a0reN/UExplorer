@@ -43,9 +43,12 @@ public:
 	FunctionValidationResult ValidateFunctionHandle(const FunctionHandle& handle);
 	const EngineNameCodec& Names() const noexcept { return m_Names; }
 	bool ConfigureReflectionLayout(
-		std::shared_ptr<const ReflectionLayout> layout) noexcept;
+		std::shared_ptr<const ReflectionLayout> layout,
+		bool includeFlatPropertyCodec = false) noexcept;
 	bool ConfigurePropertyCodec(PropertyCodecProfile profile) noexcept;
-	bool ConfigureReflectionCapture(IReflectionCandidateSource& source) noexcept;
+	bool ConfigureReflectionCapture(
+		IReflectionCandidateSource& source,
+		bool includeFlatPropertyCodec = false) noexcept;
 	std::shared_ptr<const ReflectionRuntimeSnapshot> Reflection() const noexcept
 	{
 		return m_Reflection.load(std::memory_order_acquire);

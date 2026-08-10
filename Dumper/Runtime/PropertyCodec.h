@@ -238,6 +238,7 @@ public:
 		PropertyCodecProfile profile = {});
 
 	bool IsConfigured() const noexcept { return m_Configured; }
+	bool Supports(PropertyKind kind) const noexcept;
 	const PropertyCodecProfile& Profile() const noexcept { return m_Profile; }
 	PropertyValue Decode(
 		std::uintptr_t address,

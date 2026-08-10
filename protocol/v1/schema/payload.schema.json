@@ -64,6 +64,25 @@
         "index": { "type": "integer", "minimum": 0, "maximum": 2147483647 }
       }
     },
+    "propertyReadData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "object", "type_snapshot_generation", "declaring_type_path",
+        "property_name", "array_index"
+      ],
+      "properties": {
+        "object": { "$ref": "#/$defs/objectHandle" },
+        "type_snapshot_generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "declaring_type_path": { "$ref": "#/$defs/typePath" },
+        "property_name": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "array_index": { "type": "integer", "minimum": 0, "maximum": 1023 }
+      }
+    },
     "snapshotCursor": {
       "type": "object",
       "additionalProperties": false,
@@ -635,6 +654,15 @@
             "required": ["operation"]
           },
           "then": { "properties": { "data": { "$ref": "#/$defs/snapshotPageData" } } }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation": { "const": "objects.property.read" }
+            },
+            "required": ["operation"]
+          },
+          "then": { "properties": { "data": { "$ref": "#/$defs/propertyReadData" } } }
         },
         {
           "if": {

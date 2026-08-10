@@ -1,0 +1,19 @@
+{
+  "operation": "objects.property.read",
+  "session_id": "fixture-session-4242",
+  "timeout_ms": 5000,
+  "data": {
+    "object": {
+      "session_id": "fixture-session-4242",
+      "context_generation": 42,
+      "index": 2,
+      "serial": 77,
+      "address": "0x14010200",
+      "class_fingerprint": "2F25D1C2A992E9B1"
+    },
+    "type_snapshot_generation": 9,
+    "declaring_type_path": "/Script/Fixture.Actor",
+    "property_name": "Health",
+    "array_index": 0
+  }
+}

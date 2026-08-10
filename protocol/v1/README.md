@@ -189,6 +189,7 @@ The v1 command registry is explicit. Unknown operations return
 | `objects.snapshot.page` | `{"cursor": null \| {"generation": uint53, "after_index": int32}, "limit": 1..128}` | Worker-safe immutable snapshot page |
 | `objects.handle.issue` | `{"index": int32}` | PostRender game-thread identity re-read |
 | `functions.handle.issue` | `{"index": int32}` | PostRender game-thread function/owner/path re-read |
+| `objects.property.read` | `{"object": object_handle, "type_snapshot_generation": uint53, "declaring_type_path": full_path, "property_name": exact_name, "array_index": 0..1023}` | Game-thread read from the exact object/type/reflection generation |
 | `types.classes.get` | `{"path": full_path}` | Worker-safe immutable class summary |
 | `types.classes.fields` | `{"path": full_path, "scope": "direct" \| "include_inherited", "cursor": null \| type_cursor, "limit": 1..128}` | Worker-safe immutable field page |
 | `types.classes.functions` | same member-page shape | Worker-safe immutable function page |
@@ -217,6 +218,12 @@ complete generation before publishing its type, path, package, address, and sear
 indexes. Snapshot pages never enter the game-thread queue and are capped at 128
 records; snapshot-wide `source_object_count`, `record_count`, and `skipped_slots` are
 exact rather than page-relative estimates.
+
+`objects.property.read` never accepts a bare index, caller-supplied address, short
+type name, or inferred owner. The object handle must be an exact member of the
+current immutable ObjectSnapshot; the declaring type and property must resolve in
+the matching TypeSnapshot generation. Execution revalidates the handle and all
+snapshot/codec dependencies on the witnessed game thread before decoding.
 
 The shared Rust types live in `protocol/rust`; the Host must deserialize pages with
 unknown-field rejection. `frontend/src-tauri/src/session/snapshot_cache.rs` validates

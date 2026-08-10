@@ -191,14 +191,14 @@ export default function InspectorPane({ selectedClass, selectedType, selectedInd
         await api.addWatch(selectedIndex, properties[0].name);
     };
 
-    const handlePropertyRefresh = async (propName: string) => {
+    const handlePropertyRefresh = async (property: ObjectProperty) => {
         if (!isInstanceMode || selectedIndex === null) return;
-        setPropertyRefreshing((prev) => ({ ...prev, [propName]: true }));
-        const res = await api.getObjectPropertyValue(selectedIndex, propName);
+        setPropertyRefreshing((prev) => ({ ...prev, [property.name]: true }));
+        const res = await api.getObjectPropertyValue(property);
         if (res.success && res.data) {
-            setPropertyEditMap((prev) => ({ ...prev, [propName]: toEditable(res.data!.value) }));
+            setPropertyEditMap((prev) => ({ ...prev, [property.name]: toEditable(res.data!.value) }));
         }
-        setPropertyRefreshing((prev) => ({ ...prev, [propName]: false }));
+        setPropertyRefreshing((prev) => ({ ...prev, [property.name]: false }));
     };
 
     if (!selectedClass && !isInstanceMode) {
@@ -306,7 +306,7 @@ export default function InspectorPane({ selectedClass, selectedType, selectedInd
 
                                         {/* Action Floaters */}
                                         <div className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-1 opacity-0 group-hover/row:opacity-100 flex items-center gap-0.5 bg-surface-dark border border-border-subtle rounded shadow-lg p-0.5 z-20 transition-opacity">
-                                            <button onClick={() => void handlePropertyRefresh(p.name)} className={`p-1 hover:bg-blue-500/20 text-text-low hover:text-primary rounded ${propertyRefreshing[p.name] ? 'animate-spin text-primary' : ''}`} title={t('Refresh')}>
+                                            <button onClick={() => void handlePropertyRefresh(p)} className={`p-1 hover:bg-blue-500/20 text-text-low hover:text-primary rounded ${propertyRefreshing[p.name] ? 'animate-spin text-primary' : ''}`} title={t('Refresh')}>
                                                 <RefreshCw className="w-3.5 h-3.5" />
                                             </button>
                                         </div>

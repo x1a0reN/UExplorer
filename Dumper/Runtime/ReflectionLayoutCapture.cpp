@@ -85,10 +85,12 @@ const char* ToString(const ReflectionLayoutCaptureError error) noexcept
 ReflectionLayoutCapture::ReflectionLayoutCapture(
 	const std::uint64_t contextGeneration,
 	IReflectionCandidateSource& source,
-	EngineFacade& engine)
+	EngineFacade& engine,
+	const bool includeFlatPropertyCodec)
 	: m_ContextGeneration(contextGeneration),
 	  m_Source(source),
-	  m_Engine(engine)
+	  m_Engine(engine),
+	  m_IncludeFlatPropertyCodec(includeFlatPropertyCodec)
 {
 }
 
@@ -361,7 +363,9 @@ ReflectionLayoutPumpResult ReflectionLayoutCapture::Pump(
 					.WorkConsumed = consumed
 				};
 			}
-			if (!m_Engine.ConfigureReflectionLayout(m_ValidatedLayout))
+			if (!m_Engine.ConfigureReflectionLayout(
+				m_ValidatedLayout,
+				m_IncludeFlatPropertyCodec))
 			{
 				Fail(ReflectionLayoutCaptureError::PublicationRejected);
 				return {

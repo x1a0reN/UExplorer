@@ -28,6 +28,7 @@ struct RuntimeProbes
 	std::uint64_t ObjectSnapshotGeneration = 0;
 	std::shared_ptr<const ReflectionRuntimeSnapshot> Reflection;
 	std::shared_ptr<const TypeSnapshot> Types;
+	bool ObjectPropertyServiceEnabled = false;
 	bool FunctionCallServiceEnabled = false;
 	bool NamedPipeListening = false;
 };
@@ -119,7 +120,7 @@ inline std::shared_ptr<const CapabilitySnapshot> BuildCoreCapabilities(
 		"engine.property_codec",
 		propertyCodecReady,
 		"PROPERTY_CODEC_NOT_CONFIGURED",
-		"No complete immutable property codec profile matching the published reflection layout has passed its layout witnesses",
+		"No immutable property codec profile matching the published reflection layout has passed its available layout witnesses",
 		{"engine.reflection"});
 	const bool typeSnapshotPublished = static_cast<bool>(probes.Types);
 	const bool typeSnapshotReady = typeSnapshotPublished
@@ -168,10 +169,10 @@ inline std::shared_ptr<const CapabilitySnapshot> BuildCoreCapabilities(
 		{"engine.names", "objects.handles"});
 	builder.Define(
 		"objects.properties",
-		false,
-		"OBJECT_PROPERTY_COMMAND_NOT_IMPLEMENTED",
-		"Validated reflected property commands are not registered",
-		{"engine.property_codec", "objects.handles"});
+		probes.ObjectPropertyServiceEnabled,
+		"OBJECT_PROPERTY_SERVICE_NOT_READY",
+		"The stable-handle reflected property read service is not registered",
+		{"engine.property_codec", "engine.type_snapshot", "objects.handles", "game_thread.executor"});
 	builder.Define(
 		"types.inspect",
 		true,

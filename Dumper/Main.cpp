@@ -85,6 +85,7 @@ namespace
 		probes.Types = g_EngineFacade
 			? g_EngineFacade->Types().Current()
 			: nullptr;
+		probes.ObjectPropertyServiceEnabled = true;
 		probes.FunctionCallServiceEnabled = false;
 		probes.NamedPipeListening = g_PipeServer && g_PipeServer->IsListening();
 		const auto capabilities = UExplorer::Runtime::BuildCoreCapabilities(*snapshot.Context, probes);
@@ -278,7 +279,9 @@ namespace
 		capture = g_EngineFacade->ReflectionCapture();
 		if (!capture)
 		{
-			if (!g_EngineFacade->ConfigureReflectionCapture(*g_ReflectionSource))
+			if (!g_EngineFacade->ConfigureReflectionCapture(
+				*g_ReflectionSource,
+				true))
 			{
 				std::cerr << "[UExplorer] Reflection capture ownership configuration failed.\n";
 				return g_ReflectionSource->ReleasePreparedPlan();

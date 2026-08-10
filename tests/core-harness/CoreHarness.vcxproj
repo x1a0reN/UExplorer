@@ -76,6 +76,7 @@
     <ClCompile Include="..\..\Dumper\Runtime\SafeMemory.cpp" />
     <ClCompile Include="..\..\Dumper\Runtime\VTableHook.cpp" />
 	<ClCompile Include="..\..\Dumper\Services\CoreCommandService.cpp" />
+	<ClCompile Include="..\..\Dumper\Services\ObjectPropertyCommandService.cpp" />
 	<ClCompile Include="..\..\Dumper\Services\TypeCommandService.cpp" />
     <ClCompile Include="..\..\Dumper\Server\HttpServer.cpp" />
   </ItemGroup>
@@ -116,6 +117,7 @@
     <ClInclude Include="..\..\Dumper\Runtime\ShutdownCoordinator.h" />
     <ClInclude Include="..\..\Dumper\Runtime\VTableHook.h" />
 	<ClInclude Include="..\..\Dumper\Services\CoreCommandService.h" />
+	<ClInclude Include="..\..\Dumper\Services\ObjectPropertyCommandService.h" />
 	<ClInclude Include="..\..\Dumper\Services\CoreStatusDiagnostics.h" />
 	<ClInclude Include="..\..\Dumper\Services\TypeCommandService.h" />
     <ClInclude Include="..\..\Dumper\API\GameThreadQueue.h" />

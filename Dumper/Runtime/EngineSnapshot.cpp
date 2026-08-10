@@ -1,6 +1,7 @@
 #include "EngineSnapshot.h"
 
 #include <atomic>
+#include <algorithm>
 #include <limits>
 #include <utility>
 
@@ -68,6 +69,37 @@ const char* ToString(const SnapshotPublishError error) noexcept
 	case SnapshotPublishError::PublishFailed: return "SNAPSHOT_PUBLISH_FAILED";
 	}
 	return "SNAPSHOT_UNKNOWN_ERROR";
+}
+
+const EngineSnapshotObject* EngineSnapshot::FindByIndex(const std::int32_t index) const noexcept
+{
+	const auto found = std::lower_bound(
+		Objects.begin(),
+		Objects.end(),
+		index,
+		[](const EngineSnapshotObject& object, const std::int32_t candidate) {
+			return object.Handle.Index < candidate;
+		});
+	return found != Objects.end() && found->Handle.Index == index ? &*found : nullptr;
+}
+
+const EngineSnapshotObject* EngineSnapshot::FindByAddress(
+	const std::uintptr_t address) const noexcept
+{
+	const auto found = std::lower_bound(
+		AddressIndex.begin(),
+		AddressIndex.end(),
+		address,
+		[](const auto& entry, const std::uintptr_t candidate) {
+			return entry.first < candidate;
+		});
+	if (found == AddressIndex.end() || found->first != address
+		|| found->second >= Objects.size())
+	{
+		return nullptr;
+	}
+	const EngineSnapshotObject& object = Objects[found->second];
+	return object.Handle.Address == address ? &object : nullptr;
 }
 
 EngineSnapshotStore::EngineSnapshotStore(
@@ -224,6 +256,18 @@ SnapshotPublishResult EngineSnapshotStore::PublishValidatedSnapshot(
 {
 	try
 	{
+		snapshot.AddressIndex.clear();
+		snapshot.AddressIndex.reserve(snapshot.Objects.size());
+		for (std::size_t index = 0; index < snapshot.Objects.size(); ++index)
+		{
+			snapshot.AddressIndex.emplace_back(snapshot.Objects[index].Handle.Address, index);
+		}
+		std::sort(snapshot.AddressIndex.begin(), snapshot.AddressIndex.end());
+		for (std::size_t index = 1; index < snapshot.AddressIndex.size(); ++index)
+		{
+			if (snapshot.AddressIndex[index - 1].first == snapshot.AddressIndex[index].first)
+				return {.Error = SnapshotPublishError::RecordInvalid};
+		}
 		std::lock_guard<std::mutex> lock(m_PublishMutex);
 		if (IsStopped())
 		{

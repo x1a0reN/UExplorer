@@ -32,11 +32,11 @@ UExplorerCore.dll（目标进程内）
 
 - React 领域调用只进入 `frontend/src/api/client.ts`，并调用 Tauri `domain_request`；事件只通过调用方持有的 Tauri Channel。
 - Rust `DomainService` 使用显式 operation 白名单，绑定明确 target PID 或 active session。未知 operation 在接触 session 前返回 `OPERATION_NOT_SUPPORTED`。
-- 当前 Host 已实现 status、immutable snapshot-backed Object/Type 集合查询，以及 exact-path Class/Struct/Enum/Function 详情、显式 direct/inherited 成员页、直接子类页和 CDO 身份查询。Core 会从一代稳定 Object Snapshot 自动尝试 witnessed ReflectionLayout，再由生产 `ObjectSnapshotTypeCandidateSource` 从 exact Object/Reflection generation 采集完整类型/函数结构；两者都由 Main 接入共享 PostRender scheduler。类型详情命令只读当前不可变 TypeSnapshot，不进入游戏线程或扫描 live UE memory；每页上限 128，cursor 绑定 session/context/generation/query，响应 data 上限 4 MiB。当前仍缺生产 PropertyCodec、property descriptor/enum/bytecode witness，以及 Property、Memory、Call、World、Watch、Hook、Blueprint、Dump 等领域；不得伪造字段或回退旧实现。
+- 当前 Host 已实现 status、immutable snapshot-backed Object/Type 集合查询、exact-path Class/Struct/Enum/Function 详情，以及 exact stable-handle `objects.property.read`。Core 会从一代稳定 Object Snapshot 自动采集 witnessed ReflectionLayout，再由生产 `ObjectSnapshotTypeCandidateSource` 从 exact Object/Reflection generation 采集完整类型/函数结构和 flat property descriptor；两者都由 Main 接入共享 PostRender scheduler。类型详情只读不可变 TypeSnapshot；属性读取则携带 exact ObjectHandle、TypeSnapshot generation、declaring full path、exact property name 和 array index，在游戏线程重新验证依赖与身份。当前生产 baseline codec 只开放 scalar/bool/FName/UObject；FString/FText/Weak/Soft/Struct/Array/Map/Set、enum/bytecode descriptor、property write，以及 Memory、Call、World、Watch、Hook、Blueprint、Dump 仍待实现或补充真实 layout witness，不得回退旧实现。
 - Core release project 只运行 PID-scoped Named Pipe；不编译 `Dumper/Server/HttpServer.cpp` 和 `Dumper/API/*.cpp`，不链接 `ws2_32`。旧 HTTP/SSE/WebSocket/API 源码保留为历史证据，不是兼容层。
 - Core 在 Pipe bind 后安装生产 `PostRenderHook`，发布事实 capability/Ready 后才开放 admissions。
 - 当前没有外部 HTTP/WebSocket Gateway，也没有 `connection.ini`、`runtime.ini`、port 或 Token 运行依赖。
-- 未有任何 UE 4.26、4.27 或 UE5 profile 达到发布支持门；准确范围见 `docs/SUPPORT_MATRIX.md`。
+- 未有任何 UE 4.26、4.27 或 UE5 profile 达到发布支持门；本机 UE 4.21、4.24-4.27、5.0-5.4、5.6、5.7 源码只能作为候选布局/语义证据，Wandering Sword 也必须通过实际运行 fixture 后才能改变支持声明。准确范围见 `docs/SUPPORT_MATRIX.md`。
 - 已知仍未关闭的事实包括：默认 `AllocConsole` 与 F6 路径、Dumper 配置的 current-directory/global-path 行为、剩余 `Off::*/Settings::*` 和 legacy domain monolith、未实现领域命令、Hook/Watch producer、前端 session/query/BigInt 状态重构以及真实 UE/GC/卸载/性能 fixture。
 
 ## 4. 事实优先级

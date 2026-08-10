@@ -82,6 +82,15 @@ bool IsDynamicArrayLayoutValid(const DynamicArrayLayout& layout) noexcept
 		&& FitsField(layout.MaxOffset, sizeof(std::int32_t), layout.HeaderSize);
 }
 
+bool IsDynamicArrayLayoutAbsent(const DynamicArrayLayout& layout) noexcept
+{
+	return !layout.Validated
+		&& layout.DataOffset == -1
+		&& layout.NumOffset == -1
+		&& layout.MaxOffset == -1
+		&& layout.HeaderSize == -1;
+}
+
 bool IsTextLayoutValid(const TextLayout& layout) noexcept
 {
 	return layout.Validated
@@ -90,6 +99,14 @@ bool IsTextLayoutValid(const TextLayout& layout) noexcept
 		&& FitsField(layout.DataPointerOffset, sizeof(std::uintptr_t), layout.MinimumValueSize)
 		&& layout.StringOffsetInData >= 0
 		&& layout.StringOffsetInData <= 0x10000;
+}
+
+bool IsTextLayoutAbsent(const TextLayout& layout) noexcept
+{
+	return !layout.Validated
+		&& layout.DataPointerOffset == -1
+		&& layout.StringOffsetInData == -1
+		&& layout.MinimumValueSize == -1;
 }
 
 bool IsWeakObjectLayoutValid(const WeakObjectLayout& layout) noexcept
@@ -104,6 +121,14 @@ bool IsWeakObjectLayoutValid(const WeakObjectLayout& layout) noexcept
 		&& AreFieldsDisjoint(fields)
 		&& FitsField(layout.IndexOffset, sizeof(std::int32_t), layout.ValueSize)
 		&& FitsField(layout.SerialOffset, sizeof(std::int32_t), layout.ValueSize);
+}
+
+bool IsWeakObjectLayoutAbsent(const WeakObjectLayout& layout) noexcept
+{
+	return !layout.Validated
+		&& layout.IndexOffset == -1
+		&& layout.SerialOffset == -1
+		&& layout.ValueSize == -1;
 }
 
 bool IsSoftObjectLayoutValid(
@@ -141,6 +166,15 @@ bool IsSoftObjectLayoutValid(
 	return layout.SubPathStringOffset == -1
 		|| (layout.SubPathStringOffset >= 0
 			&& layout.SubPathStringOffset < layout.MinimumValueSize);
+}
+
+bool IsSoftObjectLayoutAbsent(const SoftObjectLayout& layout) noexcept
+{
+	return !layout.Validated
+		&& layout.AssetPathNameOffsets == std::array<std::int32_t, 2>{-1, -1}
+		&& layout.AssetPathNameCount == 0
+		&& layout.SubPathStringOffset == -1
+		&& layout.MinimumValueSize == -1;
 }
 
 bool IsSoftObjectSubPathValid(
@@ -202,6 +236,20 @@ bool IsSparseContainerLayoutValid(const SparseContainerLayout& layout) noexcept
 		&& FitsField(layout.AllocationSecondaryDataOffset, sizeof(std::uintptr_t), layout.HeaderSize)
 		&& FitsField(layout.AllocationNumBitsOffset, sizeof(std::int32_t), layout.HeaderSize)
 		&& FitsField(layout.AllocationMaxBitsOffset, sizeof(std::int32_t), layout.HeaderSize);
+}
+
+bool IsSparseContainerLayoutAbsent(const SparseContainerLayout& layout) noexcept
+{
+	return !layout.Validated
+		&& layout.ElementsDataOffset == -1
+		&& layout.ElementsNumOffset == -1
+		&& layout.ElementsMaxOffset == -1
+		&& layout.AllocationInlineDataOffset == -1
+		&& layout.AllocationSecondaryDataOffset == -1
+		&& layout.AllocationNumBitsOffset == -1
+		&& layout.AllocationMaxBitsOffset == -1
+		&& layout.HeaderSize == -1
+		&& layout.InlineBitWordCount == 0;
 }
 
 PropertyValue MakeValue(
@@ -1611,15 +1659,22 @@ bool IsPropertyCodecProfileValid(
 		&& profile.Source.size() <= 1024
 		&& nameProfile.Validated
 		&& IsEngineNameProfileLayoutValid(nameProfile)
-		&& IsDynamicArrayLayoutValid(profile.DynamicArray)
-		&& IsTextLayoutValid(profile.Text)
-		&& IsWeakObjectLayoutValid(profile.WeakObject)
-		&& IsSoftObjectLayoutValid(profile.SoftObject, nameProfile)
-		&& IsSoftObjectSubPathValid(
-			profile.SoftObject,
-			profile.DynamicArray,
-			nameProfile)
-		&& IsSparseContainerLayoutValid(profile.SparseContainer);
+		&& (IsDynamicArrayLayoutAbsent(profile.DynamicArray)
+			|| IsDynamicArrayLayoutValid(profile.DynamicArray))
+		&& (IsTextLayoutAbsent(profile.Text)
+			|| IsTextLayoutValid(profile.Text))
+		&& (IsWeakObjectLayoutAbsent(profile.WeakObject)
+			|| IsWeakObjectLayoutValid(profile.WeakObject))
+		&& (IsSoftObjectLayoutAbsent(profile.SoftObject)
+			|| (IsSoftObjectLayoutValid(profile.SoftObject, nameProfile)
+				&& (profile.SoftObject.SubPathStringOffset == -1
+					|| (IsDynamicArrayLayoutValid(profile.DynamicArray)
+						&& IsSoftObjectSubPathValid(
+							profile.SoftObject,
+							profile.DynamicArray,
+							nameProfile)))))
+		&& (IsSparseContainerLayoutAbsent(profile.SparseContainer)
+			|| IsSparseContainerLayoutValid(profile.SparseContainer));
 }
 
 PropertyCodec::PropertyCodec(
@@ -1632,6 +1687,54 @@ PropertyCodec::PropertyCodec(
 {
 }
 
+bool PropertyCodec::Supports(const PropertyKind kind) const noexcept
+{
+	if (!m_Configured)
+		return false;
+	switch (kind)
+	{
+	case PropertyKind::Unknown:
+	case PropertyKind::Delegate:
+		return false;
+	case PropertyKind::String:
+	case PropertyKind::Array:
+		return IsDynamicArrayLayoutValid(m_Profile.DynamicArray);
+	case PropertyKind::Text:
+		return IsTextLayoutValid(m_Profile.Text)
+			&& IsDynamicArrayLayoutValid(m_Profile.DynamicArray);
+	case PropertyKind::WeakObject:
+		return IsWeakObjectLayoutValid(m_Profile.WeakObject);
+	case PropertyKind::SoftObject:
+		return IsSoftObjectLayoutValid(m_Profile.SoftObject, m_Names.Profile())
+			&& (m_Profile.SoftObject.SubPathStringOffset == -1
+				|| (IsDynamicArrayLayoutValid(m_Profile.DynamicArray)
+					&& IsSoftObjectSubPathValid(
+						m_Profile.SoftObject,
+						m_Profile.DynamicArray,
+						m_Names.Profile())));
+	case PropertyKind::Map:
+	case PropertyKind::Set:
+		return IsSparseContainerLayoutValid(m_Profile.SparseContainer);
+	case PropertyKind::Bool:
+	case PropertyKind::Int8:
+	case PropertyKind::Int16:
+	case PropertyKind::Int32:
+	case PropertyKind::Int64:
+	case PropertyKind::UInt8:
+	case PropertyKind::UInt16:
+	case PropertyKind::UInt32:
+	case PropertyKind::UInt64:
+	case PropertyKind::Float:
+	case PropertyKind::Double:
+	case PropertyKind::Name:
+	case PropertyKind::Object:
+	case PropertyKind::Enum:
+	case PropertyKind::Struct:
+		return true;
+	}
+	return false;
+}
+
 PropertyValue PropertyCodec::Decode(
 	const std::uintptr_t address,
 	const PropertyDescriptor& descriptor,
@@ -1642,7 +1745,7 @@ PropertyValue PropertyCodec::Decode(
 		if (!m_Configured)
 		{
 			return MakeFailure(descriptor, PropertyValueState::Unavailable,
-				"PROPERTY_CODEC_NOT_CONFIGURED", "No complete immutable property codec profile has passed validation");
+				"PROPERTY_CODEC_NOT_CONFIGURED", "No immutable property codec profile has passed validation");
 		}
 		if (options.Limits.MaxDepth == 0
 			|| options.Limits.MaxDepth > 64

@@ -114,14 +114,14 @@ export default function InstanceBrowser({ onNavigate, onSwitchMode, navContext }
         }
     };
 
-    const handlePropertyRefresh = async (propName: string) => {
+    const handlePropertyRefresh = async (property: ObjectProperty) => {
         if (!selected) return;
-        setPropertyRefreshing((prev) => ({ ...prev, [propName]: true }));
-        const res = await api.getObjectPropertyValue(selected.index, propName);
+        setPropertyRefreshing((prev) => ({ ...prev, [property.name]: true }));
+        const res = await api.getObjectPropertyValue(property);
         if (res.success && res.data) {
-            setPropertyEditMap((prev) => ({ ...prev, [propName]: toEditable(res.data!.value) }));
+            setPropertyEditMap((prev) => ({ ...prev, [property.name]: toEditable(res.data!.value) }));
         }
-        setPropertyRefreshing((prev) => ({ ...prev, [propName]: false }));
+        setPropertyRefreshing((prev) => ({ ...prev, [property.name]: false }));
     };
 
     useEffect(() => {
@@ -318,7 +318,7 @@ export default function InstanceBrowser({ onNavigate, onSwitchMode, navContext }
                                                     </td>
                                                     <td className="py-2.5 px-3">
                                                         <div className="flex gap-2 justify-end opacity-60 group-hover:opacity-100 transition-opacity">
-                                                            <button onClick={() => void handlePropertyRefresh(p.name)} title={t('Refresh')}
+                                                            <button onClick={() => void handlePropertyRefresh(p)} title={t('Refresh')}
                                                                 className={`p-1.5 rounded-md hover:bg-blue-500/20 text-slate-400 hover:text-blue-400 transition-colors ${propertyRefreshing[p.name] ? 'animate-spin text-blue-400' : ''}`}>
                                                                 <RefreshCw className="w-3.5 h-3.5" />
                                                             </button>

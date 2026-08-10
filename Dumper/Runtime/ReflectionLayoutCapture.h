@@ -155,7 +155,8 @@ public:
 	ReflectionLayoutCapture(
 		std::uint64_t contextGeneration,
 		IReflectionCandidateSource& source,
-		EngineFacade& engine);
+		EngineFacade& engine,
+		bool includeFlatPropertyCodec = false);
 	ReflectionLayoutCapture(const ReflectionLayoutCapture&) = delete;
 	ReflectionLayoutCapture& operator=(const ReflectionLayoutCapture&) = delete;
 
@@ -179,6 +180,7 @@ private:
 	std::uint64_t m_ContextGeneration = 0;
 	IReflectionCandidateSource& m_Source;
 	EngineFacade& m_Engine;
+	bool m_IncludeFlatPropertyCodec = false;
 	CallbackBarrier m_PumpBarrier;
 	mutable std::mutex m_RequestMutex;
 	std::optional<ReflectionLayoutCandidate> m_Candidate;

@@ -71,7 +71,8 @@ FunctionValidationResult EngineFacade::ValidateFunctionHandle(const FunctionHand
 }
 
 bool EngineFacade::ConfigureReflectionLayout(
-	std::shared_ptr<const ReflectionLayout> layout) noexcept
+	std::shared_ptr<const ReflectionLayout> layout,
+	const bool includeFlatPropertyCodec) noexcept
 {
 	if (!layout
 		|| !IsCurrentExecutionThreadValid()
@@ -82,12 +83,26 @@ bool EngineFacade::ConfigureReflectionLayout(
 	}
 	try
 	{
+		std::shared_ptr<const PropertyCodec> properties;
+		if (includeFlatPropertyCodec)
+		{
+			PropertyCodecProfile profile{
+				.Validated = true,
+				.ReflectionLayoutFingerprint = layout->Fingerprint(),
+				.Source = "witnessed_flat_property_descriptors_v1"
+			};
+			properties = std::make_shared<const PropertyCodec>(m_Names, std::move(profile));
+			if (!properties->IsConfigured())
+				return false;
+		}
 		auto reflection = std::make_shared<const ReflectionRuntimeSnapshot>(
 			ReflectionRuntimeSnapshot{
-				.Layout = std::move(layout)
+				.Layout = std::move(layout),
+				.Properties = std::move(properties)
 			});
 		if (!reflection->IsLayoutConfigured(ContextGeneration())
-			|| reflection->IsPropertyCodecConfigured(ContextGeneration()))
+			|| reflection->IsPropertyCodecConfigured(ContextGeneration())
+				!= includeFlatPropertyCodec)
 			return false;
 		std::lock_guard lock(m_ReflectionMutex);
 		if (!IsCurrentExecutionThreadValid()
@@ -145,7 +160,9 @@ bool EngineFacade::ConfigurePropertyCodec(PropertyCodecProfile profile) noexcept
 	}
 }
 
-bool EngineFacade::ConfigureReflectionCapture(IReflectionCandidateSource& source) noexcept
+bool EngineFacade::ConfigureReflectionCapture(
+	IReflectionCandidateSource& source,
+	const bool includeFlatPropertyCodec) noexcept
 {
 	if (!IsConfigured()
 		|| m_ReflectionCapture
@@ -159,7 +176,8 @@ bool EngineFacade::ConfigureReflectionCapture(IReflectionCandidateSource& source
 		auto capture = std::make_unique<ReflectionLayoutCapture>(
 			ContextGeneration(),
 			source,
-			*this);
+			*this,
+			includeFlatPropertyCodec);
 		if (!capture->IsConfigured())
 			return false;
 		m_ReflectionCapture = std::move(capture);

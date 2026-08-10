@@ -1033,6 +1033,34 @@ namespace
 			integerValue.State == PropertyValueState::Ok
 				&& std::get<std::int64_t>(integerValue.Scalar) == -17,
 			"Signed scalar property decoding changed its width or value");
+		PropertyCodecProfile scalarProfile{
+			.Validated = true,
+			.ReflectionLayoutFingerprint = 0x61616161,
+			.Source = "scalar-property-profile"
+		};
+		PropertyCodec scalarCodec(names, scalarProfile);
+		PropertyDescriptor unavailableString{
+			.Kind = PropertyKind::String,
+			.TypeName = "string",
+			.Size = 16
+		};
+		Require(
+			scalarCodec.IsConfigured()
+				&& scalarCodec.Supports(PropertyKind::Int32)
+				&& scalarCodec.Supports(PropertyKind::Name)
+				&& !scalarCodec.Supports(PropertyKind::String)
+				&& scalarCodec.Decode(
+					reinterpret_cast<std::uintptr_t>(&integer),
+					*intDescriptor).State == PropertyValueState::Ok
+				&& scalarCodec.Decode(
+					reinterpret_cast<std::uintptr_t>(&integer),
+					unavailableString).ErrorCode == "PROPERTY_STRING_LAYOUT_UNAVAILABLE",
+			"A missing optional value layout blocked scalar decoding or silently enabled strings");
+		PropertyCodecProfile dormantInvalidProfile = scalarProfile;
+		dormantInvalidProfile.DynamicArray.DataOffset = 0;
+		Require(
+			!PropertyCodec(names, dormantInvalidProfile).IsConfigured(),
+			"Unwitnessed dormant layout fields were accepted as an absent optional profile");
 
 		std::uint8_t boolByte = 0x04;
 		PropertyDescriptor boolDescriptor{
@@ -3576,7 +3604,7 @@ namespace
 				&& prepared.SnapshotGeneration == 1
 				&& prepared.PropertySystem == ReflectionPropertySystem::UProperty
 				&& source.IsConfigured()
-				&& facade.ConfigureReflectionCapture(source),
+				&& facade.ConfigureReflectionCapture(source, true),
 			"Production reflection source did not prepare one immutable snapshot plan");
 		ReflectionLayoutCapture* capture = facade.ReflectionCapture();
 		Require(
@@ -3635,6 +3663,9 @@ namespace
 				&& !sourceDiagnostics.Active
 				&& reflection
 				&& reflection->Layout
+				&& reflection->IsPropertyCodecConfigured(contextGeneration)
+				&& reflection->Properties->Supports(PropertyKind::Int32)
+				&& !reflection->Properties->Supports(PropertyKind::Array)
 				&& reflection->Layout->PropertySystem() == ReflectionPropertySystem::UProperty
 				&& hasOffset(ReflectionField::StructSuper, structSuperOffset)
 				&& hasOffset(ReflectionField::StructChildren, structChildrenOffset)
@@ -3719,7 +3750,10 @@ namespace
 				&& guidType->DirectProperties[0].Name == "A"
 				&& guidType->DirectProperties[1].Name == "C"
 				&& guidType->DirectProperties[0].State
-					== ReflectedMemberState::Unavailable
+					== ReflectedMemberState::Supported
+				&& guidType->DirectProperties[0].Descriptor
+				&& guidType->DirectProperties[0].Descriptor->Kind == PropertyKind::Int32
+				&& guidType->DirectProperties[0].Descriptor->Size == 4
 				&& engineTypeRecord
 				&& engineTypeRecord->DefaultObjectState
 					== ClassDefaultObjectState::NotConstructed
@@ -3729,6 +3763,9 @@ namespace
 				&& engineTypeRecord->DirectFunctions[0].Parameters.size() == 1
 				&& engineTypeRecord->DirectFunctions[0].Parameters[0].Direction
 					== ReflectedParameterDirection::Input
+				&& engineTypeRecord->DirectFunctions[0].Parameters[0].Property.State
+					== ReflectedMemberState::Supported
+				&& engineTypeRecord->DirectFunctions[0].Parameters[0].Property.Descriptor
 				&& engineTypeRecord->DirectFunctions[1].Implementation
 					== ReflectedFunctionImplementation::Unavailable
 				&& engineTypeRecord->DirectFunctions[1].NativeAddress == 0
@@ -4182,7 +4219,7 @@ namespace
 		Require(
 			prepared.Ok()
 				&& prepared.PropertySystem == ReflectionPropertySystem::FProperty
-				&& facade.ConfigureReflectionCapture(source),
+				&& facade.ConfigureReflectionCapture(source, true),
 			"FProperty reflection source did not prepare its immutable plan");
 		ReflectionLayoutCapture* capture = facade.ReflectionCapture();
 		Require(capture
@@ -4228,6 +4265,9 @@ namespace
 				&& sourceDiagnostics.EmittedFields == 25
 				&& reflection
 				&& reflection->Layout
+				&& reflection->IsPropertyCodecConfigured(contextGeneration)
+				&& reflection->Properties->Supports(PropertyKind::Name)
+				&& !reflection->Properties->Supports(PropertyKind::Set)
 				&& reflection->Layout->PropertySystem() == ReflectionPropertySystem::FProperty
 				&& hasOffset(ReflectionField::StructSuper, structSuperOffset)
 				&& hasOffset(ReflectionField::StructChildProperties,

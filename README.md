@@ -42,8 +42,9 @@ explicit reconnect, and joinable shutdown. EventHub, multi-PID SessionManager, s
 injection-to-Core-Ready gating, cross-language Core/Host fixtures, and a live x64/x86
 injection matrix are implemented. React domain calls now use one Tauri
 `domain_request` command and event consumers use caller-owned Tauri channels. The Host
-operation registry serves status and immutable-snapshot object/type queries; domains
-not yet implemented return a stable capability error instead of reaching legacy code.
+operation registry serves status, immutable-snapshot object/type queries, exact type
+details, and stable-handle property reads; domains not yet implemented return a stable
+capability error instead of reaching legacy code.
 Baseline Core initialization is also separated from optional reflection/generator
 activation: unknown property, FText, GWorld, or generator layouts cannot make the pipe
 runtime pretend to be unsupported or execute ProcessEvent from the startup worker.
@@ -61,9 +62,12 @@ The Core also contains a transport-neutral, SafeMemory-only `PropertyCodec` with
 explicit `ok/empty/unsupported/unavailable/error` states, stable-handle references,
 recursive budgets, coherent FString/array/sparse-container reads, and an atomic immutable
 upgrade of the published `ReflectionRuntimeSnapshot`. Resolver success is rejected unless its handle is complete and matches the
-resolver session/context and observed reference. The codec is deliberately not exposed
-because no production PropertyCodec profile source is registered yet; the current
-synthetic witness suite is boundary evidence only.
+resolver session/context and observed reference. Production reflection publication now
+installs a layout-bound baseline codec and the type source freezes flat descriptors for
+scalar, bool, FName, FString, FText, UObject, weak, and soft properties. The baseline
+profile exposes only scalar, bool, FName, and UObject decoding; kinds that still need a
+value-layout witness fail with `PROPERTY_CODEC_KIND_UNAVAILABLE` rather than being read
+through guessed offsets.
 Object/type/package/instance collections now use exact full-path filters and
 generation/query-bound cursor pages capped at 128 records; the Host reuses its snapshot
 indexes instead of rescanning the snapshot or accepting legacy offset pagination.
@@ -86,8 +90,8 @@ fixed-capacity worker reclamation with explicit backpressure. The production
 captures complete structural type/function coverage through stable handles and
 SafeMemory, incrementally revalidates every live evidence record, and is attached by
 Main to the same scheduler. It publishes witnessed super/CDO, direct property/parameter,
-and native-exec structure while explicitly marking unavailable property descriptors,
-enum layouts, and bytecode. A worker-only `TypeCommandService` now exposes exact-path
+flat property descriptors, and native-exec structure while explicitly marking nested
+descriptor graphs, enum layouts, and bytecode unavailable. A worker-only `TypeCommandService` now exposes exact-path
 Class/Struct/Enum/Function detail, explicitly scoped direct/inherited member pages,
 direct-child hierarchy pages, and CDO identity through Named Pipe. It reads only the
 current immutable type snapshot: pages are capped at 128 records, cursors bind the
@@ -96,6 +100,12 @@ session/context, snapshot generation, and query fingerprint, serialized command 
 It does not enter the game thread, rescan live UE memory, fabricate CDO property values,
 or make unavailable descriptors/enum layouts/bytecode appear supported. No UE profile
 is claimed until the target-process fixtures pass.
+`ObjectPropertyCommandService` accepts only an exact ObjectSnapshot handle plus the
+matching TypeSnapshot generation, declaring full path, exact property name, and fixed
+array index. It rechecks the complete dependency set and object identity on the witnessed
+game thread before decoding. Rust forwards the operation explicitly, while the React
+client derives request identity from snapshot/type pages and never sends a bare index or
+caller-supplied address.
 PostRender now drives one `GameThreadFrameScheduler` rather than giving the object
 snapshot producer an exclusive callback slot. The scheduler supports at most eight
 clients, shares a 32-unit frame budget in four-unit round-robin quanta, stops further
