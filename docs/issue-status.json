@@ -686,6 +686,28 @@
         "2026-08-09: raw actor transform route returns ACTOR_TRANSFORM_WRITE_DISABLED and the editor UI is read-only"
       ]
     },
+    "WORLD-002": {
+      "status": "in_progress",
+      "verification": [
+        "2026-08-10: production WorldSnapshotCapture prefilters one immutable Object/Type generation, then resolves GWorld, Actor typed outers, and witnessed ULevel.OwningWorld under the shared PostRender budget",
+        "2026-08-10: sorting, exact counts, store validation, and publication run on the DLL worker between two bounded game-thread scan/validation phases",
+        "Wandering Sword streaming-level, GC churn, target-scale, and unload evidence remains pending"
+      ]
+    },
+    "WORLD-003": {
+      "status": "verified",
+      "verification": [
+        "2026-08-10: WorldCommandService scans the immutable actor generation for exact matched, pages at 1..128 records, and binds continuation to generation plus query fingerprint",
+        "2026-08-10: CoreHarness verifies filtered continuation and rejects an unmatched or terminal ordinal that the service could never issue; run tests/core-harness/x64/Release/CoreHarness.exe protocol/v1/fixtures"
+      ]
+    },
+    "WORLD-005": {
+      "status": "in_progress",
+      "verification": [
+        "2026-08-10: the release command graph uses one worker-only WorldCommandService for inspect, Level pages, and Actor pages; legacy WorldApi and its debug payload are outside the release project",
+        "Actor detail/components/shortcuts and an explicit World diagnostics command remain pending"
+      ]
+    },
     "STATE-001": {
       "status": "verified",
       "verification": [

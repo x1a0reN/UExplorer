@@ -10,6 +10,8 @@
 #include "ReflectionLayoutCapture.h"
 #include "TypeSnapshot.h"
 #include "TypeSnapshotCapture.h"
+#include "WorldSnapshot.h"
+#include "WorldSnapshotCapture.h"
 
 #include <atomic>
 #include <memory>
@@ -62,8 +64,11 @@ public:
 	EngineSnapshotStore& Snapshots() noexcept { return m_Snapshots; }
 	const EngineSnapshotStore& Snapshots() const noexcept { return m_Snapshots; }
 	const TypeSnapshotStore& Types() const noexcept { return m_Types; }
+	WorldSnapshotStore& Worlds() noexcept { return m_Worlds; }
+	const WorldSnapshotStore& Worlds() const noexcept { return m_Worlds; }
 	bool ConfigureTypeSnapshotCapture(ITypeSnapshotSource& source) noexcept;
 	bool ConfigureSnapshotCapture(IEngineSnapshotSource& source) noexcept;
+	bool ConfigureWorldSnapshotCapture() noexcept;
 	EngineSnapshotCapture* SnapshotCapture() noexcept { return m_SnapshotCapture.get(); }
 	const EngineSnapshotCapture* SnapshotCapture() const noexcept { return m_SnapshotCapture.get(); }
 	ReflectionLayoutCapture* ReflectionCapture() noexcept { return m_ReflectionCapture.get(); }
@@ -73,6 +78,8 @@ public:
 	}
 	TypeSnapshotCapture* TypeCapture() noexcept { return m_TypeCapture.get(); }
 	const TypeSnapshotCapture* TypeCapture() const noexcept { return m_TypeCapture.get(); }
+	WorldSnapshotCapture* WorldCapture() noexcept { return m_WorldCapture.get(); }
+	const WorldSnapshotCapture* WorldCapture() const noexcept { return m_WorldCapture.get(); }
 	bool Stop(std::chrono::milliseconds timeout = std::chrono::milliseconds(5000));
 
 private:
@@ -88,9 +95,11 @@ private:
 	ObjectHandleService m_Handles;
 	EngineSnapshotStore m_Snapshots;
 	TypeSnapshotStore m_Types;
+	WorldSnapshotStore m_Worlds;
 	std::unique_ptr<EngineSnapshotCapture> m_SnapshotCapture;
 	std::unique_ptr<ReflectionLayoutCapture> m_ReflectionCapture;
 	std::unique_ptr<TypeSnapshotCapture> m_TypeCapture;
+	std::unique_ptr<WorldSnapshotCapture> m_WorldCapture;
 };
 
 } // namespace UExplorer::Runtime

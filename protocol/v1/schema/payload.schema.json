@@ -191,6 +191,62 @@
         "query_fingerprint": { "type": "string", "pattern": "^[0-9A-F]{16}$" }
       }
     },
+    "worldQueryCursor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["generation", "after_ordinal", "query_fingerprint"],
+      "properties": {
+        "generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "after_ordinal": { "type": "integer", "minimum": 0, "maximum": 1999999 },
+        "query_fingerprint": { "type": "string", "pattern": "^[0-9A-F]{16}$" }
+      }
+    },
+    "worldPageData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cursor", "limit"],
+      "properties": {
+        "cursor": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/worldQueryCursor" }
+          ]
+        },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 128 }
+      }
+    },
+    "worldActorPageData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cursor", "limit", "search", "class_search", "level_path"],
+      "properties": {
+        "cursor": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/worldQueryCursor" }
+          ]
+        },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 128 },
+        "search": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "maxLength": 1024 }
+          ]
+        },
+        "class_search": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "maxLength": 1024 }
+          ]
+        },
+        "level_path": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "maxLength": 4096 }
+          ]
+        }
+      }
+    },
     "typePathData": {
       "type": "object",
       "additionalProperties": false,
@@ -698,7 +754,7 @@
           "if": {
             "properties": {
               "operation": {
-                "enum": ["status.inspect", "status.engine", "status.health", "status.reconnect"]
+                "enum": ["status.inspect", "status.engine", "status.health", "status.reconnect", "world.inspect"]
               }
             },
             "required": ["operation"]
@@ -742,6 +798,24 @@
             "required": ["operation"]
           },
           "then": { "properties": { "data": { "$ref": "#/$defs/callInvokeData" } } }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation": { "const": "world.levels" }
+            },
+            "required": ["operation"]
+          },
+          "then": { "properties": { "data": { "$ref": "#/$defs/worldPageData" } } }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation": { "const": "world.actors.list" }
+            },
+            "required": ["operation"]
+          },
+          "then": { "properties": { "data": { "$ref": "#/$defs/worldActorPageData" } } }
         },
         {
           "if": {

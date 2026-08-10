@@ -74,12 +74,15 @@
 	<ClCompile Include="..\..\Dumper\Runtime\ReflectionLayoutCapture.cpp" />
 	<ClCompile Include="..\..\Dumper\Runtime\TypeSnapshot.cpp" />
 	<ClCompile Include="..\..\Dumper\Runtime\TypeSnapshotCapture.cpp" />
+	<ClCompile Include="..\..\Dumper\Runtime\WorldSnapshot.cpp" />
+	<ClCompile Include="..\..\Dumper\Runtime\WorldSnapshotCapture.cpp" />
     <ClCompile Include="..\..\Dumper\Runtime\SafeMemory.cpp" />
     <ClCompile Include="..\..\Dumper\Runtime\VTableHook.cpp" />
 	<ClCompile Include="..\..\Dumper\Services\CoreCommandService.cpp" />
 	<ClCompile Include="..\..\Dumper\Services\FunctionCallCommandService.cpp" />
 	<ClCompile Include="..\..\Dumper\Services\ObjectPropertyCommandService.cpp" />
 	<ClCompile Include="..\..\Dumper\Services\TypeCommandService.cpp" />
+	<ClCompile Include="..\..\Dumper\Services\WorldCommandService.cpp" />
     <ClCompile Include="..\..\Dumper\Server\HttpServer.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -116,6 +119,8 @@
 	<ClInclude Include="..\..\Dumper\Runtime\TypeSnapshot.h" />
 	<ClInclude Include="..\..\Dumper\Runtime\TypeSnapshotCapture.h" />
 	<ClInclude Include="..\..\Dumper\Runtime\TypeMetadataContext.h" />
+	<ClInclude Include="..\..\Dumper\Runtime\WorldSnapshot.h" />
+	<ClInclude Include="..\..\Dumper\Runtime\WorldSnapshotCapture.h" />
     <ClInclude Include="..\..\Dumper\Runtime\SafeMemory.h" />
     <ClInclude Include="..\..\Dumper\Runtime\ShutdownCoordinator.h" />
     <ClInclude Include="..\..\Dumper\Runtime\VTableHook.h" />
@@ -124,6 +129,7 @@
 	<ClInclude Include="..\..\Dumper\Services\ObjectPropertyCommandService.h" />
 	<ClInclude Include="..\..\Dumper\Services\CoreStatusDiagnostics.h" />
 	<ClInclude Include="..\..\Dumper\Services\TypeCommandService.h" />
+	<ClInclude Include="..\..\Dumper\Services\WorldCommandService.h" />
     <ClInclude Include="..\..\Dumper\API\GameThreadQueue.h" />
     <ClInclude Include="..\..\Dumper\Generator\Public\Generators\UsmapContainer.h" />
     <ClInclude Include="..\..\Dumper\Server\HttpServer.h" />

@@ -46,6 +46,7 @@ static bool g_FrameSchedulerPumpAttached = false;
 static bool g_SnapshotFrameClientAttached = false;
 static bool g_ReflectionFrameClientAttached = false;
 static bool g_TypeFrameClientAttached = false;
+static bool g_WorldFrameClientAttached = false;
 
 namespace
 {
@@ -87,6 +88,11 @@ namespace
 			: nullptr;
 		probes.ObjectPropertyServiceEnabled = true;
 		probes.FunctionCallServiceEnabled = true;
+		probes.World = g_EngineFacade
+			? g_EngineFacade->Worlds().Current()
+			: nullptr;
+		probes.WorldInspectServiceEnabled =
+			g_EngineFacade && g_EngineFacade->WorldCapture();
 		probes.NamedPipeListening = g_PipeServer && g_PipeServer->IsListening();
 		const auto capabilities = UExplorer::Runtime::BuildCoreCapabilities(*snapshot.Context, probes);
 		if (!g_Runtime.PublishCapabilities(capabilities))
@@ -136,6 +142,34 @@ namespace
 			|| state == TypeSnapshotCaptureState::Validating
 			|| state == TypeSnapshotCaptureState::Sealing
 			|| state == TypeSnapshotCaptureState::Publishing;
+	}
+
+	bool IsWorldCaptureActive(
+		const UExplorer::Runtime::WorldSnapshotCaptureState state) noexcept
+	{
+		using UExplorer::Runtime::WorldSnapshotCaptureState;
+		return state == WorldSnapshotCaptureState::Requested
+			|| state == WorldSnapshotCaptureState::Scanning
+			|| state == WorldSnapshotCaptureState::Sealing
+			|| state == WorldSnapshotCaptureState::Validating
+			|| state == WorldSnapshotCaptureState::Publishing;
+	}
+
+	bool DetachWorldFrameClient(const std::chrono::milliseconds timeout)
+	{
+		if (!g_WorldFrameClientAttached)
+			return true;
+		UExplorer::Runtime::WorldSnapshotCapture* capture =
+			g_EngineFacade ? g_EngineFacade->WorldCapture() : nullptr;
+		if (!capture
+			|| !UExplorer::Runtime::GetGameThreadFrameScheduler().DetachClient(
+				*capture,
+				timeout))
+		{
+			return false;
+		}
+		g_WorldFrameClientAttached = false;
+		return true;
 	}
 
 	bool DetachTypeFrameClient(const std::chrono::milliseconds timeout)
@@ -190,6 +224,13 @@ namespace
 			capture->Diagnostics().State;
 		return IsTypeCapturePumping(state)
 			|| state == UExplorer::Runtime::TypeSnapshotCaptureState::Ready;
+	}
+
+	bool WorldCaptureBlocksSnapshotRefresh() noexcept
+	{
+		const UExplorer::Runtime::WorldSnapshotCapture* capture =
+			g_EngineFacade ? g_EngineFacade->WorldCapture() : nullptr;
+		return capture && IsWorldCaptureActive(capture->Diagnostics().State);
 	}
 
 	bool DriveReflectionDiscovery(
@@ -470,6 +511,65 @@ namespace
 		return true;
 	}
 
+	bool DriveWorldDiscovery(
+		std::uint64_t& lastRequestedTypeGeneration,
+		std::uint64_t& lastReportedFailureGeneration)
+	{
+		if (!g_EngineFacade)
+			return true;
+		UExplorer::Runtime::WorldSnapshotCapture* capture =
+			g_EngineFacade->WorldCapture();
+		if (!capture)
+			return true;
+		const UExplorer::Runtime::WorldSnapshotCaptureDiagnostics diagnostics =
+			capture->Diagnostics();
+		if (diagnostics.State == UExplorer::Runtime::WorldSnapshotCaptureState::Sealing)
+		{
+			capture->SealForValidation();
+			return true;
+		}
+		if (diagnostics.State == UExplorer::Runtime::WorldSnapshotCaptureState::Publishing)
+		{
+			capture->PublishReady();
+			return true;
+		}
+		if (IsWorldCaptureActive(diagnostics.State))
+			return true;
+		if (diagnostics.State == UExplorer::Runtime::WorldSnapshotCaptureState::Failed
+			&& diagnostics.RequestedGeneration != lastReportedFailureGeneration)
+		{
+			std::cerr << "[UExplorer] World snapshot capture failed: capture="
+				<< UExplorer::Runtime::ToString(diagnostics.Error)
+				<< " publish=" << UExplorer::Runtime::ToString(diagnostics.PublishError)
+				<< " object_snapshot_generation=" << diagnostics.ObjectSnapshotGeneration
+				<< " type_snapshot_generation=" << diagnostics.TypeSnapshotGeneration
+				<< " object_index=" << diagnostics.ErrorObjectIndex << "\n";
+			lastReportedFailureGeneration = diagnostics.RequestedGeneration;
+		}
+
+		const std::shared_ptr<const UExplorer::Runtime::TypeSnapshot> types =
+			g_EngineFacade->Types().Current();
+		if (!types || !types->IsConfigured(g_EngineFacade->ContextGeneration()))
+			return true;
+		const std::shared_ptr<const UExplorer::Runtime::WorldSnapshot> current =
+			g_EngineFacade->Worlds().Current();
+		if ((current && current->TypeSnapshotGeneration == types->Generation())
+			|| lastRequestedTypeGeneration == types->Generation())
+		{
+			return true;
+		}
+		lastRequestedTypeGeneration = types->Generation();
+		const UExplorer::Runtime::WorldSnapshotCaptureRequestResult requested =
+			capture->RequestCapture();
+		if (!requested.Ok())
+		{
+			std::cerr << "[UExplorer] World snapshot request unavailable: "
+				<< UExplorer::Runtime::ToString(requested.Error)
+				<< " type_snapshot_generation=" << types->Generation() << "\n";
+		}
+		return true;
+	}
+
 	void ReclaimSnapshotStorage()
 	{
 		if (!g_EngineFacade)
@@ -489,6 +589,8 @@ namespace
 
 	bool DetachFrameScheduling(const std::chrono::milliseconds timeout)
 	{
+		if (!DetachWorldFrameClient(timeout))
+			return false;
 		if (!DetachTypeFrameClient(timeout))
 			return false;
 		if (!DetachReflectionFrameClient(timeout))
@@ -711,6 +813,11 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 				UExplorer::Runtime::ObjectSnapshotTypeCandidateSource>(
 					runtimeSnapshot.Context,
 					*g_EngineFacade);
+			if (runtimeSnapshot.Context->HasValidatedOffset("gworld")
+				&& !g_EngineFacade->ConfigureWorldSnapshotCapture())
+			{
+				std::cerr << "[UExplorer] World snapshot capture rejected the immutable context.\n";
+			}
 		}
 		else
 		{
@@ -792,6 +899,13 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 					+ UExplorer::Runtime::ToString(requested.Error));
 			}
 		}
+		if (UExplorer::Runtime::WorldSnapshotCapture* capture =
+			g_EngineFacade ? g_EngineFacade->WorldCapture() : nullptr)
+		{
+			if (!frameScheduler.AttachClient(*capture))
+				throw std::runtime_error("world snapshot frame-client attachment failed");
+			g_WorldFrameClientAttached = true;
+		}
 		RefreshRuntimeCapabilities();
 		startupReady = EnsurePipeAdmissions();
 		if (!startupReady)
@@ -816,6 +930,8 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 	std::uint64_t lastTypePreparationFingerprint = 0;
 	std::uint64_t lastReportedTypeFailureGeneration = 0;
 	std::uint64_t lastReportedTypeFailureFingerprint = 0;
+	std::uint64_t lastRequestedWorldTypeGeneration = 0;
+	std::uint64_t lastReportedWorldFailureGeneration = 0;
 	while (startupReady && g_Running.load())
 	{
 		ReclaimSnapshotStorage();
@@ -837,6 +953,14 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 			g_Running.store(false, std::memory_order_release);
 			break;
 		}
+		if (!DriveWorldDiscovery(
+			lastRequestedWorldTypeGeneration,
+			lastReportedWorldFailureGeneration))
+		{
+			std::cerr << "[UExplorer] World snapshot lifecycle failed.\n";
+			g_Running.store(false, std::memory_order_release);
+			break;
+		}
 		RefreshRuntimeCapabilities();
 		if (!EnsurePipeAdmissions())
 		{
@@ -848,6 +972,7 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 		if (g_SnapshotFrameClientAttached
 			&& !ReflectionCaptureBlocksSnapshotRefresh()
 			&& !TypeCaptureBlocksSnapshotRefresh()
+			&& !WorldCaptureBlocksSnapshotRefresh()
 			&& now >= nextSnapshotRefresh)
 		{
 			if (UExplorer::Runtime::EngineSnapshotCapture* capture =
@@ -883,6 +1008,7 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 	UExplorer::Services::SetCoreCommandService(nullptr);
 	bool pipeStopped = true;
 	bool hooksStopped = true;
+	bool worldFrameStopped = true;
 	bool typeFrameStopped = true;
 	bool reflectionFrameStopped = true;
 	bool snapshotFrameStopped = true;
@@ -897,6 +1023,11 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 		hooksStopped = !g_PostRenderHook
 			|| g_PostRenderHook->Stop(std::chrono::milliseconds(5000));
 		return hooksStopped;
+	});
+	shutdown.AddStage("world_frame_client", [&] {
+		worldFrameStopped = DetachWorldFrameClient(
+			std::chrono::milliseconds(5000));
+		return worldFrameStopped;
 	});
 	shutdown.AddStage("type_frame_client", [&] {
 		typeFrameStopped = DetachTypeFrameClient(
@@ -934,7 +1065,8 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 		return frameSchedulerStopped;
 	});
 	shutdown.AddStage("engine_facade", [&] {
-		return typeFrameStopped
+		return worldFrameStopped
+			&& typeFrameStopped
 			&& reflectionFrameStopped
 			&& snapshotFrameStopped
 			&& (!g_EngineFacade

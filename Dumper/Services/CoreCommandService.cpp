@@ -5,6 +5,7 @@
 #include "FunctionCallCommandService.h"
 #include "ObjectPropertyCommandService.h"
 #include "TypeCommandService.h"
+#include "WorldCommandService.h"
 
 #include <algorithm>
 #include <chrono>
@@ -724,6 +725,8 @@ CoreCommandResponse CoreCommandService::Execute(
 			return ExecuteObjectPropertyRead(request, onGameThreadQueued);
 		if (request.Operation == kFunctionCallInvoke)
 			return ExecuteFunctionCall(request, onGameThreadQueued);
+		if (WorldCommandService::Handles(request.Operation))
+			return ExecuteWorldCommand(request);
 		if (TypeCommandService::Handles(request.Operation))
 			return ExecuteTypeCommand(request);
 		return Failure(
@@ -969,6 +972,78 @@ CoreCommandResponse CoreCommandService::ExecuteFunctionCall(
 			timing);
 	}
 	return Success(request, std::move(result.Data), timing);
+}
+
+CoreCommandResponse CoreCommandService::ExecuteWorldCommand(
+	const CoreCommandRequest& request)
+{
+	const auto started = std::chrono::steady_clock::now();
+	const auto timing = [&started]() noexcept {
+		return CoreCommandTiming{.ExecuteUs = ElapsedMicroseconds(started)};
+	};
+
+	std::string admissionError;
+	auto lease = m_Runtime.TryAcquireRequest(&admissionError);
+	if (!lease)
+	{
+		return Failure(
+			request,
+			admissionError.empty() ? "CORE_NOT_READY" : admissionError,
+			"CoreRuntime is not accepting world queries");
+	}
+	constexpr const char* capabilityName = "world.inspect";
+	const Runtime::CapabilityStatus* capability = lease->Capabilities()
+		? lease->Capabilities()->Find(capabilityName)
+		: nullptr;
+	if (!capability || !capability->Available)
+	{
+		return Failure(
+			request,
+			capability && !capability->ReasonCode.empty()
+				? capability->ReasonCode
+				: "WORLD_INSPECTION_CAPABILITY_UNAVAILABLE",
+			capability && !capability->Reason.empty()
+				? capability->Reason
+				: "Immutable current-world inspection is unavailable",
+			{{"capability", capabilityName}},
+			timing());
+	}
+
+	const std::shared_ptr<const Runtime::EngineSnapshot> objects =
+		m_Engine.Snapshots().Current();
+	const std::shared_ptr<const Runtime::TypeSnapshot> types =
+		m_Engine.Types().Current();
+	const std::shared_ptr<const Runtime::WorldSnapshot> world =
+		m_Engine.Worlds().Current();
+	if (!objects || !types || !world || !lease->Context()
+		|| world->SessionId != m_SessionId
+		|| world->ContextGeneration != lease->Context()->Generation()
+		|| world->ObjectSnapshotGeneration != objects->Generation
+		|| world->TypeSnapshotGeneration != types->Generation()
+		|| types->ObjectSnapshotGeneration() != objects->Generation)
+	{
+		return Failure(
+			request,
+			"WORLD_SNAPSHOT_STALE",
+			"The immutable world snapshot no longer matches the active object/type generation",
+			{{"capability", capabilityName}},
+			timing());
+	}
+
+	WorldCommandResult result = WorldCommandService::Execute(
+		request.Operation,
+		request.Data,
+		world);
+	if (!result.Ok())
+	{
+		return Failure(
+			request,
+			result.Error ? std::move(result.Error->Code) : "WORLD_QUERY_FAILED",
+			result.Error ? std::move(result.Error->Message) : "World query failed",
+			result.Error ? std::move(result.Error->Details) : json::object(),
+			timing());
+	}
+	return Success(request, std::move(result.Data), timing());
 }
 
 CoreCommandResponse CoreCommandService::ExecuteTypeCommand(

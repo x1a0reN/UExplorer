@@ -4,6 +4,8 @@ import { Search, MapPin, Globe, ChevronDown, ChevronRight } from 'lucide-react';
 import api, {
     type WorldLevelItem,
     type WorldActorDetail,
+    type WorldActorItem,
+    type WorldQueryCursor,
     type ObjectItem,
     type Vec3Data,
 } from '../../api';
@@ -24,12 +26,16 @@ function toVecInput(vec?: Vec3Data): VecInput {
 export default function WorldBrowser({ onSwitchMode }: BrowserPageProps) {
     // World state
     const [levels, setLevels] = useState<WorldLevelItem[]>([]);
+    const [nextLevelCursor, setNextLevelCursor] = useState<WorldQueryCursor | null>(null);
     const [expandedLevels, setExpandedLevels] = useState<Set<string>>(new Set());
-    const [actors, setActors] = useState<ObjectItem[]>([]);
+    const [actors, setActors] = useState<WorldActorItem[]>([]);
+    const [nextActorCursor, setNextActorCursor] = useState<WorldQueryCursor | null>(null);
+    const [actorMatched, setActorMatched] = useState(0);
     const [search, setSearch] = useState('');
     const [classFilter, setClassFilter] = useState('');
     const [listLoading, setListLoading] = useState(false);
-    const [selected, setSelected] = useState<ObjectItem | null>(null);
+    const [actorListLoading, setActorListLoading] = useState(false);
+    const [selected, setSelected] = useState<WorldActorItem | null>(null);
 
     // Detail state
     const [detailTab, setDetailTab] = useState<WorldDetailTab>('Transform');
@@ -45,29 +51,53 @@ export default function WorldBrowser({ onSwitchMode }: BrowserPageProps) {
 
     // ─── Data Loading ──────────────────────────────────────────
 
-    const loadWorld = useCallback(async () => {
+    const loadWorld = useCallback(async (
+        cursor: WorldQueryCursor | null = null,
+        append = false,
+    ) => {
         setListLoading(true);
+        if (!append) {
+            setLevels([]);
+            setNextLevelCursor(null);
+        }
         try {
-            const levelsRes = await api.getWorldLevels();
+            const levelsRes = await api.getWorldLevels(cursor);
             if (levelsRes.success && levelsRes.data) {
-                setLevels(levelsRes.data.levels);
+                setLevels((current) => append
+                    ? [...current, ...levelsRes.data!.levels]
+                    : levelsRes.data!.levels);
+                setNextLevelCursor(levelsRes.data.next_cursor);
                 // Auto-expand first level
-                if (levelsRes.data.levels.length > 0 && levelsRes.data.levels[0].source) {
-                    setExpandedLevels(new Set([levelsRes.data.levels[0].source!]));
+                if (!append && levelsRes.data.levels.length > 0) {
+                    setExpandedLevels(new Set([levelsRes.data.levels[0].source]));
                 }
             }
         } catch { /* ignore */ }
         setListLoading(false);
     }, []);
 
-    const loadActors = useCallback(async () => {
+    const loadActors = useCallback(async (
+        cursor: WorldQueryCursor | null = null,
+        append = false,
+    ) => {
+        setActorListLoading(true);
+        if (!append) {
+            setActors([]);
+            setNextActorCursor(null);
+            setActorMatched(0);
+        }
         try {
-            const res = await api.getWorldActors(0, 128, search, classFilter);
-            if (res.success && res.data) setActors(res.data.items);
+            const res = await api.getWorldActors(cursor, 128, search, classFilter);
+            if (res.success && res.data) {
+                setActors((current) => append ? [...current, ...res.data!.items] : res.data!.items);
+                setNextActorCursor(res.data.next_cursor);
+                setActorMatched(res.data.matched);
+            }
         } catch { /* ignore */ }
+        setActorListLoading(false);
     }, [classFilter, search]);
 
-    const loadActorDetail = async (actor: ObjectItem) => {
+    const loadActorDetail = async (actor: WorldActorItem) => {
         setDetailLoading(true);
         setDetailError(null);
         setActorDetail(null);
@@ -85,6 +115,10 @@ export default function WorldBrowser({ onSwitchMode }: BrowserPageProps) {
                 setScale(toVecInput(detailRes.data.transform?.scale));
             }
             if (compRes.success && compRes.data) setComponents(compRes.data.components);
+            const failures = [detailRes, compRes]
+                .filter((response) => !response.success)
+                .map((response) => response.error || response.error_code || 'World detail unavailable');
+            if (failures.length > 0) setDetailError(failures.join('; '));
         } catch (error) {
             setDetailError(error instanceof Error ? error.message : String(error));
         } finally {
@@ -93,12 +127,12 @@ export default function WorldBrowser({ onSwitchMode }: BrowserPageProps) {
     };
 
     useEffect(() => {
-        const timer = window.setTimeout(() => void loadWorld(), 0);
+        const timer = window.setTimeout(() => void loadWorld(null, false), 0);
         return () => window.clearTimeout(timer);
     }, [loadWorld]);
 
     useEffect(() => {
-        const timer = window.setTimeout(() => void loadActors(), 150);
+        const timer = window.setTimeout(() => void loadActors(null, false), 150);
         return () => window.clearTimeout(timer);
     }, [loadActors]);
 
@@ -159,7 +193,9 @@ export default function WorldBrowser({ onSwitchMode }: BrowserPageProps) {
                                     <span className="text-[12px] text-white/80 font-mono truncate">{src}</span>
                                     <span className="text-[10px] text-white/30 ml-auto">({level.actor_count ?? 0})</span>
                                 </div>
-                                {expanded && actors.map((actor) => (
+                                {expanded && actors
+                                    .filter((actor) => actor.level.full_path === src)
+                                    .map((actor) => (
                                     <div key={actor.index}
                                         onClick={() => { setSelected(actor); void loadActorDetail(actor); }}
                                         className={`ml-5 p-1.5 rounded cursor-pointer mb-0.5 flex items-center gap-2 transition-all ${selected?.index === actor.index ? 'bg-white/10 border border-white/10' : 'hover:bg-white/5 border border-transparent'
@@ -171,6 +207,23 @@ export default function WorldBrowser({ onSwitchMode }: BrowserPageProps) {
                             </div>
                         );
                     })}
+                    {nextLevelCursor && (
+                        <button type="button"
+                            disabled={listLoading}
+                            onClick={() => void loadWorld(nextLevelCursor, true)}
+                            className="w-full my-1 rounded border border-white/10 px-2 py-1.5 text-[11px] text-white/50 hover:bg-white/5 disabled:opacity-40">
+                            {t('Load more levels')}
+                        </button>
+                    )}
+                    {nextActorCursor && (
+                        <button type="button"
+                            disabled={actorListLoading}
+                            onClick={() => void loadActors(nextActorCursor, true)}
+                            className="w-full my-1 rounded border border-cyan-400/15 px-2 py-1.5 text-[11px] text-cyan-200/60 hover:bg-cyan-400/5 disabled:opacity-40">
+                            {t('Load more actors')} ({actors.length}/{actorMatched})
+                        </button>
+                    )}
+                    {actorListLoading && <div className="text-white/30 text-[11px] p-2">{t('Loading actors...')}</div>}
                 </div>
             </div>
 
@@ -237,7 +290,9 @@ export default function WorldBrowser({ onSwitchMode }: BrowserPageProps) {
                                             <span className="text-[11px] text-blue-400/60 font-mono">{comp.class}</span>
                                         </div>
                                     ))}
-                                    {components.length === 0 && <div className="text-white/40 text-sm">{t('No components')}</div>}
+                                    {!detailLoading && !detailError && components.length === 0 && (
+                                        <div className="text-white/40 text-sm">{t('No components')}</div>
+                                    )}
                                 </div>
                             </Panel>
                         )}

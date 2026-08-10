@@ -33,11 +33,13 @@
 #include "Runtime/ReflectionLayout.h"
 #include "Runtime/ReflectionLayoutCapture.h"
 #include "Runtime/TypeSnapshotCapture.h"
+#include "Runtime/WorldSnapshot.h"
 #include "Runtime/SafeMemory.h"
 #include "Runtime/ShutdownCoordinator.h"
 #include "Runtime/VTableHook.h"
 #include "Services/CoreCommandService.h"
 #include "Services/TypeCommandService.h"
+#include "Services/WorldCommandService.h"
 #include "API/GameThreadQueue.h"
 #include "Generator/Public/Generators/UsmapContainer.h"
 #include "Server/HttpServer.h"
@@ -6998,6 +7000,148 @@ namespace
 	}
 }
 
+
+void TestWorldSnapshotQueries()
+{
+	using namespace UExplorer::Runtime;
+	using UExplorer::Services::WorldCommandService;
+
+	const auto handle = [](const std::int32_t index, const std::uintptr_t address) {
+		return ObjectHandle{
+			.SessionId = "world-fixture",
+			.ContextGeneration = 81,
+			.Index = index,
+			.SerialNumber = index + 100,
+			.Address = address,
+			.ClassFingerprint = 0xA000u + static_cast<std::uint64_t>(index)
+		};
+	};
+	WorldSnapshot snapshot{
+		.SessionId = "world-fixture",
+		.ContextGeneration = 81,
+		.Generation = 3,
+		.ObjectSnapshotGeneration = 7,
+		.TypeSnapshotGeneration = 9,
+		.CapturedAtMonotonicUs = 1000,
+		.CaptureDurationUs = 25,
+		.World = {
+			.Handle = handle(1, 0x1000),
+			.Name = "FixtureWorld",
+			.FullPath = "/Game/Maps/Fixture.Fixture",
+			.ClassPath = "/Script/Engine.World"
+		},
+		.Levels = {{
+			.Object = {
+				.Handle = handle(2, 0x2000),
+				.Name = "PersistentLevel",
+				.FullPath = "/Game/Maps/Fixture.Fixture.PersistentLevel",
+				.ClassPath = "/Script/Engine.Level"
+			},
+			.ActorCount = 3
+		}},
+		.Actors = {
+			{
+				.Object = {
+					.Handle = handle(3, 0x3000),
+					.Name = "FixtureActor",
+					.FullPath = "/Game/Maps/Fixture.Fixture.PersistentLevel.FixtureActor",
+					.ClassPath = "/Script/Engine.Actor"
+				},
+				.Level = handle(2, 0x2000)
+			},
+			{
+				.Object = {
+					.Handle = handle(4, 0x4000),
+					.Name = "UnmatchedPawn",
+					.FullPath = "/Game/Maps/Fixture.Fixture.PersistentLevel.UnmatchedPawn",
+					.ClassPath = "/Script/Engine.Pawn"
+				},
+				.Level = handle(2, 0x2000)
+			},
+			{
+				.Object = {
+					.Handle = handle(5, 0x5000),
+					.Name = "FixtureActorTwo",
+					.FullPath = "/Game/Maps/Fixture.Fixture.PersistentLevel.FixtureActorTwo",
+					.ClassPath = "/Script/Engine.Actor"
+				},
+				.Level = handle(2, 0x2000)
+			}
+		}
+	};
+	WorldSnapshotStore store("world-fixture", 81);
+	const WorldSnapshotPublishResult published = store.Publish(std::move(snapshot));
+	Require(published.Ok(), "A coherent immutable world snapshot was rejected");
+
+	const auto inspect = WorldCommandService::Execute(
+		"world.inspect",
+		nlohmann::json::object(),
+		store.Current());
+	Require(
+		inspect.Ok()
+			&& inspect.Data.at("level_count") == 1
+			&& inspect.Data.at("actor_count") == 3,
+		"World inspection did not expose exact immutable counts");
+	const auto levels = WorldCommandService::Execute(
+		"world.levels",
+		{{"cursor", nullptr}, {"limit", 128}},
+		store.Current());
+	Require(
+		levels.Ok()
+			&& levels.Data.at("levels").size() == 1
+			&& levels.Data.at("levels").at(0).at("actor_count") == 3,
+		"World level paging lost the captured actor count");
+	const auto actors = WorldCommandService::Execute(
+		"world.actors.list",
+		{{"cursor", nullptr},
+		 {"limit", 1},
+		 {"search", "fixture"},
+		 {"class_search", "actor"},
+		 {"level_path", "/Game/Maps/Fixture.Fixture.PersistentLevel"}},
+		store.Current());
+	Require(
+		actors.Ok()
+			&& actors.Data.at("items").size() == 1
+			&& actors.Data.at("matched") == 2
+			&& actors.Data.at("has_more") == true
+			&& actors.Data.at("items").at(0).at("handle").at("index") == 3
+			&& actors.Data.at("items").at(0).at("level").at("handle").at("index") == 2,
+		"World actor filtering did not retain exact actor/level handles");
+	const nlohmann::json cursor = actors.Data.at("next_cursor");
+	const auto actorsNext = WorldCommandService::Execute(
+		"world.actors.list",
+		{{"cursor", cursor},
+		 {"limit", 1},
+		 {"search", "fixture"},
+		 {"class_search", "actor"},
+		 {"level_path", "/Game/Maps/Fixture.Fixture.PersistentLevel"}},
+		store.Current());
+	Require(
+		actorsNext.Ok()
+			&& actorsNext.Data.at("items").size() == 1
+			&& actorsNext.Data.at("items").at(0).at("handle").at("index") == 5
+			&& actorsNext.Data.at("has_more") == false
+			&& actorsNext.Data.at("next_cursor").is_null(),
+		"World actor continuation cursor did not preserve the filtered result set");
+	nlohmann::json terminalCursor = cursor;
+	terminalCursor["after_ordinal"] = 2;
+	const auto forgedTerminal = WorldCommandService::Execute(
+		"world.actors.list",
+		{{"cursor", terminalCursor},
+		 {"limit", 1},
+		 {"search", "fixture"},
+		 {"class_search", "actor"},
+		 {"level_path", "/Game/Maps/Fixture.Fixture.PersistentLevel"}},
+		store.Current());
+	Require(
+		!forgedTerminal.Ok()
+			&& forgedTerminal.Error
+			&& forgedTerminal.Error->Code == "WORLD_CURSOR_INVALID",
+		"World actor paging accepted a cursor that the service could never issue");
+
+	store.Stop();
+}
+
 int main(const int argc, char** argv)
 {
 	try
@@ -7017,6 +7161,7 @@ int main(const int argc, char** argv)
 		TestEngineContextAndCapabilities();
 		TestEngineNameCodec();
 		TestPropertyCodec();
+		TestWorldSnapshotQueries();
 		TestReflectionLayout();
 		TestCoreRuntimeStateAndShutdown();
 		TestStableObjectAndFunctionHandles();
@@ -7041,7 +7186,7 @@ int main(const int argc, char** argv)
 		TestGameThreadFrameSchedulerBudgetFairnessAndDrain();
 		TestGameThreadMpscCapacity();
 		TestHttpServerLifecycle();
-		std::cout << "Core harness passed: deterministic bounded frame fuzz/disconnect matrix, secure sessions, real current-user Windows Named Pipe RPC/event lifecycle, runtime/capabilities, EngineFacade/immutable budgeted object/type snapshots, domain commands, stable handles/FUObjectItem layout, budgeted witnessed reflection capture/layouts, bounded property codecs, bounded PE/version/global-pointer probing, pattern scanning, Hook RAII/drain, SafeMemory, USMAP consumer, bounded queues, cancellable owned game-thread/frame-client work, SEH, HTTP lifecycle, and shutdown.\n";
+		std::cout << "Core harness passed: deterministic bounded frame fuzz/disconnect matrix, secure sessions, real current-user Windows Named Pipe RPC/event lifecycle, runtime/capabilities, EngineFacade/immutable budgeted object/type/world snapshots, domain commands, stable handles/FUObjectItem layout, budgeted witnessed reflection capture/layouts, bounded property codecs, bounded PE/version/global-pointer probing, pattern scanning, Hook RAII/drain, SafeMemory, USMAP consumer, bounded queues, cancellable owned game-thread/frame-client work, SEH, HTTP lifecycle, and shutdown.\n";
 		return 0;
 	}
 	catch (const std::exception& error)

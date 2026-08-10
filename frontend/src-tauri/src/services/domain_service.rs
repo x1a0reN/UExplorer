@@ -339,12 +339,12 @@ fn resolve_operation(operation: &str) -> Option<DomainRoute> {
         "types.structs.fields" => DomainRoute::Core("types.structs.fields"),
         "types.enums.get" => DomainRoute::Core("types.enums.get"),
         "types.enums.values" => DomainRoute::Core("types.enums.values"),
-        "world.inspect"
-        | "world.levels"
-        | "world.actors.list"
-        | "world.shortcuts"
-        | "world.actor.get"
-        | "world.actor.components" => DomainRoute::Unavailable("world.inspect"),
+        "world.inspect" => DomainRoute::Core("world.inspect"),
+        "world.levels" => DomainRoute::Core("world.levels"),
+        "world.actors.list" => DomainRoute::Core("world.actors.list"),
+        "world.shortcuts" | "world.actor.get" | "world.actor.components" => {
+            DomainRoute::Unavailable("world.details")
+        }
         "world.actor.transform.update" => DomainRoute::Unavailable("world.mutate"),
         "memory.raw.read" => DomainRoute::Unavailable("memory.raw_read"),
         "memory.raw.write" => DomainRoute::Unavailable("memory.raw_write"),
@@ -874,6 +874,22 @@ mod tests {
         assert_eq!(
             resolve_operation("call.invoke"),
             Some(DomainRoute::Core("call.invoke"))
+        );
+        assert_eq!(
+            resolve_operation("world.inspect"),
+            Some(DomainRoute::Core("world.inspect"))
+        );
+        assert_eq!(
+            resolve_operation("world.levels"),
+            Some(DomainRoute::Core("world.levels"))
+        );
+        assert_eq!(
+            resolve_operation("world.actors.list"),
+            Some(DomainRoute::Core("world.actors.list"))
+        );
+        assert_eq!(
+            resolve_operation("world.actor.get"),
+            Some(DomainRoute::Unavailable("world.details"))
         );
     }
 

@@ -47,7 +47,8 @@ foreach ($token in @(
 }
 foreach ($token in @(
         'IPC\NamedPipeRpcServer.cpp', 'Runtime\PostRenderHook.cpp',
-        'Services\CoreCommandService.cpp', 'advapi32.lib')) {
+        'Runtime\WorldSnapshotCapture.cpp', 'Services\CoreCommandService.cpp',
+        'Services\WorldCommandService.cpp', 'advapi32.lib')) {
     Assert-Contains $coreProject $token 'Release Core project omitted a required Pipe/domain component.'
 }
 foreach ($path in @('Dumper\Server\HttpServer.cpp', 'Dumper\API\Router.cpp')) {
@@ -57,9 +58,10 @@ foreach ($path in @('Dumper\Server\HttpServer.cpp', 'Dumper\API\Router.cpp')) {
 }
 
 foreach ($token in @(
-        '"memory.raw_read",', '"memory.raw_write",', '"world.inspect",',
-        'MEMORY_READ_COMMAND_NOT_IMPLEMENTED', 'WORLD_COMMAND_NOT_IMPLEMENTED')) {
-    Assert-Contains $capabilities $token 'Core capability publication lost a truthful unavailable command.'
+        '"memory.raw_read",', '"memory.raw_write",', '"engine.world_snapshot",',
+        '"world.inspect",', 'MEMORY_READ_COMMAND_NOT_IMPLEMENTED',
+        'WorldInspectServiceEnabled', 'WORLD_COMMAND_NOT_READY')) {
+    Assert-Contains $capabilities $token 'Core capability publication lost a required domain boundary.'
 }
 foreach ($token in @(
         'pub struct DomainService', 'pub fn execute(&self, request: DomainRequest)',
@@ -67,7 +69,10 @@ foreach ($token in @(
         'DomainRoute::ObjectsList', 'DomainRoute::TypeList',
         'DomainRoute::Unavailable("memory.raw_read")',
         'DomainRoute::Core("call.invoke")',
-        'DomainRoute::Unavailable("world.inspect")',
+        'DomainRoute::Core("world.inspect")',
+        'DomainRoute::Core("world.levels")',
+        'DomainRoute::Core("world.actors.list")',
+        'DomainRoute::Unavailable("world.details")',
         'DomainRoute::Unavailable("watch.properties")',
         'DomainRoute::Unavailable("hook.monitor")',
         'DomainRoute::Unavailable("dump.cpp")')) {

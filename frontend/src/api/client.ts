@@ -59,6 +59,7 @@ import type {
   WorldActorTransformUpdateResponse,
   WorldData,
   WorldLevelsResponse,
+  WorldQueryCursor,
   WorldShortcuts,
 } from './index';
 
@@ -458,17 +459,27 @@ class UExplorerApi {
     return this.command('world.inspect');
   }
 
-  async getWorldLevels(): Promise<ApiResponse<WorldLevelsResponse>> {
-    return this.command('world.levels');
+  async getWorldLevels(
+    cursor: WorldQueryCursor | null = null,
+    limit = 128,
+  ): Promise<ApiResponse<WorldLevelsResponse>> {
+    return this.command('world.levels', { cursor, limit });
   }
 
   async getWorldActors(
-    offset = 0,
+    cursor: WorldQueryCursor | null = null,
     limit = 50,
-    q = '',
-    classFilter = '',
+    search = '',
+    classSearch = '',
+    levelPath = '',
   ): Promise<ApiResponse<WorldActorResponse>> {
-    return this.command('world.actors.list', { offset, limit, q, class: classFilter });
+    return this.command('world.actors.list', {
+      cursor,
+      limit,
+      search: search.trim() || null,
+      class_search: classSearch.trim() || null,
+      level_path: levelPath || null,
+    });
   }
 
   async getWorldShortcuts(): Promise<ApiResponse<WorldShortcuts>> {

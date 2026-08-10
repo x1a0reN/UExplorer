@@ -87,6 +87,38 @@ describe('UExplorerApi Tauri domain boundary', () => {
     });
   });
 
+  it('uses an immutable world cursor and explicit actor filters', async () => {
+    const cursor = {
+      generation: 3,
+      after_ordinal: 127,
+      query_fingerprint: 'A1B2C3D4E5F60708',
+    };
+    invokeMock.mockResolvedValue({ success: true, data: { items: [], has_more: false } });
+
+    await api.getWorldActors(
+      cursor,
+      64,
+      'Player',
+      'Character',
+      '/Game/Maps/Fixture.Fixture.PersistentLevel',
+    );
+
+    expect(invokeMock).toHaveBeenCalledWith('domain_request', {
+      request: {
+        targetPid: null,
+        operation: 'world.actors.list',
+        timeoutMs: 5_000,
+        data: {
+          cursor,
+          limit: 64,
+          search: 'Player',
+          class_search: 'Character',
+          level_path: '/Game/Maps/Fixture.Fixture.PersistentLevel',
+        },
+      },
+    });
+  });
+
   it('turns a failed native invocation into one explicit Host error', async () => {
     invokeMock.mockRejectedValue(new Error('channel closed'));
 

@@ -478,29 +478,61 @@ export interface ClassCDOResponse {
 }
 
 export interface WorldData {
-  name: string;
-  address: string;
+  generation: number;
+  context_generation: number;
+  object_snapshot_generation: number;
+  type_snapshot_generation: number;
+  captured_at_monotonic_us: number;
+  capture_duration_us: number;
+  world: WorldSnapshotObject;
+  level_count: number;
   actor_count: number;
 }
 
-export interface WorldLevelItem extends ObjectItem {
-  source?: string;
-  actor_count?: number;
+export interface WorldQueryCursor {
+  generation: number;
+  after_ordinal: number;
+  query_fingerprint: string;
+}
+
+export interface WorldSnapshotObject extends ObjectItem {
+  handle: StableObjectHandle;
+  full_path: string;
+  class_path: string;
+}
+
+export interface WorldLevelItem extends WorldSnapshotObject {
+  source: string;
+  actor_count: number;
 }
 
 export interface WorldLevelsResponse {
-  world: ObjectItem;
+  generation: number;
+  context_generation: number;
+  object_snapshot_generation: number;
+  type_snapshot_generation: number;
+  world: WorldSnapshotObject;
   levels: WorldLevelItem[];
   count: number;
+  limit: number;
+  has_more: boolean;
+  next_cursor: WorldQueryCursor | null;
 }
 
-export type WorldActorItem = ObjectItem;
+export interface WorldActorItem extends WorldSnapshotObject {
+  level: WorldSnapshotObject;
+}
 
 export interface WorldActorResponse {
+  generation: number;
+  context_generation: number;
+  object_snapshot_generation: number;
+  type_snapshot_generation: number;
   items: WorldActorItem[];
   matched: number;
-  offset: number;
   limit: number;
+  has_more: boolean;
+  next_cursor: WorldQueryCursor | null;
 }
 
 export interface Vec3Data {

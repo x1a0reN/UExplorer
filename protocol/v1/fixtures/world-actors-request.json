@@ -1,0 +1,12 @@
+{
+  "operation": "world.actors.list",
+  "session_id": "fixture-session-4242",
+  "timeout_ms": 5000,
+  "data": {
+    "cursor": null,
+    "limit": 128,
+    "search": null,
+    "class_search": null,
+    "level_path": "/Game/Maps/Fixture.Fixture.PersistentLevel"
+  }
+}

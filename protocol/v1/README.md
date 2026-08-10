@@ -191,6 +191,9 @@ The v1 command registry is explicit. Unknown operations return
 | `functions.handle.issue` | `{"index": int32}` | PostRender game-thread function/owner/path re-read |
 | `objects.property.read` | `{"object": object_handle, "type_snapshot_generation": uint53, "declaring_type_path": full_path, "property_name": exact_name, "array_index": 0..1023}` | Game-thread read from the exact object/type/reflection generation |
 | `call.invoke` | `{"target": object_handle, "function": function_handle, "type_snapshot_generation": uint53, "function_path": full_path, "arguments": {name: {kind, value}}}` | Single ProcessEvent call after exact game-thread identity/dependency revalidation |
+| `world.inspect` | `{}` | Worker-safe immutable current-world identity and exact Level/Actor counts |
+| `world.levels` | `{"cursor": null \| world_cursor, "limit": 1..128}` | Worker-safe immutable Level page |
+| `world.actors.list` | `{"cursor": null \| world_cursor, "limit": 1..128, "search": string \| null, "class_search": string \| null, "level_path": exact_path \| null}` | Worker-safe immutable Actor page with exact total matching |
 | `types.classes.get` | `{"path": full_path}` | Worker-safe immutable class summary |
 | `types.classes.fields` | `{"path": full_path, "scope": "direct" \| "include_inherited", "cursor": null \| type_cursor, "limit": 1..128}` | Worker-safe immutable field page |
 | `types.classes.functions` | same member-page shape | Worker-safe immutable function page |
@@ -235,6 +238,16 @@ zero-initializes the exact reflected parameter frame, revalidates target/functio
 argument handles at execution, and serializes out/inout/return values. Static calls use
 the same command with an explicit CDO handle. Non-trivial UE value lifetimes and batch
 jobs are not silently approximated and remain unavailable.
+
+World commands read only a `WorldSnapshot` whose session, context, ObjectSnapshot, and
+TypeSnapshot generations still match the active immutable dependencies. A world cursor
+contains the WorldSnapshot generation, the last returned source ordinal, and a 16-hex
+query fingerprint derived from session/context/Object/Type/World generation, operation,
+and filters. It cannot cross a generation or filter, point at an unmatched Actor, or
+represent a terminal page for which the service never emitted a continuation. Actor
+queries return exact `matched` after scanning the immutable snapshot; each response is
+capped at 128 records and 4 MiB. Actor details/components/shortcuts use the unavailable
+`world.details` capability, while mutation uses the unavailable `world.mutate` capability.
 
 The shared Rust types live in `protocol/rust`; the Host must deserialize pages with
 unknown-field rejection. `frontend/src-tauri/src/session/snapshot_cache.rs` validates

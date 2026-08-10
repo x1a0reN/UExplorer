@@ -43,7 +43,8 @@ injection-to-Core-Ready gating, cross-language Core/Host fixtures, and a live x6
 injection matrix are implemented. React domain calls now use one Tauri
 `domain_request` command and event consumers use caller-owned Tauri channels. The Host
 operation registry serves status, immutable-snapshot object/type queries, exact type
-details, stable-handle property reads, and the bounded single-target `call.invoke`;
+details, stable-handle property reads, the bounded single-target `call.invoke`, and
+immutable current-world/level/actor queries;
 domains not yet implemented return a stable capability error instead of reaching
 legacy code.
 Baseline Core initialization is also separated from optional reflection/generator
@@ -116,6 +117,17 @@ ProcessEvent, then decodes out/inout/return fields from the same owned frame. St
 calls use an explicit CDO handle; the protocol has no caller-controlled thread switch.
 Non-trivial FString/container/struct lifetimes, enum input, batch jobs, and real UE
 round-trip evidence remain unavailable.
+`WorldSnapshotCapture` uses the exact immutable Object/Type generations to pre-index
+Actor and Level candidates off-thread. Under the shared PostRender budget it resolves
+the witnessed `GWorld` slot, follows the same typed-outer semantics used by
+`AActor::GetLevel()`, and requires the reflected `ULevel.OwningWorld` object field to
+equal the current world before publishing. A second game-thread pass revalidates the
+world, every stable handle, actor-to-level relationship, and level ownership. Sorting,
+full-count aggregation, store validation, and publication run on the DLL worker between
+the bounded game-thread phases rather than in the PostRender hot path. The
+worker-only `WorldCommandService` exposes `world.inspect`, cursor-paged `world.levels`,
+and cursor-paged/filterable `world.actors.list`; actor details, components, shortcuts,
+transform reads/setters, and real target evidence remain unavailable.
 PostRender now drives one `GameThreadFrameScheduler` rather than giving the object
 snapshot producer an exclusive callback slot. The scheduler supports at most eight
 clients, shares a 32-unit frame budget in four-unit round-robin quanta, stops further
@@ -125,6 +137,8 @@ capture use this scheduler; future watch collectors must do the same rather than
 another Hook or unbounded per-frame loop. Reflection capture temporarily pauses periodic
 object-snapshot replacement so its exact generation dependency cannot drift before
 validation/publication, then releases the retained plan on every terminal path.
+World capture also blocks replacement only while its exact Object/Type generation is
+being scanned and revalidated.
 The release DLL has no WinSock/WinHTTP/WinINet import or legacy HTTP marker according
 to the transport cutover contract.
 

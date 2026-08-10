@@ -5,6 +5,7 @@
 #include "EngineNameCodec.h"
 #include "ReflectionLayout.h"
 #include "TypeSnapshot.h"
+#include "WorldSnapshot.h"
 
 #include <memory>
 #include <string>
@@ -30,6 +31,8 @@ struct RuntimeProbes
 	std::shared_ptr<const TypeSnapshot> Types;
 	bool ObjectPropertyServiceEnabled = false;
 	bool FunctionCallServiceEnabled = false;
+	std::shared_ptr<const WorldSnapshot> World;
+	bool WorldInspectServiceEnabled = false;
 	bool NamedPipeListening = false;
 };
 
@@ -210,12 +213,35 @@ inline std::shared_ptr<const CapabilitySnapshot> BuildCoreCapabilities(
 		"No validated function-call domain command is registered",
 		{"engine.property_codec", "engine.type_snapshot", "objects.snapshot",
 			"game_thread.executor", "functions.handles"});
+	const bool worldSnapshotReady = probes.World
+		&& probes.World->SessionId.size() > 0
+		&& probes.World->ContextGeneration == context.Generation()
+		&& probes.World->Generation > 0
+		&& probes.Types
+		&& probes.World->ObjectSnapshotGeneration == probes.ObjectSnapshotGeneration
+		&& probes.World->TypeSnapshotGeneration == probes.Types->Generation()
+		&& probes.Types->ObjectSnapshotGeneration()
+			== probes.World->ObjectSnapshotGeneration;
+	builder.Define(
+		"engine.world_snapshot",
+		worldSnapshotReady,
+		probes.World ? "WORLD_SNAPSHOT_INVALID" : "WORLD_SNAPSHOT_NOT_PUBLISHED",
+		probes.World
+			? "The published current-world snapshot does not match the active context"
+			: "No immutable current-world snapshot has been published",
+		{"engine.world_global", "objects.snapshot", "engine.type_snapshot"});
 	builder.Define(
 		"world.inspect",
+		probes.WorldInspectServiceEnabled,
+		"WORLD_COMMAND_NOT_READY",
+		"Immutable current-world commands are not registered",
+		{"engine.world_snapshot", "objects.handles"});
+	builder.Define(
+		"world.details",
 		false,
-		"WORLD_COMMAND_NOT_IMPLEMENTED",
-		"Validated world inspection commands are not registered",
-		{"engine.world_global", "objects.handles"});
+		"WORLD_DETAILS_NOT_IMPLEMENTED",
+		"Actor details, components, and current-world shortcuts are not implemented",
+		{"world.inspect"});
 	builder.Define(
 		"world.mutate",
 		false,

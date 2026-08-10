@@ -142,6 +142,8 @@
 	<ClCompile Include="Runtime\ReflectionLayoutCapture.cpp" />
 	<ClCompile Include="Runtime\TypeSnapshot.cpp" />
 	<ClCompile Include="Runtime\TypeSnapshotCapture.cpp" />
+	<ClCompile Include="Runtime\WorldSnapshot.cpp" />
+	<ClCompile Include="Runtime\WorldSnapshotCapture.cpp" />
     <ClCompile Include="Runtime\SafeMemory.cpp" />
     <ClCompile Include="Runtime\VTableHook.cpp" />
 	<!-- Domain services -->
@@ -150,6 +152,7 @@
 	<ClCompile Include="Services\FunctionCallCommandService.cpp" />
 	<ClCompile Include="Services\ObjectPropertyCommandService.cpp" />
 	<ClCompile Include="Services\TypeCommandService.cpp" />
+	<ClCompile Include="Services\WorldCommandService.cpp" />
     <!-- Temporarily exclude zstd.c due to VS2026 STL compatibility issue -->
     <!-- <ClCompile Include="Utils\Compression\zstd.c" /> -->
     <ClCompile Include="Utils\Dumpspace\DSGen.cpp" />
@@ -239,6 +242,8 @@
 	<ClInclude Include="Runtime\TypeSnapshot.h" />
 	<ClInclude Include="Runtime\TypeSnapshotCapture.h" />
 	<ClInclude Include="Runtime\TypeMetadataContext.h" />
+	<ClInclude Include="Runtime\WorldSnapshot.h" />
+	<ClInclude Include="Runtime\WorldSnapshotCapture.h" />
     <ClInclude Include="Runtime\SafeMemory.h" />
     <ClInclude Include="Runtime\ShutdownCoordinator.h" />
     <ClInclude Include="Runtime\VTableHook.h" />
@@ -248,6 +253,7 @@
 	<ClInclude Include="Services\FunctionCallCommandService.h" />
 	<ClInclude Include="Services\ObjectPropertyCommandService.h" />
 	<ClInclude Include="Services\TypeCommandService.h" />
+	<ClInclude Include="Services\WorldCommandService.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />

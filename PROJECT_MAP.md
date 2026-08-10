@@ -25,7 +25,7 @@ UExplorer 是一个面向 Unreal Engine 的 **SDK Dump + 实时游戏内省工�
 └──────────────────────────────────────────────┘
 ```
 
-当前分支已完成 R4 原子通信切换并进入 R5.2。React -> Tauri `domain_request` -> Rust `DomainService` -> PID-scoped Named Pipe -> `CoreCommandService` 是唯一桌面主链路；release Core 不编译旧 HTTP/API，也不链接 WinSock。Object/Type 集合由 Host immutable SnapshotIndex 查询，详情由 `TypeCommandService` 读取 exact TypeSnapshot；`ObjectPropertyCommandService` 和 `FunctionCallCommandService` 分别执行稳定句柄属性读取与单目标函数调用。函数调用以 exact ObjectHandle + FunctionHandle + TypeSnapshot generation 为身份，用 owned `ParamFrame` 编码当前已开放的 trivial scalar/UObject 输入，在 witnessed game thread 再验证目标、函数 owner/signature 与对象参数后调用 ProcessEvent，并解码 out/inout/return。static 调用使用显式 CDO handle，没有 `use_game_thread` 或短名/index 执行入口。复杂生命周期参数、batch job、Memory/World/Watch/Hook/Blueprint/Dump 仍未完成。真实 UE profile、调用 round-trip、GC、Hook、目标规模和卸载证据仍以 `docs/SUPPORT_MATRIX.md` 为准，编译或 synthetic fixture 不改变支持声明。
+当前分支已完成 R4 原子通信切换并进入 R5.3。React -> Tauri `domain_request` -> Rust `DomainService` -> PID-scoped Named Pipe -> `CoreCommandService` 是唯一桌面主链路；release Core 不编译旧 HTTP/API，也不链接 WinSock。Object/Type 集合由 Host immutable SnapshotIndex 查询，详情由 `TypeCommandService` 读取 exact TypeSnapshot；`ObjectPropertyCommandService` 和 `FunctionCallCommandService` 分别执行稳定句柄属性读取与单目标函数调用。只读 World 链路由 `WorldSnapshotCapture` 在 exact Object/Type generation 上预筛候选、在 PostRender 预算内解析并复核 GWorld/Level/Actor 关系，再由 Worker 发布不可变 snapshot；`WorldCommandService` 提供 inspect、Level page 与 Actor page。函数复杂生命周期参数、batch job、Memory、World detail/components/shortcuts/transform、Watch/Hook/Blueprint/Dump 仍未完成。真实 UE profile、调用/World round-trip、streaming、GC、Hook、目标规模和卸载证据仍以 `docs/SUPPORT_MATRIX.md` 为准，编译或 synthetic fixture 不改变支持声明。
 
 ---
 
@@ -68,6 +68,8 @@ UExplorer/
 │   │   ├── TypeSnapshotCapture.*     #   分帧 record owner、精确依赖封口、Worker publication/retirement
 │   │   ├── TypeMetadataContext.h      #   类型采集所需 legacy discovery 结果的 immutable 子集
 │   │   ├── ObjectSnapshotTypeCandidateSource.* # exact snapshot/layout + SafeMemory 的生产类型源
+│   │   ├── WorldSnapshot.h/.cpp      #   current World/Level/Actor immutable generation 与严格 publish store
+│   │   ├── WorldSnapshotCapture.*    #   Worker 预筛/封口/publication + PostRender 分帧关系采集和复核
 │   │   ├── EngineVersionProbe.h/.cpp #   只扫描已验证 PE 可读节的版本标记探测
 │   │   ├── EngineSnapshot.h/.cpp     #   分段记录、validated publish、旧代 Worker retirement
 │   │   ├── EngineSnapshotCapture.*   #   budgeted capture/validate/publish + failed-set retirement
@@ -85,6 +87,7 @@ UExplorer/
 │   │   ├── TypeCommandService.h/.cpp #   worker-only exact-path immutable TypeSnapshot 详情/分页
 │   │   ├── ObjectPropertyCommandService.* # exact Handle/generation 的游戏线程属性读取
 │   │   ├── FunctionCallCommandService.* # exact Object/Function Handle 的单目标 ProcessEvent 调用
+│   │   ├── WorldCommandService.*     #   worker-only immutable World inspect/Level/Actor cursor query
 │   │   └── CoreStatusDiagnostics.*   #   只读诊断源
 │   ├── IPC/                           ★ Core Named Pipe RPC transport
 │   │   ├── Protocol.h                #   24-byte framing/有界协商 decoder/limits
@@ -570,6 +573,12 @@ Functions.tsx (四合一)
   ├─ hook events                    filtered Tauri Channel
   └─ batch/Hook/Blueprint operation -> R5 capability gate
 
+WorldBrowser.tsx
+  ├─ world.inspect / world.levels / world.actors.list  immutable WorldSnapshot + cursor
+  ├─ Actor 按 exact level.full_path 分组；Level/Actor page 显式 load-more
+  ├─ detail/components/shortcuts -> world.details capability gate
+  └─ transform update -> world.mutate capability gate
+
 Memory.tsx
   ├─ watch events -> filtered Tauri Channel
   └─ Memory/Watch operation -> R5 capability gate
@@ -842,7 +851,7 @@ Rust `DomainService` 的显式 operation registry 为准。
 | R2 CoreRuntime/能力模型 | **实现阶段完成** | Runtime、Context、Capability、Handle、Snapshot、SafeMemory |
 | R3 Named Pipe/Rust Host | **实现阶段完成** | 严格 IPC、SessionManager、EventHub、注入与跨语言 fixture |
 | R4 通信原子切换 | **已完成** | React 只走 Tauri；Core release 只走 Named Pipe，无网络栈 |
-| R5 领域正确性 | **当前阶段** | Object/Type/Memory/Call/World/Watch/Hook/Blueprint/Dump |
+| R5 领域正确性 | **当前阶段（R5.3）** | Property read、单目标 Call、只读 World 列表已接入；Memory/World detail/Watch/Hook/Blueprint/Dump 待办 |
 | R6 前端状态重构 | **未开始** | session store、query lifecycle、BigInt 地址、能力驱动 UI |
 | R7 发布硬化 | **未开始** | UE fixture、性能/压力、卸载、发布与文档门禁 |
 

@@ -24,6 +24,9 @@ EngineFacade::EngineFacade(
 		m_Context ? m_Context->Generation() : 0),
 	  m_Types(
 		m_SessionId,
+		m_Context ? m_Context->Generation() : 0),
+	  m_Worlds(
+		m_SessionId,
 		m_Context ? m_Context->Generation() : 0)
 {
 }
@@ -253,8 +256,41 @@ bool EngineFacade::ConfigureSnapshotCapture(IEngineSnapshotSource& source) noexc
 	}
 }
 
+bool EngineFacade::ConfigureWorldSnapshotCapture() noexcept
+{
+	if (!IsConfigured()
+		|| m_WorldCapture
+		|| !m_Context->HasValidatedOffset("gworld")
+		|| !m_Context->HasValidatedOffset("uobject.outer")
+		|| !m_Worlds.IsConfigured()
+		|| m_Worlds.IsStopped())
+	{
+		return false;
+	}
+	try
+	{
+		auto capture = std::make_unique<WorldSnapshotCapture>(
+			m_Context,
+			m_SessionId,
+			m_IdentitySource,
+			m_Snapshots,
+			m_Types,
+			m_Worlds);
+		if (!capture->IsConfigured())
+			return false;
+		m_WorldCapture = std::move(capture);
+		return true;
+	}
+	catch (...)
+	{
+		return false;
+	}
+}
+
 bool EngineFacade::Stop(const std::chrono::milliseconds timeout)
 {
+	if (m_WorldCapture && !m_WorldCapture->StopAndDrain(timeout))
+		return false;
 	if (m_TypeCapture && !m_TypeCapture->StopAndDrain(timeout))
 		return false;
 	if (m_ReflectionCapture && !m_ReflectionCapture->StopAndDrain(timeout))
@@ -263,9 +299,11 @@ bool EngineFacade::Stop(const std::chrono::milliseconds timeout)
 		return false;
 	std::lock_guard lock(m_ReflectionMutex);
 	m_TypeCapture.reset();
+	m_WorldCapture.reset();
 	m_ReflectionCapture.reset();
 	m_SnapshotCapture.reset();
 	m_Types.Stop();
+	m_Worlds.Stop();
 	m_Reflection.store({}, std::memory_order_release);
 	m_Snapshots.Stop();
 	return true;
