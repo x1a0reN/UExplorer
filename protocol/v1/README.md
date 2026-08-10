@@ -190,6 +190,7 @@ The v1 command registry is explicit. Unknown operations return
 | `objects.handle.issue` | `{"index": int32}` | PostRender game-thread identity re-read |
 | `functions.handle.issue` | `{"index": int32}` | PostRender game-thread function/owner/path re-read |
 | `objects.property.read` | `{"object": object_handle, "type_snapshot_generation": uint53, "declaring_type_path": full_path, "property_name": exact_name, "array_index": 0..1023}` | Game-thread read from the exact object/type/reflection generation |
+| `call.invoke` | `{"target": object_handle, "function": function_handle, "type_snapshot_generation": uint53, "function_path": full_path, "arguments": {name: {kind, value}}}` | Single ProcessEvent call after exact game-thread identity/dependency revalidation |
 | `types.classes.get` | `{"path": full_path}` | Worker-safe immutable class summary |
 | `types.classes.fields` | `{"path": full_path, "scope": "direct" \| "include_inherited", "cursor": null \| type_cursor, "limit": 1..128}` | Worker-safe immutable field page |
 | `types.classes.functions` | same member-page shape | Worker-safe immutable function page |
@@ -224,6 +225,16 @@ type name, or inferred owner. The object handle must be an exact member of the
 current immutable ObjectSnapshot; the declaring type and property must resolve in
 the matching TypeSnapshot generation. Execution revalidates the handle and all
 snapshot/codec dependencies on the witnessed game thread before decoding.
+
+`call.invoke` never accepts a target index, function short name, caller address, or
+`use_game_thread` option. Input and inout parameters are mandatory; output and return
+parameters cannot be supplied. Each argument envelope repeats the exact reflected kind.
+The initial R5.2 codec accepts bool, signed/unsigned integers as canonical decimal
+strings, finite float/double strings, and null or stable UObject handles. Core owns and
+zero-initializes the exact reflected parameter frame, revalidates target/function/object
+argument handles at execution, and serializes out/inout/return values. Static calls use
+the same command with an explicit CDO handle. Non-trivial UE value lifetimes and batch
+jobs are not silently approximated and remain unavailable.
 
 The shared Rust types live in `protocol/rust`; the Host must deserialize pages with
 unknown-field rejection. `frontend/src-tauri/src/session/snapshot_cache.rs` validates

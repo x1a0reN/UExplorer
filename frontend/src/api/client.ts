@@ -1,7 +1,6 @@
 import type {
   ApiClientSettings,
   ApiResponse,
-  BatchFunctionCallResultData,
   BlueprintBytecodeData,
   BlueprintDecompileData,
   ClassCDOResponse,
@@ -19,6 +18,8 @@ import type {
   EnumItem,
   EventBridgeDiagnostics,
   FunctionCallResultData,
+  FunctionCallArgument,
+  FunctionDetail,
   HookListResponse,
   HookLogResponse,
   HostProcessInfo,
@@ -374,7 +375,7 @@ class UExplorerApi {
     return this.command('types.classes.functions', { path, scope, cursor, limit });
   }
 
-  async getFunctionByPath(path: string): Promise<ApiResponse<ClassFunction>> {
+  async getFunctionByPath(path: string): Promise<ApiResponse<FunctionDetail>> {
     return this.command('types.functions.get', { path });
   }
 
@@ -523,51 +524,17 @@ class UExplorerApi {
     return this.command('memory.pointer_chain.resolve', { base, offsets });
   }
 
-  async callFunction(
-    objectIndex: number,
-    functionName: string,
-    params: Record<string, unknown> = {},
-    useGameThread = true,
+  async invokeFunction(
+    target: StableObjectHandle,
+    fn: FunctionDetail,
+    argumentsByName: Record<string, FunctionCallArgument>,
   ): Promise<ApiResponse<FunctionCallResultData>> {
     return this.command('call.invoke', {
-      object_index: objectIndex,
-      function_name: functionName,
-      params,
-      use_game_thread: useGameThread,
-    });
-  }
-
-  async callStaticFunction(
-    functionName: string,
-    options: {
-      className?: string;
-      classIndex?: number;
-      objectIndex?: number;
-      params?: Record<string, unknown>;
-      useGameThread?: boolean;
-    },
-  ): Promise<ApiResponse<FunctionCallResultData>> {
-    return this.command('call.static', {
-      function_name: functionName,
-      class_name: options.className,
-      class_index: options.classIndex,
-      object_index: options.objectIndex,
-      params: options.params ?? {},
-      use_game_thread: options.useGameThread ?? true,
-    });
-  }
-
-  async callFunctionBatch(
-    objectIndices: number[],
-    functionName: string,
-    params: Record<string, unknown> = {},
-    useGameThread = true,
-  ): Promise<ApiResponse<BatchFunctionCallResultData>> {
-    return this.command('call.batch', {
-      object_indices: objectIndices,
-      function_name: functionName,
-      params,
-      use_game_thread: useGameThread,
+      target,
+      function: fn.handle,
+      type_snapshot_generation: fn.type_snapshot_generation,
+      function_path: fn.full_path,
+      arguments: argumentsByName,
     });
   }
 

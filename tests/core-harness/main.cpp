@@ -28,6 +28,7 @@
 #include "Runtime/ObjectArraySnapshotSource.h"
 #include "Runtime/ObjectSnapshotReflectionCandidateSource.h"
 #include "Runtime/ObjectSnapshotTypeCandidateSource.h"
+#include "Runtime/ParamFrame.h"
 #include "Runtime/PropertyCodec.h"
 #include "Runtime/ReflectionLayout.h"
 #include "Runtime/ReflectionLayoutCapture.h"
@@ -689,7 +690,9 @@ namespace
 		const auto withoutPipe = BuildCoreCapabilities(*context, probes);
 		Require(!withoutPipe->IsAvailable("transport.named_pipe"), "Missing pipe listener was advertised");
 		Require(withoutPipe->IsAvailable("objects.snapshot"), "Published immutable snapshot was unavailable");
-		Require(withoutPipe->IsAvailable("call.invoke"), "Validated call dependencies were rejected");
+		Require(
+			!withoutPipe->IsAvailable("call.invoke"),
+			"Function invocation ignored the missing type snapshot and property codec");
 		const CapabilityStatus* reflection = withoutPipe->Find("engine.reflection");
 		Require(
 			reflection
@@ -1033,6 +1036,40 @@ namespace
 			integerValue.State == PropertyValueState::Ok
 				&& std::get<std::int64_t>(integerValue.Scalar) == -17,
 			"Signed scalar property decoding changed its width or value");
+		std::array<std::byte, sizeof(std::int32_t)> encodedInteger{};
+		Require(
+			codec.EncodeOwned(encodedInteger, *intDescriptor, std::int64_t{125}).Ok(),
+			"Owned parameter codec rejected an exact int32 input");
+		std::int32_t encodedIntegerValue = 0;
+		std::memcpy(&encodedIntegerValue, encodedInteger.data(), sizeof(encodedIntegerValue));
+		PropertyDescriptor wrongWidthInteger = *intDescriptor;
+		wrongWidthInteger.Size = sizeof(std::int64_t);
+		std::array<std::byte, sizeof(std::int64_t)> wrongWidthDestination{};
+		Require(
+			encodedIntegerValue == 125
+				&& codec.EncodeOwned(
+					wrongWidthDestination,
+					wrongWidthInteger,
+					std::int64_t{125}).Error == PropertyEncodeError::DescriptorInvalid,
+			"Owned parameter codec ignored the reflected scalar width");
+		ReflectedProperty frameProperty{
+			.Name = "Health",
+			.TypeName = "int32",
+			.Kind = PropertyKind::Int32,
+			.Offset = 0,
+			.Size = sizeof(std::int32_t),
+			.ArrayDim = 1,
+			.State = ReflectedMemberState::Supported,
+			.Descriptor = intDescriptor
+		};
+		ParamFrame frame;
+		Require(
+			ParamFrame::Create(sizeof(std::int32_t), frame).Ok()
+				&& frame.SetInput(frameProperty, std::int64_t{-33}, codec).Ok(),
+			"Owned ProcessEvent frame rejected a bounded trivial input");
+		std::int32_t frameValue = 0;
+		std::memcpy(&frameValue, frame.Data(), sizeof(frameValue));
+		Require(frameValue == -33, "Owned ProcessEvent frame encoded the wrong scalar value");
 		PropertyCodecProfile scalarProfile{
 			.Validated = true,
 			.ReflectionLayoutFingerprint = 0x61616161,

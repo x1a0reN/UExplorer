@@ -1,0 +1,42 @@
+{
+  "operation": "call.invoke",
+  "session_id": "fixture-session-4242",
+  "timeout_ms": 5000,
+  "data": {
+    "target": {
+      "session_id": "fixture-session-4242",
+      "context_generation": 7,
+      "index": 42,
+      "serial": 142,
+      "address": "0x00007FF612341000",
+      "class_fingerprint": "A123456789ABCDEF"
+    },
+    "function": {
+      "function": {
+        "session_id": "fixture-session-4242",
+        "context_generation": 7,
+        "index": 321,
+        "serial": 654,
+        "address": "0x00007FF612345678",
+        "class_fingerprint": "0123456789ABCDEF"
+      },
+      "owner": {
+        "session_id": "fixture-session-4242",
+        "context_generation": 7,
+        "index": 111,
+        "serial": 222,
+        "address": "0x00007FF612340000",
+        "class_fingerprint": "FEDCBA9876543210"
+      },
+      "full_path": "Function fname:10:0.fname:20:0.fname:30:0",
+      "signature_fingerprint": "1122334455667788"
+    },
+    "type_snapshot_generation": 9,
+    "function_path": "/Script/Fixture.Actor.SetHealth",
+    "arguments": {
+      "Health": { "kind": "int32", "value": "125" },
+      "Enabled": { "kind": "bool", "value": true },
+      "Related": { "kind": "object", "value": null }
+    }
+  }
+}

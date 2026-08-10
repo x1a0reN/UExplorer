@@ -83,6 +83,9 @@ private:
 	CoreCommandResponse ExecuteObjectPropertyRead(
 		const CoreCommandRequest& request,
 		const GameThreadQueuedCallback& onGameThreadQueued);
+	CoreCommandResponse ExecuteFunctionCall(
+		const CoreCommandRequest& request,
+		const GameThreadQueuedCallback& onGameThreadQueued);
 	CoreCommandResponse ExecuteHandleIssue(
 		const CoreCommandRequest& request,
 		bool functionHandle,

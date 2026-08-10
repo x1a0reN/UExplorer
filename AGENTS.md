@@ -32,7 +32,7 @@ UExplorerCore.dll（目标进程内）
 
 - React 领域调用只进入 `frontend/src/api/client.ts`，并调用 Tauri `domain_request`；事件只通过调用方持有的 Tauri Channel。
 - Rust `DomainService` 使用显式 operation 白名单，绑定明确 target PID 或 active session。未知 operation 在接触 session 前返回 `OPERATION_NOT_SUPPORTED`。
-- 当前 Host 已实现 status、immutable snapshot-backed Object/Type 集合查询、exact-path Class/Struct/Enum/Function 详情，以及 exact stable-handle `objects.property.read`。Core 会从一代稳定 Object Snapshot 自动采集 witnessed ReflectionLayout，再由生产 `ObjectSnapshotTypeCandidateSource` 从 exact Object/Reflection generation 采集完整类型/函数结构和 flat property descriptor；两者都由 Main 接入共享 PostRender scheduler。类型详情只读不可变 TypeSnapshot；属性读取则携带 exact ObjectHandle、TypeSnapshot generation、declaring full path、exact property name 和 array index，在游戏线程重新验证依赖与身份。当前生产 baseline codec 只开放 scalar/bool/FName/UObject；FString/FText/Weak/Soft/Struct/Array/Map/Set、enum/bytecode descriptor、property write，以及 Memory、Call、World、Watch、Hook、Blueprint、Dump 仍待实现或补充真实 layout witness，不得回退旧实现。
+- 当前 Host 已实现 status、immutable snapshot-backed Object/Type 集合查询、exact-path Class/Struct/Enum/Function 详情、exact stable-handle `objects.property.read`，以及 R5.2 的单目标 `call.invoke`。Core 会从一代稳定 Object Snapshot 自动采集 witnessed ReflectionLayout，再由生产 `ObjectSnapshotTypeCandidateSource` 从 exact Object/Reflection generation 采集完整类型/函数结构和 flat property descriptor；两者都由 Main 接入共享 PostRender scheduler。函数调用只接受 exact ObjectHandle、FunctionHandle、TypeSnapshot generation、完整显示路径和按参数名/反射 kind 编码的参数；Core 用 owned `ParamFrame` 在 witnessed game thread 再验证全部句柄后调用 ProcessEvent。当前输入只开放 bool、整数、float/double、UObject/null，输出还可解码 FName；static 调用由前端显式取得 CDO handle。FString/FText/Weak/Soft/Struct/Array/Map/Set 的调用生命周期、enum、batch job、真实 UE round-trip，以及 property write、Memory、World、Watch、Hook、Blueprint、Dump 仍待实现，不得回退旧实现。
 - Core release project 只运行 PID-scoped Named Pipe；不编译 `Dumper/Server/HttpServer.cpp` 和 `Dumper/API/*.cpp`，不链接 `ws2_32`。旧 HTTP/SSE/WebSocket/API 源码保留为历史证据，不是兼容层。
 - Core 在 Pipe bind 后安装生产 `PostRenderHook`，发布事实 capability/Ready 后才开放 admissions。
 - 当前没有外部 HTTP/WebSocket Gateway，也没有 `connection.ini`、`runtime.ini`、port 或 Token 运行依赖。
@@ -60,6 +60,7 @@ UExplorerCore.dll（目标进程内）
 - `Dumper/Runtime/`：CoreRuntime、EngineContext、Capability、SafeMemory、Handle、Snapshot、GameThread、Hook owner；`ObjectSnapshotReflectionCandidateSource.*` 是唯一生产 reflection candidate 边界，`ObjectSnapshotTypeCandidateSource.*` 是 exact snapshot/layout 上的生产结构类型源，`TypeSnapshotCapture.*` 只负责通用分帧、依赖封口与 Worker publication。不得重新接入 `Off::InitReflection()` 或 legacy wrapper 作为 fallback。
 - `Dumper/Services/CoreCommandService.*`：transport-neutral Core command 总入口、lease/capability/snapshot gate。
 - `Dumper/Services/TypeCommandService.*`：worker-only immutable TypeSnapshot 详情服务；执行身份必须是 exact full path，成员 scope 必须显式，分页必须使用 session/context/generation/query-bound cursor。
+- `Dumper/Services/FunctionCallCommandService.*` 与 `Dumper/Runtime/ParamFrame.*`：单目标 ProcessEvent 调用、精确参数 schema、owned frame 和 output decode；复杂生命周期类型与 batch 未开放。
 - `Dumper/IPC/NamedPipeRpcServer.*`：唯一 release transport。
 - `Dumper/Engine/` 与 `Dumper/Generator/`：Dumper-7 派生的 UE 模型和生成器；仍含待迁移的版本/布局假设。
 - `Dumper/API/` 与 `Dumper/Server/`：非 release legacy archive。不得从 Main、Host 或 React 恢复可达性。

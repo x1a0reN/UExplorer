@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -228,6 +229,27 @@ struct PropertyDecodeOptions
 	IPropertyReferenceResolver* ReferenceResolver = nullptr;
 };
 
+enum class PropertyEncodeError : std::uint8_t
+{
+	None,
+	CodecNotConfigured,
+	KindUnavailable,
+	DescriptorInvalid,
+	DestinationTooSmall,
+	ValueTypeMismatch,
+	ValueOutOfRange
+};
+
+const char* ToString(PropertyEncodeError error) noexcept;
+
+struct PropertyEncodeResult
+{
+	PropertyEncodeError Error = PropertyEncodeError::None;
+	std::string Message;
+
+	bool Ok() const noexcept { return Error == PropertyEncodeError::None; }
+};
+
 // Decodes only from immutable descriptors/profiles through SafeMemory. It does
 // not consult mutable Off/Settings globals or legacy UE wrapper objects.
 class PropertyCodec final
@@ -239,7 +261,12 @@ public:
 
 	bool IsConfigured() const noexcept { return m_Configured; }
 	bool Supports(PropertyKind kind) const noexcept;
+	bool SupportsInput(PropertyKind kind) const noexcept;
 	const PropertyCodecProfile& Profile() const noexcept { return m_Profile; }
+	PropertyEncodeResult EncodeOwned(
+		std::span<std::byte> destination,
+		const PropertyDescriptor& descriptor,
+		const PropertyScalar& value) const noexcept;
 	PropertyValue Decode(
 		std::uintptr_t address,
 		const PropertyDescriptor& descriptor,

@@ -561,13 +561,15 @@
       "status": "verified",
       "verification": [
         "2026-08-09: every ProcessEvent call uses GameThread::Submit and unavailable scheduling returns an explicit error",
-        "Core safety contract forbids the direct-worker fallback"
+        "Core safety contract forbids the direct-worker fallback",
+        "2026-08-10: the production call.invoke route has no direct-worker branch; it always enters GameThreadExecutor and invokes ProcessEvent only from the currently processing witnessed pump task"
       ]
     },
     "CALL-002": {
       "status": "verified",
       "verification": [
-        "2026-08-09: missing/invalid parameter struct size is rejected and each scalar property range is checked before access"
+        "2026-08-09: missing/invalid parameter struct size is rejected and each scalar property range is checked before access",
+        "2026-08-10: ParamFrame allocates the exact TypeSnapshot parameter size, rejects frames above 16 MiB, and validates descriptor width plus offset/size before encoding or decoding every field"
       ]
     },
 	"CALL-003": {
@@ -575,27 +577,30 @@
 	  "verification": [
 		"2026-08-09: PropertyCodec now provides bounded FString/FName/FText/Object/Weak/Soft/Struct/Array/Map/Set/Enum decode primitives and stable ObjectHandle references",
 		"2026-08-10: PropertyCodec profiles carry a non-zero ReflectionLayout fingerprint; EngineFacade atomically upgrades a witnessed layout-only snapshot with a matching codec, and reflection/codec capabilities are independently derived without forgeable booleans",
-		"ParamFrame construction/destruction, input encoding, and function round-trip fixtures remain pending"
+		"2026-08-10: owned ParamFrame construction and exact-width bool/integer/float/double/UObject input encoding are implemented; only zero-constructible, trivially destructible kinds are admitted",
+		"Non-trivial FString/FText/Struct/container construction and destruction plus a real UE function round-trip fixture remain pending"
 	  ]
 	},
     "CALL-004": {
       "status": "verified",
       "verification": [
-        "2026-08-09: required input and inout parameters are enforced and output/return fields are handled after execution"
+        "2026-08-09: required input and inout parameters are enforced and output/return fields are handled after execution",
+        "2026-08-10: call.invoke derives directions from the immutable TypeSnapshot, rejects missing/unknown/output inputs, and decodes output/inout/return values from the invoked owned frame"
       ]
     },
     "CALL-005": {
-      "status": "in_progress",
+      "status": "verified",
       "verification": [
         "2026-08-09: use_game_thread=false is rejected on all legacy routes",
-        "Field removal from the v2 IPC schema remains pending"
+        "2026-08-10: the only release call.invoke schema and TypeScript client contain no thread-selection field; Core always chooses GameThreadExecutor"
       ]
     },
     "CALL-006": {
       "status": "in_progress",
       "verification": [
         "2026-08-09: legacy batch is capped at 64 items",
-        "Single total deadline and cancellation remain pending"
+        "2026-08-10: legacy call.batch is unreachable from the release Host/client; only single-target call.invoke is registered",
+        "A bounded multi-target job with one total deadline and cancellation remains pending"
       ]
     },
     "CALL-007": {
@@ -607,7 +612,8 @@
         "2026-08-09: functions.handle.issue is integrated through the game-thread CoreCommandService and rejects caller-supplied identity fields",
         "2026-08-09: functions.handles is a dedicated capability requiring the complete immutable owner/path/signature offset profile; call.invoke depends on it separately from object handles",
         "2026-08-09: objects.handle.issue and functions.handle.issue are wired through real Named Pipe request/ticket execution; the fixture proves queued handle cancellation",
-        "Actual handle-validated call invocation and real UE fixtures remain pending"
+        "2026-08-10: call.invoke requires exact ObjectSnapshot/TypeSnapshot membership and revalidates the target, function owner/path/signature, and every UObject argument on the witnessed game thread immediately before ProcessEvent",
+        "A real UE fixture function round-trip and GC churn validation remain pending"
       ]
     },
     "MEM-001": {

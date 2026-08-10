@@ -85,7 +85,7 @@ bool GameThreadExecutor::Enable(const ProcessEventFn processEvent)
 		return false;
 	}
 
-	m_ProcessEvent = processEvent;
+	m_ProcessEvent.store(processEvent, std::memory_order_release);
 	m_PumpThreadId.store(0, std::memory_order_release);
 	m_PumpThreadMismatch.store(false, std::memory_order_release);
 	m_LastPumpTickMonotonicUs.store(0, std::memory_order_release);
@@ -121,7 +121,7 @@ bool GameThreadExecutor::DisableAndDrain(const int timeoutMs)
 			return !m_Processing.load(std::memory_order_acquire) && m_Queue.empty();
 		});
 	if (drained)
-		m_ProcessEvent = nullptr;
+		m_ProcessEvent.store(nullptr, std::memory_order_release);
 	return drained;
 }
 
@@ -138,7 +138,8 @@ GameThreadQueueResult GameThreadExecutor::Enqueue(
 		return GameThreadQueueResult::Invalid;
 
 	std::lock_guard<std::mutex> lock(m_Mutex);
-	if (!m_Enabled.load(std::memory_order_acquire) || !m_ProcessEvent)
+	if (!m_Enabled.load(std::memory_order_acquire)
+		|| !m_ProcessEvent.load(std::memory_order_acquire))
 		return GameThreadQueueResult::Disabled;
 	const std::size_t pending = m_Queue.size()
 		+ (m_Processing.load(std::memory_order_acquire) ? 1U : 0U);
@@ -273,7 +274,8 @@ GameThreadSubmitResult GameThreadExecutor::SubmitProcessEvent(
 	GameThreadTicket ticket;
 	{
 		std::lock_guard<std::mutex> lock(m_Mutex);
-		if (!m_Enabled.load(std::memory_order_acquire) || !m_ProcessEvent)
+		const ProcessEventFn processEvent = m_ProcessEvent.load(std::memory_order_acquire);
+		if (!m_Enabled.load(std::memory_order_acquire) || !processEvent)
 			return GameThreadSubmitResult::Disabled;
 		const std::size_t pending = m_Queue.size()
 			+ (m_Processing.load(std::memory_order_acquire) ? 1U : 0U);
@@ -281,7 +283,7 @@ GameThreadSubmitResult GameThreadExecutor::SubmitProcessEvent(
 			return GameThreadSubmitResult::QueueBusy;
 
 		work = std::make_shared<ProcessEventWork>(
-			m_ProcessEvent,
+			processEvent,
 			object,
 			function,
 			params);
@@ -297,6 +299,24 @@ GameThreadSubmitResult GameThreadExecutor::SubmitProcessEvent(
 	if (result == GameThreadSubmitResult::Completed)
 		params = work->Params();
 	return result;
+}
+
+bool GameThreadExecutor::InvokeProcessEventFromCurrentTask(
+	void* object,
+	void* function,
+	void* params)
+{
+	if (!object || !function
+		|| !m_Processing.load(std::memory_order_acquire)
+		|| !IsCurrentPumpThread())
+	{
+		return false;
+	}
+	const ProcessEventFn processEvent = m_ProcessEvent.load(std::memory_order_acquire);
+	if (!m_Enabled.load(std::memory_order_acquire) || !processEvent)
+		return false;
+	processEvent(object, function, params);
+	return true;
 }
 
 GameThreadSubmitResult GameThreadExecutor::SubmitPrepared(

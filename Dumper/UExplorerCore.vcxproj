@@ -134,7 +134,8 @@
 	<ClCompile Include="Runtime\ObjectArraySnapshotSource.cpp" />
 	<ClCompile Include="Runtime\ObjectSnapshotReflectionCandidateSource.cpp" />
 	<ClCompile Include="Runtime\ObjectSnapshotTypeCandidateSource.cpp" />
-    <ClCompile Include="Runtime\ObjectHandle.cpp" />
+	<ClCompile Include="Runtime\ObjectHandle.cpp" />
+	<ClCompile Include="Runtime\ParamFrame.cpp" />
 	<ClCompile Include="Runtime\PostRenderHook.cpp" />
 	<ClCompile Include="Runtime\PropertyCodec.cpp" />
 	<ClCompile Include="Runtime\ReflectionLayout.cpp" />
@@ -146,6 +147,7 @@
 	<!-- Domain services -->
 	<ClCompile Include="Services\CoreCommandService.cpp" />
 	<ClCompile Include="Services\CoreStatusDiagnostics.cpp" />
+	<ClCompile Include="Services\FunctionCallCommandService.cpp" />
 	<ClCompile Include="Services\ObjectPropertyCommandService.cpp" />
 	<ClCompile Include="Services\TypeCommandService.cpp" />
     <!-- Temporarily exclude zstd.c due to VS2026 STL compatibility issue -->
@@ -229,6 +231,7 @@
     <ClInclude Include="Runtime\ObjectHandle.h" />
 	<ClInclude Include="Runtime\ObjectIdentityContext.h" />
 	<ClInclude Include="Runtime\ObjectSnapshotIdentitySource.h" />
+	<ClInclude Include="Runtime\ParamFrame.h" />
 	<ClInclude Include="Runtime\PostRenderHook.h" />
 	<ClInclude Include="Runtime\PropertyCodec.h" />
 	<ClInclude Include="Runtime\ReflectionLayout.h" />
@@ -242,6 +245,7 @@
 	<ClInclude Include="Services\CoreCommandService.h" />
 	<ClInclude Include="Services\CoreCommandServiceAccess.h" />
 	<ClInclude Include="Services\CoreStatusDiagnostics.h" />
+	<ClInclude Include="Services\FunctionCallCommandService.h" />
 	<ClInclude Include="Services\ObjectPropertyCommandService.h" />
 	<ClInclude Include="Services\TypeCommandService.h" />
   </ItemGroup>

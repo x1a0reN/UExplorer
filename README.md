@@ -43,8 +43,9 @@ injection-to-Core-Ready gating, cross-language Core/Host fixtures, and a live x6
 injection matrix are implemented. React domain calls now use one Tauri
 `domain_request` command and event consumers use caller-owned Tauri channels. The Host
 operation registry serves status, immutable-snapshot object/type queries, exact type
-details, and stable-handle property reads; domains not yet implemented return a stable
-capability error instead of reaching legacy code.
+details, stable-handle property reads, and the bounded single-target `call.invoke`;
+domains not yet implemented return a stable capability error instead of reaching
+legacy code.
 Baseline Core initialization is also separated from optional reflection/generator
 activation: unknown property, FText, GWorld, or generator layouts cannot make the pipe
 runtime pretend to be unsupported or execute ProcessEvent from the startup worker.
@@ -106,6 +107,15 @@ array index. It rechecks the complete dependency set and object identity on the 
 game thread before decoding. Rust forwards the operation explicitly, while the React
 client derives request identity from snapshot/type pages and never sends a bare index or
 caller-supplied address.
+`FunctionCallCommandService` accepts one exact target `ObjectHandle`, one exact
+`FunctionHandle`, the matching TypeSnapshot generation, and arguments keyed by exact
+reflected parameter names. An owned zeroed `ParamFrame` currently encodes only trivial
+bool/integer/float/double/UObject inputs. The witnessed game-thread task revalidates the
+target, function owner/path/signature, and every object argument immediately before
+ProcessEvent, then decodes out/inout/return fields from the same owned frame. Static
+calls use an explicit CDO handle; the protocol has no caller-controlled thread switch.
+Non-trivial FString/container/struct lifetimes, enum input, batch jobs, and real UE
+round-trip evidence remain unavailable.
 PostRender now drives one `GameThreadFrameScheduler` rather than giving the object
 snapshot producer an exclusive callback slot. The scheduler supports at most eight
 clients, shares a 32-unit frame budget in four-unit round-robin quanta, stops further

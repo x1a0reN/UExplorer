@@ -319,6 +319,12 @@ export interface ClassFunction {
   inheritance_depth: number;
 }
 
+export interface FunctionDetail extends ClassFunction {
+  type_snapshot_generation: number;
+  object_snapshot_generation: number;
+  context_generation: number;
+}
+
 export interface TypeDefaultObjectMetadata {
   state: 'not_applicable' | 'present' | 'not_constructed' | 'unavailable';
   handle: StableObjectHandle | null;
@@ -602,28 +608,25 @@ export interface HookLogResponse {
   entries: HookLogEntry[];
 }
 
+export type FunctionCallArgument =
+  | { kind: 'bool'; value: boolean }
+  | { kind: 'int8' | 'int16' | 'int32' | 'int64'; value: string }
+  | { kind: 'uint8' | 'uint16' | 'uint32' | 'uint64'; value: string }
+  | { kind: 'float' | 'double'; value: string }
+  | { kind: 'object'; value: StableObjectHandle | null };
+
 export interface FunctionCallResultData {
-  function: string;
-  called: boolean;
-  object_index?: number;
-  class?: string;
-  is_static: boolean;
-  result: Record<string, unknown>;
-}
-
-export interface BatchFunctionCallItem {
-  object_index: number;
-  called: boolean;
-  result?: Record<string, unknown>;
-  error?: string;
-}
-
-export interface BatchFunctionCallResultData {
-  function: string;
-  requested: number;
-  success: number;
-  failed: number;
-  items: BatchFunctionCallItem[];
+  target: StableObjectHandle;
+  function: StableFunctionHandle;
+  function_path: string;
+  type_snapshot_generation: number;
+  object_snapshot_generation: number;
+  invoked: true;
+  outputs: Array<{
+    name: string;
+    direction: 'output' | 'inout' | 'return';
+    value: unknown;
+  }>;
 }
 
 export interface BlueprintDecompileData {

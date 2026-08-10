@@ -83,6 +83,76 @@
         "array_index": { "type": "integer", "minimum": 0, "maximum": 1023 }
       }
     },
+    "callArgument": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "value"],
+          "properties": {
+            "kind": { "const": "bool" },
+            "value": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "value"],
+          "properties": {
+            "kind": { "enum": ["int8", "int16", "int32", "int64"] },
+            "value": { "type": "string", "pattern": "^(0|-?[1-9][0-9]*)$", "maxLength": 32 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "value"],
+          "properties": {
+            "kind": { "enum": ["uint8", "uint16", "uint32", "uint64"] },
+            "value": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 32 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "value"],
+          "properties": {
+            "kind": { "enum": ["float", "double"] },
+            "value": { "type": "string", "minLength": 1, "maxLength": 128 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "value"],
+          "properties": {
+            "kind": { "const": "object" },
+            "value": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/objectHandle" }] }
+          }
+        }
+      ]
+    },
+    "callInvokeData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target", "function", "type_snapshot_generation", "function_path", "arguments"],
+      "properties": {
+        "target": { "$ref": "#/$defs/objectHandle" },
+        "function": { "$ref": "#/$defs/functionHandle" },
+        "type_snapshot_generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "function_path": { "$ref": "#/$defs/typePath" },
+        "arguments": {
+          "type": "object",
+          "maxProperties": 128,
+          "propertyNames": { "minLength": 1, "maxLength": 1024 },
+          "additionalProperties": { "$ref": "#/$defs/callArgument" }
+        }
+      }
+    },
     "snapshotCursor": {
       "type": "object",
       "additionalProperties": false,
@@ -663,6 +733,15 @@
             "required": ["operation"]
           },
           "then": { "properties": { "data": { "$ref": "#/$defs/propertyReadData" } } }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation": { "const": "call.invoke" }
+            },
+            "required": ["operation"]
+          },
+          "then": { "properties": { "data": { "$ref": "#/$defs/callInvokeData" } } }
         },
         {
           "if": {

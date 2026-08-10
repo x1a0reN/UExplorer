@@ -1,12 +1,20 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Search, Filter, TerminalSquare, Play, Info, List, History, RefreshCw, Cpu } from 'lucide-react';
 import { t } from '../i18n';
-import api, { type ClassFunction, type HookItem, type HookLogEntry, type ObjectDetail, type ObjectItem } from '../api';
+import api, {
+  type FunctionCallArgument,
+  type FunctionDetail,
+  type HookItem,
+  type HookLogEntry,
+  type ObjectDetail,
+  type ObjectItem,
+  type StableObjectHandle,
+} from '../api';
 
 type FunctionTab = 'Info' | 'Parameters' | 'Call' | 'Hook' | 'Decompile';
 type FlagTab = 'All' | 'Native' | 'Blueprint';
 type FunctionsViewMode = 'function' | 'hookManager';
-type CallMode = 'instance' | 'static' | 'batch';
+type CallMode = 'instance' | 'static';
 
 interface FunctionsProps {
   viewMode?: FunctionsViewMode;
@@ -18,35 +26,6 @@ interface FunctionItem {
   name: string;
   className: string;
   address: string;
-}
-
-function parseInputValue(raw: string): unknown {
-  const trimmed = raw.trim();
-  if (trimmed === '') return '';
-  if (trimmed === 'true') return true;
-  if (trimmed === 'false') return false;
-  if (trimmed === 'null') return null;
-  if (!Number.isNaN(Number(trimmed))) return Number(trimmed);
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    return trimmed;
-  }
-}
-
-function parseObjectIndices(raw: string): number[] {
-  const seen = new Set<number>();
-  raw
-    .split(/[,\s]+/)
-    .map((v) => v.trim())
-    .filter(Boolean)
-    .forEach((v) => {
-      const parsed = Number(v);
-      if (!Number.isNaN(parsed) && parsed >= 0) {
-        seen.add(parsed);
-      }
-    });
-  return [...seen];
 }
 
 function extractFunctionParts(detail: ObjectDetail | null): { classPath: string; functionName: string; functionPath: string } {
@@ -66,6 +45,17 @@ function hasFunctionFlag(flags: string, mask: bigint): boolean {
   return (BigInt(flags) & mask) !== 0n;
 }
 
+function parseObjectIndex(raw: string, label: string): number {
+  if (!/^(0|[1-9][0-9]*)$/.test(raw)) {
+    throw new Error(`${label} must be a canonical decimal object index`);
+  }
+  const index = Number(raw);
+  if (!Number.isSafeInteger(index) || index > 2_147_483_647) {
+    throw new Error(`${label} is outside the supported object-index range`);
+  }
+  return index;
+}
+
 export default function Functions({ viewMode = 'function', onViewModeChange }: FunctionsProps) {
   const [activeTab, setActiveTab] = useState<FunctionTab>('Call');
   const [flagTab, setFlagTab] = useState<FlagTab>('All');
@@ -77,7 +67,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
   const [listError, setListError] = useState<string | null>(null);
 
   const [detail, setDetail] = useState<ObjectDetail | null>(null);
-  const [functionMeta, setFunctionMeta] = useState<ClassFunction | null>(null);
+  const [functionMeta, setFunctionMeta] = useState<FunctionDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
 
@@ -85,9 +75,8 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
   const [paramInputs, setParamInputs] = useState<Record<string, string>>({});
   const [callMode, setCallMode] = useState<CallMode>('instance');
   const [staticClassName, setStaticClassName] = useState('');
-  const [batchObjectIndices, setBatchObjectIndices] = useState('');
   const [callResult, setCallResult] = useState<string>('');
-  const [, setCalling] = useState(false);
+  const [calling, setCalling] = useState(false);
 
   const [hooks, setHooks] = useState<HookItem[]>([]);
   const [hookLog, setHookLog] = useState<HookLogEntry[]>([]);
@@ -269,7 +258,6 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
       if (!parts.classPath || !parts.functionPath) {
         throw new Error('Function metadata does not contain an exact owner/function path');
       }
-      setStaticClassName(parts.classPath);
       setBlueprintPath(parts.functionPath);
 
       const functionRes = await api.getFunctionByPath(parts.functionPath);
@@ -278,6 +266,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
       }
       const found = functionRes.data;
       setFunctionMeta(found);
+      setStaticClassName(found.declaring_type.full_path);
 
       setCallMode(hasFunctionFlag(found.flags, 0x0000000000002000n) ? 'static' : 'instance');
       const inputMap: Record<string, string> = {};
@@ -310,87 +299,89 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
   }, [loadFunctionDetail, selected]);
 
   const executeCall = async () => {
-    if (!detail) return;
-
-    const parseParamValue = async (raw: string): Promise<unknown> => {
-      const trimmed = raw.trim();
-      const enumMatch = trimmed.match(/^(\/.+)::([^:]+)$/);
-      if (!enumMatch) return parseInputValue(raw);
-
-      const [, enumPath, enumValueName] = enumMatch;
-      const enumRes = await api.getEnumValues(enumPath);
-      if (!enumRes.success || !enumRes.data) throw new Error(enumRes.error || 'Enum metadata unavailable');
-      const found = enumRes.data.items.find((value) => value.name === enumValueName || value.name.endsWith(`::${enumValueName}`));
-      if (found) return found.value;
-      if (enumRes.data.has_more) throw new Error('Enum value is outside the loaded metadata page; exact enum lookup is not available yet');
-      throw new Error(`Enum value not found: ${enumPath}::${enumValueName}`);
-    };
+    if (!detail || !functionMeta) return;
 
     setCalling(true);
     try {
-      const params: Record<string, unknown> = {};
-      for (const [name, raw] of Object.entries(paramInputs)) {
-        params[name] = await parseParamValue(raw);
+      const argumentsByName: Record<string, FunctionCallArgument> = {};
+      for (const parameter of functionMeta.parameters) {
+        if (parameter.direction !== 'input' && parameter.direction !== 'inout') continue;
+        const raw = (paramInputs[parameter.name] ?? '').trim();
+        switch (parameter.kind) {
+          case 'bool':
+            if (raw !== 'true' && raw !== 'false') {
+              throw new Error(`${parameter.name} must be true or false`);
+            }
+            argumentsByName[parameter.name] = { kind: 'bool', value: raw === 'true' };
+            break;
+          case 'int8':
+          case 'int16':
+          case 'int32':
+          case 'int64':
+            if (!/^(0|-?[1-9][0-9]*)$/.test(raw)) {
+              throw new Error(`${parameter.name} must be a canonical signed decimal integer`);
+            }
+            argumentsByName[parameter.name] = { kind: parameter.kind, value: raw };
+            break;
+          case 'uint8':
+          case 'uint16':
+          case 'uint32':
+          case 'uint64':
+            if (!/^(0|[1-9][0-9]*)$/.test(raw)) {
+              throw new Error(`${parameter.name} must be a canonical unsigned decimal integer`);
+            }
+            argumentsByName[parameter.name] = { kind: parameter.kind, value: raw };
+            break;
+          case 'float':
+          case 'double':
+            if (raw === '' || !Number.isFinite(Number(raw))) {
+              throw new Error(`${parameter.name} must be a finite floating-point value`);
+            }
+            argumentsByName[parameter.name] = { kind: parameter.kind, value: raw };
+            break;
+          case 'object': {
+            if (raw === '' || raw === 'null') {
+              argumentsByName[parameter.name] = { kind: 'object', value: null };
+              break;
+            }
+            const objectIndex = parseObjectIndex(raw, parameter.name);
+            const objectRes = await api.getObjectByIndex(objectIndex);
+            if (!objectRes.success || !objectRes.data?.handle) {
+              throw new Error(objectRes.error || `Stable handle unavailable for ${parameter.name}`);
+            }
+            argumentsByName[parameter.name] = { kind: 'object', value: objectRes.data.handle };
+            break;
+          }
+          default:
+            throw new Error(`${parameter.name} uses unsupported input kind ${parameter.kind}`);
+        }
       }
 
+      let target: StableObjectHandle;
       if (callMode === 'static') {
         if (!staticClassName.trim()) {
-          setCallResult('Static call requires a class full path');
-          return;
+          throw new Error('Static call requires a class full path');
         }
-
-        const classCheck = await api.getClassByPath(staticClassName.trim());
-        if (!classCheck.success || !classCheck.data) {
-          setCallResult(classCheck.error || 'Class not found');
-          return;
+        const cdoRes = await api.getClassCDO(staticClassName.trim());
+        if (!cdoRes.success || !cdoRes.data?.handle || cdoRes.data.state !== 'present') {
+          throw new Error(cdoRes.error || cdoRes.data?.reason || 'Class default object is unavailable');
         }
-
-        const res = await api.callStaticFunction(detail.name, {
-          className: staticClassName.trim(),
-          params,
-          useGameThread: true,
-        });
-        if (!res.success || !res.data) {
-          setCallResult(res.error || 'Static call failed');
-          return;
+        target = cdoRes.data.handle;
+      } else {
+        const objectIndex = parseObjectIndex(targetIndex.trim(), 'Target object index');
+        const targetRes = await api.getObjectByIndex(objectIndex);
+        if (!targetRes.success || !targetRes.data?.handle) {
+          throw new Error(targetRes.error || 'Stable target handle is unavailable');
         }
-        setCallResult(JSON.stringify(res.data, null, 2));
-        return;
+        target = targetRes.data.handle;
       }
 
-      if (callMode === 'batch') {
-        const indices = parseObjectIndices(batchObjectIndices);
-        if (indices.length === 0) {
-          setCallResult('Batch call requires object indices, e.g. 100,101,102');
-          return;
-        }
-
-        const res = await api.callFunctionBatch(indices, detail.name, params, true);
-        if (!res.success || !res.data) {
-          setCallResult(res.error || 'Batch call failed');
-          return;
-        }
-        setCallResult(JSON.stringify(res.data, null, 2));
-        return;
-      }
-
-      if (!targetIndex.trim()) {
-        setCallResult('Target object index is required');
-        return;
-      }
-
-      const objectIndex = Number(targetIndex);
-      if (Number.isNaN(objectIndex)) {
-        setCallResult('Target object index is invalid');
-        return;
-      }
-
-      const res = await api.callFunction(objectIndex, detail.name, params, true);
+      const res = await api.invokeFunction(target, functionMeta, argumentsByName);
       if (!res.success || !res.data) {
         setCallResult(res.error || 'Call failed');
         return;
       }
-      setCallResult(JSON.stringify(res.data.result, null, 2));
+      setCallResult(JSON.stringify(res.data, null, 2));
     } catch (error) {
       setCallResult(error instanceof Error ? error.message : String(error));
     } finally {
@@ -818,7 +809,6 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
                                 {([
                                   { id: 'instance' as CallMode, label: 'Instance' },
                                   { id: 'static' as CallMode, label: 'Static' },
-                                  { id: 'batch' as CallMode, label: 'Batch' },
                                 ]).map((mode) => (
                                   <button
                                     key={mode.id}
@@ -860,19 +850,6 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
                               </div>
                             )}
 
-                            {callMode === 'batch' && (
-                              <div className="space-y-1.5">
-                                <label className="text-[10px] font-bold text-text-low uppercase tracking-widest font-display">Object Indices</label>
-                                <input
-                                  type="text"
-                                  value={batchObjectIndices}
-                                  onChange={(e) => setBatchObjectIndices(e.target.value)}
-                                  placeholder="100,101,102"
-                                  className="w-full bg-background-base border border-border-subtle text-text-high font-mono text-[13px] rounded-lg px-3 py-2 outline-none focus:border-primary transition-colors placeholder:text-text-low/50"
-                                />
-                              </div>
-                            )}
-
                             {functionMeta?.parameters
                               .filter((p) => p.direction === 'input' || p.direction === 'inout')
                               .map((p) => (
@@ -896,17 +873,16 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
                               ))}
 
                             <div className="text-[11px] text-text-low font-display">
-                              {t('Params support JSON/number/boolean; enums can use EnumName::ValueName')}
+                              Scalar values use exact reflected kinds. Object inputs accept null or an object index.
                             </div>
 
                             <button
                               onClick={() => void executeCall()}
-                              disabled
-                              title="Stable ObjectHandle/FunctionHandle transport is not active"
+                              disabled={calling || !functionMeta}
                               className="w-full py-2.5 rounded-lg bg-primary hover:bg-primary/90 text-white font-semibold text-[13px] font-display tracking-tight shadow-sm active:scale-[0.98] transition-all flex items-center justify-center gap-2 mt-4 disabled:opacity-50"
                             >
                               <Play className="w-4 h-4 fill-current" />
-                              Stable handles required
+                              {calling ? 'Invoking...' : 'Invoke on game thread'}
                             </button>
                           </div>
                         </div>
@@ -919,7 +895,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
                             <History className="w-4 h-4 text-text-low" />
                           </div>
                           <pre className="flex-1 bg-background-base border border-border-subtle rounded-xl p-4 font-mono text-[12px] text-accent-green overflow-y-auto whitespace-pre-wrap custom-scrollbar">
-                            {callResult || 'Unavailable: stable ObjectHandle/FunctionHandle transport is not active'}
+                            {callResult || 'No invocation result'}
                           </pre>
                         </div>
                       </div>

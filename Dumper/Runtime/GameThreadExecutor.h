@@ -132,6 +132,11 @@ public:
 		void* function,
 		std::vector<std::uint8_t>& params,
 		int timeoutMs = 5000);
+	// Only owned work currently executing from Pump may use this entrypoint.
+	bool InvokeProcessEventFromCurrentTask(
+		void* object,
+		void* function,
+		void* params);
 
 	void Pump() noexcept;
 	bool IsEnabled() const noexcept;
@@ -152,7 +157,7 @@ private:
 	std::condition_variable m_Condition;
 	std::deque<std::shared_ptr<GameThreadTaskControl>> m_Queue;
 	std::atomic<bool> m_Enabled{false};
-	ProcessEventFn m_ProcessEvent = nullptr;
+	std::atomic<ProcessEventFn> m_ProcessEvent{nullptr};
 	std::atomic<bool> m_Processing{false};
 	std::atomic<std::uint32_t> m_PumpThreadId{0};
 	std::atomic<bool> m_PumpThreadMismatch{false};

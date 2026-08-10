@@ -1649,6 +1649,21 @@ const char* ToString(const PropertyKind kind) noexcept
 	return "unknown";
 }
 
+const char* ToString(const PropertyEncodeError error) noexcept
+{
+	switch (error)
+	{
+	case PropertyEncodeError::None: return "NONE";
+	case PropertyEncodeError::CodecNotConfigured: return "PROPERTY_CODEC_NOT_CONFIGURED";
+	case PropertyEncodeError::KindUnavailable: return "PROPERTY_INPUT_KIND_UNAVAILABLE";
+	case PropertyEncodeError::DescriptorInvalid: return "PROPERTY_DESCRIPTOR_INVALID";
+	case PropertyEncodeError::DestinationTooSmall: return "PROPERTY_INPUT_DESTINATION_TOO_SMALL";
+	case PropertyEncodeError::ValueTypeMismatch: return "PROPERTY_INPUT_TYPE_MISMATCH";
+	case PropertyEncodeError::ValueOutOfRange: return "PROPERTY_INPUT_OUT_OF_RANGE";
+	}
+	return "PROPERTY_INPUT_UNKNOWN_ERROR";
+}
+
 bool IsPropertyCodecProfileValid(
 	const PropertyCodecProfile& profile,
 	const EngineNameProfile& nameProfile) noexcept
@@ -1733,6 +1748,238 @@ bool PropertyCodec::Supports(const PropertyKind kind) const noexcept
 		return true;
 	}
 	return false;
+}
+
+bool PropertyCodec::SupportsInput(const PropertyKind kind) const noexcept
+{
+	if (!m_Configured)
+		return false;
+	switch (kind)
+	{
+	case PropertyKind::Bool:
+	case PropertyKind::Int8:
+	case PropertyKind::Int16:
+	case PropertyKind::Int32:
+	case PropertyKind::Int64:
+	case PropertyKind::UInt8:
+	case PropertyKind::UInt16:
+	case PropertyKind::UInt32:
+	case PropertyKind::UInt64:
+	case PropertyKind::Float:
+	case PropertyKind::Double:
+	case PropertyKind::Object:
+		return true;
+	default:
+		return false;
+	}
+}
+
+PropertyEncodeResult PropertyCodec::EncodeOwned(
+	const std::span<std::byte> destination,
+	const PropertyDescriptor& descriptor,
+	const PropertyScalar& value) const noexcept
+{
+	const auto failure = [](const PropertyEncodeError error, std::string message) {
+		return PropertyEncodeResult{.Error = error, .Message = std::move(message)};
+	};
+	try
+	{
+		if (!m_Configured)
+		{
+			return failure(
+				PropertyEncodeError::CodecNotConfigured,
+				"No immutable property codec profile has passed validation");
+		}
+		if (!SupportsInput(descriptor.Kind))
+		{
+			return failure(
+				PropertyEncodeError::KindUnavailable,
+				"The property kind is not available for owned parameter input");
+		}
+		if (descriptor.TypeName.empty() || descriptor.Size == 0)
+		{
+			return failure(
+				PropertyEncodeError::DescriptorInvalid,
+				"The input descriptor is incomplete");
+		}
+		if (destination.size() < descriptor.Size)
+		{
+			return failure(
+				PropertyEncodeError::DestinationTooSmall,
+				"The owned parameter slot is smaller than its descriptor");
+		}
+
+		const auto copyValue = [&destination]<typename T>(const T encoded) {
+			std::memcpy(destination.data(), &encoded, sizeof(encoded));
+		};
+		const auto encodeSigned = [&]<typename T>() -> PropertyEncodeResult {
+			if (descriptor.Size != sizeof(T))
+			{
+				return failure(
+					PropertyEncodeError::DescriptorInvalid,
+					"The signed descriptor width does not match its reflected kind");
+			}
+			const auto* input = std::get_if<std::int64_t>(&value);
+			if (!input)
+			{
+				return failure(
+					PropertyEncodeError::ValueTypeMismatch,
+					"The input must be a signed integer");
+			}
+			if (*input < static_cast<std::int64_t>((std::numeric_limits<T>::min)())
+				|| *input > static_cast<std::int64_t>((std::numeric_limits<T>::max)()))
+			{
+				return failure(
+					PropertyEncodeError::ValueOutOfRange,
+					"The signed input is outside the reflected width");
+			}
+			copyValue(static_cast<T>(*input));
+			return {};
+		};
+		const auto encodeUnsigned = [&]<typename T>() -> PropertyEncodeResult {
+			if (descriptor.Size != sizeof(T))
+			{
+				return failure(
+					PropertyEncodeError::DescriptorInvalid,
+					"The unsigned descriptor width does not match its reflected kind");
+			}
+			const auto* input = std::get_if<std::uint64_t>(&value);
+			if (!input)
+			{
+				return failure(
+					PropertyEncodeError::ValueTypeMismatch,
+					"The input must be an unsigned integer");
+			}
+			if (*input > static_cast<std::uint64_t>((std::numeric_limits<T>::max)()))
+			{
+				return failure(
+					PropertyEncodeError::ValueOutOfRange,
+					"The unsigned input is outside the reflected width");
+			}
+			copyValue(static_cast<T>(*input));
+			return {};
+		};
+
+		switch (descriptor.Kind)
+		{
+		case PropertyKind::Bool:
+		{
+			const auto* input = std::get_if<bool>(&value);
+			if (!input)
+			{
+				return failure(
+					PropertyEncodeError::ValueTypeMismatch,
+					"The input must be boolean");
+			}
+			if (descriptor.BoolMask == 0 || descriptor.BoolByteOffset >= descriptor.Size)
+			{
+				return failure(
+					PropertyEncodeError::DescriptorInvalid,
+					"The bool mask or byte offset is invalid");
+			}
+			auto& target = destination[descriptor.BoolByteOffset];
+			const std::byte mask{descriptor.BoolMask};
+			target = *input ? target | mask : target & ~mask;
+			return {};
+		}
+		case PropertyKind::Int8: return encodeSigned.template operator()<std::int8_t>();
+		case PropertyKind::Int16: return encodeSigned.template operator()<std::int16_t>();
+		case PropertyKind::Int32: return encodeSigned.template operator()<std::int32_t>();
+		case PropertyKind::Int64: return encodeSigned.template operator()<std::int64_t>();
+		case PropertyKind::UInt8: return encodeUnsigned.template operator()<std::uint8_t>();
+		case PropertyKind::UInt16: return encodeUnsigned.template operator()<std::uint16_t>();
+		case PropertyKind::UInt32: return encodeUnsigned.template operator()<std::uint32_t>();
+		case PropertyKind::UInt64: return encodeUnsigned.template operator()<std::uint64_t>();
+		case PropertyKind::Float:
+		{
+			if (descriptor.Size != sizeof(float))
+			{
+				return failure(
+					PropertyEncodeError::DescriptorInvalid,
+					"The float descriptor width does not match its reflected kind");
+			}
+			const auto* input = std::get_if<double>(&value);
+			if (!input)
+			{
+				return failure(
+					PropertyEncodeError::ValueTypeMismatch,
+					"The input must be a floating-point value");
+			}
+			const float encoded = static_cast<float>(*input);
+			if (!std::isfinite(*input) || !std::isfinite(encoded))
+			{
+				return failure(
+					PropertyEncodeError::ValueOutOfRange,
+					"The floating-point input is non-finite or outside float range");
+			}
+			copyValue(encoded);
+			return {};
+		}
+		case PropertyKind::Double:
+		{
+			if (descriptor.Size != sizeof(double))
+			{
+				return failure(
+					PropertyEncodeError::DescriptorInvalid,
+					"The double descriptor width does not match its reflected kind");
+			}
+			const auto* input = std::get_if<double>(&value);
+			if (!input)
+			{
+				return failure(
+					PropertyEncodeError::ValueTypeMismatch,
+					"The input must be a floating-point value");
+			}
+			if (!std::isfinite(*input))
+			{
+				return failure(
+					PropertyEncodeError::ValueOutOfRange,
+					"The floating-point input must be finite");
+			}
+			copyValue(*input);
+			return {};
+		}
+		case PropertyKind::Object:
+		{
+			if (descriptor.Size != sizeof(std::uintptr_t))
+			{
+				return failure(
+					PropertyEncodeError::DescriptorInvalid,
+					"The object descriptor width does not match the target pointer width");
+			}
+			std::uintptr_t encoded = 0;
+			if (!std::holds_alternative<std::monostate>(value))
+			{
+				const auto* input = std::get_if<PropertyObjectReference>(&value);
+				if (!input || !IsStableObjectHandle(input->Handle))
+				{
+					return failure(
+						PropertyEncodeError::ValueTypeMismatch,
+						"The object input must be null or a complete stable handle");
+				}
+				encoded = input->Handle.Address;
+			}
+			copyValue(encoded);
+			return {};
+		}
+		default:
+			return failure(
+				PropertyEncodeError::KindUnavailable,
+				"The property kind is not available for owned parameter input");
+		}
+	}
+	catch (const std::bad_alloc&)
+	{
+		return failure(
+			PropertyEncodeError::ValueTypeMismatch,
+			"The property input error could not allocate diagnostic storage");
+	}
+	catch (...)
+	{
+		return failure(
+			PropertyEncodeError::ValueTypeMismatch,
+			"The property input could not be encoded");
+	}
 }
 
 PropertyValue PropertyCodec::Decode(

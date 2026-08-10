@@ -27,6 +27,7 @@ $capabilities = Read-ProjectFile 'Dumper\Runtime\CoreCapabilities.h'
 $tauriHost = Read-ProjectFile 'frontend\src-tauri\src\lib.rs'
 $domain = Read-ProjectFile 'frontend\src-tauri\src\services\domain_service.rs'
 $client = Read-ProjectFile 'frontend\src\api\client.ts'
+$payloadSchema = Read-ProjectFile 'protocol\v1\schema\payload.schema.json'
 
 foreach ($token in @(
         'g_PipeServer->Start()', 'g_PostRenderHook->Install()',
@@ -65,7 +66,7 @@ foreach ($token in @(
         'OPERATION_NOT_SUPPORTED', 'CAPABILITY_UNAVAILABLE',
         'DomainRoute::ObjectsList', 'DomainRoute::TypeList',
         'DomainRoute::Unavailable("memory.raw_read")',
-        'DomainRoute::Unavailable("call.invoke")',
+        'DomainRoute::Core("call.invoke")',
         'DomainRoute::Unavailable("world.inspect")',
         'DomainRoute::Unavailable("watch.properties")',
         'DomainRoute::Unavailable("hook.monitor")',
@@ -79,6 +80,9 @@ foreach ($token in @(
 }
 foreach ($token in @('runtime.ini', 'connection.ini', 'save_connection_settings')) {
     Assert-NotContains $tauriHost $token 'Tauri Host reintroduced legacy endpoint state.'
+}
+foreach ($text in @($client, $payloadSchema)) {
+    Assert-NotContains $text 'use_game_thread' 'Release call contract reintroduced caller-controlled UE thread selection.'
 }
 
 foreach ($token in @(

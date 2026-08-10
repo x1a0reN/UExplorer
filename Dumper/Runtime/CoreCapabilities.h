@@ -208,7 +208,8 @@ inline std::shared_ptr<const CapabilitySnapshot> BuildCoreCapabilities(
 		probes.FunctionCallServiceEnabled,
 		"FUNCTION_CALL_SERVICE_NOT_READY",
 		"No validated function-call domain command is registered",
-		{"game_thread.executor", "functions.handles"});
+		{"engine.property_codec", "engine.type_snapshot", "objects.snapshot",
+			"game_thread.executor", "functions.handles"});
 	builder.Define(
 		"world.inspect",
 		false,

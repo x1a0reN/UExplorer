@@ -86,7 +86,7 @@ namespace
 			? g_EngineFacade->Types().Current()
 			: nullptr;
 		probes.ObjectPropertyServiceEnabled = true;
-		probes.FunctionCallServiceEnabled = false;
+		probes.FunctionCallServiceEnabled = true;
 		probes.NamedPipeListening = g_PipeServer && g_PipeServer->IsListening();
 		const auto capabilities = UExplorer::Runtime::BuildCoreCapabilities(*snapshot.Context, probes);
 		if (!g_Runtime.PublishCapabilities(capabilities))

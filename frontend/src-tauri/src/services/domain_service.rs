@@ -350,7 +350,8 @@ fn resolve_operation(operation: &str) -> Option<DomainRoute> {
         "memory.raw.write" => DomainRoute::Unavailable("memory.raw_write"),
         "memory.typed.read" | "memory.typed.write" => DomainRoute::Unavailable("memory.typed"),
         "memory.pointer_chain.resolve" => DomainRoute::Unavailable("memory.pointer_chain"),
-        "call.invoke" | "call.static" | "call.batch" => DomainRoute::Unavailable("call.invoke"),
+        "call.invoke" => DomainRoute::Core("call.invoke"),
+        "call.static" | "call.batch" => DomainRoute::Unavailable("call.invoke"),
         "watch.add" | "watch.list" | "watch.remove" | "watch.history" => {
             DomainRoute::Unavailable("watch.properties")
         }
@@ -869,6 +870,10 @@ mod tests {
         assert_eq!(
             resolve_operation("objects.property.read"),
             Some(DomainRoute::Core("objects.property.read"))
+        );
+        assert_eq!(
+            resolve_operation("call.invoke"),
+            Some(DomainRoute::Core("call.invoke"))
         );
     }
 
