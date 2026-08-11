@@ -853,7 +853,9 @@
         {
           "if": {
             "properties": {
-              "operation": { "const": "world.actor.get" }
+              "operation": {
+                "enum": ["world.actor.get", "world.actor.transform.get"]
+              }
             },
             "required": ["operation"]
           },

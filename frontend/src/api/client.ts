@@ -56,6 +56,7 @@ import type {
   WorldActorComponentsResponse,
   WorldActorDetail,
   WorldActorResponse,
+  WorldActorTransformResponse,
   WorldActorTransformUpdateResponse,
   WorldData,
   WorldLevelsResponse,
@@ -523,6 +524,16 @@ class UExplorerApi {
       world_snapshot_generation: worldSnapshotGeneration,
       cursor,
       limit,
+    });
+  }
+
+  async getWorldActorTransform(
+    actor: StableObjectHandle,
+    worldSnapshotGeneration: number,
+  ): Promise<ApiResponse<WorldActorTransformResponse>> {
+    return this.command('world.actor.transform.get', {
+      actor,
+      world_snapshot_generation: worldSnapshotGeneration,
     });
   }
 

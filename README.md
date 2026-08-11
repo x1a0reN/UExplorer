@@ -136,11 +136,17 @@ game-thread phases rather than in the PostRender hot path. The worker-only
 explicit-state shortcuts. If local-player metadata is missing, PlayerController/Pawn stay
 explicitly unavailable. The production type source now derives canonical FVector and
 FRotator descriptors only from exact `/Script/CoreUObject.Vector`/`Rotator` identity and
-their witnessed `X/Y/Z` or `Pitch/Yaw/Roll` float/double fields. WorldBrowser uses the
-existing exact property command to display a root component's stored `RelativeLocation`,
-`RelativeRotation`, and `RelativeScale3D`; these three requests are not a same-frame
-computed world transform and do not yet include the `bAbsolute*` flags. Transform setters
-and real target evidence remain unavailable.
+their witnessed `X/Y/Z` or `Pitch/Yaw/Roll` float/double fields.
+`WorldTransformCommandService` exposes `world.actor.transform.get`: one owned game-thread
+work freezes the exact World/Object/Type/codec generations, revalidates Actor and
+RootComponent handles, reads `RelativeLocation`, `RelativeRotation`, `RelativeScale3D`,
+and all three `bAbsolute*` flags from one bounded stable byte witness, then rechecks the
+root relation and live bytes before publishing. WorldBrowser displays the resulting
+float/double precision and relative-versus-absolute-world storage semantics. This is not
+computed `ComponentToWorld`. Transform mutation remains unavailable: the UE 4.21-5.7
+source signatures for the location/rotation setters include an `FHitResult&` output, and
+the current owned `ParamFrame` does not yet support the required struct input/output
+lifecycle. Real target evidence also remains unavailable.
 PostRender now drives one `GameThreadFrameScheduler` rather than giving the object
 snapshot producer an exclusive callback slot. The scheduler supports at most eight
 clients, shares a 32-unit frame budget in four-unit round-robin quanta, stops further
@@ -258,6 +264,7 @@ cargo test --manifest-path D:\Projects\UExplorer\frontend\src-tauri\Cargo.toml -
 & 'D:\Projects\UExplorer\tests\contracts\verify-named-pipe.ps1'
 & 'D:\Projects\UExplorer\tests\contracts\verify-platform-safety.ps1'
 & 'D:\Projects\UExplorer\tests\contracts\verify-offset-discovery.ps1'
+& 'D:\Projects\UExplorer\tests\contracts\verify-type-commands.ps1'
 & 'D:\Projects\UExplorer\tests\contracts\verify-transport-cutover.ps1' `
   -DllPath 'D:\Projects\UExplorer\Dumper\x64\Release\UExplorerCore.dll'
 ```

@@ -48,7 +48,8 @@ foreach ($token in @(
 foreach ($token in @(
         'IPC\NamedPipeRpcServer.cpp', 'Runtime\PostRenderHook.cpp',
         'Runtime\WorldSnapshotCapture.cpp', 'Services\CoreCommandService.cpp',
-        'Services\WorldCommandService.cpp', 'advapi32.lib')) {
+        'Services\WorldCommandService.cpp', 'Services\WorldTransformCommandService.cpp',
+        'advapi32.lib')) {
     Assert-Contains $coreProject $token 'Release Core project omitted a required Pipe/domain component.'
 }
 foreach ($path in @('Dumper\Server\HttpServer.cpp', 'Dumper\API\Router.cpp')) {
@@ -75,6 +76,7 @@ foreach ($token in @(
         'DomainRoute::Core("world.shortcuts")',
         'DomainRoute::Core("world.actor.get")',
         'DomainRoute::Core("world.actor.components")',
+        'DomainRoute::Core("world.actor.transform.get")',
         'DomainRoute::Unavailable("watch.properties")',
         'DomainRoute::Unavailable("hook.monitor")',
         'DomainRoute::Unavailable("dump.cpp")')) {

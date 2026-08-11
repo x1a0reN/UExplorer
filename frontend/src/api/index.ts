@@ -542,6 +542,12 @@ export interface Vec3Data {
   z: number;
 }
 
+export interface RotatorData {
+  pitch: number;
+  yaw: number;
+  roll: number;
+}
+
 export interface ActorTransformData {
   location?: Vec3Data;
   rotation?: Vec3Data;
@@ -593,6 +599,37 @@ export interface WorldActorComponentsResponse {
   limit: number;
   has_more: boolean;
   next_cursor: WorldQueryCursor | null;
+}
+
+export type WorldTransformSpace = 'relative' | 'world';
+
+export interface WorldActorStoredTransform {
+  source: 'scene_component_stored_relative';
+  computed_world: false;
+  precision: 'float32' | 'float64';
+  location: Vec3Data;
+  rotation: RotatorData;
+  scale: Vec3Data;
+  absolute: {
+    location: boolean;
+    rotation: boolean;
+    scale: boolean;
+  };
+  space: {
+    location: WorldTransformSpace;
+    rotation: WorldTransformSpace;
+    scale: WorldTransformSpace;
+  };
+}
+
+export interface WorldActorTransformResponse {
+  generation: number;
+  context_generation: number;
+  object_snapshot_generation: number;
+  type_snapshot_generation: number;
+  actor: WorldSnapshotObject;
+  root_component: WorldSnapshotObject;
+  transform: WorldActorStoredTransform;
 }
 
 export interface WorldActorTransformUpdateResponse {

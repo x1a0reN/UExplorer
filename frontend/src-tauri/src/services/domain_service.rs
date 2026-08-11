@@ -345,6 +345,7 @@ fn resolve_operation(operation: &str) -> Option<DomainRoute> {
         "world.shortcuts" => DomainRoute::Core("world.shortcuts"),
         "world.actor.get" => DomainRoute::Core("world.actor.get"),
         "world.actor.components" => DomainRoute::Core("world.actor.components"),
+        "world.actor.transform.get" => DomainRoute::Core("world.actor.transform.get"),
         "world.actor.transform.update" => DomainRoute::Unavailable("world.mutate"),
         "memory.raw.read" => DomainRoute::Unavailable("memory.raw_read"),
         "memory.raw.write" => DomainRoute::Unavailable("memory.raw_write"),
@@ -894,6 +895,10 @@ mod tests {
         assert_eq!(
             resolve_operation("world.actor.components"),
             Some(DomainRoute::Core("world.actor.components"))
+        );
+        assert_eq!(
+            resolve_operation("world.actor.transform.get"),
+            Some(DomainRoute::Core("world.actor.transform.get"))
         );
         assert_eq!(
             resolve_operation("world.shortcuts"),

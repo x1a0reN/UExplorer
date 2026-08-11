@@ -197,6 +197,7 @@ The v1 command registry is explicit. Unknown operations return
 | `world.shortcuts` | `{}` | Current-World GameMode/GameState references plus explicit unavailable LocalPlayer/Pawn states |
 | `world.actor.get` | `{"actor": object_handle, "world_snapshot_generation": uint53}` | Exact immutable Actor/Level/root-component detail; transform state remains explicit |
 | `world.actor.components` | `{"actor": object_handle, "world_snapshot_generation": uint53, "cursor": null \| world_cursor, "limit": 1..128}` | Cursor-paged immutable components owned by the exact Actor |
+| `world.actor.transform.get` | `{"actor": object_handle, "world_snapshot_generation": uint53}` | One game-thread work reads exact RootComponent `Relative*` plus `bAbsolute*` fields from one stable byte witness; it does not claim computed `ComponentToWorld` |
 | `types.classes.get` | `{"path": full_path}` | Worker-safe immutable class summary |
 | `types.classes.fields` | `{"path": full_path, "scope": "direct" \| "include_inherited", "cursor": null \| type_cursor, "limit": 1..128}` | Worker-safe immutable field page |
 | `types.classes.functions` | same member-page shape | Worker-safe immutable function page |

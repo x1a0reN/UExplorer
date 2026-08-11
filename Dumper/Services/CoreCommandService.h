@@ -86,6 +86,9 @@ private:
 	CoreCommandResponse ExecuteFunctionCall(
 		const CoreCommandRequest& request,
 		const GameThreadQueuedCallback& onGameThreadQueued);
+	CoreCommandResponse ExecuteWorldTransformRead(
+		const CoreCommandRequest& request,
+		const GameThreadQueuedCallback& onGameThreadQueued);
 	CoreCommandResponse ExecuteWorldCommand(const CoreCommandRequest& request);
 	CoreCommandResponse ExecuteHandleIssue(
 		const CoreCommandRequest& request,

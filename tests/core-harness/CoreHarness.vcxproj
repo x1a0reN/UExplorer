@@ -83,6 +83,7 @@
 	<ClCompile Include="..\..\Dumper\Services\ObjectPropertyCommandService.cpp" />
 	<ClCompile Include="..\..\Dumper\Services\TypeCommandService.cpp" />
 	<ClCompile Include="..\..\Dumper\Services\WorldCommandService.cpp" />
+	<ClCompile Include="..\..\Dumper\Services\WorldTransformCommandService.cpp" />
     <ClCompile Include="..\..\Dumper\Server\HttpServer.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -130,6 +131,7 @@
 	<ClInclude Include="..\..\Dumper\Services\CoreStatusDiagnostics.h" />
 	<ClInclude Include="..\..\Dumper\Services\TypeCommandService.h" />
 	<ClInclude Include="..\..\Dumper\Services\WorldCommandService.h" />
+	<ClInclude Include="..\..\Dumper\Services\WorldTransformCommandService.h" />
     <ClInclude Include="..\..\Dumper\API\GameThreadQueue.h" />
     <ClInclude Include="..\..\Dumper\Generator\Public\Generators\UsmapContainer.h" />
     <ClInclude Include="..\..\Dumper\Server\HttpServer.h" />

@@ -153,6 +153,7 @@
 	<ClCompile Include="Services\ObjectPropertyCommandService.cpp" />
 	<ClCompile Include="Services\TypeCommandService.cpp" />
 	<ClCompile Include="Services\WorldCommandService.cpp" />
+	<ClCompile Include="Services\WorldTransformCommandService.cpp" />
     <!-- Temporarily exclude zstd.c due to VS2026 STL compatibility issue -->
     <!-- <ClCompile Include="Utils\Compression\zstd.c" /> -->
     <ClCompile Include="Utils\Dumpspace\DSGen.cpp" />
@@ -254,6 +255,7 @@
 	<ClInclude Include="Services\ObjectPropertyCommandService.h" />
 	<ClInclude Include="Services\TypeCommandService.h" />
 	<ClInclude Include="Services\WorldCommandService.h" />
+	<ClInclude Include="Services\WorldTransformCommandService.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />

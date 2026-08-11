@@ -33,6 +33,13 @@ These assets are available for development, but none changes the support rows ab
   template instantiations. `SceneComponent.h` keeps reflected `RelativeLocation`,
   `RelativeRotation`, and `RelativeScale3D` members across the sampled UE4/UE5 trees.
   This evidence defines exact candidate identities and fixture expectations only.
+- `SceneComponent.h` across the 4.21-5.7 source inventory preserves reflected
+  `RelativeLocation`, `RelativeRotation`, `RelativeScale3D`, and the three `bAbsolute*`
+  flags. It also preserves `K2_SetRelativeLocation(FVector, bool, FHitResult&, bool)` and
+  `K2_SetRelativeRotation(FRotator, bool, FHitResult&, bool)`, while
+  `SetRelativeScale3D(FVector)` has no `FHitResult` output. This is useful for selecting
+  semantic properties and planning the owned ProcessEvent frame lifecycle, but it is not
+  permission to assume offsets or zero-initialize an uncaptured Shipping `FHitResult`.
 - `D:\Steam\steamapps\common\Wandering Sword` is the designated real-game fixture.
   Earlier passive artifacts are consistent with an x64 UE4/PhysX Shipping build in the
   UE 4.26 family, but the 2026-08-11 inventory contains only the IDA
@@ -121,10 +128,12 @@ The exact `objects.property.read` path additionally binds an ObjectSnapshot hand
 TypeSnapshot generation, declaring full path, property name, and array index, then
 revalidates the dependencies and handle on the game thread before SafeMemory decoding.
 Struct decoding reads a bounded whole-value witness twice, decodes children from that owned
-snapshot, and compares the live bytes again before returning. WorldBrowser composes three
-exact root-component reads for the stored RelativeLocation/Rotation/Scale fields, but those
-requests are not yet one same-frame aggregate and do not include SceneComponent `bAbsolute*`
-semantics or a UE setter.
+snapshot, and compares the live bytes again before returning. The dedicated
+`world.actor.transform.get` path now resolves the six exact SceneComponent properties and
+reads them in one owned game-thread work from a shared bounded byte witness, with final
+RootComponent and byte-range comparison. It reports the stored relative fields, scalar
+precision, and `bAbsolute*` semantics without claiming computed `ComponentToWorld`.
+Canonical setter mutation and a real UE target round-trip remain pending.
 Rust/schema fixtures and React builds cover their side of this contract. The real
 cross-language process fixture does not yet publish a production TypeSnapshot, and no
 target-process reflection/type run exists, so this does not change any support row.

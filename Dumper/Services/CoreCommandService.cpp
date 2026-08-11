@@ -6,8 +6,10 @@
 #include "ObjectPropertyCommandService.h"
 #include "TypeCommandService.h"
 #include "WorldCommandService.h"
+#include "WorldTransformCommandService.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <format>
@@ -31,6 +33,7 @@ constexpr std::string_view kObjectHandleIssue = "objects.handle.issue";
 constexpr std::string_view kFunctionHandleIssue = "functions.handle.issue";
 constexpr std::string_view kObjectPropertyRead = "objects.property.read";
 constexpr std::string_view kFunctionCallInvoke = "call.invoke";
+constexpr std::string_view kWorldActorTransformGet = "world.actor.transform.get";
 constexpr std::size_t kMaxSnapshotPageRecords = 128;
 
 std::uint64_t ElapsedMicroseconds(const std::chrono::steady_clock::time_point started) noexcept
@@ -725,6 +728,8 @@ CoreCommandResponse CoreCommandService::Execute(
 			return ExecuteObjectPropertyRead(request, onGameThreadQueued);
 		if (request.Operation == kFunctionCallInvoke)
 			return ExecuteFunctionCall(request, onGameThreadQueued);
+		if (request.Operation == kWorldActorTransformGet)
+			return ExecuteWorldTransformRead(request, onGameThreadQueued);
 		if (WorldCommandService::Handles(request.Operation))
 			return ExecuteWorldCommand(request);
 		if (TypeCommandService::Handles(request.Operation))
@@ -962,6 +967,127 @@ CoreCommandResponse CoreCommandService::ExecuteFunctionCall(
 
 	FunctionCallCommandResult result =
 		FunctionCallCommandService::CompleteInvoke(*prepared.Work);
+	if (!result.Ok())
+	{
+		return Failure(
+			request,
+			std::move(result.Error->Code),
+			std::move(result.Error->Message),
+			std::move(result.Error->Details),
+			timing);
+	}
+	return Success(request, std::move(result.Data), timing);
+}
+
+CoreCommandResponse CoreCommandService::ExecuteWorldTransformRead(
+	const CoreCommandRequest& request,
+	const GameThreadQueuedCallback& onGameThreadQueued)
+{
+	std::string admissionError;
+	auto lease = m_Runtime.TryAcquireRequest(&admissionError);
+	if (!lease)
+	{
+		return Failure(
+			request,
+			admissionError.empty() ? "CORE_NOT_READY" : admissionError,
+			"CoreRuntime is not accepting world transform queries");
+	}
+	constexpr std::array capabilityNames{"world.details", "objects.properties"};
+	for (const char* capabilityName : capabilityNames)
+	{
+		const Runtime::CapabilityStatus* capability = lease->Capabilities()
+			? lease->Capabilities()->Find(capabilityName)
+			: nullptr;
+		if (!capability || !capability->Available)
+		{
+			return Failure(
+				request,
+				capability && !capability->ReasonCode.empty()
+					? capability->ReasonCode
+					: "WORLD_TRANSFORM_CAPABILITY_UNAVAILABLE",
+				capability && !capability->Reason.empty()
+					? capability->Reason
+					: "Validated same-frame SceneComponent transform reads are unavailable",
+				{{"capability", capabilityName}});
+		}
+	}
+
+	WorldTransformReadPreparation prepared = WorldTransformCommandService::PrepareRead(
+		request.Data,
+		std::move(*lease),
+		m_Engine);
+	if (!prepared.Ok())
+	{
+		return Failure(
+			request,
+			prepared.Error
+				? std::move(prepared.Error->Code)
+				: "WORLD_TRANSFORM_PREPARATION_FAILED",
+			prepared.Error
+				? std::move(prepared.Error->Message)
+				: "World transform read preparation failed",
+			prepared.Error ? std::move(prepared.Error->Details) : json::object());
+	}
+
+	Runtime::GameThreadTicket ticket;
+	const Runtime::GameThreadQueueResult queued = m_GameThread.Enqueue(
+		prepared.Work,
+		std::chrono::steady_clock::now() + std::chrono::milliseconds(request.TimeoutMs),
+		ticket);
+	if (queued != Runtime::GameThreadQueueResult::Accepted)
+	{
+		switch (queued)
+		{
+		case Runtime::GameThreadQueueResult::Disabled:
+			return Failure(request, "GAME_THREAD_UNAVAILABLE", "Game-thread executor is disabled");
+		case Runtime::GameThreadQueueResult::QueueBusy:
+			return Failure(request, "GAME_THREAD_QUEUE_BUSY", "Game-thread queue capacity is exhausted");
+		case Runtime::GameThreadQueueResult::Invalid:
+			return Failure(request, "GAME_THREAD_TASK_INVALID", "Game-thread task or deadline is invalid");
+		case Runtime::GameThreadQueueResult::Accepted:
+			break;
+		}
+	}
+
+	if (onGameThreadQueued)
+	{
+		try
+		{
+			onGameThreadQueued(ticket);
+		}
+		catch (...)
+		{
+			m_GameThread.Cancel(ticket);
+			return Failure(request, "COMMAND_OBSERVER_FAILED", "Request task observer raised an exception");
+		}
+	}
+
+	const Runtime::GameThreadSubmitResult submitted = m_GameThread.Wait(ticket);
+	Runtime::GameThreadTaskTiming taskTiming;
+	m_GameThread.TryGetTiming(ticket, taskTiming);
+	const CoreCommandTiming timing = ToCommandTiming(taskTiming);
+	switch (submitted)
+	{
+	case Runtime::GameThreadSubmitResult::Completed:
+		break;
+	case Runtime::GameThreadSubmitResult::Disabled:
+		return Failure(request, "GAME_THREAD_UNAVAILABLE", "Game-thread executor is disabled", json::object(), timing);
+	case Runtime::GameThreadSubmitResult::Cancelled:
+		return Failure(request, "REQUEST_CANCELLED", "Queued world transform query was cancelled", json::object(), timing);
+	case Runtime::GameThreadSubmitResult::PumpThreadWaitDenied:
+		return Failure(request, "GAME_THREAD_REENTRANT_WAIT_DENIED", "Synchronous waits are forbidden on the pump thread", json::object(), timing);
+	case Runtime::GameThreadSubmitResult::QueueBusy:
+		return Failure(request, "GAME_THREAD_QUEUE_BUSY", "Game-thread queue capacity is exhausted", json::object(), timing);
+	case Runtime::GameThreadSubmitResult::TimedOutBeforeStart:
+		return Failure(request, "GAME_THREAD_TIMEOUT_BEFORE_START", "World transform query expired before execution", json::object(), timing);
+	case Runtime::GameThreadSubmitResult::TimedOutWhileRunning:
+		return Failure(request, "GAME_THREAD_TIMEOUT_WHILE_RUNNING", "World transform query is still running; completion is unknown", json::object(), timing);
+	case Runtime::GameThreadSubmitResult::ExecutionFailed:
+		return Failure(request, "GAME_THREAD_EXECUTION_FAILED", "World transform query failed during guarded execution", json::object(), timing);
+	}
+
+	WorldTransformCommandResult result =
+		WorldTransformCommandService::CompleteRead(*prepared.Work);
 	if (!result.Ok())
 	{
 		return Failure(

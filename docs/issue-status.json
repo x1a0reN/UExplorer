@@ -726,7 +726,8 @@
         "2026-08-11: UE 4.21/4.27 source confirms float X/Y/Z and Pitch/Yaw/Roll, while UE5 LWC source preserves those semantic fields and 5.4/5.7 aliases the defaults to double templates",
         "2026-08-11: worker publication resolves FVector/FRotator descriptors only from exact CoreUObject path plus witnessed scalar kind, semantic names, packed offsets, size, and alignment; the CoreHarness covers UE4 float, UE5 double, and a Rotator X/Y/Z rejection",
         "2026-08-11: struct values are decoded from one bounded stable byte snapshot, and WorldBrowser strictly parses exact RootComponent RelativeLocation/RelativeRotation/RelativeScale3D property reads",
-        "A same-frame aggregate read, bAbsoluteLocation/Rotation/Scale semantics, witnessed UE setters, and real UE4/UE5 target round-trips remain pending"
+        "2026-08-11: world.actor.transform.get now fixes one World/Object/Type/codec generation and reads RelativeLocation/RelativeRotation/RelativeScale3D plus all three bAbsolute flags from one stable byte witness in one owned game-thread work; it rechecks RootComponent and live bytes before publishing",
+        "2026-08-11: the typed Host/React path reports float32/float64 and relative versus absolute-world storage semantics with computed_world=false; UE setters and real UE4/UE5 target round-trips remain pending"
       ]
     },
     "STATE-001": {

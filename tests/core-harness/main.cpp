@@ -5556,6 +5556,20 @@ namespace
 				&& unavailableType.Error->Details.at("capability") == "types.inspect",
 			"Core command registry did not route type operations through their capability boundary");
 
+		const CoreCommandResponse unavailableTransform = service.Execute({
+			.RequestId = 17,
+			.Operation = "world.actor.transform.get",
+			.SessionId = service.SessionId(),
+			.TimeoutMs = 1000,
+			.Data = json::object()
+		});
+		Require(
+			!unavailableTransform.Ok
+				&& unavailableTransform.Error
+				&& unavailableTransform.Error->Code != "OPERATION_NOT_SUPPORTED"
+				&& unavailableTransform.Error->Details.at("capability") == "world.details",
+			"Core command registry did not route live World transform reads through their capability boundary");
+
 		CoreCommandRequest objectRequest{
 			.RequestId = 2,
 			.Operation = "objects.handle.issue",

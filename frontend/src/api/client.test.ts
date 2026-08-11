@@ -132,6 +132,7 @@ describe('UExplorerApi Tauri domain boundary', () => {
 
     await api.getWorldActorDetail(actor, 3);
     await api.getWorldActorComponents(actor, 3, null, 64);
+    await api.getWorldActorTransform(actor, 3);
 
     expect(invokeMock).toHaveBeenNthCalledWith(1, 'domain_request', {
       request: {
@@ -152,6 +153,14 @@ describe('UExplorerApi Tauri domain boundary', () => {
           cursor: null,
           limit: 64,
         },
+      },
+    });
+    expect(invokeMock).toHaveBeenNthCalledWith(3, 'domain_request', {
+      request: {
+        targetPid: null,
+        operation: 'world.actor.transform.get',
+        timeoutMs: 5_000,
+        data: { actor, world_snapshot_generation: 3 },
       },
     });
   });

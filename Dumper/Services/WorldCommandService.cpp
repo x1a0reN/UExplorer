@@ -720,8 +720,8 @@ WorldCommandResult ActorDetail(
 		{"components", SerializeComponentAvailability(snapshot, actor)},
 		{"transform", {
 			{"state", "unavailable"},
-			{"reason_code", "WORLD_TRANSFORM_CODEC_UNAVAILABLE"},
-			{"reason", "FVector, FRotator, and LWC layouts have not been selected by exact reflected struct identity"}
+			{"reason_code", "WORLD_TRANSFORM_LIVE_QUERY_REQUIRED"},
+			{"reason", "Use world.actor.transform.get for one same-frame RootComponent transform witness"}
 		}}
 	});
 }
