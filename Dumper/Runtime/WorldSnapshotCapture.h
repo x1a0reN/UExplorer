@@ -98,9 +98,20 @@ public:
 		"/Script/Engine.GameModeBase";
 	static constexpr std::string_view kGameStateClassPath =
 		"/Script/Engine.GameStateBase";
+	static constexpr std::string_view kGameInstanceClassPath =
+		"/Script/Engine.GameInstance";
+	static constexpr std::string_view kLocalPlayerClassPath =
+		"/Script/Engine.LocalPlayer";
+	static constexpr std::string_view kPlayerClassPath = "/Script/Engine.Player";
+	static constexpr std::string_view kPlayerControllerClassPath =
+		"/Script/Engine.PlayerController";
+	static constexpr std::string_view kControllerClassPath =
+		"/Script/Engine.Controller";
+	static constexpr std::string_view kPawnClassPath = "/Script/Engine.Pawn";
 	static constexpr std::string_view kLevelClassPath = "/Script/Engine.Level";
 	static constexpr std::string_view kWorldClassPath = "/Script/Engine.World";
 	static constexpr std::size_t kMaxOuterDepth = 32;
+	static constexpr std::int32_t kMaxLocalPlayers = 64;
 
 	WorldSnapshotCapture(
 		std::shared_ptr<const EngineContext> context,
@@ -135,6 +146,14 @@ private:
 		CandidateKind Kind = CandidateKind::Actor;
 	};
 
+	struct LocalPlayerChainObservation
+	{
+		const EngineSnapshotObject* GameInstance = nullptr;
+		const EngineSnapshotObject* LocalPlayer = nullptr;
+		const EngineSnapshotObject* PlayerController = nullptr;
+		const EngineSnapshotObject* Pawn = nullptr;
+	};
+
 	struct WorkingCapture
 	{
 		std::uint64_t Generation = 0;
@@ -145,18 +164,29 @@ private:
 		std::set<std::string, std::less<>> ComponentClassPaths;
 		std::set<std::string, std::less<>> GameModeClassPaths;
 		std::set<std::string, std::less<>> GameStateClassPaths;
+		std::set<std::string, std::less<>> GameInstanceClassPaths;
+		std::set<std::string, std::less<>> LocalPlayerClassPaths;
+		std::set<std::string, std::less<>> PlayerControllerClassPaths;
+		std::set<std::string, std::less<>> PawnClassPaths;
 		std::set<std::string, std::less<>> LevelClassPaths;
 		std::set<std::string, std::less<>> WorldClassPaths;
 		ReflectedProperty OwningWorld;
 		std::optional<ReflectedProperty> RootComponent;
 		std::optional<ReflectedProperty> AuthorityGameMode;
 		std::optional<ReflectedProperty> GameState;
+		std::optional<ReflectedProperty> OwningGameInstance;
+		std::optional<ReflectedProperty> LocalPlayers;
+		std::optional<ReflectedProperty> LocalPlayerController;
+		std::optional<ReflectedProperty> ControllerPawn;
 		std::vector<Candidate> Candidates;
 		WorldSnapshotObject World;
 		WorldSnapshotReference GameMode;
 		WorldSnapshotReference GameStateReference;
 		WorldSnapshotReference PlayerController;
 		WorldSnapshotReference Pawn;
+		std::optional<ObjectHandle> GameInstanceHandle;
+		std::optional<ObjectHandle> LocalPlayerHandle;
+		bool LocalPlayerChainAvailable = false;
 		bool ComponentsAvailable = false;
 		std::string ComponentsReasonCode;
 		std::string ComponentsReason;
@@ -183,6 +213,20 @@ private:
 	bool ValidateActorRoot(
 		const WorkingCapture& working,
 		const WorldSnapshotActor& actor) noexcept;
+	bool ObserveLocalPlayerChain(
+		const WorkingCapture& working,
+		LocalPlayerChainObservation& observation) noexcept;
+	bool CaptureLocalPlayerChain(WorkingCapture& working);
+	bool ValidateLocalPlayerChain(WorkingCapture& working) noexcept;
+	bool ReadFirstObjectArrayElement(
+		const EngineSnapshotObject& object,
+		const ReflectedProperty& property,
+		std::uintptr_t& element,
+		bool& hasElement) const noexcept;
+	bool ValidateCurrentWorldActor(
+		const WorkingCapture& working,
+		const EngineSnapshotObject& actor,
+		const EngineSnapshotObject*& level) const noexcept;
 	bool ReadStablePointer(std::uintptr_t address, std::uintptr_t& value) const noexcept;
 	bool ReadObjectProperty(
 		const EngineSnapshotObject& object,

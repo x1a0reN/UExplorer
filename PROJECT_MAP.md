@@ -25,7 +25,7 @@ UExplorer 是一个面向 Unreal Engine 的 **SDK Dump + 实时游戏内省工�
 └──────────────────────────────────────────────┘
 ```
 
-当前分支已完成 R4 原子通信切换并进入 R5.3。React -> Tauri `domain_request` -> Rust `DomainService` -> PID-scoped Named Pipe -> `CoreCommandService` 是唯一桌面主链路；release Core 不编译旧 HTTP/API，也不链接 WinSock。Object/Type 集合由 Host immutable SnapshotIndex 查询，详情由 `TypeCommandService` 读取 exact TypeSnapshot；`ObjectPropertyCommandService` 和 `FunctionCallCommandService` 分别执行稳定句柄属性读取与单目标函数调用。只读 World 链路由 `WorldSnapshotCapture` 在 exact Object/Type generation 上预筛候选、在 PostRender 预算内解析并复核 GWorld/Level/Actor/ActorComponent、RootComponent 与 GameMode/GameState 关系，再由 Worker 发布不可变 snapshot；`WorldCommandService` 提供 inspect、Level/Actor/Component page、exact-handle Actor detail 与显式状态 shortcuts。函数复杂生命周期参数、batch job、Memory、LocalPlayer/Pawn shortcut、World transform、Watch/Hook/Blueprint/Dump 仍未完成。真实 UE profile、调用/World round-trip、streaming、GC、Hook、目标规模和卸载证据仍以 `docs/SUPPORT_MATRIX.md` 为准，编译或 synthetic fixture 不改变支持声明。
+当前分支已完成 R4 原子通信切换并进入 R5.3。React -> Tauri `domain_request` -> Rust `DomainService` -> PID-scoped Named Pipe -> `CoreCommandService` 是唯一桌面主链路；release Core 不编译旧 HTTP/API，也不链接 WinSock。Object/Type 集合由 Host immutable SnapshotIndex 查询，详情由 `TypeCommandService` 读取 exact TypeSnapshot；`ObjectPropertyCommandService` 和 `FunctionCallCommandService` 分别执行稳定句柄属性读取与单目标函数调用。生产类型源现可冻结 flat descriptor 和一层 `Array<flat>` descriptor，并在 Windows x64 使用明确的 16-byte ScriptArray profile。只读 World 链路由 `WorldSnapshotCapture` 在 exact Object/Type generation 上预筛候选、在 PostRender 预算内解析并复核 GWorld/Level/Actor/ActorComponent、RootComponent、GameMode/GameState 及 `OwningGameInstance -> LocalPlayers[0] -> PlayerController -> Pawn` 关系，再由 Worker 发布不可变 snapshot；`WorldCommandService` 提供 inspect、Level/Actor/Component page、exact-handle Actor detail 与显式状态 shortcuts。函数复杂生命周期参数、batch job、Memory、World transform、Watch/Hook/Blueprint/Dump 仍未完成。真实 UE profile、调用/World round-trip、streaming、GC、Hook、目标规模和卸载证据仍以 `docs/SUPPORT_MATRIX.md` 为准，编译或 synthetic fixture 不改变支持声明。
 
 ---
 
@@ -59,7 +59,7 @@ UExplorer/
 │   │   ├── EngineContext*.h/.cpp     #   一次性发布的引擎 profile/offset report
 │   │   ├── EngineFacade.h/.cpp       #   session/context/identity 的单一领域入口
 │   │   ├── EngineNameCodec.h/.cpp    #   immutable layout + SafeMemory 的严格 FName 解码
-│   │   ├── PropertyCodec.h/.cpp      #   显式状态、完整 profile、稳定句柄与精确值树预算
+│   │   ├── PropertyCodec.h/.cpp      #   显式状态、Windows x64 ScriptArray profile、稳定句柄与精确值树预算
 │   │   ├── ParamFrame.h/.cpp         #   ProcessEvent owned frame、trivial lifetime 与精确字段边界
 │   │   ├── ReflectionLayout.h/.cpp   #   U/FProperty 字段 witness、尺寸边界与分阶段原子 snapshot
 │   │   ├── ReflectionLayoutCapture.* #   单条 evidence/预检预算、依赖复核、同线程发布与 drain owner
@@ -67,9 +67,9 @@ UExplorer/
 │   │   ├── TypeSnapshot.h/.cpp       #   完整类型覆盖、冻结 descriptor、继承/CDO 语义
 │   │   ├── TypeSnapshotCapture.*     #   分帧 record owner、精确依赖封口、Worker publication/retirement
 │   │   ├── TypeMetadataContext.h      #   类型采集所需 legacy discovery 结果的 immutable 子集
-│   │   ├── ObjectSnapshotTypeCandidateSource.* # exact snapshot/layout + SafeMemory 的生产类型源
+│   │   ├── ObjectSnapshotTypeCandidateSource.* # exact snapshot/layout + flat/单层 Array descriptor 的生产类型源
 │   │   ├── WorldSnapshot.h/.cpp      #   current World/Level/Actor/Component generation、reference state 与严格 store
-│   │   ├── WorldSnapshotCapture.*    #   Worker 预筛/封口/publication + PostRender 分帧 ownership/reference 采集和复核
+│   │   ├── WorldSnapshotCapture.*    #   Worker 预筛/封口/publication + PostRender 分帧 ownership/local-player 采集和复核
 │   │   ├── EngineVersionProbe.h/.cpp #   只扫描已验证 PE 可读节的版本标记探测
 │   │   ├── EngineSnapshot.h/.cpp     #   分段记录、validated publish、旧代 Worker retirement
 │   │   ├── EngineSnapshotCapture.*   #   budgeted capture/validate/publish + failed-set retirement
@@ -578,7 +578,7 @@ WorldBrowser.tsx
   ├─ Actor 按 exact level.full_path 分组；Level/Actor page 显式 load-more
   ├─ world.actor.get                  exact ActorHandle + WorldSnapshot generation
   ├─ world.actor.components           Actor-bound cursor page + explicit load-more
-  ├─ world.shortcuts                  exact UWorld relations；LocalPlayer/Pawn 显式 unavailable
+  ├─ world.shortcuts                  exact UWorld relations + witnessed LocalPlayers[0] 链；缺 metadata 显式 unavailable
   └─ transform update -> world.mutate capability gate
 
 Memory.tsx
@@ -853,7 +853,7 @@ Rust `DomainService` 的显式 operation registry 为准。
 | R2 CoreRuntime/能力模型 | **实现阶段完成** | Runtime、Context、Capability、Handle、Snapshot、SafeMemory |
 | R3 Named Pipe/Rust Host | **实现阶段完成** | 严格 IPC、SessionManager、EventHub、注入与跨语言 fixture |
 | R4 通信原子切换 | **已完成** | React 只走 Tauri；Core release 只走 Named Pipe，无网络栈 |
-| R5 领域正确性 | **当前阶段（R5.3）** | Property read、单目标 Call、World 列表/Actor detail/Component page/current-World shortcuts 已接入；Memory/World transform/Watch/Hook/Blueprint/Dump 待办 |
+| R5 领域正确性 | **当前阶段（R5.3）** | Property read、单目标 Call、单层 Array descriptor、World 列表/Actor detail/Component page/local-player shortcuts 已接入；Memory/World transform/Watch/Hook/Blueprint/Dump 待办 |
 | R6 前端状态重构 | **未开始** | session store、query lifecycle、BigInt 地址、能力驱动 UI |
 | R7 发布硬化 | **未开始** | UE fixture、性能/压力、卸载、发布与文档门禁 |
 

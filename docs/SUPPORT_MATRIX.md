@@ -21,6 +21,12 @@ These assets are available for development, but none changes the support rows ab
   5.6.1, and 5.7.4. Source is used to derive candidate layouts, version transitions,
   lifecycle semantics, and fixture expectations; runtime witnesses still decide whether
   a candidate applies to a target binary.
+- Representative UE 4.21/4.27/5.0/5.7 source confirms that the default-allocator
+  `FScriptArray` consists of one data pointer followed by `int32 ArrayNum` and
+  `int32 ArrayMax`, and that `UGameInstance::GetFirstGamePlayer()` selects
+  `LocalPlayers[0]`. The corresponding World/GameInstance/Player/Controller fields remain
+  reflected across those versions. This supports the Windows x64 ScriptArray and local-player
+  candidates implemented in R5; it does not prove a Shipping binary uses those candidates.
 - `D:\Steam\steamapps\common\Wandering Sword` is the designated real-game fixture.
   Earlier passive artifacts are consistent with an x64 UE4/PhysX Shipping build in the
   UE 4.26 family, but the 2026-08-11 inventory contains only the IDA
@@ -90,12 +96,14 @@ and incrementally re-reads every evidence record before sealing. Main attaches t
 to the shared scheduler and performs worker-only publication after quiet detach. The
 fixtures prove per-unit capture/validation, no partial visibility, exact dependency
 identity, mutation rejection, fixed-capacity retirement/backpressure, deep-frozen generic
-descriptor graphs, bounded member ranges, direct versus inherited ordering, exact
-CDO/owner matching, and hierarchy guards. The production stream now freezes flat
-descriptors for scalar/bool/FName/FString/FText/UObject/Weak/Soft properties and
-publishes a baseline codec that opens scalar/bool/FName/UObject only. Nested descriptor
-graphs, value-layout profiles for the remaining flat kinds, UEnum layout, and Blueprint
-bytecode are still explicitly unavailable. The same
+  descriptor graphs, bounded member ranges, direct versus inherited ordering, exact
+  CDO/owner matching, and hierarchy guards. The production stream now freezes flat
+  descriptors for scalar/bool/FName/FString/FText/UObject/Weak/Soft properties and one-level
+  arrays whose element has a supported flat descriptor. Exact `Array<Object>` metadata also
+  requires the element class full path from the same ObjectSnapshot. The Windows x64 profile
+  opens scalar/bool/FName/FString/UObject and bounded array decoding; FText, Weak/Soft,
+  deeper nested containers, Struct/Map/Set descriptors, UEnum layout, and Blueprint bytecode
+  are still explicitly unavailable without their own witnessed layouts. The same
 harness exercises the worker-only immutable `TypeCommandService` for exact-path
 Class/Struct/Enum/Function detail, explicit member scope, hierarchy/CDO metadata,
 session/context/generation/query-bound pagination, 128-record page limits, a 4 MiB command-data ceiling,

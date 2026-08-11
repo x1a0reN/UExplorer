@@ -122,15 +122,19 @@ Actor, Level, and ActorComponent candidates off-thread. Under the shared PostRen
 the witnessed `GWorld` slot, follows the same typed-outer semantics used by
 `AActor::GetLevel()` and `UActorComponent::GetOwner()`, and requires the reflected
 `ULevel.OwningWorld` object field to equal the current world before publishing. It also
-captures witnessed `AActor.RootComponent` and exact `UWorld.AuthorityGameMode/GameState`
-relations. A second game-thread pass revalidates the world, every stable handle, all
-Actor/Level/Component ownership, root references, and shortcut fields. Sorting, exact
+captures witnessed `AActor.RootComponent`, exact `UWorld.AuthorityGameMode/GameState`,
+and the exact `OwningGameInstance -> LocalPlayers[0] -> PlayerController -> Pawn` chain.
+The local-player path is enabled only when the same TypeSnapshot contains all required
+object fields plus an exact `Array<Object /Script/Engine.LocalPlayer>` descriptor; it
+does not search later array entries or fall back to a global class match. A second
+game-thread pass revalidates the world, every stable handle, all Actor/Level/Component
+ownership, root references, and the complete intermediate shortcut chain. Sorting, exact
 counts, store validation, and publication run on the DLL worker between the bounded
 game-thread phases rather than in the PostRender hot path. The worker-only
 `WorldCommandService` exposes `world.inspect`, cursor-paged `world.levels`, filtered
 `world.actors.list`, exact-handle `world.actor.get`, Actor-bound component pages, and
-explicit-state shortcuts. `UGameInstance.LocalPlayers` array traversal, PlayerController/
-Pawn shortcuts, transform reads/setters, and real target evidence remain unavailable.
+explicit-state shortcuts. If local-player metadata is missing, PlayerController/Pawn stay
+explicitly unavailable. Transform reads/setters and real target evidence remain unavailable.
 PostRender now drives one `GameThreadFrameScheduler` rather than giving the object
 snapshot producer an exclusive callback slot. The scheduler supports at most eight
 clients, shares a 32-unit frame budget in four-unit round-robin quanta, stops further
@@ -148,10 +152,12 @@ to the transport cutover contract.
 The production reflection path is covered by complete synthetic UProperty and FProperty
 memory graphs, including fail-closed profile mismatch, bounded field chains, no partial
 publication, and shutdown ownership. A production type-source UProperty graph additionally
-proves exact dependency sealing, complete structural coverage, worker publication, and
-mutation rejection during incremental validation. No Unreal Engine version is currently claimed as
-verified because the required target fixtures have not yet been added. A successful
-build or synthetic fixture does not establish target runtime safety.
+proves exact dependency sealing, complete structural coverage, worker publication, flat
+property descriptors, one-level exact `Array<Object>` metadata, and mutation rejection
+during incremental validation. The Windows x64 property profile uses the source-backed
+16-byte ScriptArray header for FString and bounded array decoding. No Unreal Engine version
+is currently claimed as verified because the required target fixtures have not yet been
+added. A successful build or synthetic fixture does not establish target runtime safety.
 
 ## Repository layout
 

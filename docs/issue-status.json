@@ -486,7 +486,8 @@
 		"2026-08-10: TypeSnapshotCapture bounds source and validation steps, enforces strict nested type/function records and global type/member/enum limits, and uses four retirement slots plus explicit stalled-candidate backpressure with worker reclamation",
 		"2026-08-10: production type discovery bounds every field chain at 65,536 nodes, uses a fixed 131,072-slot epoch cycle table, revalidates each captured evidence record incrementally, and rejects exact dependency drift at Begin, capture, validation, and seal",
 		"2026-08-10: production type discovery now freezes bounded flat descriptors and EngineSnapshot publication builds a duplicate-checked immutable address index for exact object-reference resolution",
-		"Nested reflection descriptors and target-scale container fixtures remain pending"
+		"2026-08-11: the Windows x64 property profile defines a bounded 16-byte ScriptArray header, and production type discovery captures and revalidates one-level flat array elements including exact ObjectSnapshot-backed element class paths",
+		"Deeper nested containers, Struct/Map/Set descriptors, GC churn, and target-scale container fixtures remain pending"
 	  ]
 	},
 	"OBJ-007": {
@@ -706,8 +707,9 @@
       "status": "in_progress",
       "verification": [
         "2026-08-11: GameMode and GameState shortcuts read witnessed fields from the exact current UWorld and must resolve to stable Actors owned by that World",
-        "2026-08-11: PlayerController and Pawn return WORLD_LOCAL_PLAYER_CHAIN_UNAVAILABLE instead of selecting the first global class-name match",
-        "A validated UGameInstance.LocalPlayers array traversal and real target fixture remain pending"
+        "2026-08-11: WorldSnapshotCapture now requires exact OwningGameInstance, Array<Object LocalPlayer>, PlayerController, and Pawn descriptors, selects only LocalPlayers[0], and binds every intermediate to the same Object/Type generation",
+        "2026-08-11: the first array element, stable handles, class closures, Actor-to-Level/OwningWorld relations, and the complete local-player chain are re-read during the second game-thread validation phase; missing metadata remains WORLD_LOCAL_PLAYER_CHAIN_UNAVAILABLE with no global-object fallback",
+        "The production UProperty array descriptor has synthetic CoreHarness evidence; a real Wandering Sword local-player/streaming/GC fixture remains pending"
       ]
     },
     "WORLD-005": {

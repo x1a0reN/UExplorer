@@ -89,10 +89,13 @@ bool EngineFacade::ConfigureReflectionLayout(
 		std::shared_ptr<const PropertyCodec> properties;
 		if (includeFlatPropertyCodec)
 		{
+			if (sizeof(std::uintptr_t) != 8)
+				return false;
 			PropertyCodecProfile profile{
 				.Validated = true,
 				.ReflectionLayoutFingerprint = layout->Fingerprint(),
-				.Source = "witnessed_flat_property_descriptors_v1"
+				.Source = "witnessed_reflection_windows_x64_property_profile_v2",
+				.DynamicArray = WindowsX64ScriptArrayLayout()
 			};
 			properties = std::make_shared<const PropertyCodec>(m_Names, std::move(profile));
 			if (!properties->IsConfigured())

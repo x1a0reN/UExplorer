@@ -101,6 +101,17 @@ struct DynamicArrayLayout
 	std::int32_t HeaderSize = -1;
 };
 
+constexpr DynamicArrayLayout WindowsX64ScriptArrayLayout() noexcept
+{
+	return {
+		.Validated = true,
+		.DataOffset = 0,
+		.NumOffset = 8,
+		.MaxOffset = 12,
+		.HeaderSize = 16
+	};
+}
+
 struct TextLayout
 {
 	bool Validated = false;

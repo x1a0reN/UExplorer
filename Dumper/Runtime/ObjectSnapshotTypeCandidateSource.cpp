@@ -12,6 +12,7 @@
 #include <map>
 #include <mutex>
 #include <new>
+#include <optional>
 #include <string_view>
 #include <unordered_map>
 #include <utility>
@@ -309,6 +310,22 @@ public:
 		bool IsEnum = false;
 	};
 
+	struct NestedPropertyEvidence final
+	{
+		const EngineSnapshotObject* Object = nullptr;
+		std::uintptr_t Address = 0;
+		std::uintptr_t ClassAddress = 0;
+		std::uint64_t CastFlags = 0;
+		std::int32_t ArrayDim = 0;
+		std::int32_t ElementSize = 0;
+		std::int32_t Offset = 0;
+		std::uint64_t Flags = 0;
+		std::uintptr_t ReferencedType = 0;
+		std::uint32_t BoolByteOffset = 0;
+		std::uint8_t BoolMask = 0;
+		std::string Name;
+	};
+
 	struct FieldEvidence final
 	{
 		const EngineSnapshotObject* Owner = nullptr;
@@ -324,6 +341,7 @@ public:
 		std::uintptr_t ReferencedType = 0;
 		std::uint32_t BoolByteOffset = 0;
 		std::uint8_t BoolMask = 0;
+		std::optional<NestedPropertyEvidence> Element;
 		std::uint32_t OwnerSize = 0;
 		std::string Name;
 		bool IsProperty = false;
@@ -476,13 +494,23 @@ public:
 		const EngineSnapshotObject& owner,
 		std::uint32_t ownerSize,
 		FieldEvidence& evidence);
+	TypeSnapshotSourceError ReadNestedPropertyEvidence(
+		std::uintptr_t address,
+		NestedPropertyEvidence& evidence);
 	TypeSnapshotSourceError ReadFunctionEvidence(
 		const EngineSnapshotObject& object,
 		const EngineSnapshotObject& owner,
 		FunctionEvidence& evidence);
 	TypeSnapshotSourceError BuildFlatDescriptor(
-		const FieldEvidence& evidence,
+		std::int32_t elementSize,
+		std::uint32_t boolByteOffset,
+		std::uint8_t boolMask,
+		std::uintptr_t referencedType,
 		PropertyKind kind,
+		bool requireExactType,
+		std::shared_ptr<const PropertyDescriptor>& descriptor) const;
+	TypeSnapshotSourceError BuildArrayDescriptor(
+		const FieldEvidence& evidence,
 		std::shared_ptr<const PropertyDescriptor>& descriptor) const;
 	TypeSnapshotSourceError CaptureType(TypeSnapshotSourceStepResult& result);
 	TypeSnapshotSourceError CaptureField(
@@ -621,6 +649,130 @@ ObjectSnapshotTypeCandidateSource::Impl::ReadTypeEvidence(
 }
 
 TypeSnapshotSourceError
+ObjectSnapshotTypeCandidateSource::Impl::ReadNestedPropertyEvidence(
+	const std::uintptr_t address,
+	NestedPropertyEvidence& evidence)
+{
+	evidence = {.Address = address};
+	if (address == 0 || !Active || !Active->Plan || !Active->Plan->Reflection)
+		return TypeSnapshotSourceError::InvalidConfiguration;
+	const ReflectionLayout& layout = *Active->Plan->Reflection->Layout;
+	if (layout.PropertySystem() == ReflectionPropertySystem::FProperty)
+	{
+		const ReflectionFieldReport* fieldClass = Field(ReflectionField::FFieldClass);
+		const ReflectionFieldReport* fieldName = Field(ReflectionField::FFieldName);
+		const ReflectionFieldReport* classFlags =
+			Field(ReflectionField::FFieldClassCastFlags);
+		if (!fieldClass || !fieldName || !classFlags
+			|| !ReadStable(address, fieldClass->Offset, evidence.ClassAddress)
+			|| evidence.ClassAddress == 0
+			|| !ReadStable(
+				evidence.ClassAddress,
+				classFlags->Offset,
+				evidence.CastFlags)
+			|| !DecodeFNameStable(address, fieldName->Offset, evidence.Name))
+		{
+			return TypeSnapshotSourceError::MemoryUnavailable;
+		}
+	}
+	else
+	{
+		const auto object = Active->Plan->ByAddress.find(address);
+		if (object == Active->Plan->ByAddress.end() || !object->second
+			|| !Engine.ValidateObjectHandle(object->second->Handle).Ok()
+			|| !ReadStable(address, Metadata.ObjectClass, evidence.ClassAddress)
+			|| evidence.ClassAddress == 0
+			|| !ReadStable(
+				evidence.ClassAddress,
+				Metadata.ClassCastFlags,
+				evidence.CastFlags))
+		{
+			return TypeSnapshotSourceError::MemoryUnavailable;
+		}
+		evidence.Object = object->second;
+		evidence.Name = evidence.Object->Name;
+	}
+
+	const ReflectionFieldReport* arrayDim = Field(ReflectionField::PropertyArrayDim);
+	const ReflectionFieldReport* elementSize = Field(ReflectionField::PropertyElementSize);
+	const ReflectionFieldReport* flags = Field(ReflectionField::PropertyFlags);
+	const ReflectionFieldReport* offset = Field(ReflectionField::PropertyOffset);
+	if (!arrayDim || !elementSize || !flags || !offset
+		|| !ReadStable(address, arrayDim->Offset, evidence.ArrayDim)
+		|| !ReadStable(address, elementSize->Offset, evidence.ElementSize)
+		|| !ReadStable(address, flags->Offset, evidence.Flags)
+		|| !ReadStable(address, offset->Offset, evidence.Offset))
+	{
+		return TypeSnapshotSourceError::MemoryUnavailable;
+	}
+	if (evidence.ArrayDim != 1 || evidence.ElementSize <= 0
+		|| static_cast<std::uint64_t>(evidence.ElementSize)
+			> TypeSnapshotStore::kMaxValueSize
+		|| evidence.Offset != 0)
+	{
+		return TypeSnapshotSourceError::EvidenceAmbiguous;
+	}
+
+	if (HasFlag(evidence.CastFlags, kCastByteProperty))
+	{
+		const ReflectionFieldReport* enumField = Field(ReflectionField::BytePropertyEnum);
+		if (!enumField
+			|| !ReadStable(address, enumField->Offset, evidence.ReferencedType))
+		{
+			return TypeSnapshotSourceError::MemoryUnavailable;
+		}
+	}
+	else if (HasFlag(evidence.CastFlags, kCastObjectProperty)
+		|| HasFlag(evidence.CastFlags, kCastClassProperty)
+		|| HasFlag(evidence.CastFlags, kCastInterfaceProperty))
+	{
+		const ReflectionFieldReport* objectClass = Field(ReflectionField::ObjectPropertyClass);
+		if (!objectClass
+			|| !ReadStable(address, objectClass->Offset, evidence.ReferencedType)
+			|| evidence.ReferencedType == 0)
+		{
+			return TypeSnapshotSourceError::MemoryUnavailable;
+		}
+	}
+	else if (HasFlag(evidence.CastFlags, kCastStructProperty))
+	{
+		const ReflectionFieldReport* structure = Field(ReflectionField::StructPropertyStruct);
+		if (!structure
+			|| !ReadStable(address, structure->Offset, evidence.ReferencedType)
+			|| evidence.ReferencedType == 0)
+		{
+			return TypeSnapshotSourceError::MemoryUnavailable;
+		}
+	}
+	else if (HasFlag(evidence.CastFlags, kCastEnumProperty))
+	{
+		const ReflectionFieldReport* enumField = Field(ReflectionField::EnumPropertyEnum);
+		if (!enumField
+			|| !ReadStable(address, enumField->Offset, evidence.ReferencedType)
+			|| evidence.ReferencedType == 0)
+		{
+			return TypeSnapshotSourceError::MemoryUnavailable;
+		}
+	}
+	if (HasFlag(evidence.CastFlags, kCastBoolProperty))
+	{
+		const ReflectionFieldReport* byteOffset = Field(ReflectionField::BoolByteOffset);
+		const ReflectionFieldReport* fieldMask = Field(ReflectionField::BoolFieldMask);
+		std::uint8_t witnessedByteOffset = 0;
+		if (!byteOffset || !fieldMask
+			|| !ReadStable(address, byteOffset->Offset, witnessedByteOffset)
+			|| !ReadStable(address, fieldMask->Offset, evidence.BoolMask)
+			|| evidence.BoolMask == 0
+			|| witnessedByteOffset >= evidence.ElementSize)
+		{
+			return TypeSnapshotSourceError::EvidenceAmbiguous;
+		}
+		evidence.BoolByteOffset = witnessedByteOffset;
+	}
+	return TypeSnapshotSourceError::None;
+}
+
+TypeSnapshotSourceError
 ObjectSnapshotTypeCandidateSource::Impl::ReadFieldEvidence(
 	const std::uintptr_t address,
 	const EngineSnapshotObject& owner,
@@ -740,6 +892,47 @@ ObjectSnapshotTypeCandidateSource::Impl::ReadFieldEvidence(
 			return TypeSnapshotSourceError::MemoryUnavailable;
 		}
 	}
+	else if (HasFlag(evidence.CastFlags, kCastObjectProperty)
+		|| HasFlag(evidence.CastFlags, kCastClassProperty)
+		|| HasFlag(evidence.CastFlags, kCastInterfaceProperty))
+	{
+		const ReflectionFieldReport* objectClass = Field(ReflectionField::ObjectPropertyClass);
+		if (!objectClass
+			|| !ReadStable(address, objectClass->Offset, evidence.ReferencedType)
+			|| evidence.ReferencedType == 0)
+		{
+			return TypeSnapshotSourceError::MemoryUnavailable;
+		}
+	}
+	else if (HasFlag(evidence.CastFlags, kCastStructProperty))
+	{
+		const ReflectionFieldReport* structure = Field(ReflectionField::StructPropertyStruct);
+		if (!structure
+			|| !ReadStable(address, structure->Offset, evidence.ReferencedType)
+			|| evidence.ReferencedType == 0)
+		{
+			return TypeSnapshotSourceError::MemoryUnavailable;
+		}
+	}
+	else if (HasFlag(evidence.CastFlags, kCastArrayProperty))
+	{
+		const ReflectionFieldReport* inner = Field(ReflectionField::ArrayPropertyInner);
+		std::uintptr_t innerAddress = 0;
+		if (!inner
+			|| !ReadStable(address, inner->Offset, innerAddress)
+			|| innerAddress == 0)
+		{
+			return TypeSnapshotSourceError::MemoryUnavailable;
+		}
+		NestedPropertyEvidence element;
+		const TypeSnapshotSourceError nested = ReadNestedPropertyEvidence(
+			innerAddress,
+			element);
+		if (nested != TypeSnapshotSourceError::None)
+			return nested;
+		evidence.ReferencedType = innerAddress;
+		evidence.Element.emplace(std::move(element));
+	}
 	if (HasFlag(evidence.CastFlags, kCastBoolProperty))
 	{
 		const ReflectionFieldReport* byteOffset = Field(ReflectionField::BoolByteOffset);
@@ -760,18 +953,22 @@ ObjectSnapshotTypeCandidateSource::Impl::ReadFieldEvidence(
 
 TypeSnapshotSourceError
 ObjectSnapshotTypeCandidateSource::Impl::BuildFlatDescriptor(
-	const FieldEvidence& evidence,
+	const std::int32_t elementSize,
+	const std::uint32_t boolByteOffset,
+	const std::uint8_t boolMask,
+	const std::uintptr_t referencedType,
 	const PropertyKind kind,
+	const bool requireExactType,
 	std::shared_ptr<const PropertyDescriptor>& descriptor) const
 {
 	descriptor.reset();
-	if (!IsFlatDescriptorKind(kind) || evidence.ElementSize <= 0)
+	if (!IsFlatDescriptorKind(kind) || elementSize <= 0)
 		return TypeSnapshotSourceError::None;
-	const auto size = static_cast<std::uint32_t>(evidence.ElementSize);
+	const auto size = static_cast<std::uint32_t>(elementSize);
 	const std::uint32_t scalarSize = ExactScalarSize(kind);
 	if ((scalarSize != 0 && size != scalarSize)
 		|| (kind == PropertyKind::Bool
-			&& (evidence.BoolMask == 0 || evidence.BoolByteOffset >= size))
+			&& (boolMask == 0 || boolByteOffset >= size))
 		|| (kind == PropertyKind::Name
 			&& (Context->NameProfile().FNameSize <= 0
 				|| size != static_cast<std::uint32_t>(Context->NameProfile().FNameSize)))
@@ -789,11 +986,72 @@ ObjectSnapshotTypeCandidateSource::Impl::BuildFlatDescriptor(
 	mutableDescriptor->Kind = kind;
 	mutableDescriptor->TypeName = ToString(kind);
 	mutableDescriptor->Size = size;
+	if (kind == PropertyKind::Object && referencedType != 0)
+	{
+		const auto referenced = Active->Plan->ByAddress.find(referencedType);
+		if (referenced == Active->Plan->ByAddress.end() || !referenced->second
+			|| referenced->second->Kind != EngineObjectKind::Class)
+		{
+			if (requireExactType)
+				return TypeSnapshotSourceError::EvidenceUnavailable;
+		}
+		else
+		{
+			mutableDescriptor->TypeName = referenced->second->FullPath;
+		}
+	}
+	else if (kind == PropertyKind::Object && requireExactType)
+	{
+		return TypeSnapshotSourceError::EvidenceUnavailable;
+	}
 	if (kind == PropertyKind::Bool)
 	{
-		mutableDescriptor->BoolByteOffset = evidence.BoolByteOffset;
-		mutableDescriptor->BoolMask = evidence.BoolMask;
+		mutableDescriptor->BoolByteOffset = boolByteOffset;
+		mutableDescriptor->BoolMask = boolMask;
 	}
+	descriptor = std::shared_ptr<const PropertyDescriptor>(std::move(mutableDescriptor));
+	return TypeSnapshotSourceError::None;
+}
+
+TypeSnapshotSourceError
+ObjectSnapshotTypeCandidateSource::Impl::BuildArrayDescriptor(
+	const FieldEvidence& evidence,
+	std::shared_ptr<const PropertyDescriptor>& descriptor) const
+{
+	descriptor.reset();
+	const DynamicArrayLayout layout = WindowsX64ScriptArrayLayout();
+	if (!evidence.Element
+		|| evidence.ArrayDim != 1
+		|| evidence.ElementSize != layout.HeaderSize)
+	{
+		return TypeSnapshotSourceError::EvidenceAmbiguous;
+	}
+	const NestedPropertyEvidence& element = *evidence.Element;
+	const PropertyKind elementKind = ClassifyProperty(
+		element.CastFlags,
+		element.ReferencedType);
+	if (!IsFlatDescriptorKind(elementKind)
+		|| HasFlag(element.CastFlags, kCastInterfaceProperty))
+	{
+		return TypeSnapshotSourceError::None;
+	}
+	std::shared_ptr<const PropertyDescriptor> elementDescriptor;
+	const TypeSnapshotSourceError elementResult = BuildFlatDescriptor(
+		element.ElementSize,
+		element.BoolByteOffset,
+		element.BoolMask,
+		element.ReferencedType,
+		elementKind,
+		elementKind == PropertyKind::Object,
+		elementDescriptor);
+	if (elementResult != TypeSnapshotSourceError::None || !elementDescriptor)
+		return elementResult;
+	auto mutableDescriptor = std::make_shared<PropertyDescriptor>();
+	mutableDescriptor->Kind = PropertyKind::Array;
+	mutableDescriptor->TypeName = "array<" + elementDescriptor->TypeName + ">";
+	mutableDescriptor->Size = static_cast<std::uint32_t>(evidence.ElementSize);
+	mutableDescriptor->ElementStride = static_cast<std::uint32_t>(element.ElementSize);
+	mutableDescriptor->Element = std::move(elementDescriptor);
 	descriptor = std::shared_ptr<const PropertyDescriptor>(std::move(mutableDescriptor));
 	return TypeSnapshotSourceError::None;
 }
@@ -968,18 +1226,34 @@ TypeSnapshotSourceError ObjectSnapshotTypeCandidateSource::Impl::CaptureField(
 		property.Reason =
 			"The witnessed property class has no supported immutable descriptor kind";
 	}
-	else if (IsFlatDescriptorKind(kind)
-		&& !HasFlag(evidence.CastFlags, kCastInterfaceProperty))
+	else if ((IsFlatDescriptorKind(kind)
+			&& !HasFlag(evidence.CastFlags, kCastInterfaceProperty))
+		|| kind == PropertyKind::Array)
 	{
-		const TypeSnapshotSourceError descriptorResult = BuildFlatDescriptor(
-			evidence,
-			kind,
-			property.Descriptor);
+		const TypeSnapshotSourceError descriptorResult = kind == PropertyKind::Array
+			? BuildArrayDescriptor(evidence, property.Descriptor)
+			: BuildFlatDescriptor(
+				evidence.ElementSize,
+				evidence.BoolByteOffset,
+				evidence.BoolMask,
+				evidence.ReferencedType,
+				kind,
+				false,
+				property.Descriptor);
 		if (descriptorResult != TypeSnapshotSourceError::None)
 			return descriptorResult;
-		if (!property.Descriptor)
-			return TypeSnapshotSourceError::ContractViolation;
-		property.State = ReflectedMemberState::Supported;
+		if (property.Descriptor)
+		{
+			property.TypeName = property.Descriptor->TypeName;
+			property.State = ReflectedMemberState::Supported;
+		}
+		else
+		{
+			property.State = ReflectedMemberState::Unavailable;
+			property.ReasonCode = "PROPERTY_DESCRIPTOR_NOT_CAPTURED";
+			property.Reason =
+				"The container element metadata is witnessed, but its immutable descriptor kind is not captured";
+		}
 	}
 	else
 	{
@@ -1093,6 +1367,26 @@ TypeSnapshotSourceError ObjectSnapshotTypeCandidateSource::Impl::ValidateEvidenc
 			current);
 		if (read != TypeSnapshotSourceError::None)
 			return read;
+		const auto sameElement = [](
+			const std::optional<NestedPropertyEvidence>& left,
+			const std::optional<NestedPropertyEvidence>& right) {
+			if (left.has_value() != right.has_value())
+				return false;
+			if (!left)
+				return true;
+			return left->Object == right->Object
+				&& left->Address == right->Address
+				&& left->ClassAddress == right->ClassAddress
+				&& left->CastFlags == right->CastFlags
+				&& left->ArrayDim == right->ArrayDim
+				&& left->ElementSize == right->ElementSize
+				&& left->Offset == right->Offset
+				&& left->Flags == right->Flags
+				&& left->ReferencedType == right->ReferencedType
+				&& left->BoolByteOffset == right->BoolByteOffset
+				&& left->BoolMask == right->BoolMask
+				&& left->Name == right->Name;
+		};
 		return current.Owner == expected->Owner
 			&& current.Object == expected->Object
 			&& current.Address == expected->Address
@@ -1106,6 +1400,7 @@ TypeSnapshotSourceError ObjectSnapshotTypeCandidateSource::Impl::ValidateEvidenc
 			&& current.ReferencedType == expected->ReferencedType
 			&& current.BoolByteOffset == expected->BoolByteOffset
 			&& current.BoolMask == expected->BoolMask
+			&& sameElement(current.Element, expected->Element)
 			&& current.OwnerSize == expected->OwnerSize
 			&& current.Name == expected->Name
 			&& current.IsProperty == expected->IsProperty

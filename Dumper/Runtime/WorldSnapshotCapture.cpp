@@ -118,6 +118,69 @@ bool TryFindSupportedObjectProperty(
 	return true;
 }
 
+bool TryFindSupportedObjectArrayProperty(
+	const std::shared_ptr<const TypeSnapshot>& types,
+	const std::string_view typePath,
+	const std::string_view propertyName,
+	const std::string_view elementTypePath,
+	ReflectedProperty& property)
+{
+	property = {};
+	const TypePropertyQueryResult properties = QueryTypeProperties(
+		types,
+		typePath,
+		TypeMemberScope::IncludeInherited);
+	if (!properties.Ok())
+		return false;
+	const ReflectedProperty* found = nullptr;
+	for (const TypeMemberView<ReflectedProperty>& member : properties.Members)
+	{
+		if (!member.Member || member.Member->Name != propertyName)
+			continue;
+		if (found)
+			return false;
+		found = member.Member;
+	}
+	const DynamicArrayLayout layout = WindowsX64ScriptArrayLayout();
+	if (!found
+		|| found->State != ReflectedMemberState::Supported
+		|| found->Kind != PropertyKind::Array
+		|| found->ArrayDim != 1
+		|| found->Size != static_cast<std::uint32_t>(layout.HeaderSize)
+		|| !found->Descriptor
+		|| found->Descriptor->Kind != PropertyKind::Array
+		|| found->Descriptor->Size != static_cast<std::uint32_t>(layout.HeaderSize)
+		|| found->Descriptor->ElementStride != sizeof(std::uintptr_t)
+		|| found->Descriptor->ElementValueOffset != 0
+		|| !found->Descriptor->Element
+		|| found->Descriptor->Element->Kind != PropertyKind::Object
+		|| found->Descriptor->Element->Size != sizeof(std::uintptr_t)
+		|| found->Descriptor->Element->TypeName != elementTypePath)
+	{
+		return false;
+	}
+	property = *found;
+	return true;
+}
+
+struct ScriptArrayHeader final
+{
+	std::uintptr_t Data = 0;
+	std::int32_t Num = 0;
+	std::int32_t Max = 0;
+};
+
+static_assert(sizeof(ScriptArrayHeader) == 16);
+
+bool SameArrayHeader(
+	const ScriptArrayHeader& left,
+	const ScriptArrayHeader& right) noexcept
+{
+	return left.Data == right.Data
+		&& left.Num == right.Num
+		&& left.Max == right.Max;
+}
+
 WorldSnapshotReference UnavailableReference(
 	std::string reasonCode,
 	std::string reason)
@@ -277,12 +340,66 @@ bool WorldSnapshotCapture::PrepareWorkingCapture(WorkingCapture& working)
 		return false;
 	}
 
-	working.PlayerController = UnavailableReference(
-		"WORLD_LOCAL_PLAYER_CHAIN_UNAVAILABLE",
-		"UGameInstance.LocalPlayers requires a validated reflected array traversal before a local PlayerController can be selected");
-	working.Pawn = UnavailableReference(
-		"WORLD_LOCAL_PLAYER_CHAIN_UNAVAILABLE",
-		"Pawn resolution is unavailable until the exact local PlayerController chain is captured");
+	ReflectedProperty owningGameInstance;
+	ReflectedProperty localPlayers;
+	ReflectedProperty localPlayerController;
+	ReflectedProperty controllerPawn;
+	working.LocalPlayerChainAvailable =
+		BuildClassPaths(
+			*working.Types,
+			kGameInstanceClassPath,
+			working.GameInstanceClassPaths)
+		&& BuildClassPaths(
+			*working.Types,
+			kLocalPlayerClassPath,
+			working.LocalPlayerClassPaths)
+		&& BuildClassPaths(
+			*working.Types,
+			kPlayerControllerClassPath,
+			working.PlayerControllerClassPaths)
+		&& BuildClassPaths(
+			*working.Types,
+			kPawnClassPath,
+			working.PawnClassPaths)
+		&& TryFindSupportedObjectProperty(
+			working.Types,
+			kWorldClassPath,
+			"OwningGameInstance",
+			owningGameInstance)
+		&& TryFindSupportedObjectArrayProperty(
+			working.Types,
+			kGameInstanceClassPath,
+			"LocalPlayers",
+			kLocalPlayerClassPath,
+			localPlayers)
+		&& TryFindSupportedObjectProperty(
+			working.Types,
+			kPlayerClassPath,
+			"PlayerController",
+			localPlayerController)
+		&& TryFindSupportedObjectProperty(
+			working.Types,
+			kControllerClassPath,
+			"Pawn",
+			controllerPawn);
+	if (working.LocalPlayerChainAvailable)
+	{
+		working.OwningGameInstance = std::move(owningGameInstance);
+		working.LocalPlayers = std::move(localPlayers);
+		working.LocalPlayerController = std::move(localPlayerController);
+		working.ControllerPawn = std::move(controllerPawn);
+		working.PlayerController = NotPresentReference();
+		working.Pawn = NotPresentReference();
+	}
+	else
+	{
+		working.PlayerController = UnavailableReference(
+			"WORLD_LOCAL_PLAYER_CHAIN_UNAVAILABLE",
+			"The exact UWorld.GameInstance.LocalPlayers.PlayerController chain is not available in this TypeSnapshot");
+		working.Pawn = UnavailableReference(
+			"WORLD_LOCAL_PLAYER_CHAIN_UNAVAILABLE",
+			"Pawn resolution requires the exact local PlayerController chain");
+	}
 
 	working.ComponentsAvailable = BuildClassPaths(
 		*working.Types,
@@ -500,6 +617,256 @@ bool WorldSnapshotCapture::ReadObjectProperty(
 	return ReadStablePointer(object.Handle.Address + property.Offset, value);
 }
 
+bool WorldSnapshotCapture::ReadFirstObjectArrayElement(
+	const EngineSnapshotObject& object,
+	const ReflectedProperty& property,
+	std::uintptr_t& element,
+	bool& hasElement) const noexcept
+{
+	element = 0;
+	hasElement = false;
+	const DynamicArrayLayout layout = WindowsX64ScriptArrayLayout();
+	if (property.State != ReflectedMemberState::Supported
+		|| property.Kind != PropertyKind::Array
+		|| property.ArrayDim != 1
+		|| property.Size != static_cast<std::uint32_t>(layout.HeaderSize)
+		|| !property.Descriptor
+		|| property.Descriptor->Kind != PropertyKind::Array
+		|| property.Descriptor->ElementStride != sizeof(std::uintptr_t)
+		|| !property.Descriptor->Element
+		|| property.Descriptor->Element->Kind != PropertyKind::Object
+		|| property.Descriptor->Element->Size != sizeof(std::uintptr_t)
+		|| property.Offset
+			> (std::numeric_limits<std::uintptr_t>::max)() - object.Handle.Address)
+	{
+		return false;
+	}
+	const std::uintptr_t headerAddress = object.Handle.Address + property.Offset;
+	ScriptArrayHeader first;
+	ScriptArrayHeader second;
+	if (!ReadValue(headerAddress, first).Ok()
+		|| !ReadValue(headerAddress, second).Ok()
+		|| !SameArrayHeader(first, second)
+		|| first.Num < 0
+		|| first.Max < first.Num
+		|| first.Num > kMaxLocalPlayers
+		|| first.Max > 1024 * 1024)
+	{
+		return false;
+	}
+	if (first.Num == 0)
+		return true;
+	if (first.Data == 0)
+		return false;
+	const std::size_t bytes = static_cast<std::size_t>(first.Num)
+		* sizeof(std::uintptr_t);
+	std::uintptr_t rangeEnd = 0;
+	if (!CheckedAddressRange(first.Data, bytes, rangeEnd))
+		return false;
+	std::uintptr_t firstElement = 0;
+	std::uintptr_t secondElement = 0;
+	ScriptArrayHeader finalHeader;
+	if (!ReadValue(first.Data, firstElement).Ok()
+		|| !ReadValue(first.Data, secondElement).Ok()
+		|| firstElement != secondElement
+		|| !ReadValue(headerAddress, finalHeader).Ok()
+		|| !SameArrayHeader(first, finalHeader))
+	{
+		return false;
+	}
+	element = firstElement;
+	hasElement = firstElement != 0;
+	return true;
+}
+
+bool WorldSnapshotCapture::ValidateCurrentWorldActor(
+	const WorkingCapture& working,
+	const EngineSnapshotObject& actor,
+	const EngineSnapshotObject*& level) const noexcept
+{
+	level = nullptr;
+	bool readFailed = false;
+	level = FindActorLevel(working, actor, readFailed);
+	std::uintptr_t owningWorld = 0;
+	return !readFailed
+		&& level
+		&& ReadOwningWorld(working, *level, owningWorld)
+		&& owningWorld == working.World.Handle.Address;
+}
+
+bool WorldSnapshotCapture::ObserveLocalPlayerChain(
+	const WorkingCapture& working,
+	LocalPlayerChainObservation& observation) noexcept
+{
+	observation = {};
+	if (!working.LocalPlayerChainAvailable
+		|| !working.OwningGameInstance
+		|| !working.LocalPlayers
+		|| !working.LocalPlayerController
+		|| !working.ControllerPawn)
+	{
+		return false;
+	}
+	const EngineSnapshotObject* world = working.Objects->FindByIndex(
+		working.World.Handle.Index);
+	std::uintptr_t address = 0;
+	if (!world
+		|| !SameHandle(world->Handle, working.World.Handle)
+		|| !ReadObjectProperty(*world, *working.OwningGameInstance, address))
+	{
+		return false;
+	}
+	if (address == 0)
+		return true;
+	observation.GameInstance = working.Objects->FindByAddress(address);
+	if (!observation.GameInstance
+		|| !working.GameInstanceClassPaths.contains(observation.GameInstance->ClassPath)
+		|| !ValidateHandle(observation.GameInstance->Handle))
+	{
+		return false;
+	}
+	bool hasLocalPlayer = false;
+	if (!ReadFirstObjectArrayElement(
+			*observation.GameInstance,
+			*working.LocalPlayers,
+			address,
+			hasLocalPlayer))
+	{
+		return false;
+	}
+	if (!hasLocalPlayer)
+		return true;
+	observation.LocalPlayer = working.Objects->FindByAddress(address);
+	if (!observation.LocalPlayer
+		|| !working.LocalPlayerClassPaths.contains(observation.LocalPlayer->ClassPath)
+		|| !ValidateHandle(observation.LocalPlayer->Handle)
+		|| !ReadObjectProperty(
+			*observation.LocalPlayer,
+			*working.LocalPlayerController,
+			address))
+	{
+		return false;
+	}
+	if (address == 0)
+		return true;
+	observation.PlayerController = working.Objects->FindByAddress(address);
+	if (!observation.PlayerController
+		|| !working.PlayerControllerClassPaths.contains(
+			observation.PlayerController->ClassPath)
+		|| !ValidateHandle(observation.PlayerController->Handle)
+		|| !ReadObjectProperty(
+			*observation.PlayerController,
+			*working.ControllerPawn,
+			address))
+	{
+		return false;
+	}
+	if (address == 0)
+		return true;
+	observation.Pawn = working.Objects->FindByAddress(address);
+	return observation.Pawn
+		&& working.PawnClassPaths.contains(observation.Pawn->ClassPath)
+		&& ValidateHandle(observation.Pawn->Handle);
+}
+
+bool WorldSnapshotCapture::CaptureLocalPlayerChain(WorkingCapture& working)
+{
+	if (!working.LocalPlayerChainAvailable)
+	{
+		return working.PlayerController.State == WorldReferenceState::Unavailable
+			&& working.Pawn.State == WorldReferenceState::Unavailable;
+	}
+	LocalPlayerChainObservation observation;
+	if (!ObserveLocalPlayerChain(working, observation))
+		return false;
+	if (observation.GameInstance)
+		working.GameInstanceHandle = observation.GameInstance->Handle;
+	if (observation.LocalPlayer)
+		working.LocalPlayerHandle = observation.LocalPlayer->Handle;
+	if (!observation.PlayerController)
+	{
+		working.PlayerController = NotPresentReference();
+		working.Pawn = NotPresentReference();
+		return true;
+	}
+	const EngineSnapshotObject* controllerLevel = nullptr;
+	if (!ValidateCurrentWorldActor(
+			working,
+			*observation.PlayerController,
+			controllerLevel)
+		|| !AddActor(working, *observation.PlayerController, *controllerLevel))
+	{
+		return false;
+	}
+	working.PlayerController = PresentReference(*observation.PlayerController);
+	if (!observation.Pawn)
+	{
+		working.Pawn = NotPresentReference();
+		return true;
+	}
+	const EngineSnapshotObject* pawnLevel = nullptr;
+	if (!ValidateCurrentWorldActor(working, *observation.Pawn, pawnLevel)
+		|| !AddActor(working, *observation.Pawn, *pawnLevel))
+	{
+		return false;
+	}
+	working.Pawn = PresentReference(*observation.Pawn);
+	return true;
+}
+
+bool WorldSnapshotCapture::ValidateLocalPlayerChain(WorkingCapture& working) noexcept
+{
+	if (!working.LocalPlayerChainAvailable)
+	{
+		return working.PlayerController.State == WorldReferenceState::Unavailable
+			&& working.Pawn.State == WorldReferenceState::Unavailable
+			&& !working.GameInstanceHandle
+			&& !working.LocalPlayerHandle;
+	}
+	LocalPlayerChainObservation observation;
+	if (!ObserveLocalPlayerChain(working, observation))
+		return false;
+	const auto sameOptionalHandle = [](const std::optional<ObjectHandle>& expected,
+		const EngineSnapshotObject* observed) {
+		return expected
+			? observed && SameHandle(*expected, observed->Handle)
+			: observed == nullptr;
+	};
+	if (!sameOptionalHandle(working.GameInstanceHandle, observation.GameInstance)
+		|| !sameOptionalHandle(working.LocalPlayerHandle, observation.LocalPlayer))
+	{
+		return false;
+	}
+	const auto validateActorReference = [&](
+		const WorldSnapshotReference& reference,
+		const EngineSnapshotObject* observed) {
+		if (!observed)
+			return reference.State == WorldReferenceState::NotPresent;
+		if (reference.State != WorldReferenceState::Present
+			|| !reference.Object
+			|| !SameHandle(reference.Object->Handle, observed->Handle))
+		{
+			return false;
+		}
+		const EngineSnapshotObject* level = nullptr;
+		if (!ValidateCurrentWorldActor(working, *observed, level))
+			return false;
+		const auto actor = std::lower_bound(
+			working.Actors.begin(),
+			working.Actors.end(),
+			observed->Handle.Index,
+			[](const WorldSnapshotActor& candidate, const std::int32_t expected) {
+				return candidate.Object.Handle.Index < expected;
+			});
+		return actor != working.Actors.end()
+			&& SameHandle(actor->Object.Handle, observed->Handle);
+	};
+	return validateActorReference(
+			working.PlayerController,
+			observation.PlayerController)
+		&& validateActorReference(working.Pawn, observation.Pawn);
+}
+
 bool WorldSnapshotCapture::ReadCurrentWorldRecord(
 	const WorkingCapture& working,
 	const EngineSnapshotObject*& world) const noexcept
@@ -564,7 +931,8 @@ bool WorldSnapshotCapture::ResolveWorld(WorkingCapture& working)
 			working,
 			working.GameState,
 			working.GameStateClassPaths,
-			working.GameStateReference))
+			working.GameStateReference)
+		|| !CaptureLocalPlayerChain(working))
 	{
 		if (m_Error.load(std::memory_order_acquire) == WorldSnapshotCaptureError::None)
 		{
@@ -988,7 +1356,9 @@ bool WorldSnapshotCapture::ValidateRecord(
 			working.GameState,
 			working.GameStateReference);
 	}
-	const std::size_t levelIndex = validationIndex - 3;
+	if (validationIndex == 3)
+		return ValidateLocalPlayerChain(working);
+	const std::size_t levelIndex = validationIndex - 4;
 	if (levelIndex < working.Levels.size())
 	{
 		const WorldSnapshotLevel& level = working.Levels[levelIndex];
@@ -1297,7 +1667,7 @@ IGameThreadFrameClient::PumpResult WorldSnapshotCapture::PumpFrame(
 			}
 			if (state == WorldSnapshotCaptureState::Validating)
 			{
-				const std::size_t validationCount = 3
+				const std::size_t validationCount = 4
 					+ working.Levels.size()
 					+ working.Actors.size()
 					+ working.Components.size();
@@ -1308,18 +1678,18 @@ IGameThreadFrameClient::PumpResult WorldSnapshotCapture::PumpFrame(
 					if (!ValidateRecord(working, index))
 					{
 						std::int32_t objectIndex = working.World.Handle.Index;
-						if (index >= 3 && index - 3 < working.Levels.size())
-							objectIndex = working.Levels[index - 3].Object.Handle.Index;
-						else if (index >= 3 + working.Levels.size()
-							&& index - 3 - working.Levels.size() < working.Actors.size())
+						if (index >= 4 && index - 4 < working.Levels.size())
+							objectIndex = working.Levels[index - 4].Object.Handle.Index;
+						else if (index >= 4 + working.Levels.size()
+							&& index - 4 - working.Levels.size() < working.Actors.size())
 						{
 							objectIndex = working.Actors[
-								index - 3 - working.Levels.size()].Object.Handle.Index;
+								index - 4 - working.Levels.size()].Object.Handle.Index;
 						}
-						else if (index >= 3 + working.Levels.size() + working.Actors.size())
+						else if (index >= 4 + working.Levels.size() + working.Actors.size())
 						{
 							objectIndex = working.Components[
-								index - 3 - working.Levels.size() - working.Actors.size()]
+								index - 4 - working.Levels.size() - working.Actors.size()]
 								.Object.Handle.Index;
 						}
 						Fail(WorldSnapshotCaptureError::SourceValidationFailed, objectIndex);

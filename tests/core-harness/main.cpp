@@ -3343,6 +3343,7 @@ namespace
 			RequiredObject{"/Script/CoreUObject.TwoVectors", EngineObjectKind::Struct},
 			RequiredObject{"/Script/Engine.Engine", EngineObjectKind::Class},
 			RequiredObject{"/Script/Engine.PlayerController", EngineObjectKind::Class},
+			RequiredObject{"/Script/Engine.LocalPlayer", EngineObjectKind::Class},
 			RequiredObject{"/Script/Engine.CollisionResponseContainer", EngineObjectKind::Struct},
 			RequiredObject{"/Script/Engine.Controller", EngineObjectKind::Class},
 			RequiredObject{"/Script/Engine.PlayerState", EngineObjectKind::Class},
@@ -3404,6 +3405,8 @@ namespace
 			"/Script/CoreUObject.TwoVectors.v2", structClass);
 		FixtureBlock& debugProperties = addSnapshotProperty(
 			"/Script/Engine.GameViewportClient.DebugProperties", arrayClass);
+		FixtureBlock& localPlayers = addSnapshotProperty(
+			"/Script/Engine.GameViewportClient.LocalPlayers", arrayClass);
 		FixtureBlock& displayNameMap = addSnapshotProperty(
 			"/Script/Engine.UserDefinedEnum.DisplayNameMap", mapClass);
 		FixtureBlock& levels = addSnapshotProperty(
@@ -3438,7 +3441,12 @@ namespace
 			initializeProperty(property, identity.Index, propertyClass);
 			return property;
 		};
-		FixtureBlock& arrayInner = addInnerProperty(structClass);
+		FixtureBlock& arrayInner = addSnapshotProperty(
+			"/Script/Engine.GameViewportClient.DebugProperties.Inner",
+			structClass);
+		FixtureBlock& localPlayerInner = addSnapshotProperty(
+			"/Script/Engine.GameViewportClient.LocalPlayers.Inner",
+			objectClass);
 		FixtureBlock& mapKey = addInnerProperty(nameClass);
 		FixtureBlock& mapValue = addInnerProperty(textClass);
 		FixtureBlock& setElement = addInnerProperty(objectClass);
@@ -3468,6 +3476,8 @@ namespace
 		write(color, structChildrenOffset, colorR.Address());
 		write(guidA, fieldNextOffset, guidC.Address());
 		write(colorR, fieldNextOffset, colorG.Address());
+		write(debugProperties, fieldNextOffset, localPlayers.Address());
+		write(localPlayers, fieldNextOffset, std::uintptr_t{0});
 
 		for (FixtureBlock* property : std::array{&guidA, &guidC, &guidD})
 		{
@@ -3516,6 +3526,9 @@ namespace
 		write(debugProperties, derivedPropertyOffset, arrayInner.Address());
 		write(arrayInner, derivedPropertyOffset,
 			addressOf("/Script/Engine.DebugDisplayProperty"));
+		write(localPlayers, derivedPropertyOffset, localPlayerInner.Address());
+		write(localPlayerInner, derivedPropertyOffset,
+			addressOf("/Script/Engine.LocalPlayer"));
 		write(displayNameMap, derivedPropertyOffset, mapKey.Address());
 		write(displayNameMap, derivedPropertyOffset + sizeof(std::uintptr_t),
 			mapValue.Address());
@@ -3562,7 +3575,27 @@ namespace
 			write(*property, propertyArrayDimOffset, std::int32_t{1});
 			write(*property, propertyElementSizeOffset, std::int32_t{1});
 		}
+		for (FixtureBlock* property : std::array{&debugProperties, &localPlayers})
+		{
+			write(*property, propertyArrayDimOffset, std::int32_t{1});
+			write(*property, propertyElementSizeOffset, std::int32_t{16});
+			write(*property, propertyFlagsOffset, std::uint64_t{0});
+		}
+		write(debugProperties, propertyOffsetOffset, std::int32_t{0x20});
+		write(localPlayers, propertyOffsetOffset, std::int32_t{0x30});
+		write(arrayInner, propertyArrayDimOffset, std::int32_t{1});
+		write(arrayInner, propertyElementSizeOffset, std::int32_t{0x20});
+		write(arrayInner, propertyFlagsOffset, std::uint64_t{0});
+		write(arrayInner, propertyOffsetOffset, std::int32_t{0});
+		write(localPlayerInner, propertyArrayDimOffset, std::int32_t{1});
+		write(localPlayerInner, propertyElementSizeOffset, std::int32_t{8});
+		write(localPlayerInner, propertyFlagsOffset, std::uint64_t{0});
+		write(localPlayerInner, propertyOffsetOffset, std::int32_t{0});
 		FixtureBlock& engineType = *nodes.at("/Script/Engine.Engine").Memory;
+		write(
+			*nodes.at("/Script/Engine.GameViewportClient").Memory,
+			structChildrenOffset,
+			debugProperties.Address());
 		write(engineType, structChildrenOffset, nativeFunction.Address());
 		write(nativeFunction, fieldNextOffset, scriptFunction.Address());
 		write(nativeFunction, structChildrenOffset, functionParameter.Address());
@@ -3704,7 +3737,8 @@ namespace
 				&& reflection->Layout
 				&& reflection->IsPropertyCodecConfigured(contextGeneration)
 				&& reflection->Properties->Supports(PropertyKind::Int32)
-				&& !reflection->Properties->Supports(PropertyKind::Array)
+				&& reflection->Properties->Supports(PropertyKind::Array)
+				&& reflection->Properties->Supports(PropertyKind::String)
 				&& reflection->Layout->PropertySystem() == ReflectionPropertySystem::UProperty
 				&& hasOffset(ReflectionField::StructSuper, structSuperOffset)
 				&& hasOffset(ReflectionField::StructChildren, structChildrenOffset)
@@ -3777,8 +3811,32 @@ namespace
 		const ReflectedType* enumType = types
 			? types->FindByFullPath("/Script/Engine.ECollisionResponse")
 			: nullptr;
+		const ReflectedType* gameViewportType = types
+			? types->FindByFullPath("/Script/Engine.GameViewportClient")
+			: nullptr;
 		const ObjectSnapshotTypeSourceDiagnostics completedTypeSource =
 			typeSource.Diagnostics();
+		if (!gameViewportType
+			|| gameViewportType->DirectProperties.size() != 2
+			|| gameViewportType->DirectProperties[1].State != ReflectedMemberState::Supported
+			|| !gameViewportType->DirectProperties[1].Descriptor)
+		{
+			std::ostringstream detail;
+			detail << "Object-array descriptor fixture failed: snapshot="
+				<< static_cast<bool>(types)
+				<< ", publish=" << ToString(publishedTypes.Error)
+				<< ", type=" << static_cast<bool>(gameViewportType);
+			if (gameViewportType)
+			{
+				detail << ", properties=" << gameViewportType->DirectProperties.size();
+				for (const ReflectedProperty& property : gameViewportType->DirectProperties)
+				{
+					detail << ", [" << property.Name << ':' << ToString(property.State)
+						<< ':' << property.ReasonCode << ']';
+				}
+			}
+			throw std::runtime_error(detail.str());
+		}
 		Require(
 			publishedTypes.Ok()
 				&& types == publishedTypes.Snapshot
@@ -3810,6 +3868,24 @@ namespace
 				&& engineTypeRecord->DirectFunctions[1].NativeAddress == 0
 				&& engineTypeRecord->DirectFunctions[1].ReasonCode
 					== "FUNCTION_BYTECODE_NOT_CAPTURED"
+				&& gameViewportType
+				&& gameViewportType->DirectProperties.size() == 2
+				&& gameViewportType->DirectProperties[0].Name == "DebugProperties"
+				&& gameViewportType->DirectProperties[0].State
+					== ReflectedMemberState::Unavailable
+				&& gameViewportType->DirectProperties[1].Name == "LocalPlayers"
+				&& gameViewportType->DirectProperties[1].State
+					== ReflectedMemberState::Supported
+				&& gameViewportType->DirectProperties[1].Descriptor
+				&& gameViewportType->DirectProperties[1].Descriptor->Kind
+					== PropertyKind::Array
+				&& gameViewportType->DirectProperties[1].Descriptor->ElementStride
+					== sizeof(std::uintptr_t)
+				&& gameViewportType->DirectProperties[1].Descriptor->Element
+				&& gameViewportType->DirectProperties[1].Descriptor->Element->Kind
+					== PropertyKind::Object
+				&& gameViewportType->DirectProperties[1].Descriptor->Element->TypeName
+					== "/Script/Engine.LocalPlayer"
 				&& enumType
 				&& enumType->EnumState == ReflectedMemberState::Unavailable
 				&& completedTypeSource.SourceError == TypeSnapshotSourceError::None
@@ -4306,6 +4382,7 @@ namespace
 				&& reflection->Layout
 				&& reflection->IsPropertyCodecConfigured(contextGeneration)
 				&& reflection->Properties->Supports(PropertyKind::Name)
+				&& reflection->Properties->Supports(PropertyKind::Array)
 				&& !reflection->Properties->Supports(PropertyKind::Set)
 				&& reflection->Layout->PropertySystem() == ReflectionPropertySystem::FProperty
 				&& hasOffset(ReflectionField::StructSuper, structSuperOffset)
