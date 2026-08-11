@@ -38,7 +38,7 @@ enum class FunctionCallExecutionError : std::uint8_t
 struct FunctionCallInput
 {
 	const Runtime::ReflectedParameter* Parameter = nullptr;
-	Runtime::PropertyScalar Value;
+	Runtime::PropertyInputValue Value;
 };
 
 struct FunctionCallOutput

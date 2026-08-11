@@ -40,6 +40,12 @@ These assets are available for development, but none changes the support rows ab
   `SetRelativeScale3D(FVector)` has no `FHitResult` output. This is useful for selecting
   semantic properties and planning the owned ProcessEvent frame lifecycle, but it is not
   permission to assume offsets or zero-initialize an uncaptured Shipping `FHitResult`.
+- `Actor.h` across the same source inventory preserves reflected
+  `SetActorScale3D(FVector)` and `GetActorScale3D() -> FVector` without a complex output
+  parameter. R5 now admits only descriptor-proven canonical FVector/FRotator slots in the
+  owned ProcessEvent frame, so these signatures are code-reachable through exact
+  `call.invoke`; this source and synthetic frame evidence do not establish a supported
+  target profile or a successful Shipping ProcessEvent round-trip.
 - `D:\Steam\steamapps\common\Wandering Sword` is the designated real-game fixture.
   Earlier passive artifacts are consistent with an x64 UE4/PhysX Shipping build in the
   UE 4.26 family, but the 2026-08-11 inventory contains only the IDA

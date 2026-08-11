@@ -129,6 +129,44 @@
             "kind": { "const": "object" },
             "value": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/objectHandle" }] }
           }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "type_name", "value"],
+          "properties": {
+            "kind": { "const": "struct" },
+            "type_name": { "const": "/Script/CoreUObject.Vector" },
+            "value": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["X", "Y", "Z"],
+              "properties": {
+                "X": { "type": "string", "minLength": 1, "maxLength": 128 },
+                "Y": { "type": "string", "minLength": 1, "maxLength": 128 },
+                "Z": { "type": "string", "minLength": 1, "maxLength": 128 }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "type_name", "value"],
+          "properties": {
+            "kind": { "const": "struct" },
+            "type_name": { "const": "/Script/CoreUObject.Rotator" },
+            "value": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["Pitch", "Yaw", "Roll"],
+              "properties": {
+                "Pitch": { "type": "string", "minLength": 1, "maxLength": 128 },
+                "Yaw": { "type": "string", "minLength": 1, "maxLength": 128 },
+                "Roll": { "type": "string", "minLength": 1, "maxLength": 128 }
+              }
+            }
+          }
         }
       ]
     },

@@ -110,12 +110,13 @@ client derives request identity from snapshot/type pages and never sends a bare 
 caller-supplied address.
 `FunctionCallCommandService` accepts one exact target `ObjectHandle`, one exact
 `FunctionHandle`, the matching TypeSnapshot generation, and arguments keyed by exact
-reflected parameter names. An owned zeroed `ParamFrame` currently encodes only trivial
-bool/integer/float/double/UObject inputs. The witnessed game-thread task revalidates the
+reflected parameter names. An owned zeroed `ParamFrame` encodes trivial
+bool/integer/float/double/UObject inputs plus descriptor-proven canonical FVector/FRotator
+values with exact semantic fields and float/double width. The witnessed game-thread task revalidates the
 target, function owner/path/signature, and every object argument immediately before
 ProcessEvent, then decodes out/inout/return fields from the same owned frame. Static
 calls use an explicit CDO handle; the protocol has no caller-controlled thread switch.
-Non-trivial FString/container/struct lifetimes, enum input, batch jobs, and real UE
+Arbitrary/non-trivial FString/container/struct lifetimes, enum input, batch jobs, and real UE
 round-trip evidence remain unavailable.
 `WorldSnapshotCapture` uses the exact immutable Object/Type generations to pre-index
 Actor, Level, and ActorComponent candidates off-thread. Under the shared PostRender budget it resolves
@@ -143,10 +144,11 @@ RootComponent handles, reads `RelativeLocation`, `RelativeRotation`, `RelativeSc
 and all three `bAbsolute*` flags from one bounded stable byte witness, then rechecks the
 root relation and live bytes before publishing. WorldBrowser displays the resulting
 float/double precision and relative-versus-absolute-world storage semantics. This is not
-computed `ComponentToWorld`. Transform mutation remains unavailable: the UE 4.21-5.7
-source signatures for the location/rotation setters include an `FHitResult&` output, and
-the current owned `ParamFrame` does not yet support the required struct input/output
-lifecycle. Real target evidence also remains unavailable.
+computed `ComponentToWorld`. The same UE 4.21-5.7 sources expose
+`SetActorScale3D(FVector)` and `SetRelativeScale3D(FVector)` without complex outputs, so
+those exact reflected functions now fit the canonical-struct `call.invoke` contract.
+Full transform mutation remains unavailable: location/rotation setters include an
+`FHitResult&` output whose lifetime is still closed. Real target evidence also remains unavailable.
 PostRender now drives one `GameThreadFrameScheduler` rather than giving the object
 snapshot producer an exclusive callback slot. The scheduler supports at most eight
 clients, shares a 32-unit frame budget in four-unit round-robin quanta, stops further

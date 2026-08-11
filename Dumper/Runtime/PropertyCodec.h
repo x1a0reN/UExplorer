@@ -63,6 +63,12 @@ struct PropertyObjectReference
 	ObjectHandle Handle;
 };
 
+struct PropertyMathStructInput
+{
+	std::string TypeName;
+	std::array<double, 3> Components{};
+};
+
 using PropertyScalar = std::variant<
 	std::monostate,
 	bool,
@@ -71,6 +77,16 @@ using PropertyScalar = std::variant<
 	double,
 	std::string,
 	PropertyObjectReference>;
+
+using PropertyInputValue = std::variant<
+	std::monostate,
+	bool,
+	std::int64_t,
+	std::uint64_t,
+	double,
+	std::string,
+	PropertyObjectReference,
+	PropertyMathStructInput>;
 
 struct PropertyValue
 {
@@ -202,6 +218,18 @@ struct PropertyDescriptor
 	std::vector<PropertyEnumEntry> EnumEntries;
 };
 
+enum class CanonicalMathStructKind : std::uint8_t
+{
+	None,
+	Vector,
+	Rotator
+};
+
+// Only exact, witnessed FVector/FRotator descriptors are treated as trivial
+// ProcessEvent frame members. Arbitrary reflected structs remain unavailable.
+CanonicalMathStructKind ClassifyCanonicalMathStruct(
+	const PropertyDescriptor& descriptor) noexcept;
+
 struct PropertyReferenceResult
 {
 	PropertyValueState State = PropertyValueState::Error;
@@ -273,11 +301,12 @@ public:
 	bool IsConfigured() const noexcept { return m_Configured; }
 	bool Supports(PropertyKind kind) const noexcept;
 	bool SupportsInput(PropertyKind kind) const noexcept;
+	bool SupportsInput(const PropertyDescriptor& descriptor) const noexcept;
 	const PropertyCodecProfile& Profile() const noexcept { return m_Profile; }
 	PropertyEncodeResult EncodeOwned(
 		std::span<std::byte> destination,
 		const PropertyDescriptor& descriptor,
-		const PropertyScalar& value) const noexcept;
+		const PropertyInputValue& value) const noexcept;
 	PropertyValue Decode(
 		std::uintptr_t address,
 		const PropertyDescriptor& descriptor,

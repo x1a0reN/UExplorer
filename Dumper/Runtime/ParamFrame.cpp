@@ -71,6 +71,12 @@ bool ParamFrame::SupportsLifetime(const PropertyKind kind) noexcept
 	}
 }
 
+bool ParamFrame::SupportsLifetime(const PropertyDescriptor& descriptor) noexcept
+{
+	return SupportsLifetime(descriptor.Kind)
+		|| ClassifyCanonicalMathStruct(descriptor) != CanonicalMathStructKind::None;
+}
+
 ParamFrameResult ParamFrame::Create(
 	const std::uint32_t size,
 	ParamFrame& frame) noexcept
@@ -103,13 +109,13 @@ ParamFrameResult ParamFrame::Create(
 
 ParamFrameResult ParamFrame::SetInput(
 	const ReflectedProperty& property,
-	const PropertyScalar& value,
+	const PropertyInputValue& value,
 	const PropertyCodec& codec) noexcept
 {
 	if (!property.Descriptor
 		|| property.State != ReflectedMemberState::Supported
 		|| property.ArrayDim != 1
-		|| !SupportsLifetime(property.Kind))
+		|| !SupportsLifetime(*property.Descriptor))
 	{
 		return Failure(
 			ParamFrameError::ParameterInvalid,

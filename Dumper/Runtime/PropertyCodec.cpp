@@ -28,6 +28,94 @@ constexpr std::size_t kMaximumDescriptorTextBytes = 4096;
 constexpr std::size_t kMaximumErrorCodeBytes = 128;
 constexpr std::int32_t kMaximumLayoutSize = 4096;
 
+constexpr std::array<std::string_view, 3> kVectorFields{"X", "Y", "Z"};
+constexpr std::array<std::string_view, 3> kRotatorFields{"Pitch", "Yaw", "Roll"};
+
+bool HasNoNestedDescriptorMetadata(const PropertyDescriptor& descriptor) noexcept
+{
+	return !descriptor.Element
+		&& !descriptor.Key
+		&& !descriptor.Mapped
+		&& descriptor.Fields.empty()
+		&& descriptor.EnumEntries.empty()
+		&& descriptor.BoolByteOffset == 0
+		&& descriptor.BoolMask == 0
+		&& descriptor.ElementStride == 0
+		&& descriptor.ElementValueOffset == 0
+		&& descriptor.MapKeyOffset == 0
+		&& descriptor.MapValueOffset == 0;
+}
+
+CanonicalMathStructKind ClassifyCanonicalMathStructImpl(
+	const PropertyDescriptor& descriptor) noexcept
+{
+	if (descriptor.Kind != PropertyKind::Struct
+		|| descriptor.Fields.size() != 3
+		|| descriptor.Element
+		|| descriptor.Key
+		|| descriptor.Mapped
+		|| !descriptor.EnumEntries.empty()
+		|| descriptor.BoolByteOffset != 0
+		|| descriptor.BoolMask != 0
+		|| descriptor.ElementStride != 0
+		|| descriptor.ElementValueOffset != 0
+		|| descriptor.MapKeyOffset != 0
+		|| descriptor.MapValueOffset != 0)
+	{
+		return CanonicalMathStructKind::None;
+	}
+
+	CanonicalMathStructKind kind = CanonicalMathStructKind::None;
+	const std::array<std::string_view, 3>* expectedFields = nullptr;
+	if (descriptor.TypeName == "/Script/CoreUObject.Vector")
+	{
+		kind = CanonicalMathStructKind::Vector;
+		expectedFields = &kVectorFields;
+	}
+	else if (descriptor.TypeName == "/Script/CoreUObject.Rotator")
+	{
+		kind = CanonicalMathStructKind::Rotator;
+		expectedFields = &kRotatorFields;
+	}
+	else
+	{
+		return CanonicalMathStructKind::None;
+	}
+
+	PropertyKind componentKind = PropertyKind::Unknown;
+	std::uint32_t componentSize = 0;
+	for (std::size_t index = 0; index < descriptor.Fields.size(); ++index)
+	{
+		const PropertyFieldDescriptor& field = descriptor.Fields[index];
+		if (field.Name != (*expectedFields)[index]
+			|| !field.Descriptor
+			|| (field.Descriptor->Kind != PropertyKind::Float
+				&& field.Descriptor->Kind != PropertyKind::Double)
+			|| field.Descriptor->TypeName.empty()
+			|| !HasNoNestedDescriptorMetadata(*field.Descriptor))
+		{
+			return CanonicalMathStructKind::None;
+		}
+		const std::uint32_t exactSize = field.Descriptor->Kind == PropertyKind::Float
+			? static_cast<std::uint32_t>(sizeof(float))
+			: static_cast<std::uint32_t>(sizeof(double));
+		if (index == 0)
+		{
+			componentKind = field.Descriptor->Kind;
+			componentSize = exactSize;
+		}
+		if (field.Descriptor->Kind != componentKind
+			|| field.Descriptor->Size != componentSize
+			|| field.Offset != index * componentSize)
+		{
+			return CanonicalMathStructKind::None;
+		}
+	}
+	return componentSize != 0 && descriptor.Size == descriptor.Fields.size() * componentSize
+		? kind
+		: CanonicalMathStructKind::None;
+}
+
 struct FieldRange
 {
 	std::int32_t Offset = -1;
@@ -1660,6 +1748,12 @@ private:
 
 } // namespace
 
+CanonicalMathStructKind ClassifyCanonicalMathStruct(
+	const PropertyDescriptor& descriptor) noexcept
+{
+	return ClassifyCanonicalMathStructImpl(descriptor);
+}
+
 const char* ToString(const PropertyValueState state) noexcept
 {
 	switch (state)
@@ -1830,10 +1924,17 @@ bool PropertyCodec::SupportsInput(const PropertyKind kind) const noexcept
 	}
 }
 
+bool PropertyCodec::SupportsInput(const PropertyDescriptor& descriptor) const noexcept
+{
+	return SupportsInput(descriptor.Kind)
+		|| (m_Configured
+			&& ClassifyCanonicalMathStruct(descriptor) != CanonicalMathStructKind::None);
+}
+
 PropertyEncodeResult PropertyCodec::EncodeOwned(
 	const std::span<std::byte> destination,
 	const PropertyDescriptor& descriptor,
-	const PropertyScalar& value) const noexcept
+	const PropertyInputValue& value) const noexcept
 {
 	const auto failure = [](const PropertyEncodeError error, std::string message) {
 		return PropertyEncodeResult{.Error = error, .Message = std::move(message)};
@@ -1846,7 +1947,7 @@ PropertyEncodeResult PropertyCodec::EncodeOwned(
 				PropertyEncodeError::CodecNotConfigured,
 				"No immutable property codec profile has passed validation");
 		}
-		if (!SupportsInput(descriptor.Kind))
+		if (!SupportsInput(descriptor))
 		{
 			return failure(
 				PropertyEncodeError::KindUnavailable,
@@ -2016,6 +2117,37 @@ PropertyEncodeResult PropertyCodec::EncodeOwned(
 				encoded = input->Handle.Address;
 			}
 			copyValue(encoded);
+			return {};
+		}
+		case PropertyKind::Struct:
+		{
+			if (ClassifyCanonicalMathStruct(descriptor) == CanonicalMathStructKind::None)
+			{
+				return failure(
+					PropertyEncodeError::DescriptorInvalid,
+					"The struct descriptor is not an exact canonical FVector or FRotator");
+			}
+			const auto* input = std::get_if<PropertyMathStructInput>(&value);
+			if (!input || input->TypeName != descriptor.TypeName)
+			{
+				return failure(
+					PropertyEncodeError::ValueTypeMismatch,
+					"The struct input type must match the exact reflected canonical type");
+			}
+			std::array<std::byte, 3 * sizeof(double)> encoded{};
+			for (std::size_t index = 0; index < descriptor.Fields.size(); ++index)
+			{
+				const PropertyFieldDescriptor& field = descriptor.Fields[index];
+				const PropertyEncodeResult component = EncodeOwned(
+					std::span<std::byte>(encoded).subspan(
+						field.Offset,
+						field.Descriptor->Size),
+					*field.Descriptor,
+					PropertyInputValue{input->Components[index]});
+				if (!component.Ok())
+					return component;
+			}
+			std::memcpy(destination.data(), encoded.data(), descriptor.Size);
 			return {};
 		}
 		default:

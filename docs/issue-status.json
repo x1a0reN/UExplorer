@@ -579,7 +579,8 @@
 		"2026-08-09: PropertyCodec now provides bounded FString/FName/FText/Object/Weak/Soft/Struct/Array/Map/Set/Enum decode primitives and stable ObjectHandle references",
 		"2026-08-10: PropertyCodec profiles carry a non-zero ReflectionLayout fingerprint; EngineFacade atomically upgrades a witnessed layout-only snapshot with a matching codec, and reflection/codec capabilities are independently derived without forgeable booleans",
 		"2026-08-10: owned ParamFrame construction and exact-width bool/integer/float/double/UObject input encoding are implemented; only zero-constructible, trivially destructible kinds are admitted",
-		"Non-trivial FString/FText/Struct/container construction and destruction plus a real UE function round-trip fixture remain pending"
+		"2026-08-11: descriptor-aware owned input/output now admits only exact CoreUObject FVector X/Y/Z or FRotator Pitch/Yaw/Roll with witnessed homogeneous float/double widths and packed offsets; arbitrary Struct remains closed",
+		"Non-trivial FString/FText/arbitrary Struct/container construction and destruction plus a real UE function round-trip fixture remain pending"
 	  ]
 	},
     "CALL-004": {
@@ -725,9 +726,10 @@
       "verification": [
         "2026-08-11: UE 4.21/4.27 source confirms float X/Y/Z and Pitch/Yaw/Roll, while UE5 LWC source preserves those semantic fields and 5.4/5.7 aliases the defaults to double templates",
         "2026-08-11: worker publication resolves FVector/FRotator descriptors only from exact CoreUObject path plus witnessed scalar kind, semantic names, packed offsets, size, and alignment; the CoreHarness covers UE4 float, UE5 double, and a Rotator X/Y/Z rejection",
-        "2026-08-11: struct values are decoded from one bounded stable byte snapshot, and WorldBrowser strictly parses exact RootComponent RelativeLocation/RelativeRotation/RelativeScale3D property reads",
-        "2026-08-11: world.actor.transform.get now fixes one World/Object/Type/codec generation and reads RelativeLocation/RelativeRotation/RelativeScale3D plus all three bAbsolute flags from one stable byte witness in one owned game-thread work; it rechecks RootComponent and live bytes before publishing",
-        "2026-08-11: the typed Host/React path reports float32/float64 and relative versus absolute-world storage semantics with computed_world=false; UE setters and real UE4/UE5 target round-trips remain pending"
+		"2026-08-11: struct values are decoded from one bounded stable byte snapshot, and WorldBrowser strictly parses exact RootComponent RelativeLocation/RelativeRotation/RelativeScale3D property reads",
+		"2026-08-11: world.actor.transform.get now fixes one World/Object/Type/codec generation and reads RelativeLocation/RelativeRotation/RelativeScale3D plus all three bAbsolute flags from one stable byte witness in one owned game-thread work; it rechecks RootComponent and live bytes before publishing",
+		"2026-08-11: the typed Host/React path reports float32/float64 and relative versus absolute-world storage semantics with computed_world=false",
+		"2026-08-11: canonical FVector input makes the reflected SetActorScale3D/SetRelativeScale3D signature executable through exact call.invoke without raw writes; full location/rotation mutation still requires FHitResult lifecycle and real UE4/UE5 round-trips"
       ]
     },
     "STATE-001": {

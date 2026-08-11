@@ -1,6 +1,7 @@
 #include "FunctionCallCommandService.h"
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cmath>
 #include <format>
@@ -324,14 +325,14 @@ bool IsUnsignedKind(const Runtime::PropertyKind kind) noexcept
 		|| kind == Runtime::PropertyKind::UInt64;
 }
 
-bool ParseInputScalar(
+bool ParseInputValue(
 	const json& encoded,
 	const Runtime::ReflectedProperty& property,
-	Runtime::PropertyScalar& value,
+	Runtime::PropertyInputValue& value,
 	FunctionCallCommandError& error)
 {
 	value = {};
-	if (!encoded.is_object() || encoded.size() != 2
+	if (!encoded.is_object()
 		|| !encoded.contains("kind") || !encoded.contains("value")
 		|| !encoded.at("kind").is_string()
 		|| encoded.at("kind").get_ref<const std::string&>() != Runtime::ToString(property.Kind))
@@ -340,6 +341,32 @@ bool ParseInputScalar(
 			"CALL_ARGUMENT_ENVELOPE_INVALID",
 			"Each argument must contain exactly the matching reflected kind and value",
 			{{"parameter", property.Name}, {"expected_kind", Runtime::ToString(property.Kind)}});
+		return false;
+	}
+	const Runtime::CanonicalMathStructKind mathKind = property.Descriptor
+		? Runtime::ClassifyCanonicalMathStruct(*property.Descriptor)
+		: Runtime::CanonicalMathStructKind::None;
+	if (mathKind == Runtime::CanonicalMathStructKind::None)
+	{
+		if (encoded.size() != 2)
+		{
+			error = Error(
+				"CALL_ARGUMENT_ENVELOPE_INVALID",
+				"Scalar arguments must contain exactly kind and value",
+				{{"parameter", property.Name}});
+			return false;
+		}
+	}
+	else if (encoded.size() != 3
+		|| !encoded.contains("type_name")
+		|| !encoded.at("type_name").is_string()
+		|| encoded.at("type_name").get_ref<const std::string&>() != property.TypeName
+		|| property.Descriptor->TypeName != property.TypeName)
+	{
+		error = Error(
+			"CALL_ARGUMENT_STRUCT_TYPE_MISMATCH",
+			"Canonical struct arguments must contain the exact reflected type_name",
+			{{"parameter", property.Name}, {"expected_type_name", property.TypeName}});
 		return false;
 	}
 	const json& raw = encoded.at("value");
@@ -401,6 +428,38 @@ bool ParseInputScalar(
 			return false;
 		}
 		value = Runtime::PropertyObjectReference{.Handle = std::move(handle)};
+		return true;
+	}
+	if (mathKind != Runtime::CanonicalMathStructKind::None)
+	{
+		const std::array<std::string_view, 3> fields =
+			mathKind == Runtime::CanonicalMathStructKind::Vector
+			? std::array<std::string_view, 3>{"X", "Y", "Z"}
+			: std::array<std::string_view, 3>{"Pitch", "Yaw", "Roll"};
+		if (!raw.is_object() || raw.size() != fields.size())
+		{
+			error = Error(
+				"CALL_ARGUMENT_STRUCT_VALUE_INVALID",
+				"Canonical struct values must contain exactly three semantic components",
+				{{"parameter", property.Name}, {"type_name", property.TypeName}});
+			return false;
+		}
+		Runtime::PropertyMathStructInput input{.TypeName = property.TypeName};
+		for (std::size_t index = 0; index < fields.size(); ++index)
+		{
+			const std::string field(fields[index]);
+			double component = 0.0;
+			if (!raw.contains(field) || !TryFiniteDouble(raw.at(field), component))
+			{
+				error = Error(
+					"CALL_ARGUMENT_STRUCT_VALUE_INVALID",
+					"Each canonical struct component must be a finite floating-point string",
+					{{"parameter", property.Name}, {"component", field}});
+				return false;
+			}
+			input.Components[index] = component;
+		}
+		value = std::move(input);
 		return true;
 	}
 	error = Error(
@@ -857,7 +916,9 @@ FunctionCallPreparation FunctionCallCommandService::PrepareInvoke(
 			if (property.State != Runtime::ReflectedMemberState::Supported
 				|| !property.Descriptor
 				|| property.ArrayDim != 1
-				|| !Runtime::ParamFrame::SupportsLifetime(property.Kind)
+				|| property.Descriptor->Kind != property.Kind
+				|| property.Descriptor->TypeName != property.TypeName
+				|| !Runtime::ParamFrame::SupportsLifetime(*property.Descriptor)
 				|| !reflection->Properties->Supports(property.Kind))
 			{
 				return {.Error = Error(
@@ -890,16 +951,16 @@ FunctionCallPreparation FunctionCallCommandService::PrepareInvoke(
 						"A required input or inout argument is missing",
 						{{"parameter", property.Name}})};
 				}
-				if (!reflection->Properties->SupportsInput(property.Kind))
+				if (!reflection->Properties->SupportsInput(*property.Descriptor))
 				{
 					return {.Error = Error(
 						"CALL_PARAMETER_INPUT_UNAVAILABLE",
 						"The input parameter kind has no safe owned-frame encoder",
 						{{"parameter", property.Name}, {"kind", Runtime::ToString(property.Kind)}})};
 				}
-				Runtime::PropertyScalar value;
+				Runtime::PropertyInputValue value;
 				FunctionCallCommandError parseError;
-				if (!ParseInputScalar(
+				if (!ParseInputValue(
 					data.at("arguments").at(property.Name),
 					property,
 					value,

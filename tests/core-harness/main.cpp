@@ -1072,6 +1072,86 @@ namespace
 		std::int32_t frameValue = 0;
 		std::memcpy(&frameValue, frame.Data(), sizeof(frameValue));
 		Require(frameValue == -33, "Owned ProcessEvent frame encoded the wrong scalar value");
+
+		const auto floatDescriptor = std::make_shared<PropertyDescriptor>(PropertyDescriptor{
+			.Kind = PropertyKind::Float,
+			.TypeName = "float",
+			.Size = sizeof(float)
+		});
+		const auto vectorDescriptor = std::make_shared<PropertyDescriptor>(PropertyDescriptor{
+			.Kind = PropertyKind::Struct,
+			.TypeName = "/Script/CoreUObject.Vector",
+			.Size = 3 * sizeof(float),
+			.Fields = {
+				{.Name = "X", .Offset = 0, .Descriptor = floatDescriptor},
+				{.Name = "Y", .Offset = sizeof(float), .Descriptor = floatDescriptor},
+				{.Name = "Z", .Offset = 2 * sizeof(float), .Descriptor = floatDescriptor}
+			}
+		});
+		ReflectedProperty vectorParameter{
+			.Name = "NewScale3D",
+			.TypeName = vectorDescriptor->TypeName,
+			.Kind = PropertyKind::Struct,
+			.Offset = 0,
+			.Size = vectorDescriptor->Size,
+			.ArrayDim = 1,
+			.State = ReflectedMemberState::Supported,
+			.Descriptor = vectorDescriptor
+		};
+		ParamFrame vectorFrame;
+		const PropertyMathStructInput vectorInput{
+			.TypeName = "/Script/CoreUObject.Vector",
+			.Components = {1.25, -2.5, 3.75}
+		};
+		Require(
+			ClassifyCanonicalMathStruct(*vectorDescriptor) == CanonicalMathStructKind::Vector
+				&& codec.SupportsInput(*vectorDescriptor)
+				&& ParamFrame::SupportsLifetime(*vectorDescriptor)
+				&& ParamFrame::Create(vectorDescriptor->Size, vectorFrame).Ok()
+				&& vectorFrame.SetInput(vectorParameter, vectorInput, codec).Ok(),
+			"Canonical FVector was not admitted as a trivial owned-frame input");
+		std::array<float, 3> encodedVector{};
+		std::memcpy(encodedVector.data(), vectorFrame.Data(), sizeof(encodedVector));
+		Require(
+			encodedVector == std::array<float, 3>{1.25F, -2.5F, 3.75F},
+			"Canonical FVector components were not encoded at witnessed offsets");
+		PropertyDescriptor malformedRotator = *vectorDescriptor;
+		malformedRotator.TypeName = "/Script/CoreUObject.Rotator";
+		Require(
+			ClassifyCanonicalMathStruct(malformedRotator) == CanonicalMathStructKind::None
+				&& !codec.SupportsInput(malformedRotator)
+				&& !ParamFrame::SupportsLifetime(malformedRotator),
+			"A Rotator descriptor with FVector semantic fields bypassed the canonical gate");
+		const auto doubleDescriptor = std::make_shared<PropertyDescriptor>(PropertyDescriptor{
+			.Kind = PropertyKind::Double,
+			.TypeName = "double",
+			.Size = sizeof(double)
+		});
+		const PropertyDescriptor rotatorDescriptor{
+			.Kind = PropertyKind::Struct,
+			.TypeName = "/Script/CoreUObject.Rotator",
+			.Size = 3 * sizeof(double),
+			.Fields = {
+				{.Name = "Pitch", .Offset = 0, .Descriptor = doubleDescriptor},
+				{.Name = "Yaw", .Offset = sizeof(double), .Descriptor = doubleDescriptor},
+				{.Name = "Roll", .Offset = 2 * sizeof(double), .Descriptor = doubleDescriptor}
+			}
+		};
+		std::array<std::byte, 3 * sizeof(double)> encodedRotator{};
+		Require(
+			ClassifyCanonicalMathStruct(rotatorDescriptor) == CanonicalMathStructKind::Rotator
+				&& codec.EncodeOwned(
+					encodedRotator,
+					rotatorDescriptor,
+					PropertyMathStructInput{
+						.TypeName = "/Script/CoreUObject.Rotator",
+						.Components = {10.0, 20.0, 30.0}}).Ok(),
+			"Canonical UE5 double FRotator was not admitted by the owned codec");
+		std::array<double, 3> encodedRotatorValues{};
+		std::memcpy(encodedRotatorValues.data(), encodedRotator.data(), sizeof(encodedRotatorValues));
+		Require(
+			encodedRotatorValues == std::array<double, 3>{10.0, 20.0, 30.0},
+			"Canonical FRotator components were not encoded at witnessed offsets");
 		PropertyCodecProfile scalarProfile{
 			.Validated = true,
 			.ReflectionLayoutFingerprint = 0x61616161,

@@ -717,7 +717,17 @@ export type FunctionCallArgument =
   | { kind: 'int8' | 'int16' | 'int32' | 'int64'; value: string }
   | { kind: 'uint8' | 'uint16' | 'uint32' | 'uint64'; value: string }
   | { kind: 'float' | 'double'; value: string }
-  | { kind: 'object'; value: StableObjectHandle | null };
+  | { kind: 'object'; value: StableObjectHandle | null }
+  | {
+      kind: 'struct';
+      type_name: '/Script/CoreUObject.Vector';
+      value: { X: string; Y: string; Z: string };
+    }
+  | {
+      kind: 'struct';
+      type_name: '/Script/CoreUObject.Rotator';
+      value: { Pitch: string; Yaw: string; Roll: string };
+    };
 
 export interface FunctionCallResultData {
   target: StableObjectHandle;

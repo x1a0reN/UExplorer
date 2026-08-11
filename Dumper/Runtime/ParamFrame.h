@@ -33,14 +33,15 @@ struct ParamFrameResult
 	bool Ok() const noexcept { return Error == ParamFrameError::None; }
 };
 
-// Owns the exact ProcessEvent parameter storage. R5.2 initially admits only
-// zero-constructible, trivially destructible reflected kinds.
+// Owns the exact ProcessEvent parameter storage. It admits scalar/object slots
+// plus descriptor-proven canonical FVector/FRotator; other UE lifetimes remain closed.
 class ParamFrame final
 {
 public:
 	static constexpr std::uint32_t kMaxSize = 16 * 1024 * 1024;
 
 	static bool SupportsLifetime(PropertyKind kind) noexcept;
+	static bool SupportsLifetime(const PropertyDescriptor& descriptor) noexcept;
 	static ParamFrameResult Create(std::uint32_t size, ParamFrame& frame) noexcept;
 
 	ParamFrame() = default;
@@ -51,7 +52,7 @@ public:
 
 	ParamFrameResult SetInput(
 		const ReflectedProperty& property,
-		const PropertyScalar& value,
+		const PropertyInputValue& value,
 		const PropertyCodec& codec) noexcept;
 	std::uintptr_t ValueAddress(const ReflectedProperty& property) const noexcept;
 	void* Data() noexcept { return m_Bytes.empty() ? nullptr : m_Bytes.data(); }

@@ -352,6 +352,29 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
             argumentsByName[parameter.name] = { kind: 'object', value: objectRes.data.handle };
             break;
           }
+          case 'struct': {
+            const components = raw.split(',').map((component) => component.trim());
+            if (components.length !== 3 || components.some((component) => component === '' || !Number.isFinite(Number(component)))) {
+              throw new Error(`${parameter.name} must contain three finite comma-separated components`);
+            }
+            if (parameter.type_name === '/Script/CoreUObject.Vector') {
+              argumentsByName[parameter.name] = {
+                kind: 'struct',
+                type_name: parameter.type_name,
+                value: { X: components[0], Y: components[1], Z: components[2] },
+              };
+              break;
+            }
+            if (parameter.type_name === '/Script/CoreUObject.Rotator') {
+              argumentsByName[parameter.name] = {
+                kind: 'struct',
+                type_name: parameter.type_name,
+                value: { Pitch: components[0], Yaw: components[1], Roll: components[2] },
+              };
+              break;
+            }
+            throw new Error(`${parameter.name} uses unsupported struct type ${parameter.type_name}`);
+          }
           default:
             throw new Error(`${parameter.name} uses unsupported input kind ${parameter.kind}`);
         }
@@ -861,6 +884,13 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
                                   <input
                                     type="text"
                                     value={paramInputs[p.name] ?? ''}
+                                    placeholder={
+                                      p.type_name === '/Script/CoreUObject.Vector'
+                                        ? 'X, Y, Z'
+                                        : p.type_name === '/Script/CoreUObject.Rotator'
+                                          ? 'Pitch, Yaw, Roll'
+                                          : undefined
+                                    }
                                     onChange={(e) =>
                                       setParamInputs((prev) => ({
                                         ...prev,
