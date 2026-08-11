@@ -1,6 +1,7 @@
 #include "TypeSnapshot.h"
 
 #include <algorithm>
+#include <array>
 #include <new>
 #include <set>
 #include <unordered_map>
@@ -684,6 +685,143 @@ TQueryResult QueryMembers(
 }
 
 } // namespace
+
+std::size_t ResolveCanonicalMathStructDescriptors(
+	TypeSnapshotCandidate& candidate) noexcept
+{
+	try
+	{
+		struct CanonicalStruct final
+		{
+			std::string_view Path;
+			std::array<std::string_view, 3> FieldNames;
+		};
+		constexpr std::array canonicalStructs{
+			CanonicalStruct{
+				.Path = "/Script/CoreUObject.Vector",
+				.FieldNames = {"X", "Y", "Z"}},
+			CanonicalStruct{
+				.Path = "/Script/CoreUObject.Rotator",
+				.FieldNames = {"Pitch", "Yaw", "Roll"}}
+		};
+
+		std::map<std::string_view, std::shared_ptr<const PropertyDescriptor>, std::less<>>
+			descriptors;
+		for (const CanonicalStruct& canonical : canonicalStructs)
+		{
+			const auto type = std::ranges::find_if(
+				candidate.Types,
+				[&canonical](const ReflectedType& value) {
+					return value.FullPath == canonical.Path;
+				});
+			if (type == candidate.Types.end()
+				|| type->Kind != ReflectedTypeKind::Struct
+				|| type->DirectProperties.size() != canonical.FieldNames.size())
+			{
+				continue;
+			}
+
+			std::array<const ReflectedProperty*, 3> fields{};
+			PropertyKind scalarKind = PropertyKind::Unknown;
+			std::uint32_t scalarSize = 0;
+			bool valid = true;
+			for (std::size_t index = 0; index < canonical.FieldNames.size(); ++index)
+			{
+				const auto field = std::ranges::find_if(
+					type->DirectProperties,
+					[&canonical, index](const ReflectedProperty& value) {
+						return value.Name == canonical.FieldNames[index];
+					});
+				if (field == type->DirectProperties.end()
+					|| field->State != ReflectedMemberState::Supported
+					|| !field->Descriptor
+					|| field->ArrayDim != 1
+					|| (field->Kind != PropertyKind::Float
+						&& field->Kind != PropertyKind::Double)
+					|| field->Descriptor->Kind != field->Kind
+					|| field->Descriptor->TypeName != field->TypeName
+					|| field->Descriptor->Size != field->Size
+					|| HasNestedMetadata(*field->Descriptor))
+				{
+					valid = false;
+					break;
+				}
+				if (index == 0)
+				{
+					scalarKind = field->Kind;
+					scalarSize = ExactScalarSize(field->Kind);
+				}
+				if (scalarSize == 0
+					|| field->Kind != scalarKind
+					|| field->Size != scalarSize
+					|| field->Offset != index * scalarSize)
+				{
+					valid = false;
+					break;
+				}
+				fields[index] = &*field;
+			}
+			if (!valid
+				|| type->PropertiesSize != canonical.FieldNames.size() * scalarSize
+				|| type->MinAlignment != scalarSize)
+			{
+				continue;
+			}
+
+			auto descriptor = std::make_shared<PropertyDescriptor>();
+			descriptor->Kind = PropertyKind::Struct;
+			descriptor->TypeName = canonical.Path;
+			descriptor->Size = type->PropertiesSize;
+			descriptor->Fields.reserve(fields.size());
+			for (std::size_t index = 0; index < fields.size(); ++index)
+			{
+				descriptor->Fields.push_back({
+					.Name = std::string(canonical.FieldNames[index]),
+					.Offset = fields[index]->Offset,
+					.Descriptor = fields[index]->Descriptor
+				});
+			}
+			descriptors.emplace(canonical.Path, std::move(descriptor));
+		}
+
+		std::size_t resolved = 0;
+		const auto resolveProperty = [&descriptors, &resolved](ReflectedProperty& property) {
+			if (property.Kind != PropertyKind::Struct
+				|| property.State != ReflectedMemberState::Unavailable
+				|| property.ReasonCode != "PROPERTY_DESCRIPTOR_NOT_CAPTURED")
+			{
+				return;
+			}
+			const auto descriptor = descriptors.find(property.TypeName);
+			if (descriptor == descriptors.end()
+				|| !descriptor->second
+				|| descriptor->second->Size != property.Size)
+			{
+				return;
+			}
+			property.Descriptor = descriptor->second;
+			property.State = ReflectedMemberState::Supported;
+			property.ReasonCode.clear();
+			property.Reason.clear();
+			++resolved;
+		};
+		for (ReflectedType& type : candidate.Types)
+		{
+			for (ReflectedProperty& property : type.DirectProperties)
+				resolveProperty(property);
+			for (ReflectedFunction& function : type.DirectFunctions)
+			{
+				for (ReflectedParameter& parameter : function.Parameters)
+					resolveProperty(parameter.Property);
+			}
+		}
+		return resolved;
+	}
+	catch (...)
+	{
+		return 0;
+	}
+}
 
 const char* ToString(const ReflectedTypeKind kind) noexcept
 {

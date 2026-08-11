@@ -634,6 +634,7 @@ TypeSnapshotPublishResult TypeSnapshotCapture::PublishReady() noexcept
 		m_State.store(TypeSnapshotCaptureState::Publishing, std::memory_order_release);
 	}
 
+	(void)ResolveCanonicalMathStructDescriptors(*candidate);
 	TypeSnapshotPublishResult published =
 		m_Engine.PublishTypeSnapshot(std::move(*candidate));
 	{

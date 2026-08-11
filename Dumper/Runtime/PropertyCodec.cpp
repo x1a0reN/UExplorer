@@ -501,7 +501,8 @@ public:
 	PropertyValue Decode(
 		const std::uintptr_t address,
 		const PropertyDescriptor& descriptor,
-		const std::uint32_t depth = 0)
+		const std::uint32_t depth = 0,
+		const std::uintptr_t identityAddress = 0)
 	{
 		if (descriptor.TypeName.empty()
 			|| descriptor.TypeName.size() > kMaximumDescriptorTextBytes)
@@ -524,7 +525,10 @@ public:
 				"PROPERTY_NODE_BUDGET_EXCEEDED", "The property node budget was exhausted");
 		++m_Nodes;
 		const bool recursive = IsRecursiveKind(descriptor.Kind);
-		const auto recursionKey = std::pair{address, &descriptor};
+		const std::uintptr_t recursionAddress = identityAddress == 0
+			? address
+			: identityAddress;
+		const auto recursionKey = std::pair{recursionAddress, &descriptor};
 		if (recursive
 			&& std::ranges::find(m_RecursionStack, recursionKey) != m_RecursionStack.end())
 		{
@@ -565,7 +569,8 @@ public:
 		case PropertyKind::WeakObject: return DecodeWeakObject(address, descriptor);
 		case PropertyKind::SoftObject: return DecodeSoftObject(address, descriptor);
 		case PropertyKind::Enum: return DecodeEnum(address, descriptor, depth);
-		case PropertyKind::Struct: return DecodeStruct(address, descriptor, depth);
+		case PropertyKind::Struct:
+			return DecodeStruct(address, descriptor, depth, recursionAddress);
 		case PropertyKind::Array: return DecodeArray(address, descriptor, depth);
 		case PropertyKind::Map: return DecodeSparse(address, descriptor, depth, true);
 		case PropertyKind::Set: return DecodeSparse(address, descriptor, depth, false);
@@ -1104,11 +1109,45 @@ private:
 	PropertyValue DecodeStruct(
 		const std::uintptr_t address,
 		const PropertyDescriptor& descriptor,
-		const std::uint32_t depth)
+		const std::uint32_t depth,
+		const std::uintptr_t identityAddress)
 	{
 		if (descriptor.Size == 0 || descriptor.Fields.size() > kMaximumDescriptorFields)
 			return MakeFailure(descriptor, PropertyValueState::Error,
 				"PROPERTY_DESCRIPTOR_INVALID", "The struct descriptor is empty or exceeds its field limit");
+		std::size_t snapshotBytes = 0;
+		if (!TryMultiply(static_cast<std::size_t>(descriptor.Size), 2, snapshotBytes)
+			|| snapshotBytes > m_Options.Limits.MaxReadableContainerBytes
+				- (std::min)(m_StructSnapshotBytes,
+					m_Options.Limits.MaxReadableContainerBytes))
+		{
+			return MakeFailure(descriptor, PropertyValueState::Error,
+				"PROPERTY_STRUCT_LIMIT_EXCEEDED", "Stable struct snapshots exceed the aggregate read budget");
+		}
+		m_StructSnapshotBytes += snapshotBytes;
+		struct SnapshotBudgetGuard final
+		{
+			std::size_t& Used;
+			std::size_t Reserved;
+			~SnapshotBudgetGuard() { Used -= Reserved; }
+		};
+		[[maybe_unused]] SnapshotBudgetGuard snapshotBudget{
+			m_StructSnapshotBytes,
+			snapshotBytes
+		};
+		std::vector<std::byte> witness(descriptor.Size);
+		std::vector<std::byte> stable(descriptor.Size);
+		MemoryResult memory = ReadMemory(address, witness);
+		if (!memory.Ok())
+			return MakeMemoryFailure(descriptor, memory);
+		memory = ReadMemory(address, stable);
+		if (!memory.Ok())
+			return MakeMemoryFailure(descriptor, memory);
+		if (witness != stable)
+			return MakeFailure(descriptor, PropertyValueState::Error,
+				"PROPERTY_VALUE_CHANGED_DURING_READ", "The struct bytes changed before they could be decoded");
+		const std::uintptr_t stableAddress =
+			reinterpret_cast<std::uintptr_t>(stable.data());
 		PropertyValue value = MakeValue(descriptor, PropertyValueState::Ok);
 		value.TotalCount = static_cast<std::uint32_t>(descriptor.Fields.size());
 		std::set<std::string> names;
@@ -1131,10 +1170,20 @@ private:
 				break;
 			}
 			std::uintptr_t fieldAddress = 0;
-			if (!TryAddAddress(address, field.Offset, field.Descriptor->Size, fieldAddress))
+			std::uintptr_t fieldIdentityAddress = 0;
+			if (!TryAddAddress(stableAddress, field.Offset, field.Descriptor->Size, fieldAddress)
+				|| !TryAddAddress(
+					identityAddress,
+					field.Offset,
+					field.Descriptor->Size,
+					fieldIdentityAddress))
 				return MakeFailure(descriptor, PropertyValueState::Error,
 					"PROPERTY_ADDRESS_OVERFLOW", "A struct field address overflowed");
-			PropertyValue child = Decode(fieldAddress, *field.Descriptor, depth + 1);
+			PropertyValue child = Decode(
+				fieldAddress,
+				*field.Descriptor,
+				depth + 1,
+				fieldIdentityAddress);
 			child.Label = field.Name;
 			value.State = MergeState(value.State, child.State);
 			if (!child.ErrorCode.empty() && value.ErrorCode.empty())
@@ -1149,6 +1198,12 @@ private:
 				break;
 			}
 		}
+		memory = ReadMemory(address, witness);
+		if (!memory.Ok())
+			return MakeMemoryFailure(descriptor, memory);
+		if (witness != stable)
+			return MakeFailure(descriptor, PropertyValueState::Error,
+				"PROPERTY_VALUE_CHANGED_DURING_READ", "The struct bytes changed while they were decoded");
 		return value;
 	}
 
@@ -1599,6 +1654,7 @@ private:
 	const PropertyCodecProfile& m_Profile;
 	PropertyDecodeOptions m_Options;
 	std::uint32_t m_Nodes = 0;
+	std::size_t m_StructSnapshotBytes = 0;
 	std::vector<std::pair<std::uintptr_t, const PropertyDescriptor*>> m_RecursionStack;
 };
 

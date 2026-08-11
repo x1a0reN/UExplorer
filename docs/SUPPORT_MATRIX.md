@@ -27,6 +27,12 @@ These assets are available for development, but none changes the support rows ab
   `LocalPlayers[0]`. The corresponding World/GameInstance/Player/Controller fields remain
   reflected across those versions. This supports the Windows x64 ScriptArray and local-player
   candidates implemented in R5; it does not prove a Shipping binary uses those candidates.
+- UE 4.21/4.27 `Vector.h` and `Rotator.h` define `X/Y/Z` and `Pitch/Yaw/Roll`
+  as three packed `float` fields. UE5 LWC math declarations use the same semantic field
+  names, while 5.4/5.7 `MathFwd.h` aliases the default FVector/FRotator to the `double`
+  template instantiations. `SceneComponent.h` keeps reflected `RelativeLocation`,
+  `RelativeRotation`, and `RelativeScale3D` members across the sampled UE4/UE5 trees.
+  This evidence defines exact candidate identities and fixture expectations only.
 - `D:\Steam\steamapps\common\Wandering Sword` is the designated real-game fixture.
   Earlier passive artifacts are consistent with an x64 UE4/PhysX Shipping build in the
   UE 4.26 family, but the 2026-08-11 inventory contains only the IDA
@@ -98,11 +104,14 @@ fixtures prove per-unit capture/validation, no partial visibility, exact depende
 identity, mutation rejection, fixed-capacity retirement/backpressure, deep-frozen generic
   descriptor graphs, bounded member ranges, direct versus inherited ordering, exact
   CDO/owner matching, and hierarchy guards. The production stream now freezes flat
-  descriptors for scalar/bool/FName/FString/FText/UObject/Weak/Soft properties and one-level
-  arrays whose element has a supported flat descriptor. Exact `Array<Object>` metadata also
+  descriptors for scalar/bool/FName/FString/FText/UObject/Weak/Soft properties, one-level
+  arrays whose element has a supported flat descriptor, and canonical FVector/FRotator
+  struct descriptors when exact type path, semantic field names, scalar kind, packed offsets,
+  size, and alignment all agree. Exact `Array<Object>` metadata also
   requires the element class full path from the same ObjectSnapshot. The Windows x64 profile
-  opens scalar/bool/FName/FString/UObject and bounded array decoding; FText, Weak/Soft,
-  deeper nested containers, Struct/Map/Set descriptors, UEnum layout, and Blueprint bytecode
+  opens scalar/bool/FName/FString/UObject, bounded array decoding, and the canonical math
+  structs above; FText, Weak/Soft, arbitrary/deeper Struct/container descriptors, Map/Set,
+  UEnum layout, and Blueprint bytecode
   are still explicitly unavailable without their own witnessed layouts. The same
 harness exercises the worker-only immutable `TypeCommandService` for exact-path
 Class/Struct/Enum/Function detail, explicit member scope, hierarchy/CDO metadata,
@@ -111,6 +120,11 @@ hex 64-bit flags, decimal-string enum int64 values, and deterministic unavailabl
 The exact `objects.property.read` path additionally binds an ObjectSnapshot handle,
 TypeSnapshot generation, declaring full path, property name, and array index, then
 revalidates the dependencies and handle on the game thread before SafeMemory decoding.
+Struct decoding reads a bounded whole-value witness twice, decodes children from that owned
+snapshot, and compares the live bytes again before returning. WorldBrowser composes three
+exact root-component reads for the stored RelativeLocation/Rotation/Scale fields, but those
+requests are not yet one same-frame aggregate and do not include SceneComponent `bAbsolute*`
+semantics or a UE setter.
 Rust/schema fixtures and React builds cover their side of this contract. The real
 cross-language process fixture does not yet publish a production TypeSnapshot, and no
 target-process reflection/type run exists, so this does not change any support row.

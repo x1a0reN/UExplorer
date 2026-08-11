@@ -134,7 +134,13 @@ game-thread phases rather than in the PostRender hot path. The worker-only
 `WorldCommandService` exposes `world.inspect`, cursor-paged `world.levels`, filtered
 `world.actors.list`, exact-handle `world.actor.get`, Actor-bound component pages, and
 explicit-state shortcuts. If local-player metadata is missing, PlayerController/Pawn stay
-explicitly unavailable. Transform reads/setters and real target evidence remain unavailable.
+explicitly unavailable. The production type source now derives canonical FVector and
+FRotator descriptors only from exact `/Script/CoreUObject.Vector`/`Rotator` identity and
+their witnessed `X/Y/Z` or `Pitch/Yaw/Roll` float/double fields. WorldBrowser uses the
+existing exact property command to display a root component's stored `RelativeLocation`,
+`RelativeRotation`, and `RelativeScale3D`; these three requests are not a same-frame
+computed world transform and do not yet include the `bAbsolute*` flags. Transform setters
+and real target evidence remain unavailable.
 PostRender now drives one `GameThreadFrameScheduler` rather than giving the object
 snapshot producer an exclusive callback slot. The scheduler supports at most eight
 clients, shares a 32-unit frame budget in four-unit round-robin quanta, stops further
@@ -153,9 +159,12 @@ The production reflection path is covered by complete synthetic UProperty and FP
 memory graphs, including fail-closed profile mismatch, bounded field chains, no partial
 publication, and shutdown ownership. A production type-source UProperty graph additionally
 proves exact dependency sealing, complete structural coverage, worker publication, flat
-property descriptors, one-level exact `Array<Object>` metadata, and mutation rejection
-during incremental validation. The Windows x64 property profile uses the source-backed
-16-byte ScriptArray header for FString and bounded array decoding. No Unreal Engine version
+property descriptors, one-level exact `Array<Object>` metadata, canonical UE4-float and
+UE5-LWC-double FVector/FRotator descriptors, and mutation rejection during incremental
+validation. Struct decoding snapshots and compares the whole bounded value around child
+decoding so fields are not assembled from separate live reads. The Windows x64 property
+profile uses the source-backed 16-byte ScriptArray header for FString and bounded array
+decoding. No Unreal Engine version
 is currently claimed as verified because the required target fixtures have not yet been
 added. A successful build or synthetic fixture does not establish target runtime safety.
 

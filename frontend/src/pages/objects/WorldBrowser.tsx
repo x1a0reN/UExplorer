@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { t } from '../../i18n';
 import { Search, MapPin, Globe, ChevronDown, ChevronRight } from 'lucide-react';
 import api, {
@@ -14,9 +14,156 @@ import { Panel, HeaderCard, type BrowserPageProps } from './shared';
 
 type WorldDetailTab = 'Transform' | 'Components';
 
+type TransformPrecision = 'float32' | 'float64';
+
+interface ParsedMathStruct {
+    precision: TransformPrecision;
+    values: Record<string, number>;
+}
+
+type LiveRelativeTransform =
+    | { state: 'idle' | 'loading' }
+    | {
+        state: 'available';
+        precision: TransformPrecision;
+        location: { x: number; y: number; z: number };
+        rotation: { pitch: number; yaw: number; roll: number };
+        scale: { x: number; y: number; z: number };
+    }
+    | { state: 'unavailable'; reasonCode: string; reason: string };
+
+const SCENE_COMPONENT_PATH = '/Script/Engine.SceneComponent';
+const VECTOR_PATH = '/Script/CoreUObject.Vector';
+const ROTATOR_PATH = '/Script/CoreUObject.Rotator';
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+    return typeof value === 'object' && value !== null && !Array.isArray(value)
+        ? value as Record<string, unknown>
+        : null;
+}
+
+function parseMathStruct(
+    value: unknown,
+    exactTypePath: string,
+    fieldNames: readonly string[],
+): ParsedMathStruct | null {
+    const root = asRecord(value);
+    if (!root
+        || root.state !== 'ok'
+        || root.kind !== 'struct'
+        || root.type_name !== exactTypePath
+        || root.truncated !== false
+        || root.total_count !== fieldNames.length
+        || !Array.isArray(root.children)
+        || root.children.length !== fieldNames.length) {
+        return null;
+    }
+
+    let scalarKind: 'float' | 'double' | null = null;
+    const values: Record<string, number> = {};
+    for (let index = 0; index < fieldNames.length; index += 1) {
+        const child = asRecord(root.children[index]);
+        const scalar = child ? asRecord(child.scalar) : null;
+        const fieldName = fieldNames[index];
+        if (!child
+            || !scalar
+            || typeof fieldName !== 'string'
+            || child.state !== 'ok'
+            || child.label !== fieldName
+            || (child.kind !== 'float' && child.kind !== 'double')
+            || scalar.kind !== 'float64'
+            || typeof scalar.value !== 'string'
+            || scalar.value.trim().length === 0) {
+            return null;
+        }
+        if (scalarKind === null) scalarKind = child.kind;
+        if (child.kind !== scalarKind) return null;
+        const parsed = Number(scalar.value);
+        if (!Number.isFinite(parsed)) return null;
+        values[fieldName] = parsed;
+    }
+    if (scalarKind === null) return null;
+    return {
+        precision: scalarKind === 'float' ? 'float32' : 'float64',
+        values,
+    };
+}
+
+async function readRootRelativeTransform(
+    detail: WorldActorDetail,
+): Promise<LiveRelativeTransform> {
+    const root = detail.root_component.object;
+    if (detail.root_component.state !== 'present' || !root) {
+        return {
+            state: 'unavailable',
+            reasonCode: detail.root_component.reason_code || 'WORLD_ROOT_COMPONENT_NOT_PRESENT',
+            reason: detail.root_component.reason || 'The actor has no witnessed root scene component.',
+        };
+    }
+
+    const requests = [
+        { property: 'RelativeLocation', typePath: VECTOR_PATH, fields: ['X', 'Y', 'Z'] },
+        { property: 'RelativeRotation', typePath: ROTATOR_PATH, fields: ['Pitch', 'Yaw', 'Roll'] },
+        { property: 'RelativeScale3D', typePath: VECTOR_PATH, fields: ['X', 'Y', 'Z'] },
+    ] as const;
+    const responses = await Promise.all(requests.map((request) => api.readExactObjectProperty(
+        root.handle,
+        detail.type_snapshot_generation,
+        SCENE_COMPONENT_PATH,
+        request.property,
+    )));
+    const failed = responses.find((response) => !response.success || !response.data);
+    if (failed) {
+        return {
+            state: 'unavailable',
+            reasonCode: failed.error_code || 'WORLD_TRANSFORM_READ_FAILED',
+            reason: failed.error || 'An exact root-component transform property could not be read.',
+        };
+    }
+
+    const location = responses[0].data
+        ? parseMathStruct(responses[0].data.value, requests[0].typePath, requests[0].fields)
+        : null;
+    const rotation = responses[1].data
+        ? parseMathStruct(responses[1].data.value, requests[1].typePath, requests[1].fields)
+        : null;
+    const scale = responses[2].data
+        ? parseMathStruct(responses[2].data.value, requests[2].typePath, requests[2].fields)
+        : null;
+    if (!location || !rotation || !scale
+        || location.precision !== rotation.precision
+        || location.precision !== scale.precision) {
+        return {
+            state: 'unavailable',
+            reasonCode: 'WORLD_TRANSFORM_VALUE_INVALID',
+            reason: 'The exact FVector/FRotator values or their scalar precision were inconsistent.',
+        };
+    }
+    return {
+        state: 'available',
+        precision: location.precision,
+        location: {
+            x: location.values.X,
+            y: location.values.Y,
+            z: location.values.Z,
+        },
+        rotation: {
+            pitch: rotation.values.Pitch,
+            yaw: rotation.values.Yaw,
+            roll: rotation.values.Roll,
+        },
+        scale: {
+            x: scale.values.X,
+            y: scale.values.Y,
+            z: scale.values.Z,
+        },
+    };
+}
+
 // ─── Component ─────────────────────────────────────────────────
 
 export default function WorldBrowser({ onSwitchMode }: BrowserPageProps) {
+    const detailRequestEpoch = useRef(0);
     // World state
     const [levels, setLevels] = useState<WorldLevelItem[]>([]);
     const [nextLevelCursor, setNextLevelCursor] = useState<WorldQueryCursor | null>(null);
@@ -39,6 +186,7 @@ export default function WorldBrowser({ onSwitchMode }: BrowserPageProps) {
     const [componentLoading, setComponentLoading] = useState(false);
     const [detailLoading, setDetailLoading] = useState(false);
     const [detailError, setDetailError] = useState<string | null>(null);
+    const [relativeTransform, setRelativeTransform] = useState<LiveRelativeTransform>({ state: 'idle' });
 
     // ─── Data Loading ──────────────────────────────────────────
 
@@ -73,6 +221,7 @@ export default function WorldBrowser({ onSwitchMode }: BrowserPageProps) {
     ) => {
         setActorListLoading(true);
         if (!append) {
+            detailRequestEpoch.current += 1;
             setActors([]);
             setNextActorCursor(null);
             setActorMatched(0);
@@ -81,6 +230,7 @@ export default function WorldBrowser({ onSwitchMode }: BrowserPageProps) {
             setActorDetail(null);
             setComponents([]);
             setNextComponentCursor(null);
+            setRelativeTransform({ state: 'idle' });
         }
         try {
             const res = await api.getWorldActors(cursor, 128, search, classFilter);
@@ -95,24 +245,36 @@ export default function WorldBrowser({ onSwitchMode }: BrowserPageProps) {
     }, [classFilter, search]);
 
     const loadActorDetail = async (actor: WorldActorItem) => {
+        const requestEpoch = ++detailRequestEpoch.current;
         setDetailLoading(true);
         setDetailError(null);
         setActorDetail(null);
         setComponents([]);
         setNextComponentCursor(null);
         setDetailTab('Transform');
+        setRelativeTransform({ state: 'loading' });
         const generation = actorGeneration;
         if (generation === null) {
             setDetailError('WORLD_SNAPSHOT_STALE: actor list generation is unavailable');
+            setRelativeTransform({
+                state: 'unavailable',
+                reasonCode: 'WORLD_SNAPSHOT_STALE',
+                reason: 'The actor list generation is unavailable.',
+            });
             setDetailLoading(false);
             return;
         }
         try {
             const detailRes = await api.getWorldActorDetail(actor.handle, generation);
+            if (requestEpoch !== detailRequestEpoch.current) return;
             if (detailRes.success && detailRes.data) {
                 setActorDetail(detailRes.data);
+                const transform = await readRootRelativeTransform(detailRes.data);
+                if (requestEpoch !== detailRequestEpoch.current) return;
+                setRelativeTransform(transform);
                 if (detailRes.data.components.state === 'available') {
                     const compRes = await api.getWorldActorComponents(actor.handle, generation);
+                    if (requestEpoch !== detailRequestEpoch.current) return;
                     if (compRes.success && compRes.data) {
                         setComponents(compRes.data.components);
                         setNextComponentCursor(compRes.data.next_cursor);
@@ -122,11 +284,24 @@ export default function WorldBrowser({ onSwitchMode }: BrowserPageProps) {
                 }
             } else {
                 setDetailError(detailRes.error || detailRes.error_code || 'World detail unavailable');
+                setRelativeTransform({
+                    state: 'unavailable',
+                    reasonCode: detailRes.error_code || 'WORLD_DETAIL_UNAVAILABLE',
+                    reason: detailRes.error || 'World detail is unavailable.',
+                });
             }
         } catch (error) {
-            setDetailError(error instanceof Error ? error.message : String(error));
+            if (requestEpoch === detailRequestEpoch.current) {
+                const reason = error instanceof Error ? error.message : String(error);
+                setDetailError(reason);
+                setRelativeTransform({
+                    state: 'unavailable',
+                    reasonCode: 'WORLD_TRANSFORM_READ_FAILED',
+                    reason,
+                });
+            }
         } finally {
-            setDetailLoading(false);
+            if (requestEpoch === detailRequestEpoch.current) setDetailLoading(false);
         }
     };
 
@@ -280,10 +455,52 @@ export default function WorldBrowser({ onSwitchMode }: BrowserPageProps) {
                         {/* Transform Tab */}
                         {detailTab === 'Transform' && (
                             <Panel title={t('Transform')}>
-                                <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
-                                    {actorDetail?.transform.reason
-                                        || 'Transform data is unavailable until FVector/FRotator/LWC identity and a game-thread Unreal setter are verified.'}
-                                </div>
+                                {relativeTransform.state === 'loading' && (
+                                    <div className="text-xs text-white/40">{t('Loading...')}</div>
+                                )}
+                                {relativeTransform.state === 'available' && (
+                                    <div className="space-y-3">
+                                        <div className="flex items-center justify-between text-[11px] text-white/40">
+                                            <span>Stored USceneComponent Relative* fields</span>
+                                            <span className="rounded border border-cyan-400/20 bg-cyan-400/5 px-2 py-0.5 font-mono text-cyan-200/70">
+                                                {relativeTransform.precision}
+                                            </span>
+                                        </div>
+                                        <div className="grid gap-3 xl:grid-cols-3">
+                                            {[
+                                                { label: 'Location', values: [['X', relativeTransform.location.x], ['Y', relativeTransform.location.y], ['Z', relativeTransform.location.z]] },
+                                                { label: 'Rotation', values: [['Pitch', relativeTransform.rotation.pitch], ['Yaw', relativeTransform.rotation.yaw], ['Roll', relativeTransform.rotation.roll]] },
+                                                { label: 'Scale', values: [['X', relativeTransform.scale.x], ['Y', relativeTransform.scale.y], ['Z', relativeTransform.scale.z]] },
+                                            ].map((group) => (
+                                                <div key={group.label} className="rounded-lg border border-white/5 bg-black/20 p-3">
+                                                    <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-white/40">{group.label}</div>
+                                                    <div className="space-y-1.5">
+                                                        {group.values.map(([axis, value]) => (
+                                                            <div key={axis} className="flex items-center justify-between gap-3 font-mono text-xs">
+                                                                <span className="text-white/35">{axis}</span>
+                                                                <span className="truncate text-white/85">{String(value)}</span>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                        <div className="text-[11px] text-white/30">
+                                            bAbsoluteLocation/Rotation/Scale are not included yet; these are the exact stored Relative* values, not a computed world transform.
+                                        </div>
+                                    </div>
+                                )}
+                                {relativeTransform.state === 'unavailable' && (
+                                    <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                                        <span className="mr-2 font-mono text-amber-300/70">{relativeTransform.reasonCode}</span>
+                                        {relativeTransform.reason}
+                                    </div>
+                                )}
+                                {relativeTransform.state === 'idle' && actorDetail && (
+                                    <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                                        {actorDetail.transform.reason}
+                                    </div>
+                                )}
                             </Panel>
                         )}
 

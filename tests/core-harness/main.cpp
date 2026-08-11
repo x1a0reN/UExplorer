@@ -1329,6 +1329,14 @@ namespace
 				&& structValue.Children.size() == 2
 				&& structValue.Children[1].Label == "B",
 			"Struct fields were not bounded and labeled deterministically");
+		PropertyDecodeOptions structLimitOptions;
+		structLimitOptions.Limits.MaxReadableContainerBytes = structDescriptor.Size;
+		Require(
+			codec.Decode(
+				reinterpret_cast<std::uintptr_t>(structData.data()),
+				structDescriptor,
+				structLimitOptions).ErrorCode == "PROPERTY_STRUCT_LIMIT_EXCEEDED",
+			"Stable struct snapshots exceeded the aggregate byte budget");
 		PropertyDescriptor cyclicDescriptor{
 			.Kind = PropertyKind::Struct,
 			.TypeName = "Cycle",
@@ -1531,6 +1539,115 @@ namespace
 					*intDescriptor).ErrorCode == "PROPERTY_CODEC_NOT_CONFIGURED",
 			"Overlapping layout fields configured a partially usable property codec");
 
+	}
+
+	void TestCanonicalMathStructDescriptors()
+	{
+		using namespace UExplorer::Runtime;
+
+		const auto scalarDescriptor = std::make_shared<PropertyDescriptor>(
+			PropertyDescriptor{
+				.Kind = PropertyKind::Double,
+				.TypeName = "double",
+				.Size = 8
+			});
+		const auto makeScalar = [&scalarDescriptor](
+			const std::string& name,
+			const std::uint32_t offset) {
+			return ReflectedProperty{
+				.Name = name,
+				.TypeName = "double",
+				.Kind = PropertyKind::Double,
+				.Offset = offset,
+				.Size = 8,
+				.ArrayDim = 1,
+				.State = ReflectedMemberState::Supported,
+				.Descriptor = scalarDescriptor
+			};
+		};
+		const auto makeCanonical = [&makeScalar](
+			const std::string& name,
+			const std::string& path,
+			const std::array<std::string, 3>& fields) {
+			return ReflectedType{
+				.Kind = ReflectedTypeKind::Struct,
+				.Name = name,
+				.FullPath = path,
+				.PackagePath = "/Script/CoreUObject",
+				.PropertiesSize = 24,
+				.MinAlignment = 8,
+				.DirectProperties = {
+					makeScalar(fields[0], 0),
+					makeScalar(fields[1], 8),
+					makeScalar(fields[2], 16)
+				}
+			};
+		};
+		const auto makeStructProperty = [](const std::string& name,
+			const std::string& typeName,
+			const std::uint32_t offset = 0) {
+			return ReflectedProperty{
+				.Name = name,
+				.TypeName = typeName,
+				.Kind = PropertyKind::Struct,
+				.Offset = offset,
+				.Size = 24,
+				.ArrayDim = 1,
+				.State = ReflectedMemberState::Unavailable,
+				.ReasonCode = "PROPERTY_DESCRIPTOR_NOT_CAPTURED",
+				.Reason = "fixture"
+			};
+		};
+
+		TypeSnapshotCandidate candidate;
+		candidate.Types.push_back(makeCanonical(
+			"Vector", "/Script/CoreUObject.Vector", {"X", "Y", "Z"}));
+		candidate.Types.push_back(makeCanonical(
+			"Rotator", "/Script/CoreUObject.Rotator", {"Pitch", "Yaw", "Roll"}));
+		ReflectedType sceneComponent{
+			.Kind = ReflectedTypeKind::Class,
+			.Name = "SceneComponent",
+			.FullPath = "/Script/Engine.SceneComponent",
+			.PackagePath = "/Script/Engine",
+			.PropertiesSize = 72,
+			.MinAlignment = 8,
+			.DirectProperties = {
+				makeStructProperty("RelativeLocation", "/Script/CoreUObject.Vector", 0),
+				makeStructProperty("RelativeRotation", "/Script/CoreUObject.Rotator", 24),
+				makeStructProperty("RelativeScale3D", "/Script/CoreUObject.Vector", 48)
+			}
+		};
+		ReflectedFunction function;
+		function.Parameters.push_back({
+			.Direction = ReflectedParameterDirection::Input,
+			.Property = makeStructProperty("NewRotation", "/Script/CoreUObject.Rotator")
+		});
+		sceneComponent.DirectFunctions.push_back(std::move(function));
+		candidate.Types.push_back(std::move(sceneComponent));
+
+		TypeSnapshotCandidate malformed = candidate;
+		malformed.Types[1].DirectProperties[0].Name = "X";
+		Require(
+			ResolveCanonicalMathStructDescriptors(malformed) == 2
+				&& malformed.Types[2].DirectProperties[0].State
+					== ReflectedMemberState::Supported
+				&& malformed.Types[2].DirectProperties[1].State
+					== ReflectedMemberState::Unavailable
+				&& malformed.Types[2].DirectFunctions[0].Parameters[0].Property.State
+					== ReflectedMemberState::Unavailable,
+			"A Rotator with FVector field identity produced a canonical descriptor");
+
+		Require(
+			ResolveCanonicalMathStructDescriptors(candidate) == 4
+				&& candidate.Types[2].DirectProperties[0].Descriptor
+				&& candidate.Types[2].DirectProperties[0].Descriptor->Fields[0].Name == "X"
+				&& candidate.Types[2].DirectProperties[1].Descriptor
+				&& candidate.Types[2].DirectProperties[1].Descriptor->Fields[0].Name == "Pitch"
+				&& candidate.Types[2].DirectProperties[1].Descriptor->Fields[1].Name == "Yaw"
+				&& candidate.Types[2].DirectProperties[1].Descriptor->Fields[2].Name == "Roll"
+				&& candidate.Types[2].DirectFunctions[0].Parameters[0].Property.State
+					== ReflectedMemberState::Supported,
+			"Canonical UE5 double FVector/FRotator descriptors were not resolved by exact identity");
 	}
 
 	void TestReflectionLayout()
@@ -3217,6 +3334,7 @@ namespace
 		constexpr std::uint64_t castField = 0x0000000000000001;
 		constexpr std::uint64_t castByte = 0x0000000000000040;
 		constexpr std::uint64_t castInt = 0x0000000000000080;
+		constexpr std::uint64_t castFloat = 0x0000000000000100;
 		constexpr std::uint64_t castName = 0x0000000000002000;
 		constexpr std::uint64_t castProperty = 0x0000000000008000;
 		constexpr std::uint64_t castObject = 0x0000000000010000;
@@ -3340,6 +3458,7 @@ namespace
 			RequiredObject{"/Script/CoreUObject.Guid", EngineObjectKind::Struct},
 			RequiredObject{"/Script/CoreUObject.Color", EngineObjectKind::Struct},
 			RequiredObject{"/Script/CoreUObject.Vector", EngineObjectKind::Struct},
+			RequiredObject{"/Script/CoreUObject.Rotator", EngineObjectKind::Struct},
 			RequiredObject{"/Script/CoreUObject.TwoVectors", EngineObjectKind::Struct},
 			RequiredObject{"/Script/Engine.Engine", EngineObjectKind::Class},
 			RequiredObject{"/Script/Engine.PlayerController", EngineObjectKind::Class},
@@ -3363,6 +3482,8 @@ namespace
 
 		FixtureBlock& intClass = addPropertyClass(
 			castProperty | castNumeric | castInt);
+		FixtureBlock& floatClass = addPropertyClass(
+			castProperty | castNumeric | castFloat);
 		FixtureBlock& byteClass = addPropertyClass(
 			castProperty | castNumeric | castByte);
 		FixtureBlock& boolClass = addPropertyClass(castProperty | castBool);
@@ -3387,6 +3508,18 @@ namespace
 		FixtureBlock& colorR = addSnapshotProperty("/Script/CoreUObject.Color.R", byteClass);
 		FixtureBlock& colorB = addSnapshotProperty("/Script/CoreUObject.Color.B", byteClass);
 		FixtureBlock& colorG = addSnapshotProperty("/Script/CoreUObject.Color.G", byteClass);
+		FixtureBlock& vectorX = addSnapshotProperty(
+			"/Script/CoreUObject.Vector.X", floatClass);
+		FixtureBlock& vectorY = addSnapshotProperty(
+			"/Script/CoreUObject.Vector.Y", floatClass);
+		FixtureBlock& vectorZ = addSnapshotProperty(
+			"/Script/CoreUObject.Vector.Z", floatClass);
+		FixtureBlock& rotatorPitch = addSnapshotProperty(
+			"/Script/CoreUObject.Rotator.Pitch", floatClass);
+		FixtureBlock& rotatorYaw = addSnapshotProperty(
+			"/Script/CoreUObject.Rotator.Yaw", floatClass);
+		FixtureBlock& rotatorRoll = addSnapshotProperty(
+			"/Script/CoreUObject.Rotator.Roll", floatClass);
 		FixtureBlock& engineBool = addSnapshotProperty(
 			"/Script/Engine.Engine.bIsOverridingSelectedColor", boolClass);
 		FixtureBlock& controllerBool = addSnapshotProperty(
@@ -3403,6 +3536,8 @@ namespace
 			"/Script/CoreUObject.TwoVectors.v1", structClass);
 		FixtureBlock& twoVectorsV2 = addSnapshotProperty(
 			"/Script/CoreUObject.TwoVectors.v2", structClass);
+		FixtureBlock& twoVectorsRotation = addSnapshotProperty(
+			"/Script/CoreUObject.TwoVectors.rotation", structClass);
 		FixtureBlock& debugProperties = addSnapshotProperty(
 			"/Script/Engine.GameViewportClient.DebugProperties", arrayClass);
 		FixtureBlock& localPlayers = addSnapshotProperty(
@@ -3474,8 +3609,23 @@ namespace
 		write(ueClass, structSuperOffset, ueStruct.Address());
 		write(guid, structChildrenOffset, guidA.Address());
 		write(color, structChildrenOffset, colorR.Address());
+		write(*nodes.at("/Script/CoreUObject.Vector").Memory,
+			structChildrenOffset, vectorX.Address());
+		write(*nodes.at("/Script/CoreUObject.Rotator").Memory,
+			structChildrenOffset, rotatorPitch.Address());
+		write(*nodes.at("/Script/CoreUObject.TwoVectors").Memory,
+			structChildrenOffset, twoVectorsV1.Address());
 		write(guidA, fieldNextOffset, guidC.Address());
 		write(colorR, fieldNextOffset, colorG.Address());
+		write(vectorX, fieldNextOffset, vectorY.Address());
+		write(vectorY, fieldNextOffset, vectorZ.Address());
+		write(vectorZ, fieldNextOffset, std::uintptr_t{0});
+		write(rotatorPitch, fieldNextOffset, rotatorYaw.Address());
+		write(rotatorYaw, fieldNextOffset, rotatorRoll.Address());
+		write(rotatorRoll, fieldNextOffset, std::uintptr_t{0});
+		write(twoVectorsV1, fieldNextOffset, twoVectorsV2.Address());
+		write(twoVectorsV2, fieldNextOffset, twoVectorsRotation.Address());
+		write(twoVectorsRotation, fieldNextOffset, std::uintptr_t{0});
 		write(debugProperties, fieldNextOffset, localPlayers.Address());
 		write(localPlayers, fieldNextOffset, std::uintptr_t{0});
 
@@ -3523,6 +3673,8 @@ namespace
 			addressOf("/Script/CoreUObject.Vector"));
 		write(twoVectorsV2, derivedPropertyOffset,
 			addressOf("/Script/CoreUObject.Vector"));
+		write(twoVectorsRotation, derivedPropertyOffset,
+			addressOf("/Script/CoreUObject.Rotator"));
 		write(debugProperties, derivedPropertyOffset, arrayInner.Address());
 		write(arrayInner, derivedPropertyOffset,
 			addressOf("/Script/Engine.DebugDisplayProperty"));
@@ -3567,6 +3719,17 @@ namespace
 				propertiesSize = 4;
 				minAlignment = 1;
 			}
+			else if (required.Path == "/Script/CoreUObject.Vector"
+				|| required.Path == "/Script/CoreUObject.Rotator")
+			{
+				propertiesSize = 12;
+				minAlignment = 4;
+			}
+			else if (required.Path == "/Script/CoreUObject.TwoVectors")
+			{
+				propertiesSize = 36;
+				minAlignment = 4;
+			}
 			write(object, structPropertiesSizeOffset, propertiesSize);
 			write(object, structMinAlignmentOffset, minAlignment);
 		}
@@ -3574,6 +3737,29 @@ namespace
 		{
 			write(*property, propertyArrayDimOffset, std::int32_t{1});
 			write(*property, propertyElementSizeOffset, std::int32_t{1});
+		}
+		const std::array mathFields{
+			&vectorX, &vectorY, &vectorZ,
+			&rotatorPitch, &rotatorYaw, &rotatorRoll
+		};
+		for (std::size_t index = 0; index < mathFields.size(); ++index)
+		{
+			write(*mathFields[index], propertyArrayDimOffset, std::int32_t{1});
+			write(*mathFields[index], propertyElementSizeOffset, std::int32_t{4});
+			write(*mathFields[index], propertyFlagsOffset, std::uint64_t{0});
+			write(*mathFields[index], propertyOffsetOffset,
+				static_cast<std::int32_t>((index % 3) * sizeof(float)));
+		}
+		const std::array mathStructFields{
+			&twoVectorsV1, &twoVectorsV2, &twoVectorsRotation
+		};
+		for (std::size_t index = 0; index < mathStructFields.size(); ++index)
+		{
+			write(*mathStructFields[index], propertyArrayDimOffset, std::int32_t{1});
+			write(*mathStructFields[index], propertyElementSizeOffset, std::int32_t{12});
+			write(*mathStructFields[index], propertyFlagsOffset, std::uint64_t{0});
+			write(*mathStructFields[index], propertyOffsetOffset,
+				static_cast<std::int32_t>(index * 12));
 		}
 		for (FixtureBlock* property : std::array{&debugProperties, &localPlayers})
 		{
@@ -3805,6 +3991,15 @@ namespace
 		const ReflectedType* guidType = types
 			? types->FindByFullPath("/Script/CoreUObject.Guid")
 			: nullptr;
+		const ReflectedType* vectorType = types
+			? types->FindByFullPath("/Script/CoreUObject.Vector")
+			: nullptr;
+		const ReflectedType* rotatorType = types
+			? types->FindByFullPath("/Script/CoreUObject.Rotator")
+			: nullptr;
+		const ReflectedType* mathHolderType = types
+			? types->FindByFullPath("/Script/CoreUObject.TwoVectors")
+			: nullptr;
 		const ReflectedType* engineTypeRecord = types
 			? types->FindByFullPath("/Script/Engine.Engine")
 			: nullptr;
@@ -3851,6 +4046,33 @@ namespace
 				&& guidType->DirectProperties[0].Descriptor
 				&& guidType->DirectProperties[0].Descriptor->Kind == PropertyKind::Int32
 				&& guidType->DirectProperties[0].Descriptor->Size == 4
+				&& vectorType
+				&& vectorType->PropertiesSize == 12
+				&& vectorType->DirectProperties.size() == 3
+				&& vectorType->DirectProperties[0].Name == "X"
+				&& vectorType->DirectProperties[0].Kind == PropertyKind::Float
+				&& rotatorType
+				&& rotatorType->PropertiesSize == 12
+				&& rotatorType->DirectProperties.size() == 3
+				&& rotatorType->DirectProperties[0].Name == "Pitch"
+				&& rotatorType->DirectProperties[1].Name == "Yaw"
+				&& rotatorType->DirectProperties[2].Name == "Roll"
+				&& mathHolderType
+				&& mathHolderType->DirectProperties.size() == 3
+				&& mathHolderType->DirectProperties[0].TypeName
+					== "/Script/CoreUObject.Vector"
+				&& mathHolderType->DirectProperties[0].State
+					== ReflectedMemberState::Supported
+				&& mathHolderType->DirectProperties[0].Descriptor
+				&& mathHolderType->DirectProperties[0].Descriptor->Fields.size() == 3
+				&& mathHolderType->DirectProperties[1].Descriptor
+				&& mathHolderType->DirectProperties[1].Descriptor->Fields[2].Name == "Z"
+				&& mathHolderType->DirectProperties[2].TypeName
+					== "/Script/CoreUObject.Rotator"
+				&& mathHolderType->DirectProperties[2].State
+					== ReflectedMemberState::Supported
+				&& mathHolderType->DirectProperties[2].Descriptor
+				&& mathHolderType->DirectProperties[2].Descriptor->Fields[0].Name == "Pitch"
 				&& engineTypeRecord
 				&& engineTypeRecord->DefaultObjectState
 					== ClassDefaultObjectState::NotConstructed
@@ -7370,6 +7592,7 @@ int main(const int argc, char** argv)
 		TestEngineContextAndCapabilities();
 		TestEngineNameCodec();
 		TestPropertyCodec();
+		TestCanonicalMathStructDescriptors();
 		TestWorldSnapshotQueries();
 		TestReflectionLayout();
 		TestCoreRuntimeStateAndShutdown();

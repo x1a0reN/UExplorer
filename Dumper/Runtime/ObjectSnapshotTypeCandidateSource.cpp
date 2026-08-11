@@ -1219,6 +1219,16 @@ TypeSnapshotSourceError ObjectSnapshotTypeCandidateSource::Impl::CaptureField(
 		.ArrayDim = static_cast<std::uint32_t>(evidence.ArrayDim),
 		.Flags = evidence.Flags
 	};
+	if (kind == PropertyKind::Struct && evidence.ReferencedType != 0)
+	{
+		const auto referenced = Active->Plan->ByAddress.find(evidence.ReferencedType);
+		if (referenced != Active->Plan->ByAddress.end()
+			&& referenced->second
+			&& referenced->second->Kind == EngineObjectKind::Struct)
+		{
+			property.TypeName = referenced->second->FullPath;
+		}
+	}
 	if (kind == PropertyKind::Unknown || kind == PropertyKind::Delegate)
 	{
 		property.State = ReflectedMemberState::Unsupported;

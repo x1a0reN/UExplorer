@@ -305,12 +305,28 @@ class UExplorerApi {
   async getObjectPropertyValue(
     property: ObjectProperty,
   ): Promise<ApiResponse<ObjectPropertyValueData>> {
+    return this.readExactObjectProperty(
+      property.object,
+      property.type_snapshot_generation,
+      property.declaring_type_path,
+      property.property_name,
+      property.array_index,
+    );
+  }
+
+  async readExactObjectProperty(
+    object: StableObjectHandle,
+    typeSnapshotGeneration: number,
+    declaringTypePath: string,
+    propertyName: string,
+    arrayIndex = 0,
+  ): Promise<ApiResponse<ObjectPropertyValueData>> {
     return this.command('objects.property.read', {
-      object: property.object,
-      type_snapshot_generation: property.type_snapshot_generation,
-      declaring_type_path: property.declaring_type_path,
-      property_name: property.property_name,
-      array_index: property.array_index,
+      object,
+      type_snapshot_generation: typeSnapshotGeneration,
+      declaring_type_path: declaringTypePath,
+      property_name: propertyName,
+      array_index: arrayIndex,
     });
   }
 

@@ -154,6 +154,9 @@ struct TypeSnapshotCandidate
 	std::vector<ReflectedType> Types;
 };
 
+std::size_t ResolveCanonicalMathStructDescriptors(
+	TypeSnapshotCandidate& candidate) noexcept;
+
 enum class TypeSnapshotPublishError : std::uint8_t
 {
 	None,
