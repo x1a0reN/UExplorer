@@ -486,12 +486,28 @@ class UExplorerApi {
     return this.command('world.shortcuts');
   }
 
-  async getWorldActorDetail(index: number): Promise<ApiResponse<WorldActorDetail>> {
-    return this.command('world.actor.get', { index });
+  async getWorldActorDetail(
+    actor: StableObjectHandle,
+    worldSnapshotGeneration: number,
+  ): Promise<ApiResponse<WorldActorDetail>> {
+    return this.command('world.actor.get', {
+      actor,
+      world_snapshot_generation: worldSnapshotGeneration,
+    });
   }
 
-  async getWorldActorComponents(index: number): Promise<ApiResponse<WorldActorComponentsResponse>> {
-    return this.command('world.actor.components', { index });
+  async getWorldActorComponents(
+    actor: StableObjectHandle,
+    worldSnapshotGeneration: number,
+    cursor: WorldQueryCursor | null = null,
+    limit = 128,
+  ): Promise<ApiResponse<WorldActorComponentsResponse>> {
+    return this.command('world.actor.components', {
+      actor,
+      world_snapshot_generation: worldSnapshotGeneration,
+      cursor,
+      limit,
+    });
   }
 
   async updateWorldActorTransform(

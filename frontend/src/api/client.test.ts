@@ -119,6 +119,43 @@ describe('UExplorerApi Tauri domain boundary', () => {
     });
   });
 
+  it('uses an exact actor handle and world generation for immutable details', async () => {
+    const actor = {
+      session_id: 'world-fixture',
+      context_generation: 81,
+      index: 3,
+      serial: 103,
+      address: '0x3000',
+      class_fingerprint: '000000000000A003',
+    };
+    invokeMock.mockResolvedValue({ success: true, data: { components: [], has_more: false } });
+
+    await api.getWorldActorDetail(actor, 3);
+    await api.getWorldActorComponents(actor, 3, null, 64);
+
+    expect(invokeMock).toHaveBeenNthCalledWith(1, 'domain_request', {
+      request: {
+        targetPid: null,
+        operation: 'world.actor.get',
+        timeoutMs: 5_000,
+        data: { actor, world_snapshot_generation: 3 },
+      },
+    });
+    expect(invokeMock).toHaveBeenNthCalledWith(2, 'domain_request', {
+      request: {
+        targetPid: null,
+        operation: 'world.actor.components',
+        timeoutMs: 5_000,
+        data: {
+          actor,
+          world_snapshot_generation: 3,
+          cursor: null,
+          limit: 64,
+        },
+      },
+    });
+  });
+
   it('turns a failed native invocation into one explicit Host error', async () => {
     invokeMock.mockRejectedValue(new Error('channel closed'));
 

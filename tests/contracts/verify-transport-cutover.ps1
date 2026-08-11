@@ -59,7 +59,7 @@ foreach ($path in @('Dumper\Server\HttpServer.cpp', 'Dumper\API\Router.cpp')) {
 
 foreach ($token in @(
         '"memory.raw_read",', '"memory.raw_write",', '"engine.world_snapshot",',
-        '"world.inspect",', 'MEMORY_READ_COMMAND_NOT_IMPLEMENTED',
+        '"world.inspect",', '"world.details",', 'MEMORY_READ_COMMAND_NOT_IMPLEMENTED',
         'WorldInspectServiceEnabled', 'WORLD_COMMAND_NOT_READY')) {
     Assert-Contains $capabilities $token 'Core capability publication lost a required domain boundary.'
 }
@@ -72,7 +72,9 @@ foreach ($token in @(
         'DomainRoute::Core("world.inspect")',
         'DomainRoute::Core("world.levels")',
         'DomainRoute::Core("world.actors.list")',
-        'DomainRoute::Unavailable("world.details")',
+        'DomainRoute::Core("world.shortcuts")',
+        'DomainRoute::Core("world.actor.get")',
+        'DomainRoute::Core("world.actor.components")',
         'DomainRoute::Unavailable("watch.properties")',
         'DomainRoute::Unavailable("hook.monitor")',
         'DomainRoute::Unavailable("dump.cpp")')) {

@@ -991,7 +991,12 @@ CoreCommandResponse CoreCommandService::ExecuteWorldCommand(
 			admissionError.empty() ? "CORE_NOT_READY" : admissionError,
 			"CoreRuntime is not accepting world queries");
 	}
-	constexpr const char* capabilityName = "world.inspect";
+	const char* capabilityName =
+		request.Operation == "world.shortcuts"
+			|| request.Operation == "world.actor.get"
+			|| request.Operation == "world.actor.components"
+			? "world.details"
+			: "world.inspect";
 	const Runtime::CapabilityStatus* capability = lease->Capabilities()
 		? lease->Capabilities()->Find(capabilityName)
 		: nullptr;

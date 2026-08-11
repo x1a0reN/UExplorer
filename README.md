@@ -118,16 +118,19 @@ calls use an explicit CDO handle; the protocol has no caller-controlled thread s
 Non-trivial FString/container/struct lifetimes, enum input, batch jobs, and real UE
 round-trip evidence remain unavailable.
 `WorldSnapshotCapture` uses the exact immutable Object/Type generations to pre-index
-Actor and Level candidates off-thread. Under the shared PostRender budget it resolves
+Actor, Level, and ActorComponent candidates off-thread. Under the shared PostRender budget it resolves
 the witnessed `GWorld` slot, follows the same typed-outer semantics used by
-`AActor::GetLevel()`, and requires the reflected `ULevel.OwningWorld` object field to
-equal the current world before publishing. A second game-thread pass revalidates the
-world, every stable handle, actor-to-level relationship, and level ownership. Sorting,
-full-count aggregation, store validation, and publication run on the DLL worker between
-the bounded game-thread phases rather than in the PostRender hot path. The
-worker-only `WorldCommandService` exposes `world.inspect`, cursor-paged `world.levels`,
-and cursor-paged/filterable `world.actors.list`; actor details, components, shortcuts,
-transform reads/setters, and real target evidence remain unavailable.
+`AActor::GetLevel()` and `UActorComponent::GetOwner()`, and requires the reflected
+`ULevel.OwningWorld` object field to equal the current world before publishing. It also
+captures witnessed `AActor.RootComponent` and exact `UWorld.AuthorityGameMode/GameState`
+relations. A second game-thread pass revalidates the world, every stable handle, all
+Actor/Level/Component ownership, root references, and shortcut fields. Sorting, exact
+counts, store validation, and publication run on the DLL worker between the bounded
+game-thread phases rather than in the PostRender hot path. The worker-only
+`WorldCommandService` exposes `world.inspect`, cursor-paged `world.levels`, filtered
+`world.actors.list`, exact-handle `world.actor.get`, Actor-bound component pages, and
+explicit-state shortcuts. `UGameInstance.LocalPlayers` array traversal, PlayerController/
+Pawn shortcuts, transform reads/setters, and real target evidence remain unavailable.
 PostRender now drives one `GameThreadFrameScheduler` rather than giving the object
 snapshot producer an exclusive callback slot. The scheduler supports at most eight
 clients, shares a 32-unit frame budget in four-unit round-robin quanta, stops further

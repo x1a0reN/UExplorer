@@ -83,6 +83,7 @@ struct WorldSnapshotCaptureDiagnostics
 	std::size_t NextCandidate = 0;
 	std::size_t CapturedLevels = 0;
 	std::size_t CapturedActors = 0;
+	std::size_t CapturedComponents = 0;
 	std::size_t ValidationIndex = 0;
 	std::int32_t ErrorObjectIndex = -1;
 };
@@ -91,6 +92,12 @@ class WorldSnapshotCapture final : public IGameThreadFrameClient
 {
 public:
 	static constexpr std::string_view kActorClassPath = "/Script/Engine.Actor";
+	static constexpr std::string_view kActorComponentClassPath =
+		"/Script/Engine.ActorComponent";
+	static constexpr std::string_view kGameModeClassPath =
+		"/Script/Engine.GameModeBase";
+	static constexpr std::string_view kGameStateClassPath =
+		"/Script/Engine.GameStateBase";
 	static constexpr std::string_view kLevelClassPath = "/Script/Engine.Level";
 	static constexpr std::string_view kWorldClassPath = "/Script/Engine.World";
 	static constexpr std::size_t kMaxOuterDepth = 32;
@@ -118,7 +125,8 @@ private:
 	enum class CandidateKind : std::uint8_t
 	{
 		Level,
-		Actor
+		Actor,
+		Component
 	};
 
 	struct Candidate
@@ -134,14 +142,30 @@ private:
 		std::shared_ptr<const EngineSnapshot> Objects;
 		std::shared_ptr<const TypeSnapshot> Types;
 		std::set<std::string, std::less<>> ActorClassPaths;
+		std::set<std::string, std::less<>> ComponentClassPaths;
+		std::set<std::string, std::less<>> GameModeClassPaths;
+		std::set<std::string, std::less<>> GameStateClassPaths;
 		std::set<std::string, std::less<>> LevelClassPaths;
 		std::set<std::string, std::less<>> WorldClassPaths;
 		ReflectedProperty OwningWorld;
+		std::optional<ReflectedProperty> RootComponent;
+		std::optional<ReflectedProperty> AuthorityGameMode;
+		std::optional<ReflectedProperty> GameState;
 		std::vector<Candidate> Candidates;
 		WorldSnapshotObject World;
+		WorldSnapshotReference GameMode;
+		WorldSnapshotReference GameStateReference;
+		WorldSnapshotReference PlayerController;
+		WorldSnapshotReference Pawn;
+		bool ComponentsAvailable = false;
+		std::string ComponentsReasonCode;
+		std::string ComponentsReason;
 		std::vector<WorldSnapshotLevel> Levels;
 		std::unordered_map<std::int32_t, std::size_t> LevelByIndex;
 		std::vector<WorldSnapshotActor> Actors;
+		std::unordered_map<std::int32_t, std::size_t> ActorByIndex;
+		std::vector<WorldSnapshotComponent> Components;
+		std::unordered_map<std::int32_t, std::size_t> ComponentByIndex;
 		std::size_t NextCandidate = 0;
 		std::size_t ValidationIndex = 0;
 	};
@@ -152,7 +176,18 @@ private:
 	bool ValidateRecord(WorkingCapture& working, std::size_t validationIndex);
 	bool ValidateDependencies(const WorkingCapture& working) const noexcept;
 	bool ValidateHandle(const ObjectHandle& handle) noexcept;
+	bool ValidateShortcut(
+		const WorkingCapture& working,
+		const std::optional<ReflectedProperty>& property,
+		const WorldSnapshotReference& reference) noexcept;
+	bool ValidateActorRoot(
+		const WorkingCapture& working,
+		const WorldSnapshotActor& actor) noexcept;
 	bool ReadStablePointer(std::uintptr_t address, std::uintptr_t& value) const noexcept;
+	bool ReadObjectProperty(
+		const EngineSnapshotObject& object,
+		const ReflectedProperty& property,
+		std::uintptr_t& value) const noexcept;
 	bool ReadOuter(std::uintptr_t address, std::uintptr_t& outer) const noexcept;
 	bool ReadOwningWorld(
 		const WorkingCapture& working,
@@ -162,11 +197,26 @@ private:
 		const WorkingCapture& working,
 		const EngineSnapshotObject& actor,
 		bool& readFailed) const noexcept;
+	const EngineSnapshotObject* FindTypedOuter(
+		const WorkingCapture& working,
+		const EngineSnapshotObject& object,
+		const std::set<std::string, std::less<>>& classPaths,
+		bool& readFailed) const noexcept;
 	bool AddLevel(WorkingCapture& working, const EngineSnapshotObject& level);
 	bool AddActor(
 		WorkingCapture& working,
 		const EngineSnapshotObject& actor,
 		const EngineSnapshotObject& level);
+	bool AddComponent(
+		WorkingCapture& working,
+		const EngineSnapshotObject& component,
+		const EngineSnapshotObject& owner,
+		const EngineSnapshotObject& level);
+	bool CaptureShortcut(
+		WorkingCapture& working,
+		const std::optional<ReflectedProperty>& property,
+		const std::set<std::string, std::less<>>& classPaths,
+		WorldSnapshotReference& reference);
 	bool ReadCurrentWorldRecord(
 		const WorkingCapture& working,
 		const EngineSnapshotObject*& world) const noexcept;
@@ -199,6 +249,7 @@ private:
 	std::atomic<std::size_t> m_NextCandidate{0};
 	std::atomic<std::size_t> m_CapturedLevels{0};
 	std::atomic<std::size_t> m_CapturedActors{0};
+	std::atomic<std::size_t> m_CapturedComponents{0};
 	std::atomic<std::size_t> m_ValidationIndex{0};
 	std::atomic<std::int32_t> m_ErrorObjectIndex{-1};
 };

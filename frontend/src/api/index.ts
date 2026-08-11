@@ -487,6 +487,7 @@ export interface WorldData {
   world: WorldSnapshotObject;
   level_count: number;
   actor_count: number;
+  components: WorldCollectionAvailability;
 }
 
 export interface WorldQueryCursor {
@@ -547,22 +548,51 @@ export interface ActorTransformData {
   scale?: Vec3Data;
 }
 
+export type WorldReferenceState = 'present' | 'not_present' | 'unavailable';
+
+export interface WorldReference {
+  state: WorldReferenceState;
+  object: WorldSnapshotObject | null;
+  reason_code: string | null;
+  reason: string | null;
+}
+
+export interface WorldCollectionAvailability {
+  state: 'available' | 'unavailable';
+  count: number | null;
+  reason_code: string | null;
+  reason: string | null;
+}
+
+export interface WorldTransformAvailability {
+  state: 'unavailable';
+  reason_code: string;
+  reason: string;
+}
+
 export interface WorldActorDetail {
-  index: number;
-  name: string;
-  full_name: string;
-  class: string;
-  address: string;
-  root_component: ObjectItem | null;
-  transform: ActorTransformData;
-  components: ObjectItem[];
-  component_count: number;
+  generation: number;
+  context_generation: number;
+  object_snapshot_generation: number;
+  type_snapshot_generation: number;
+  actor: WorldSnapshotObject;
+  level: WorldSnapshotObject;
+  root_component: WorldReference;
+  components: WorldCollectionAvailability;
+  transform: WorldTransformAvailability;
 }
 
 export interface WorldActorComponentsResponse {
-  actor_index: number;
-  components: ObjectItem[];
+  generation: number;
+  context_generation: number;
+  object_snapshot_generation: number;
+  type_snapshot_generation: number;
+  actor: WorldSnapshotObject;
+  components: WorldSnapshotObject[];
   count: number;
+  limit: number;
+  has_more: boolean;
+  next_cursor: WorldQueryCursor | null;
 }
 
 export interface WorldActorTransformUpdateResponse {
@@ -573,10 +603,15 @@ export interface WorldActorTransformUpdateResponse {
 }
 
 export interface WorldShortcuts {
-  game_mode: ObjectItem | null;
-  game_state: ObjectItem | null;
-  player_controller: ObjectItem | null;
-  pawn: ObjectItem | null;
+  generation: number;
+  context_generation: number;
+  object_snapshot_generation: number;
+  type_snapshot_generation: number;
+  world: WorldSnapshotObject;
+  game_mode: WorldReference;
+  game_state: WorldReference;
+  player_controller: WorldReference;
+  pawn: WorldReference;
 }
 
 export interface MemoryReadData {

@@ -691,6 +691,7 @@
       "verification": [
         "2026-08-10: production WorldSnapshotCapture prefilters one immutable Object/Type generation, then resolves GWorld, Actor typed outers, and witnessed ULevel.OwningWorld under the shared PostRender budget",
         "2026-08-10: sorting, exact counts, store validation, and publication run on the DLL worker between two bounded game-thread scan/validation phases",
+        "2026-08-11: the same bounded capture now scans ActorComponent typed outers, witnessed RootComponent fields, exact owner/component counts, and revalidates every component relation before publication",
         "Wandering Sword streaming-level, GC churn, target-scale, and unload evidence remains pending"
       ]
     },
@@ -701,11 +702,20 @@
         "2026-08-10: CoreHarness verifies filtered continuation and rejects an unmatched or terminal ordinal that the service could never issue; run tests/core-harness/x64/Release/CoreHarness.exe protocol/v1/fixtures"
       ]
     },
+    "WORLD-004": {
+      "status": "in_progress",
+      "verification": [
+        "2026-08-11: GameMode and GameState shortcuts read witnessed fields from the exact current UWorld and must resolve to stable Actors owned by that World",
+        "2026-08-11: PlayerController and Pawn return WORLD_LOCAL_PLAYER_CHAIN_UNAVAILABLE instead of selecting the first global class-name match",
+        "A validated UGameInstance.LocalPlayers array traversal and real target fixture remain pending"
+      ]
+    },
     "WORLD-005": {
       "status": "in_progress",
       "verification": [
-        "2026-08-10: the release command graph uses one worker-only WorldCommandService for inspect, Level pages, and Actor pages; legacy WorldApi and its debug payload are outside the release project",
-        "Actor detail/components/shortcuts and an explicit World diagnostics command remain pending"
+        "2026-08-10: the release command graph uses one worker-only WorldCommandService; legacy WorldApi and its debug payload are outside the release project",
+        "2026-08-11: WorldCommandService now owns inspect, Level/Actor/Component pages, exact-handle Actor detail, and explicit-state shortcuts with a shared 4 MiB response ceiling",
+        "An explicit World diagnostics command and real target evidence remain pending"
       ]
     },
     "STATE-001": {

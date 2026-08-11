@@ -81,6 +81,67 @@ bool BuildClassPaths(
 	return !paths.empty();
 }
 
+bool TryFindSupportedObjectProperty(
+	const std::shared_ptr<const TypeSnapshot>& types,
+	const std::string_view typePath,
+	const std::string_view propertyName,
+	ReflectedProperty& property)
+{
+	property = {};
+	const TypePropertyQueryResult properties = QueryTypeProperties(
+		types,
+		typePath,
+		TypeMemberScope::IncludeInherited);
+	if (!properties.Ok())
+		return false;
+	const ReflectedProperty* found = nullptr;
+	for (const TypeMemberView<ReflectedProperty>& member : properties.Members)
+	{
+		if (!member.Member || member.Member->Name != propertyName)
+			continue;
+		if (found)
+			return false;
+		found = member.Member;
+	}
+	if (!found
+		|| found->State != ReflectedMemberState::Supported
+		|| found->Kind != PropertyKind::Object
+		|| found->ArrayDim != 1
+		|| found->Size != sizeof(std::uintptr_t)
+		|| !found->Descriptor
+		|| found->Descriptor->Kind != PropertyKind::Object
+		|| found->Descriptor->Size != sizeof(std::uintptr_t))
+	{
+		return false;
+	}
+	property = *found;
+	return true;
+}
+
+WorldSnapshotReference UnavailableReference(
+	std::string reasonCode,
+	std::string reason)
+{
+	return {
+		.State = WorldReferenceState::Unavailable,
+		.ReasonCode = std::move(reasonCode),
+		.Reason = std::move(reason)
+	};
+}
+
+WorldSnapshotReference NotPresentReference()
+{
+	return {.State = WorldReferenceState::NotPresent};
+}
+
+WorldSnapshotReference PresentReference(const EngineSnapshotObject& object)
+{
+	return {
+		.State = WorldReferenceState::Present,
+		.Object = CopyObject(object)
+	};
+}
+
 } // namespace
 
 const char* ToString(const WorldSnapshotCaptureState state) noexcept
@@ -206,47 +267,96 @@ bool WorldSnapshotCapture::PrepareWorkingCapture(WorkingCapture& working)
 		return false;
 	}
 
-	const TypePropertyQueryResult properties = QueryTypeProperties(
+	if (!TryFindSupportedObjectProperty(
 		working.Types,
 		kLevelClassPath,
-		TypeMemberScope::IncludeInherited);
-	if (!properties.Ok())
+		"OwningWorld",
+		working.OwningWorld))
 	{
 		m_Error.store(WorldSnapshotCaptureError::TypeMetadataUnavailable, std::memory_order_release);
 		return false;
 	}
-	const ReflectedProperty* owningWorld = nullptr;
-	for (const TypeMemberView<ReflectedProperty>& member : properties.Members)
+
+	working.PlayerController = UnavailableReference(
+		"WORLD_LOCAL_PLAYER_CHAIN_UNAVAILABLE",
+		"UGameInstance.LocalPlayers requires a validated reflected array traversal before a local PlayerController can be selected");
+	working.Pawn = UnavailableReference(
+		"WORLD_LOCAL_PLAYER_CHAIN_UNAVAILABLE",
+		"Pawn resolution is unavailable until the exact local PlayerController chain is captured");
+
+	working.ComponentsAvailable = BuildClassPaths(
+		*working.Types,
+		kActorComponentClassPath,
+		working.ComponentClassPaths);
+	if (working.ComponentsAvailable)
 	{
-		if (member.Member && member.Member->Name == "OwningWorld")
+		ReflectedProperty rootComponent;
+		if (TryFindSupportedObjectProperty(
+			working.Types,
+			kActorClassPath,
+			"RootComponent",
+			rootComponent))
 		{
-			if (owningWorld)
-			{
-				m_Error.store(WorldSnapshotCaptureError::TypeMetadataUnavailable, std::memory_order_release);
-				return false;
-			}
-			owningWorld = member.Member;
+			working.RootComponent = std::move(rootComponent);
 		}
 	}
-	if (!owningWorld
-		|| owningWorld->State != ReflectedMemberState::Supported
-		|| owningWorld->Kind != PropertyKind::Object
-		|| owningWorld->ArrayDim != 1
-		|| owningWorld->Size != sizeof(std::uintptr_t)
-		|| !owningWorld->Descriptor
-		|| owningWorld->Descriptor->Kind != PropertyKind::Object
-		|| owningWorld->Descriptor->Size != sizeof(std::uintptr_t))
+	else
 	{
-		m_Error.store(WorldSnapshotCaptureError::TypeMetadataUnavailable, std::memory_order_release);
-		return false;
+		working.ComponentsReasonCode = "WORLD_COMPONENT_CLASS_METADATA_UNAVAILABLE";
+		working.ComponentsReason =
+			"The current TypeSnapshot does not contain a complete ActorComponent class closure";
 	}
-	working.OwningWorld = *owningWorld;
+
+	ReflectedProperty authorityGameMode;
+	if (BuildClassPaths(
+			*working.Types,
+			kGameModeClassPath,
+			working.GameModeClassPaths)
+		&& TryFindSupportedObjectProperty(
+			working.Types,
+			kWorldClassPath,
+			"AuthorityGameMode",
+			authorityGameMode))
+	{
+		working.AuthorityGameMode = std::move(authorityGameMode);
+		working.GameMode = NotPresentReference();
+	}
+	else
+	{
+		working.GameMode = UnavailableReference(
+			"WORLD_GAME_MODE_METADATA_UNAVAILABLE",
+			"The current TypeSnapshot does not expose a validated UWorld.AuthorityGameMode object relation");
+	}
+
+	ReflectedProperty gameState;
+	if (BuildClassPaths(
+			*working.Types,
+			kGameStateClassPath,
+			working.GameStateClassPaths)
+		&& TryFindSupportedObjectProperty(
+			working.Types,
+			kWorldClassPath,
+			"GameState",
+			gameState))
+	{
+		working.GameState = std::move(gameState);
+		working.GameStateReference = NotPresentReference();
+	}
+	else
+	{
+		working.GameStateReference = UnavailableReference(
+			"WORLD_GAME_STATE_METADATA_UNAVAILABLE",
+			"The current TypeSnapshot does not expose a validated UWorld.GameState object relation");
+	}
 
 	std::size_t levelCandidates = 0;
 	std::size_t actorCandidates = 0;
+	std::size_t componentCandidates = 0;
 	working.Candidates.reserve((std::min)(
 		working.Objects->Objects.size(),
-		WorldSnapshotStore::kMaxLevels + WorldSnapshotStore::kMaxActors));
+		WorldSnapshotStore::kMaxLevels
+			+ WorldSnapshotStore::kMaxActors
+			+ WorldSnapshotStore::kMaxComponents));
 	for (const EngineSnapshotObject& object : working.Objects->Objects)
 	{
 		if (working.LevelClassPaths.contains(object.ClassPath))
@@ -269,10 +379,24 @@ bool WorldSnapshotCapture::PrepareWorkingCapture(WorkingCapture& working)
 			working.Candidates.push_back({.Object = &object, .Kind = CandidateKind::Actor});
 			++actorCandidates;
 		}
+		else if (working.ComponentsAvailable
+			&& working.ComponentClassPaths.contains(object.ClassPath))
+		{
+			if (componentCandidates == WorldSnapshotStore::kMaxComponents)
+			{
+				m_Error.store(WorldSnapshotCaptureError::CountLimitExceeded, std::memory_order_release);
+				return false;
+			}
+			working.Candidates.push_back({.Object = &object, .Kind = CandidateKind::Component});
+			++componentCandidates;
+		}
 	}
 	working.Levels.reserve(levelCandidates);
 	working.LevelByIndex.reserve(levelCandidates);
 	working.Actors.reserve(actorCandidates);
+	working.ActorByIndex.reserve(actorCandidates);
+	working.Components.reserve(componentCandidates);
+	working.ComponentByIndex.reserve(componentCandidates);
 	return true;
 }
 
@@ -322,6 +446,7 @@ WorldSnapshotCaptureRequestResult WorldSnapshotCapture::RequestCapture() noexcep
 		m_NextCandidate.store(0, std::memory_order_release);
 		m_CapturedLevels.store(0, std::memory_order_release);
 		m_CapturedActors.store(0, std::memory_order_release);
+		m_CapturedComponents.store(0, std::memory_order_release);
 		m_ValidationIndex.store(0, std::memory_order_release);
 		m_ErrorObjectIndex.store(-1, std::memory_order_release);
 		const std::uint64_t generation = working.Generation;
@@ -355,6 +480,24 @@ bool WorldSnapshotCapture::ReadStablePointer(
 		&& ReadValue(address, second).Ok()
 		&& first == second
 		&& ((value = first), true);
+}
+
+bool WorldSnapshotCapture::ReadObjectProperty(
+	const EngineSnapshotObject& object,
+	const ReflectedProperty& property,
+	std::uintptr_t& value) const noexcept
+{
+	value = 0;
+	if (property.State != ReflectedMemberState::Supported
+		|| property.Kind != PropertyKind::Object
+		|| property.ArrayDim != 1
+		|| property.Size != sizeof(std::uintptr_t)
+		|| property.Offset
+			> (std::numeric_limits<std::uintptr_t>::max)() - object.Handle.Address)
+	{
+		return false;
+	}
+	return ReadStablePointer(object.Handle.Address + property.Offset, value);
 }
 
 bool WorldSnapshotCapture::ReadCurrentWorldRecord(
@@ -412,6 +555,25 @@ bool WorldSnapshotCapture::ResolveWorld(WorkingCapture& working)
 		return false;
 	}
 	working.World = CopyObject(*world);
+	if (!CaptureShortcut(
+			working,
+			working.AuthorityGameMode,
+			working.GameModeClassPaths,
+			working.GameMode)
+		|| !CaptureShortcut(
+			working,
+			working.GameState,
+			working.GameStateClassPaths,
+			working.GameStateReference))
+	{
+		if (m_Error.load(std::memory_order_acquire) == WorldSnapshotCaptureError::None)
+		{
+			m_Error.store(
+				WorldSnapshotCaptureError::SourceValidationFailed,
+				std::memory_order_release);
+		}
+		return false;
+	}
 	return true;
 }
 
@@ -452,8 +614,17 @@ const EngineSnapshotObject* WorldSnapshotCapture::FindActorLevel(
 	const EngineSnapshotObject& actor,
 	bool& readFailed) const noexcept
 {
+	return FindTypedOuter(working, actor, working.LevelClassPaths, readFailed);
+}
+
+const EngineSnapshotObject* WorldSnapshotCapture::FindTypedOuter(
+	const WorkingCapture& working,
+	const EngineSnapshotObject& object,
+	const std::set<std::string, std::less<>>& classPaths,
+	bool& readFailed) const noexcept
+{
 	readFailed = false;
-	std::uintptr_t current = actor.Handle.Address;
+	std::uintptr_t current = object.Handle.Address;
 	std::array<std::uintptr_t, kMaxOuterDepth> visited{};
 	std::size_t visitedCount = 0;
 	for (std::size_t depth = 0; depth < kMaxOuterDepth; ++depth)
@@ -473,11 +644,11 @@ const EngineSnapshotObject* WorldSnapshotCapture::FindActorLevel(
 			return nullptr;
 		}
 		visited[visitedCount++] = outer;
-		const EngineSnapshotObject* object = working.Objects->FindByAddress(outer);
-		if (!object)
+		const EngineSnapshotObject* outerObject = working.Objects->FindByAddress(outer);
+		if (!outerObject)
 			return nullptr;
-		if (working.LevelClassPaths.contains(object->ClassPath))
-			return object;
+		if (classPaths.contains(outerObject->ClassPath))
+			return outerObject;
 		current = outer;
 	}
 	readFailed = true;
@@ -502,15 +673,147 @@ bool WorldSnapshotCapture::AddActor(
 	const EngineSnapshotObject& actor,
 	const EngineSnapshotObject& level)
 {
-	if (working.Actors.size() >= WorldSnapshotStore::kMaxActors
-		|| !AddLevel(working, level))
+	const auto existing = working.ActorByIndex.find(actor.Handle.Index);
+	if (existing != working.ActorByIndex.end())
 	{
+		const WorldSnapshotActor& captured = working.Actors[existing->second];
+		return SameHandle(captured.Object.Handle, actor.Handle)
+			&& SameHandle(captured.Level, level.Handle);
+	}
+	if (working.Actors.size() >= WorldSnapshotStore::kMaxActors)
+	{
+		m_Error.store(WorldSnapshotCaptureError::CountLimitExceeded, std::memory_order_release);
 		return false;
 	}
+	if (!AddLevel(working, level))
+	{
+		m_Error.store(WorldSnapshotCaptureError::CountLimitExceeded, std::memory_order_release);
+		return false;
+	}
+	WorldSnapshotReference rootComponent = UnavailableReference(
+		"WORLD_ROOT_COMPONENT_METADATA_UNAVAILABLE",
+		"A validated reflected AActor.RootComponent relation is not available in the current snapshot");
+	if (working.ComponentsAvailable && working.RootComponent)
+	{
+		std::uintptr_t rootAddress = 0;
+		if (!ReadObjectProperty(actor, *working.RootComponent, rootAddress))
+		{
+			m_Error.store(WorldSnapshotCaptureError::SourceReadFailed, std::memory_order_release);
+			return false;
+		}
+		if (rootAddress == 0)
+		{
+			rootComponent = NotPresentReference();
+		}
+		else
+		{
+			const EngineSnapshotObject* root = working.Objects->FindByAddress(rootAddress);
+			bool readFailed = false;
+			const EngineSnapshotObject* owner = root
+				&& working.ComponentClassPaths.contains(root->ClassPath)
+				? FindTypedOuter(working, *root, working.ActorClassPaths, readFailed)
+				: nullptr;
+			if (readFailed || !root || !owner || !SameHandle(owner->Handle, actor.Handle))
+			{
+				m_Error.store(
+					readFailed ? WorldSnapshotCaptureError::SourceReadFailed
+						: WorldSnapshotCaptureError::SourceValidationFailed,
+					std::memory_order_release);
+				return false;
+			}
+			rootComponent = PresentReference(*root);
+		}
+	}
+	const std::size_t actorOrdinal = working.Actors.size();
 	working.Actors.push_back({
 		.Object = CopyObject(actor),
-		.Level = level.Handle
+		.Level = level.Handle,
+		.RootComponent = std::move(rootComponent)
 	});
+	working.ActorByIndex.emplace(actor.Handle.Index, actorOrdinal);
+	return true;
+}
+
+bool WorldSnapshotCapture::AddComponent(
+	WorkingCapture& working,
+	const EngineSnapshotObject& component,
+	const EngineSnapshotObject& owner,
+	const EngineSnapshotObject& level)
+{
+	const auto existing = working.ComponentByIndex.find(component.Handle.Index);
+	if (existing != working.ComponentByIndex.end())
+	{
+		const WorldSnapshotComponent& captured = working.Components[existing->second];
+		return SameHandle(captured.Object.Handle, component.Handle)
+			&& SameHandle(captured.Owner, owner.Handle);
+	}
+	if (working.Components.size() >= WorldSnapshotStore::kMaxComponents)
+	{
+		m_Error.store(WorldSnapshotCaptureError::CountLimitExceeded, std::memory_order_release);
+		return false;
+	}
+	if (!AddLevel(working, level))
+	{
+		m_Error.store(WorldSnapshotCaptureError::CountLimitExceeded, std::memory_order_release);
+		return false;
+	}
+	const std::size_t componentOrdinal = working.Components.size();
+	working.Components.push_back({
+		.Object = CopyObject(component),
+		.Owner = owner.Handle
+	});
+	working.ComponentByIndex.emplace(component.Handle.Index, componentOrdinal);
+	return true;
+}
+
+bool WorldSnapshotCapture::CaptureShortcut(
+	WorkingCapture& working,
+	const std::optional<ReflectedProperty>& property,
+	const std::set<std::string, std::less<>>& classPaths,
+	WorldSnapshotReference& reference)
+{
+	if (!property)
+		return reference.State == WorldReferenceState::Unavailable;
+	const EngineSnapshotObject* world = working.Objects->FindByIndex(
+		working.World.Handle.Index);
+	std::uintptr_t address = 0;
+	if (!world
+		|| !SameHandle(world->Handle, working.World.Handle)
+		|| !ReadObjectProperty(*world, *property, address))
+	{
+		m_Error.store(WorldSnapshotCaptureError::SourceReadFailed, std::memory_order_release);
+		return false;
+	}
+	if (address == 0)
+	{
+		reference = NotPresentReference();
+		return true;
+	}
+	const EngineSnapshotObject* actor = working.Objects->FindByAddress(address);
+	if (!actor || !classPaths.contains(actor->ClassPath))
+	{
+		m_Error.store(WorldSnapshotCaptureError::SourceValidationFailed, std::memory_order_release);
+		return false;
+	}
+	bool readFailed = false;
+	const EngineSnapshotObject* level = FindActorLevel(working, *actor, readFailed);
+	std::uintptr_t owningWorld = 0;
+	if (readFailed
+		|| !level
+		|| !ReadOwningWorld(working, *level, owningWorld)
+		|| owningWorld != working.World.Handle.Address
+		|| !AddActor(working, *actor, *level))
+	{
+		if (m_Error.load(std::memory_order_acquire) == WorldSnapshotCaptureError::None)
+		{
+			m_Error.store(
+				readFailed ? WorldSnapshotCaptureError::SourceReadFailed
+					: WorldSnapshotCaptureError::SourceValidationFailed,
+				std::memory_order_release);
+		}
+		return false;
+	}
+	reference = PresentReference(*actor);
 	return true;
 }
 
@@ -527,6 +830,33 @@ bool WorldSnapshotCapture::ScanCandidate(
 			return false;
 		return owningWorld != working.World.Handle.Address
 			|| AddLevel(working, *candidate.Object);
+	}
+	if (candidate.Kind == CandidateKind::Component)
+	{
+		bool ownerReadFailed = false;
+		const EngineSnapshotObject* owner = FindTypedOuter(
+			working,
+			*candidate.Object,
+			working.ActorClassPaths,
+			ownerReadFailed);
+		if (ownerReadFailed)
+			return false;
+		if (!owner)
+			return true;
+		bool levelReadFailed = false;
+		const EngineSnapshotObject* level = FindActorLevel(
+			working,
+			*owner,
+			levelReadFailed);
+		if (levelReadFailed)
+			return false;
+		if (!level)
+			return true;
+		std::uintptr_t owningWorld = 0;
+		if (!ReadOwningWorld(working, *level, owningWorld))
+			return false;
+		return owningWorld != working.World.Handle.Address
+			|| AddComponent(working, *candidate.Object, *owner, *level);
 	}
 
 	bool readFailed = false;
@@ -560,6 +890,78 @@ bool WorldSnapshotCapture::ValidateDependencies(
 		&& working.Types->ObjectSnapshotGeneration() == working.Objects->Generation;
 }
 
+bool WorldSnapshotCapture::ValidateShortcut(
+	const WorkingCapture& working,
+	const std::optional<ReflectedProperty>& property,
+	const WorldSnapshotReference& reference) noexcept
+{
+	if (!property)
+		return reference.State == WorldReferenceState::Unavailable;
+	const EngineSnapshotObject* world = working.Objects->FindByIndex(
+		working.World.Handle.Index);
+	std::uintptr_t address = 0;
+	if (!world
+		|| !SameHandle(world->Handle, working.World.Handle)
+		|| !ReadObjectProperty(*world, *property, address))
+	{
+		return false;
+	}
+	if (reference.State == WorldReferenceState::NotPresent)
+		return address == 0;
+	if (reference.State != WorldReferenceState::Present
+		|| !reference.Object
+		|| address != reference.Object->Handle.Address
+		|| !ValidateHandle(reference.Object->Handle))
+	{
+		return false;
+	}
+	const auto actor = std::lower_bound(
+		working.Actors.begin(),
+		working.Actors.end(),
+		reference.Object->Handle.Index,
+		[](const WorldSnapshotActor& candidate, const std::int32_t expected) {
+			return candidate.Object.Handle.Index < expected;
+		});
+	return actor != working.Actors.end()
+		&& SameHandle(actor->Object.Handle, reference.Object->Handle);
+}
+
+bool WorldSnapshotCapture::ValidateActorRoot(
+	const WorkingCapture& working,
+	const WorldSnapshotActor& actor) noexcept
+{
+	if (!working.ComponentsAvailable || !working.RootComponent)
+		return actor.RootComponent.State == WorldReferenceState::Unavailable;
+	const EngineSnapshotObject* source = working.Objects->FindByIndex(
+		actor.Object.Handle.Index);
+	std::uintptr_t rootAddress = 0;
+	if (!source
+		|| !SameHandle(source->Handle, actor.Object.Handle)
+		|| !ReadObjectProperty(*source, *working.RootComponent, rootAddress))
+	{
+		return false;
+	}
+	if (actor.RootComponent.State == WorldReferenceState::NotPresent)
+		return rootAddress == 0;
+	if (actor.RootComponent.State != WorldReferenceState::Present
+		|| !actor.RootComponent.Object
+		|| rootAddress != actor.RootComponent.Object->Handle.Address
+		|| !ValidateHandle(actor.RootComponent.Object->Handle))
+	{
+		return false;
+	}
+	bool readFailed = false;
+	const EngineSnapshotObject* root = working.Objects->FindByAddress(rootAddress);
+	const EngineSnapshotObject* owner = root
+		&& working.ComponentClassPaths.contains(root->ClassPath)
+		? FindTypedOuter(working, *root, working.ActorClassPaths, readFailed)
+		: nullptr;
+	return !readFailed
+		&& root
+		&& owner
+		&& SameHandle(owner->Handle, actor.Object.Handle);
+}
+
 bool WorldSnapshotCapture::ValidateRecord(
 	WorkingCapture& working,
 	const std::size_t validationIndex)
@@ -572,7 +974,21 @@ bool WorldSnapshotCapture::ValidateRecord(
 			&& SameHandle(current->Handle, working.World.Handle)
 			&& ValidateHandle(working.World.Handle);
 	}
-	const std::size_t levelIndex = validationIndex - 1;
+	if (validationIndex == 1)
+	{
+		return ValidateShortcut(
+			working,
+			working.AuthorityGameMode,
+			working.GameMode);
+	}
+	if (validationIndex == 2)
+	{
+		return ValidateShortcut(
+			working,
+			working.GameState,
+			working.GameStateReference);
+	}
+	const std::size_t levelIndex = validationIndex - 3;
 	if (levelIndex < working.Levels.size())
 	{
 		const WorldSnapshotLevel& level = working.Levels[levelIndex];
@@ -586,24 +1002,49 @@ bool WorldSnapshotCapture::ValidateRecord(
 	}
 
 	const std::size_t actorIndex = levelIndex - working.Levels.size();
-	if (actorIndex >= working.Actors.size())
+	if (actorIndex < working.Actors.size())
+	{
+		const WorldSnapshotActor& actor = working.Actors[actorIndex];
+		const EngineSnapshotObject* source = working.Objects->FindByIndex(
+			actor.Object.Handle.Index);
+		if (!source
+			|| !SameHandle(source->Handle, actor.Object.Handle)
+			|| !ValidateHandle(actor.Object.Handle)
+			|| !ValidateActorRoot(working, actor))
+		{
+			return false;
+		}
+		bool readFailed = false;
+		const EngineSnapshotObject* level = FindActorLevel(working, *source, readFailed);
+		std::uintptr_t owningWorld = 0;
+		return !readFailed
+			&& level
+			&& SameHandle(level->Handle, actor.Level)
+			&& ReadOwningWorld(working, *level, owningWorld)
+			&& owningWorld == working.World.Handle.Address;
+	}
+
+	const std::size_t componentIndex = actorIndex - working.Actors.size();
+	if (componentIndex >= working.Components.size())
 		return false;
-	const WorldSnapshotActor& actor = working.Actors[actorIndex];
-	const EngineSnapshotObject* source = working.Objects->FindByIndex(actor.Object.Handle.Index);
+	const WorldSnapshotComponent& component = working.Components[componentIndex];
+	const EngineSnapshotObject* source = working.Objects->FindByIndex(
+		component.Object.Handle.Index);
 	if (!source
-		|| !SameHandle(source->Handle, actor.Object.Handle)
-		|| !ValidateHandle(actor.Object.Handle))
+		|| !SameHandle(source->Handle, component.Object.Handle)
+		|| !ValidateHandle(component.Object.Handle))
 	{
 		return false;
 	}
 	bool readFailed = false;
-	const EngineSnapshotObject* level = FindActorLevel(working, *source, readFailed);
-	std::uintptr_t owningWorld = 0;
+	const EngineSnapshotObject* owner = FindTypedOuter(
+		working,
+		*source,
+		working.ActorClassPaths,
+		readFailed);
 	return !readFailed
-		&& level
-		&& SameHandle(level->Handle, actor.Level)
-		&& ReadOwningWorld(working, *level, owningWorld)
-		&& owningWorld == working.World.Handle.Address;
+		&& owner
+		&& SameHandle(owner->Handle, component.Owner);
 }
 
 void WorldSnapshotCapture::CompleteCounts(WorkingCapture& working) noexcept
@@ -614,8 +1055,13 @@ void WorldSnapshotCapture::CompleteCounts(WorkingCapture& working) noexcept
 	std::ranges::sort(working.Actors, {}, [](const WorldSnapshotActor& actor) {
 		return actor.Object.Handle.Index;
 	});
+	std::ranges::sort(working.Components, {}, [](const WorldSnapshotComponent& component) {
+		return component.Object.Handle.Index;
+	});
 	for (WorldSnapshotLevel& level : working.Levels)
 		level.ActorCount = 0;
+	for (WorldSnapshotActor& actor : working.Actors)
+		actor.ComponentCount = 0;
 	for (const WorldSnapshotActor& actor : working.Actors)
 	{
 		const auto level = std::lower_bound(
@@ -629,6 +1075,21 @@ void WorldSnapshotCapture::CompleteCounts(WorkingCapture& working) noexcept
 			&& SameHandle(level->Object.Handle, actor.Level))
 		{
 			++level->ActorCount;
+		}
+	}
+	for (const WorldSnapshotComponent& component : working.Components)
+	{
+		const auto actor = std::lower_bound(
+			working.Actors.begin(),
+			working.Actors.end(),
+			component.Owner.Index,
+			[](const WorldSnapshotActor& candidate, const std::int32_t expected) {
+				return candidate.Object.Handle.Index < expected;
+			});
+		if (actor != working.Actors.end()
+			&& SameHandle(actor->Object.Handle, component.Owner))
+		{
+			++actor->ComponentCount;
 		}
 	}
 }
@@ -652,6 +1113,7 @@ bool WorldSnapshotCapture::SealForValidation() noexcept
 		CompleteCounts(*m_Working);
 		m_CapturedLevels.store(m_Working->Levels.size(), std::memory_order_release);
 		m_CapturedActors.store(m_Working->Actors.size(), std::memory_order_release);
+		m_CapturedComponents.store(m_Working->Components.size(), std::memory_order_release);
 		m_State.store(WorldSnapshotCaptureState::Validating, std::memory_order_release);
 		return true;
 	}
@@ -695,8 +1157,16 @@ bool WorldSnapshotCapture::PublishReady() noexcept
 				? capturedAt - working.StartedAtMonotonicUs
 				: 0,
 			.World = std::move(working.World),
+			.GameMode = std::move(working.GameMode),
+			.GameState = std::move(working.GameStateReference),
+			.PlayerController = std::move(working.PlayerController),
+			.Pawn = std::move(working.Pawn),
+			.ComponentsAvailable = working.ComponentsAvailable,
+			.ComponentsReasonCode = std::move(working.ComponentsReasonCode),
+			.ComponentsReason = std::move(working.ComponentsReason),
 			.Levels = std::move(working.Levels),
-			.Actors = std::move(working.Actors)
+			.Actors = std::move(working.Actors),
+			.Components = std::move(working.Components)
 		};
 		const WorldSnapshotPublishResult published = m_Worlds.Publish(std::move(snapshot));
 		if (!published.Ok())
@@ -777,10 +1247,11 @@ IGameThreadFrameClient::PumpResult WorldSnapshotCapture::PumpFrame(
 				++consumed;
 				if (!ResolveWorld(working))
 				{
-					const WorldSnapshotCaptureError error =
-						m_Error.load(std::memory_order_acquire) == WorldSnapshotCaptureError::WorldIdentityInvalid
-							? WorldSnapshotCaptureError::WorldIdentityInvalid
-							: WorldSnapshotCaptureError::WorldPointerUnavailable;
+					const WorldSnapshotCaptureError reported =
+						m_Error.load(std::memory_order_acquire);
+					const WorldSnapshotCaptureError error = reported == WorldSnapshotCaptureError::None
+						? WorldSnapshotCaptureError::WorldPointerUnavailable
+						: reported;
 					Fail(error);
 					break;
 				}
@@ -795,11 +1266,20 @@ IGameThreadFrameClient::PumpResult WorldSnapshotCapture::PumpFrame(
 					++consumed;
 					if (!ScanCandidate(working, candidate))
 					{
-						Fail(
-							working.Levels.size() > WorldSnapshotStore::kMaxLevels
-								|| working.Actors.size() > WorldSnapshotStore::kMaxActors
+						const WorldSnapshotCaptureError reported =
+							m_Error.load(std::memory_order_acquire);
+						const bool countLimitReached =
+							working.Levels.size() >= WorldSnapshotStore::kMaxLevels
+							|| working.Actors.size() >= WorldSnapshotStore::kMaxActors
+							|| working.Components.size() >= WorldSnapshotStore::kMaxComponents;
+						const WorldSnapshotCaptureError error =
+							reported != WorldSnapshotCaptureError::None
+								? reported
+								: countLimitReached
 									? WorldSnapshotCaptureError::CountLimitExceeded
-									: WorldSnapshotCaptureError::SourceReadFailed,
+									: WorldSnapshotCaptureError::SourceReadFailed;
+						Fail(
+							error,
 							candidate.Object ? candidate.Object->Handle.Index : -1);
 						break;
 					}
@@ -807,6 +1287,9 @@ IGameThreadFrameClient::PumpResult WorldSnapshotCapture::PumpFrame(
 					m_NextCandidate.store(working.NextCandidate, std::memory_order_release);
 					m_CapturedLevels.store(working.Levels.size(), std::memory_order_release);
 					m_CapturedActors.store(working.Actors.size(), std::memory_order_release);
+					m_CapturedComponents.store(
+						working.Components.size(),
+						std::memory_order_release);
 					continue;
 				}
 				m_State.store(WorldSnapshotCaptureState::Sealing, std::memory_order_release);
@@ -814,8 +1297,10 @@ IGameThreadFrameClient::PumpResult WorldSnapshotCapture::PumpFrame(
 			}
 			if (state == WorldSnapshotCaptureState::Validating)
 			{
-				const std::size_t validationCount =
-					1 + working.Levels.size() + working.Actors.size();
+				const std::size_t validationCount = 3
+					+ working.Levels.size()
+					+ working.Actors.size()
+					+ working.Components.size();
 				if (working.ValidationIndex < validationCount)
 				{
 					const std::size_t index = working.ValidationIndex;
@@ -823,10 +1308,20 @@ IGameThreadFrameClient::PumpResult WorldSnapshotCapture::PumpFrame(
 					if (!ValidateRecord(working, index))
 					{
 						std::int32_t objectIndex = working.World.Handle.Index;
-						if (index > 0 && index - 1 < working.Levels.size())
-							objectIndex = working.Levels[index - 1].Object.Handle.Index;
-						else if (index > working.Levels.size())
-							objectIndex = working.Actors[index - 1 - working.Levels.size()].Object.Handle.Index;
+						if (index >= 3 && index - 3 < working.Levels.size())
+							objectIndex = working.Levels[index - 3].Object.Handle.Index;
+						else if (index >= 3 + working.Levels.size()
+							&& index - 3 - working.Levels.size() < working.Actors.size())
+						{
+							objectIndex = working.Actors[
+								index - 3 - working.Levels.size()].Object.Handle.Index;
+						}
+						else if (index >= 3 + working.Levels.size() + working.Actors.size())
+						{
+							objectIndex = working.Components[
+								index - 3 - working.Levels.size() - working.Actors.size()]
+								.Object.Handle.Index;
+						}
 						Fail(WorldSnapshotCaptureError::SourceValidationFailed, objectIndex);
 						break;
 					}
@@ -864,6 +1359,7 @@ WorldSnapshotCaptureDiagnostics WorldSnapshotCapture::Diagnostics() const noexce
 		.NextCandidate = m_NextCandidate.load(std::memory_order_acquire),
 		.CapturedLevels = m_CapturedLevels.load(std::memory_order_acquire),
 		.CapturedActors = m_CapturedActors.load(std::memory_order_acquire),
+		.CapturedComponents = m_CapturedComponents.load(std::memory_order_acquire),
 		.ValidationIndex = m_ValidationIndex.load(std::memory_order_acquire),
 		.ErrorObjectIndex = m_ErrorObjectIndex.load(std::memory_order_acquire)
 	};

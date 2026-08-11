@@ -1,6 +1,7 @@
 #include "WorldSnapshot.h"
 
 #include <algorithm>
+#include <array>
 #include <limits>
 #include <new>
 #include <set>
@@ -50,7 +51,56 @@ bool IsObjectValid(
 		&& IsTextValid(object.ClassPath, WorldSnapshotStore::kMaxPathBytes);
 }
 
+bool SameObject(
+	const WorldSnapshotObject& left,
+	const WorldSnapshotObject& right) noexcept
+{
+	return SameHandle(left.Handle, right.Handle)
+		&& left.Name == right.Name
+		&& left.FullPath == right.FullPath
+		&& left.ClassPath == right.ClassPath;
+}
+
+bool IsReferenceValid(
+	const WorldSnapshotReference& reference,
+	const std::string& sessionId,
+	const std::uint64_t contextGeneration) noexcept
+{
+	switch (reference.State)
+	{
+	case WorldReferenceState::Present:
+		return reference.Object
+			&& IsObjectValid(*reference.Object, sessionId, contextGeneration)
+			&& reference.ReasonCode.empty()
+			&& reference.Reason.empty();
+	case WorldReferenceState::NotPresent:
+		return !reference.Object
+			&& reference.ReasonCode.empty()
+			&& reference.Reason.empty();
+	case WorldReferenceState::Unavailable:
+		return !reference.Object
+			&& IsTextValid(
+				reference.ReasonCode,
+				WorldSnapshotStore::kMaxReasonCodeBytes)
+			&& IsTextValid(
+				reference.Reason,
+				WorldSnapshotStore::kMaxReasonBytes);
+	}
+	return false;
+}
+
 } // namespace
+
+const char* ToString(const WorldReferenceState state) noexcept
+{
+	switch (state)
+	{
+	case WorldReferenceState::Present: return "present";
+	case WorldReferenceState::NotPresent: return "not_present";
+	case WorldReferenceState::Unavailable: return "unavailable";
+	}
+	return "unavailable";
+}
 
 const WorldSnapshotLevel* WorldSnapshot::FindLevelByIndex(
 	const std::int32_t index) const noexcept
@@ -82,6 +132,21 @@ const WorldSnapshotActor* WorldSnapshot::FindActorByIndex(
 		: nullptr;
 }
 
+const WorldSnapshotComponent* WorldSnapshot::FindComponentByIndex(
+	const std::int32_t index) const noexcept
+{
+	const auto found = std::lower_bound(
+		Components.begin(),
+		Components.end(),
+		index,
+		[](const WorldSnapshotComponent& component, const std::int32_t expected) {
+			return component.Object.Handle.Index < expected;
+		});
+	return found != Components.end() && found->Object.Handle.Index == index
+		? &*found
+		: nullptr;
+}
+
 const char* ToString(const WorldSnapshotPublishError error) noexcept
 {
 	switch (error)
@@ -95,6 +160,8 @@ const char* ToString(const WorldSnapshotPublishError error) noexcept
 	case WorldSnapshotPublishError::WorldInvalid: return "WORLD_SNAPSHOT_WORLD_INVALID";
 	case WorldSnapshotPublishError::LevelInvalid: return "WORLD_SNAPSHOT_LEVEL_INVALID";
 	case WorldSnapshotPublishError::ActorInvalid: return "WORLD_SNAPSHOT_ACTOR_INVALID";
+	case WorldSnapshotPublishError::ComponentInvalid: return "WORLD_SNAPSHOT_COMPONENT_INVALID";
+	case WorldSnapshotPublishError::ReferenceInvalid: return "WORLD_SNAPSHOT_REFERENCE_INVALID";
 	case WorldSnapshotPublishError::RelationshipInvalid: return "WORLD_SNAPSHOT_RELATIONSHIP_INVALID";
 	case WorldSnapshotPublishError::AllocationFailed: return "WORLD_SNAPSHOT_ALLOCATION_FAILED";
 	}
@@ -142,10 +209,26 @@ WorldSnapshotPublishResult WorldSnapshotStore::Publish(
 		const std::shared_ptr<const WorldSnapshot> current = Current();
 		if (current && snapshot.Generation <= current->Generation)
 			return {.Error = WorldSnapshotPublishError::GenerationNotMonotonic};
-		if (snapshot.Levels.size() > kMaxLevels || snapshot.Actors.size() > kMaxActors)
+		if (snapshot.Levels.size() > kMaxLevels
+			|| snapshot.Actors.size() > kMaxActors
+			|| snapshot.Components.size() > kMaxComponents)
 			return {.Error = WorldSnapshotPublishError::CountLimitExceeded};
 		if (!IsObjectValid(snapshot.World, m_SessionId, m_ContextGeneration))
 			return {.Error = WorldSnapshotPublishError::WorldInvalid};
+		if (snapshot.ComponentsAvailable)
+		{
+			if (!snapshot.ComponentsReasonCode.empty()
+				|| !snapshot.ComponentsReason.empty())
+			{
+				return {.Error = WorldSnapshotPublishError::EnvelopeInvalid};
+			}
+		}
+		else if (!snapshot.Components.empty()
+			|| !IsTextValid(snapshot.ComponentsReasonCode, kMaxReasonCodeBytes)
+			|| !IsTextValid(snapshot.ComponentsReason, kMaxReasonBytes))
+		{
+			return {.Error = WorldSnapshotPublishError::EnvelopeInvalid};
+		}
 
 		std::set<std::int32_t> objectIndices{snapshot.World.Handle.Index};
 		std::set<std::uintptr_t> objectAddresses{snapshot.World.Handle.Address};
@@ -174,6 +257,11 @@ WorldSnapshotPublishResult WorldSnapshotStore::Publish(
 			const WorldSnapshotActor& actor = snapshot.Actors[index];
 			if (!IsObjectValid(actor.Object, m_SessionId, m_ContextGeneration)
 				|| !IsHandleValid(actor.Level, m_SessionId, m_ContextGeneration)
+				|| !IsReferenceValid(
+					actor.RootComponent,
+					m_SessionId,
+					m_ContextGeneration)
+				|| actor.ComponentCount > snapshot.Components.size()
 				|| actor.Object.Handle.Index <= previousIndex
 				|| !objectIndices.emplace(actor.Object.Handle.Index).second
 				|| !objectAddresses.emplace(actor.Object.Handle.Address).second)
@@ -203,6 +291,43 @@ WorldSnapshotPublishResult WorldSnapshotStore::Publish(
 			++observedActorCounts[levelIndex];
 			previousIndex = actor.Object.Handle.Index;
 		}
+
+		std::vector<std::uint32_t> observedComponentCounts(snapshot.Actors.size(), 0);
+		previousIndex = -1;
+		for (std::size_t index = 0; index < snapshot.Components.size(); ++index)
+		{
+			const WorldSnapshotComponent& component = snapshot.Components[index];
+			if (!IsObjectValid(component.Object, m_SessionId, m_ContextGeneration)
+				|| !IsHandleValid(component.Owner, m_SessionId, m_ContextGeneration)
+				|| component.Object.Handle.Index <= previousIndex
+				|| !objectIndices.emplace(component.Object.Handle.Index).second
+				|| !objectAddresses.emplace(component.Object.Handle.Address).second)
+			{
+				return {
+					.Error = WorldSnapshotPublishError::ComponentInvalid,
+					.RecordIndex = static_cast<std::int32_t>(index)
+				};
+			}
+			const auto actor = std::lower_bound(
+				snapshot.Actors.begin(),
+				snapshot.Actors.end(),
+				component.Owner.Index,
+				[](const WorldSnapshotActor& candidate, const std::int32_t expected) {
+					return candidate.Object.Handle.Index < expected;
+				});
+			if (actor == snapshot.Actors.end()
+				|| !SameHandle(actor->Object.Handle, component.Owner))
+			{
+				return {
+					.Error = WorldSnapshotPublishError::RelationshipInvalid,
+					.RecordIndex = static_cast<std::int32_t>(index)
+				};
+			}
+			const std::size_t actorIndex = static_cast<std::size_t>(
+				std::distance(snapshot.Actors.begin(), actor));
+			++observedComponentCounts[actorIndex];
+			previousIndex = component.Object.Handle.Index;
+		}
 		for (std::size_t index = 0; index < snapshot.Levels.size(); ++index)
 		{
 			if (snapshot.Levels[index].ActorCount != observedActorCounts[index])
@@ -212,6 +337,52 @@ WorldSnapshotPublishResult WorldSnapshotStore::Publish(
 					.RecordIndex = static_cast<std::int32_t>(index)
 				};
 			}
+		}
+		for (std::size_t index = 0; index < snapshot.Actors.size(); ++index)
+		{
+			const WorldSnapshotActor& actor = snapshot.Actors[index];
+			if (actor.ComponentCount != observedComponentCounts[index])
+			{
+				return {
+					.Error = WorldSnapshotPublishError::RelationshipInvalid,
+					.RecordIndex = static_cast<std::int32_t>(index)
+				};
+			}
+			if (actor.RootComponent.State == WorldReferenceState::Present)
+			{
+				const WorldSnapshotComponent* root = snapshot.FindComponentByIndex(
+					actor.RootComponent.Object->Handle.Index);
+				if (!root
+					|| !SameObject(root->Object, *actor.RootComponent.Object)
+					|| !SameHandle(root->Owner, actor.Object.Handle))
+				{
+					return {
+						.Error = WorldSnapshotPublishError::RelationshipInvalid,
+						.RecordIndex = static_cast<std::int32_t>(index)
+					};
+				}
+			}
+		}
+
+		const std::array<const WorldSnapshotReference*, 4> shortcuts{
+			&snapshot.GameMode,
+			&snapshot.GameState,
+			&snapshot.PlayerController,
+			&snapshot.Pawn
+		};
+		for (const WorldSnapshotReference* reference : shortcuts)
+		{
+			if (!reference
+				|| !IsReferenceValid(*reference, m_SessionId, m_ContextGeneration))
+			{
+				return {.Error = WorldSnapshotPublishError::ReferenceInvalid};
+			}
+			if (reference->State != WorldReferenceState::Present)
+				continue;
+			const WorldSnapshotActor* actor = snapshot.FindActorByIndex(
+				reference->Object->Handle.Index);
+			if (!actor || !SameObject(actor->Object, *reference->Object))
+				return {.Error = WorldSnapshotPublishError::ReferenceInvalid};
 		}
 
 		auto published = std::make_shared<const WorldSnapshot>(std::move(snapshot));

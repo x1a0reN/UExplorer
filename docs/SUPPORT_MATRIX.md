@@ -22,11 +22,13 @@ These assets are available for development, but none changes the support rows ab
   lifecycle semantics, and fixture expectations; runtime witnesses still decide whether
   a candidate applies to a target binary.
 - `D:\Steam\steamapps\common\Wandering Sword` is the designated real-game fixture.
-  Passive inspection confirms an x64 UE4/PhysX Shipping layout and bundled engine-file
-  timestamps consistent with the UE 4.26 family. This is still an inference: the current
-  executable has `.uedbg`/`.bind` sections, a local `version.dll`, an IDA database, and
-  prior injection logs. Exact engine identity, loaded modules, offsets, GC behavior, and
-  clean unload must be captured from a controlled run before the UE 4.26 row changes.
+  Earlier passive artifacts are consistent with an x64 UE4/PhysX Shipping build in the
+  UE 4.26 family, but the 2026-08-11 inventory contains only the IDA
+  `JH-Win64-Shipping.exe.i64` database, a local `version.dll`, prior injection logs, and
+  third-party trainer files under `Wandering_Sword\Binaries\Win64`; no launchable game
+  executable is present. The official executable must be restored before a controlled
+  baseline can establish engine identity, loaded modules, offsets, GC behavior, or clean
+  unload. Existing derived artifacts cannot change the UE 4.26 support row.
 
 ## Fixture requirements
 

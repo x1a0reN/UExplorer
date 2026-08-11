@@ -194,6 +194,9 @@ The v1 command registry is explicit. Unknown operations return
 | `world.inspect` | `{}` | Worker-safe immutable current-world identity and exact Level/Actor counts |
 | `world.levels` | `{"cursor": null \| world_cursor, "limit": 1..128}` | Worker-safe immutable Level page |
 | `world.actors.list` | `{"cursor": null \| world_cursor, "limit": 1..128, "search": string \| null, "class_search": string \| null, "level_path": exact_path \| null}` | Worker-safe immutable Actor page with exact total matching |
+| `world.shortcuts` | `{}` | Current-World GameMode/GameState references plus explicit unavailable LocalPlayer/Pawn states |
+| `world.actor.get` | `{"actor": object_handle, "world_snapshot_generation": uint53}` | Exact immutable Actor/Level/root-component detail; transform state remains explicit |
+| `world.actor.components` | `{"actor": object_handle, "world_snapshot_generation": uint53, "cursor": null \| world_cursor, "limit": 1..128}` | Cursor-paged immutable components owned by the exact Actor |
 | `types.classes.get` | `{"path": full_path}` | Worker-safe immutable class summary |
 | `types.classes.fields` | `{"path": full_path, "scope": "direct" \| "include_inherited", "cursor": null \| type_cursor, "limit": 1..128}` | Worker-safe immutable field page |
 | `types.classes.functions` | same member-page shape | Worker-safe immutable function page |
@@ -246,8 +249,15 @@ query fingerprint derived from session/context/Object/Type/World generation, ope
 and filters. It cannot cross a generation or filter, point at an unmatched Actor, or
 represent a terminal page for which the service never emitted a continuation. Actor
 queries return exact `matched` after scanning the immutable snapshot; each response is
-capped at 128 records and 4 MiB. Actor details/components/shortcuts use the unavailable
-`world.details` capability, while mutation uses the unavailable `world.mutate` capability.
+capped at 128 records and 4 MiB. Actor details and component pages require both the exact
+Actor handle and WorldSnapshot generation. Components are associated only through the
+witnessed Actor typed-outer relation, and `RootComponent` is read through its reflected
+object field. GameMode and GameState shortcuts are read from the exact current UWorld and
+must resolve back to an Actor in that World. LocalPlayer order still requires a validated
+`UGameInstance.LocalPlayers` array codec, so PlayerController and Pawn return explicit
+`unavailable` states rather than selecting the first global class match. Transform data and
+mutation remain behind the unavailable `world.mutate` capability until FVector/FRotator/LWC
+struct identity and a game-thread UE setter are implemented.
 
 The shared Rust types live in `protocol/rust`; the Host must deserialize pages with
 unknown-field rejection. `frontend/src-tauri/src/session/snapshot_cache.rs` validates

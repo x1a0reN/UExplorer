@@ -6,20 +6,13 @@ import api, {
     type WorldActorDetail,
     type WorldActorItem,
     type WorldQueryCursor,
-    type ObjectItem,
-    type Vec3Data,
+    type WorldSnapshotObject,
 } from '../../api';
 import { Panel, HeaderCard, type BrowserPageProps } from './shared';
 
 // ─── Types ─────────────────────────────────────────────────────
 
-type WorldDetailTab = 'Transform' | 'Components' | 'Properties';
-type VecInput = { x: string; y: string; z: string };
-
-function toVecInput(vec?: Vec3Data): VecInput {
-    if (!vec) return { x: '', y: '', z: '' };
-    return { x: String(vec.x), y: String(vec.y), z: String(vec.z) };
-}
+type WorldDetailTab = 'Transform' | 'Components';
 
 // ─── Component ─────────────────────────────────────────────────
 
@@ -31,6 +24,7 @@ export default function WorldBrowser({ onSwitchMode }: BrowserPageProps) {
     const [actors, setActors] = useState<WorldActorItem[]>([]);
     const [nextActorCursor, setNextActorCursor] = useState<WorldQueryCursor | null>(null);
     const [actorMatched, setActorMatched] = useState(0);
+    const [actorGeneration, setActorGeneration] = useState<number | null>(null);
     const [search, setSearch] = useState('');
     const [classFilter, setClassFilter] = useState('');
     const [listLoading, setListLoading] = useState(false);
@@ -40,14 +34,11 @@ export default function WorldBrowser({ onSwitchMode }: BrowserPageProps) {
     // Detail state
     const [detailTab, setDetailTab] = useState<WorldDetailTab>('Transform');
     const [actorDetail, setActorDetail] = useState<WorldActorDetail | null>(null);
-    const [components, setComponents] = useState<ObjectItem[]>([]);
+    const [components, setComponents] = useState<WorldSnapshotObject[]>([]);
+    const [nextComponentCursor, setNextComponentCursor] = useState<WorldQueryCursor | null>(null);
+    const [componentLoading, setComponentLoading] = useState(false);
     const [detailLoading, setDetailLoading] = useState(false);
     const [detailError, setDetailError] = useState<string | null>(null);
-
-    // Transform inputs
-    const [location, setLocation] = useState<VecInput>({ x: '', y: '', z: '' });
-    const [rotation, setRotation] = useState<VecInput>({ x: '', y: '', z: '' });
-    const [scale, setScale] = useState<VecInput>({ x: '', y: '', z: '' });
 
     // ─── Data Loading ──────────────────────────────────────────
 
@@ -85,6 +76,11 @@ export default function WorldBrowser({ onSwitchMode }: BrowserPageProps) {
             setActors([]);
             setNextActorCursor(null);
             setActorMatched(0);
+            setActorGeneration(null);
+            setSelected(null);
+            setActorDetail(null);
+            setComponents([]);
+            setNextComponentCursor(null);
         }
         try {
             const res = await api.getWorldActors(cursor, 128, search, classFilter);
@@ -92,6 +88,7 @@ export default function WorldBrowser({ onSwitchMode }: BrowserPageProps) {
                 setActors((current) => append ? [...current, ...res.data!.items] : res.data!.items);
                 setNextActorCursor(res.data.next_cursor);
                 setActorMatched(res.data.matched);
+                setActorGeneration(res.data.generation);
             }
         } catch { /* ignore */ }
         setActorListLoading(false);
@@ -102,27 +99,56 @@ export default function WorldBrowser({ onSwitchMode }: BrowserPageProps) {
         setDetailError(null);
         setActorDetail(null);
         setComponents([]);
+        setNextComponentCursor(null);
         setDetailTab('Transform');
+        const generation = actorGeneration;
+        if (generation === null) {
+            setDetailError('WORLD_SNAPSHOT_STALE: actor list generation is unavailable');
+            setDetailLoading(false);
+            return;
+        }
         try {
-            const [detailRes, compRes] = await Promise.all([
-                api.getWorldActorDetail(actor.index),
-                api.getWorldActorComponents(actor.index),
-            ]);
+            const detailRes = await api.getWorldActorDetail(actor.handle, generation);
             if (detailRes.success && detailRes.data) {
                 setActorDetail(detailRes.data);
-                setLocation(toVecInput(detailRes.data.transform?.location));
-                setRotation(toVecInput(detailRes.data.transform?.rotation));
-                setScale(toVecInput(detailRes.data.transform?.scale));
+                if (detailRes.data.components.state === 'available') {
+                    const compRes = await api.getWorldActorComponents(actor.handle, generation);
+                    if (compRes.success && compRes.data) {
+                        setComponents(compRes.data.components);
+                        setNextComponentCursor(compRes.data.next_cursor);
+                    } else {
+                        setDetailError(compRes.error || compRes.error_code || 'World components unavailable');
+                    }
+                }
+            } else {
+                setDetailError(detailRes.error || detailRes.error_code || 'World detail unavailable');
             }
-            if (compRes.success && compRes.data) setComponents(compRes.data.components);
-            const failures = [detailRes, compRes]
-                .filter((response) => !response.success)
-                .map((response) => response.error || response.error_code || 'World detail unavailable');
-            if (failures.length > 0) setDetailError(failures.join('; '));
         } catch (error) {
             setDetailError(error instanceof Error ? error.message : String(error));
         } finally {
             setDetailLoading(false);
+        }
+    };
+
+    const loadMoreComponents = async () => {
+        if (!selected || !actorDetail || !nextComponentCursor || componentLoading) return;
+        setComponentLoading(true);
+        try {
+            const response = await api.getWorldActorComponents(
+                selected.handle,
+                actorDetail.generation,
+                nextComponentCursor,
+            );
+            if (response.success && response.data) {
+                setComponents((current) => [...current, ...response.data!.components]);
+                setNextComponentCursor(response.data.next_cursor);
+            } else {
+                setDetailError(response.error || response.error_code || 'World components unavailable');
+            }
+        } catch (error) {
+            setDetailError(error instanceof Error ? error.message : String(error));
+        } finally {
+            setComponentLoading(false);
         }
     };
 
@@ -146,18 +172,6 @@ export default function WorldBrowser({ onSwitchMode }: BrowserPageProps) {
             return next;
         });
     };
-
-    const VecEditor = ({ label, value }: { label: string; value: VecInput }) => (
-        <div className="grid grid-cols-[80px_1fr_1fr_1fr] gap-2 items-center">
-            <span className="text-white/50 text-xs">{label}</span>
-            {(['x', 'y', 'z'] as const).map((axis) => (
-                <input key={axis} type="text" value={value[axis]}
-                    readOnly
-                    placeholder={axis.toUpperCase()}
-                    className="h-7 bg-white/[0.03] border border-white/5 rounded text-xs text-white/60 font-mono px-2 text-center cursor-not-allowed" />
-            ))}
-        </div>
-    );
 
     // ─── Render ────────────────────────────────────────────────
 
@@ -235,14 +249,14 @@ export default function WorldBrowser({ onSwitchMode }: BrowserPageProps) {
                         <HeaderCard
                             icon={MapPin}
                             name={selected.name}
-                            subtitle={actorDetail?.full_name || selected.class}
+                            subtitle={actorDetail?.actor.full_path || selected.class_path}
                             gradient="from-cyan-500/20 to-blue-500/10"
                             iconColor="text-cyan-400"
                             glow="bg-cyan-500/20"
                             badges={<>
                                 <span className="px-2.5 py-1 rounded-[6px] bg-blue-500/10 border border-blue-500/20 text-[11px] font-mono text-blue-400 cursor-pointer hover:bg-blue-500/20"
-                                    onClick={() => onSwitchMode?.('types', { className: actorDetail?.class || selected.class })}>
-                                    {actorDetail?.class || selected.class}
+                                    onClick={() => onSwitchMode?.('types', { className: actorDetail?.actor.class_path || selected.class_path })}>
+                                    {actorDetail?.actor.class_path || selected.class_path}
                                 </span>
                                 <span className="px-2.5 py-1 rounded-[6px] bg-white/5 border border-white/10 text-[11px] font-mono text-white/70">
                                     #{selected.index}
@@ -266,13 +280,9 @@ export default function WorldBrowser({ onSwitchMode }: BrowserPageProps) {
                         {/* Transform Tab */}
                         {detailTab === 'Transform' && (
                             <Panel title={t('Transform')}>
-                                <div className="space-y-3">
-                                    <VecEditor label="Location" value={location} />
-                                    <VecEditor label="Rotation" value={rotation} />
-                                    <VecEditor label="Scale" value={scale} />
-                                    <div className="mt-4 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
-                                        Transform editing is disabled until a verified game-thread Unreal setter is available.
-                                    </div>
+                                <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                                    {actorDetail?.transform.reason
+                                        || 'Transform data is unavailable until FVector/FRotator/LWC identity and a game-thread Unreal setter are verified.'}
                                 </div>
                             </Panel>
                         )}
@@ -281,16 +291,37 @@ export default function WorldBrowser({ onSwitchMode }: BrowserPageProps) {
                         {detailTab === 'Components' && (
                             <Panel title={t('Components')}>
                                 <div className="space-y-1">
+                                    {actorDetail?.root_component.state === 'present' && actorDetail.root_component.object && (
+                                        <div className="mb-2 rounded-lg border border-cyan-400/15 bg-cyan-400/5 px-3 py-2 text-xs text-cyan-100/70">
+                                            Root: <span className="font-mono">{actorDetail.root_component.object.name}</span>
+                                        </div>
+                                    )}
+                                    {actorDetail?.components.state === 'unavailable' && (
+                                        <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                                            {actorDetail.components.reason}
+                                        </div>
+                                    )}
                                     {components.map((comp) => (
                                         <div key={comp.index}
                                             className="flex items-center gap-3 p-2 rounded-lg border border-white/5 bg-black/20 hover:bg-white/5 cursor-pointer"
                                             onClick={() => onSwitchMode?.('instances', { objectIndex: comp.index })}>
                                             <div className="w-2 h-2 rounded-full bg-cyan-400/60 flex-none" />
                                             <span className="text-[13px] text-white/90 font-mono flex-1 truncate">{comp.name}</span>
-                                            <span className="text-[11px] text-blue-400/60 font-mono">{comp.class}</span>
+                                            <span className="text-[11px] text-blue-400/60 font-mono">{comp.class_path}</span>
                                         </div>
                                     ))}
-                                    {!detailLoading && !detailError && components.length === 0 && (
+                                    {nextComponentCursor && (
+                                        <button type="button"
+                                            disabled={componentLoading}
+                                            onClick={() => void loadMoreComponents()}
+                                            className="w-full mt-2 rounded border border-cyan-400/15 px-2 py-1.5 text-[11px] text-cyan-200/60 hover:bg-cyan-400/5 disabled:opacity-40">
+                                            {componentLoading ? t('Loading...') : t('Load more components')}
+                                            {actorDetail?.components.count !== null && ` (${components.length}/${actorDetail?.components.count ?? 0})`}
+                                        </button>
+                                    )}
+                                    {!detailLoading && !detailError
+                                        && actorDetail?.components.state === 'available'
+                                        && components.length === 0 && (
                                         <div className="text-white/40 text-sm">{t('No components')}</div>
                                     )}
                                 </div>

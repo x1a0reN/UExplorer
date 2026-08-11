@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -21,6 +22,23 @@ struct WorldSnapshotObject
 	std::string ClassPath;
 };
 
+enum class WorldReferenceState : std::uint8_t
+{
+	Present,
+	NotPresent,
+	Unavailable
+};
+
+const char* ToString(WorldReferenceState state) noexcept;
+
+struct WorldSnapshotReference
+{
+	WorldReferenceState State = WorldReferenceState::Unavailable;
+	std::optional<WorldSnapshotObject> Object;
+	std::string ReasonCode;
+	std::string Reason;
+};
+
 struct WorldSnapshotLevel
 {
 	WorldSnapshotObject Object;
@@ -31,6 +49,14 @@ struct WorldSnapshotActor
 {
 	WorldSnapshotObject Object;
 	ObjectHandle Level;
+	WorldSnapshotReference RootComponent;
+	std::uint32_t ComponentCount = 0;
+};
+
+struct WorldSnapshotComponent
+{
+	WorldSnapshotObject Object;
+	ObjectHandle Owner;
 };
 
 struct WorldSnapshot
@@ -43,11 +69,20 @@ struct WorldSnapshot
 	std::uint64_t CapturedAtMonotonicUs = 0;
 	std::uint64_t CaptureDurationUs = 0;
 	WorldSnapshotObject World;
+	WorldSnapshotReference GameMode;
+	WorldSnapshotReference GameState;
+	WorldSnapshotReference PlayerController;
+	WorldSnapshotReference Pawn;
+	bool ComponentsAvailable = false;
+	std::string ComponentsReasonCode;
+	std::string ComponentsReason;
 	std::vector<WorldSnapshotLevel> Levels;
 	std::vector<WorldSnapshotActor> Actors;
+	std::vector<WorldSnapshotComponent> Components;
 
 	const WorldSnapshotLevel* FindLevelByIndex(std::int32_t index) const noexcept;
 	const WorldSnapshotActor* FindActorByIndex(std::int32_t index) const noexcept;
+	const WorldSnapshotComponent* FindComponentByIndex(std::int32_t index) const noexcept;
 };
 
 enum class WorldSnapshotPublishError : std::uint8_t
@@ -61,6 +96,8 @@ enum class WorldSnapshotPublishError : std::uint8_t
 	WorldInvalid,
 	LevelInvalid,
 	ActorInvalid,
+	ComponentInvalid,
+	ReferenceInvalid,
 	RelationshipInvalid,
 	AllocationFailed
 };
@@ -85,8 +122,11 @@ class WorldSnapshotStore final
 public:
 	static constexpr std::size_t kMaxLevels = 65'536;
 	static constexpr std::size_t kMaxActors = 2'000'000;
+	static constexpr std::size_t kMaxComponents = 4'000'000;
 	static constexpr std::size_t kMaxNameBytes = 1024;
 	static constexpr std::size_t kMaxPathBytes = 4096;
+	static constexpr std::size_t kMaxReasonCodeBytes = 128;
+	static constexpr std::size_t kMaxReasonBytes = 1024;
 	static constexpr std::uint64_t kMaxProtocolGeneration =
 		9'007'199'254'740'991ULL;
 

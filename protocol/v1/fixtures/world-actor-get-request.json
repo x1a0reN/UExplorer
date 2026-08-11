@@ -1,0 +1,16 @@
+{
+  "operation": "world.actor.get",
+  "session_id": "fixture-session-4242",
+  "timeout_ms": 5000,
+  "data": {
+    "actor": {
+      "session_id": "fixture-session-4242",
+      "context_generation": 7,
+      "index": 42,
+      "serial": 9,
+      "address": "0x7FF612341000",
+      "class_fingerprint": "0123456789ABCDEF"
+    },
+    "world_snapshot_generation": 3
+  }
+}

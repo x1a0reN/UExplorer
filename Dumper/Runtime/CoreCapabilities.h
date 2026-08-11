@@ -238,9 +238,9 @@ inline std::shared_ptr<const CapabilitySnapshot> BuildCoreCapabilities(
 		{"engine.world_snapshot", "objects.handles"});
 	builder.Define(
 		"world.details",
-		false,
-		"WORLD_DETAILS_NOT_IMPLEMENTED",
-		"Actor details, components, and current-world shortcuts are not implemented",
+		probes.WorldInspectServiceEnabled,
+		"WORLD_DETAILS_COMMAND_NOT_READY",
+		"Immutable actor detail, component, and shortcut commands are not registered",
 		{"world.inspect"});
 	builder.Define(
 		"world.mutate",

@@ -7030,6 +7030,19 @@ void TestWorldSnapshotQueries()
 			.FullPath = "/Game/Maps/Fixture.Fixture",
 			.ClassPath = "/Script/Engine.World"
 		},
+		.GameMode = {.State = WorldReferenceState::NotPresent},
+		.GameState = {.State = WorldReferenceState::NotPresent},
+		.PlayerController = {
+			.State = WorldReferenceState::Unavailable,
+			.ReasonCode = "WORLD_LOCAL_PLAYER_CHAIN_UNAVAILABLE",
+			.Reason = "Fixture has no validated LocalPlayers traversal"
+		},
+		.Pawn = {
+			.State = WorldReferenceState::Unavailable,
+			.ReasonCode = "WORLD_LOCAL_PLAYER_CHAIN_UNAVAILABLE",
+			.Reason = "Fixture has no validated local PlayerController"
+		},
+		.ComponentsAvailable = true,
 		.Levels = {{
 			.Object = {
 				.Handle = handle(2, 0x2000),
@@ -7047,7 +7060,17 @@ void TestWorldSnapshotQueries()
 					.FullPath = "/Game/Maps/Fixture.Fixture.PersistentLevel.FixtureActor",
 					.ClassPath = "/Script/Engine.Actor"
 				},
-				.Level = handle(2, 0x2000)
+				.Level = handle(2, 0x2000),
+				.RootComponent = {
+					.State = WorldReferenceState::Present,
+					.Object = WorldSnapshotObject{
+						.Handle = handle(6, 0x6000),
+						.Name = "Root",
+						.FullPath = "/Game/Maps/Fixture.Fixture.PersistentLevel.FixtureActor.Root",
+						.ClassPath = "/Script/Engine.SceneComponent"
+					}
+				},
+				.ComponentCount = 2
 			},
 			{
 				.Object = {
@@ -7056,7 +7079,8 @@ void TestWorldSnapshotQueries()
 					.FullPath = "/Game/Maps/Fixture.Fixture.PersistentLevel.UnmatchedPawn",
 					.ClassPath = "/Script/Engine.Pawn"
 				},
-				.Level = handle(2, 0x2000)
+				.Level = handle(2, 0x2000),
+				.RootComponent = {.State = WorldReferenceState::NotPresent}
 			},
 			{
 				.Object = {
@@ -7065,7 +7089,46 @@ void TestWorldSnapshotQueries()
 					.FullPath = "/Game/Maps/Fixture.Fixture.PersistentLevel.FixtureActorTwo",
 					.ClassPath = "/Script/Engine.Actor"
 				},
-				.Level = handle(2, 0x2000)
+				.Level = handle(2, 0x2000),
+				.RootComponent = {
+					.State = WorldReferenceState::Present,
+					.Object = WorldSnapshotObject{
+						.Handle = handle(8, 0x8000),
+						.Name = "RootTwo",
+						.FullPath = "/Game/Maps/Fixture.Fixture.PersistentLevel.FixtureActorTwo.RootTwo",
+						.ClassPath = "/Script/Engine.SceneComponent"
+					}
+				},
+				.ComponentCount = 1
+			}
+		},
+		.Components = {
+			{
+				.Object = {
+					.Handle = handle(6, 0x6000),
+					.Name = "Root",
+					.FullPath = "/Game/Maps/Fixture.Fixture.PersistentLevel.FixtureActor.Root",
+					.ClassPath = "/Script/Engine.SceneComponent"
+				},
+				.Owner = handle(3, 0x3000)
+			},
+			{
+				.Object = {
+					.Handle = handle(7, 0x7000),
+					.Name = "Mesh",
+					.FullPath = "/Game/Maps/Fixture.Fixture.PersistentLevel.FixtureActor.Mesh",
+					.ClassPath = "/Script/Engine.StaticMeshComponent"
+				},
+				.Owner = handle(3, 0x3000)
+			},
+			{
+				.Object = {
+					.Handle = handle(8, 0x8000),
+					.Name = "RootTwo",
+					.FullPath = "/Game/Maps/Fixture.Fixture.PersistentLevel.FixtureActorTwo.RootTwo",
+					.ClassPath = "/Script/Engine.SceneComponent"
+				},
+				.Owner = handle(5, 0x5000)
 			}
 		}
 	};
@@ -7080,8 +7143,77 @@ void TestWorldSnapshotQueries()
 	Require(
 		inspect.Ok()
 			&& inspect.Data.at("level_count") == 1
-			&& inspect.Data.at("actor_count") == 3,
+			&& inspect.Data.at("actor_count") == 3
+			&& inspect.Data.at("components").at("state") == "available"
+			&& inspect.Data.at("components").at("count") == 3,
 		"World inspection did not expose exact immutable counts");
+	const auto shortcuts = WorldCommandService::Execute(
+		"world.shortcuts",
+		nlohmann::json::object(),
+		store.Current());
+	Require(
+		shortcuts.Ok()
+			&& shortcuts.Data.at("game_mode").at("state") == "not_present"
+			&& shortcuts.Data.at("player_controller").at("state") == "unavailable",
+		"World shortcuts fabricated a global object instead of preserving relation state");
+	const auto actorDetail = WorldCommandService::Execute(
+		"world.actor.get",
+		{{"actor", {
+			{"session_id", "world-fixture"},
+			{"context_generation", 81},
+			{"index", 3},
+			{"serial", 103},
+			{"address", "0x3000"},
+			{"class_fingerprint", "000000000000A003"}
+		}}, {"world_snapshot_generation", 3}},
+		store.Current());
+	Require(
+		actorDetail.Ok()
+			&& actorDetail.Data.at("actor").at("handle").at("index") == 3
+			&& actorDetail.Data.at("root_component").at("state") == "present"
+			&& actorDetail.Data.at("root_component").at("object").at("handle").at("index") == 6
+			&& actorDetail.Data.at("components").at("count") == 2
+			&& actorDetail.Data.at("transform").at("state") == "unavailable",
+		"World actor detail lost its exact handle, root component, or explicit transform state");
+	const nlohmann::json actorHandle = actorDetail.Data.at("actor").at("handle");
+	const auto components = WorldCommandService::Execute(
+		"world.actor.components",
+		{{"actor", actorHandle},
+		 {"world_snapshot_generation", 3},
+		 {"cursor", nullptr},
+		 {"limit", 1}},
+		store.Current());
+	Require(
+		components.Ok()
+			&& components.Data.at("components").size() == 1
+			&& components.Data.at("components").at(0).at("handle").at("index") == 6
+			&& components.Data.at("count") == 2
+			&& components.Data.at("has_more") == true,
+		"World component paging did not bind the first page to the exact Actor");
+	const auto componentsNext = WorldCommandService::Execute(
+		"world.actor.components",
+		{{"actor", actorHandle},
+		 {"world_snapshot_generation", 3},
+		 {"cursor", components.Data.at("next_cursor")},
+		 {"limit", 1}},
+		store.Current());
+	Require(
+		componentsNext.Ok()
+			&& componentsNext.Data.at("components").size() == 1
+			&& componentsNext.Data.at("components").at(0).at("handle").at("index") == 7
+			&& componentsNext.Data.at("has_more") == false,
+		"World component continuation crossed Actor ownership or lost its terminal state");
+	nlohmann::json staleActorHandle = actorHandle;
+	staleActorHandle["serial"] = 999;
+	const auto staleActor = WorldCommandService::Execute(
+		"world.actor.get",
+		{{"actor", staleActorHandle}, {"world_snapshot_generation", 3}},
+		store.Current());
+	Require(
+		!staleActor.Ok()
+			&& staleActor.Error
+			&& staleActor.Error->Code == "WORLD_ACTOR_HANDLE_STALE",
+		"World actor detail accepted a stale serial for a reused object index");
 	const auto levels = WorldCommandService::Execute(
 		"world.levels",
 		{{"cursor", nullptr}, {"limit", 128}},
