@@ -130,6 +130,15 @@
           "additionalProperties": false,
           "required": ["kind", "value"],
           "properties": {
+            "kind": { "enum": ["string", "text"] },
+            "value": { "type": "string", "maxLength": 4194304 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "value"],
+          "properties": {
             "kind": { "const": "object" },
             "value": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/objectHandle" }] }
           }
@@ -169,35 +178,10 @@
           "required": ["kind", "type_name", "value"],
           "properties": {
             "kind": { "const": "struct" },
-            "type_name": { "const": "/Script/CoreUObject.Vector" },
+            "type_name": { "$ref": "#/$defs/typePath" },
             "value": {
               "type": "object",
-              "additionalProperties": false,
-              "required": ["X", "Y", "Z"],
-              "properties": {
-                "X": { "type": "string", "pattern": "^-?(?:(?:0|[1-9][0-9]*)(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$", "maxLength": 128 },
-                "Y": { "type": "string", "pattern": "^-?(?:(?:0|[1-9][0-9]*)(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$", "maxLength": 128 },
-                "Z": { "type": "string", "pattern": "^-?(?:(?:0|[1-9][0-9]*)(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$", "maxLength": 128 }
-              }
-            }
-          }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "type_name", "value"],
-          "properties": {
-            "kind": { "const": "struct" },
-            "type_name": { "const": "/Script/CoreUObject.Rotator" },
-            "value": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": ["Pitch", "Yaw", "Roll"],
-              "properties": {
-                "Pitch": { "type": "string", "pattern": "^-?(?:(?:0|[1-9][0-9]*)(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$", "maxLength": 128 },
-                "Yaw": { "type": "string", "pattern": "^-?(?:(?:0|[1-9][0-9]*)(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$", "maxLength": 128 },
-                "Roll": { "type": "string", "pattern": "^-?(?:(?:0|[1-9][0-9]*)(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$", "maxLength": 128 }
-              }
+              "maxProperties": 1024
             }
           }
         }

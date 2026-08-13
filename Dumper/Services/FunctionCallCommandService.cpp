@@ -6,6 +6,7 @@
 #include <cmath>
 #include <format>
 #include <limits>
+#include <ranges>
 #include <set>
 #include <string_view>
 #include <system_error>
@@ -325,6 +326,182 @@ bool IsUnsignedKind(const Runtime::PropertyKind kind) noexcept
 		|| kind == Runtime::PropertyKind::UInt64;
 }
 
+bool ParseStructFieldValue(
+	const json& encoded,
+	const Runtime::PropertyDescriptor& descriptor,
+	const std::string& path,
+	Runtime::PropertyInputValue& value,
+	FunctionCallCommandError& error,
+	const std::size_t depth)
+{
+	if (depth > Runtime::TypeSnapshotStore::kMaxDescriptorDepth)
+	{
+		error = Error(
+			"CALL_ARGUMENT_STRUCT_DEPTH_EXCEEDED",
+			"The struct argument exceeds the supported nesting depth",
+			{{"parameter", path}});
+		return false;
+	}
+	if (descriptor.Kind == Runtime::PropertyKind::Bool)
+	{
+		if (!encoded.is_boolean())
+		{
+			error = Error("CALL_ARGUMENT_TYPE_MISMATCH", "The struct field must be boolean", {{"parameter", path}});
+			return false;
+		}
+		value = encoded.get<bool>();
+		return true;
+	}
+	if (IsSignedKind(descriptor.Kind))
+	{
+		std::int64_t parsed = 0;
+		if (!TrySignedDecimal(encoded, parsed))
+		{
+			error = Error("CALL_ARGUMENT_TYPE_MISMATCH", "The struct field must be a canonical signed decimal string", {{"parameter", path}});
+			return false;
+		}
+		value = parsed;
+		return true;
+	}
+	if (IsUnsignedKind(descriptor.Kind))
+	{
+		std::uint64_t parsed = 0;
+		if (!TryUnsignedDecimal(encoded, parsed))
+		{
+			error = Error("CALL_ARGUMENT_TYPE_MISMATCH", "The struct field must be a canonical unsigned decimal string", {{"parameter", path}});
+			return false;
+		}
+		value = parsed;
+		return true;
+	}
+	if (descriptor.Kind == Runtime::PropertyKind::Float
+		|| descriptor.Kind == Runtime::PropertyKind::Double)
+	{
+		double parsed = 0.0;
+		if (!TryFiniteDouble(encoded, parsed))
+		{
+			error = Error("CALL_ARGUMENT_TYPE_MISMATCH", "The struct field must be a finite floating-point string", {{"parameter", path}});
+			return false;
+		}
+		value = parsed;
+		return true;
+	}
+	if (descriptor.Kind == Runtime::PropertyKind::Object)
+	{
+		if (encoded.is_null())
+		{
+			value = std::monostate{};
+			return true;
+		}
+		Runtime::ObjectHandle handle;
+		if (!TryParseObjectHandle(encoded, handle))
+		{
+			error = Error("CALL_ARGUMENT_TYPE_MISMATCH", "The struct object field must be null or a complete stable handle", {{"parameter", path}});
+			return false;
+		}
+		value = Runtime::PropertyObjectReference{.Handle = std::move(handle)};
+		return true;
+	}
+	if (descriptor.Kind == Runtime::PropertyKind::Enum
+		&& Runtime::IsDescriptorProvenEnum(descriptor))
+	{
+		if (!encoded.is_object() || encoded.size() != 1
+			|| (!encoded.contains("name") && !encoded.contains("raw")))
+		{
+			error = Error("CALL_ARGUMENT_ENUM_VALUE_INVALID", "The struct enum field must contain one name or raw selector", {{"parameter", path}});
+			return false;
+		}
+		Runtime::PropertyEnumInput input{.TypeName = descriptor.TypeName};
+		if (encoded.contains("name"))
+		{
+			if (!encoded.at("name").is_string()
+				|| !IsBoundedText(encoded.at("name").get_ref<const std::string&>(), kMaxPathBytes))
+			{
+				error = Error("CALL_ARGUMENT_ENUM_NAME_INVALID", "The struct enum field name is invalid", {{"parameter", path}});
+				return false;
+			}
+			const std::string selected = encoded.at("name").get<std::string>();
+			if (std::ranges::none_of(descriptor.EnumEntries, [&selected](const Runtime::PropertyEnumEntry& entry) {
+				return entry.Name == selected;
+			}))
+			{
+				error = Error("CALL_ARGUMENT_ENUM_NAME_UNKNOWN", "The struct enum field name is absent from the reflected table", {{"parameter", path}});
+				return false;
+			}
+			input.Selection = selected;
+		}
+		else if (IsSignedKind(descriptor.Element->Kind))
+		{
+			std::int64_t parsed = 0;
+			if (!TrySignedDecimal(encoded.at("raw"), parsed)
+				|| std::ranges::none_of(descriptor.EnumEntries, [parsed](const Runtime::PropertyEnumEntry& entry) {
+					return entry.RawValue == static_cast<std::uint64_t>(parsed);
+				}))
+			{
+				error = Error("CALL_ARGUMENT_ENUM_RAW_INVALID", "The struct enum raw value is invalid or unknown", {{"parameter", path}});
+				return false;
+			}
+			input.Selection = parsed;
+		}
+		else
+		{
+			std::uint64_t parsed = 0;
+			if (!TryUnsignedDecimal(encoded.at("raw"), parsed)
+				|| std::ranges::none_of(descriptor.EnumEntries, [parsed](const Runtime::PropertyEnumEntry& entry) {
+					return entry.RawValue == parsed;
+				}))
+			{
+				error = Error("CALL_ARGUMENT_ENUM_RAW_INVALID", "The struct enum raw value is invalid or unknown", {{"parameter", path}});
+				return false;
+			}
+			input.Selection = parsed;
+		}
+		value = std::move(input);
+		return true;
+	}
+	if (descriptor.Kind == Runtime::PropertyKind::Struct)
+	{
+		if (!encoded.is_object() || encoded.size() != descriptor.Fields.size())
+		{
+			error = Error(
+				"CALL_ARGUMENT_STRUCT_VALUE_INVALID",
+				"The struct field object must contain the exact reflected field set",
+				{{"parameter", path}, {"type_name", descriptor.TypeName}});
+			return false;
+		}
+		auto input = std::make_shared<Runtime::PropertyStructInput>();
+		input->TypeName = descriptor.TypeName;
+		input->Fields.reserve(descriptor.Fields.size());
+		for (const Runtime::PropertyFieldDescriptor& field : descriptor.Fields)
+		{
+			if (!field.Descriptor || !encoded.contains(field.Name))
+			{
+				error = Error("CALL_ARGUMENT_STRUCT_VALUE_INVALID", "A reflected struct field is missing", {{"parameter", path + "." + field.Name}});
+				return false;
+			}
+			Runtime::PropertyInputValue fieldValue;
+			if (!ParseStructFieldValue(
+				encoded.at(field.Name),
+				*field.Descriptor,
+				path + "." + field.Name,
+				fieldValue,
+				error,
+				depth + 1))
+			{
+				return false;
+			}
+			input->Fields.push_back({.Name = field.Name, .Value = std::move(fieldValue)});
+		}
+		value = std::move(input);
+		return true;
+	}
+	error = Error(
+		"CALL_ARGUMENT_STRUCT_FIELD_UNAVAILABLE",
+		"The reflected struct field kind has no owned-frame input codec",
+		{{"parameter", path}, {"kind", Runtime::ToString(descriptor.Kind)}});
+	return false;
+}
+
 bool ParseInputValue(
 	const json& encoded,
 	const Runtime::ReflectedProperty& property,
@@ -348,7 +525,9 @@ bool ParseInputValue(
 		: Runtime::CanonicalMathStructKind::None;
 	const bool enumInput = property.Descriptor
 		&& Runtime::IsDescriptorProvenEnum(*property.Descriptor);
-	if (mathKind == Runtime::CanonicalMathStructKind::None && !enumInput)
+	const bool structInput = property.Kind == Runtime::PropertyKind::Struct
+		&& property.Descriptor;
+	if (!structInput && !enumInput)
 	{
 		if (encoded.size() != 2)
 		{
@@ -365,10 +544,10 @@ bool ParseInputValue(
 		|| encoded.at("type_name").get_ref<const std::string&>() != property.TypeName
 		|| property.Descriptor->TypeName != property.TypeName)
 	{
-		error = Error(
-			enumInput
-				? "CALL_ARGUMENT_ENUM_TYPE_MISMATCH"
-				: "CALL_ARGUMENT_STRUCT_TYPE_MISMATCH",
+			error = Error(
+				enumInput
+					? "CALL_ARGUMENT_ENUM_TYPE_MISMATCH"
+					: "CALL_ARGUMENT_STRUCT_TYPE_MISMATCH",
 			enumInput
 				? "Enum arguments must contain the exact reflected type_name"
 				: "Canonical struct arguments must contain the exact reflected type_name",
@@ -376,6 +555,22 @@ bool ParseInputValue(
 		return false;
 	}
 	const json& raw = encoded.at("value");
+	if (property.Kind == Runtime::PropertyKind::String
+		|| property.Kind == Runtime::PropertyKind::Text)
+	{
+		if (!raw.is_string()
+			|| raw.get_ref<const std::string&>().size()
+				> FunctionCallCommandService::kMaxSerializedDataBytes)
+		{
+			error = Error(
+				"CALL_ARGUMENT_TYPE_MISMATCH",
+				"The FString/FText argument must be a bounded UTF-8 string",
+				{{"parameter", property.Name}});
+			return false;
+		}
+		value = raw.get<std::string>();
+		return true;
+	}
 	if (property.Kind == Runtime::PropertyKind::Bool)
 	{
 		if (!raw.is_boolean())
@@ -563,6 +758,16 @@ bool ParseInputValue(
 		value = std::move(input);
 		return true;
 	}
+	if (structInput)
+	{
+		return ParseStructFieldValue(
+			raw,
+			*property.Descriptor,
+			property.Name,
+			value,
+			error,
+			0);
+	}
 	error = Error(
 		"CALL_PARAMETER_INPUT_UNAVAILABLE",
 		"The reflected parameter kind has no safe owned-frame input codec",
@@ -725,6 +930,77 @@ private:
 	const Runtime::EngineSnapshot& m_Snapshot;
 };
 
+struct StringTextConversionSignature
+{
+	const Runtime::ReflectedParameter* Input = nullptr;
+	const Runtime::ReflectedParameter* Output = nullptr;
+
+	bool Valid() const noexcept { return Input && Output; }
+};
+
+const Runtime::ReflectedFunction* FindStringTextConversion(
+	const Runtime::TypeSnapshot& types,
+	const std::string_view functionName) noexcept
+{
+	const std::string exactPath =
+		"/Script/Engine.KismetTextLibrary." + std::string(functionName);
+	const Runtime::ReflectedFunctionLookup exact =
+		types.FindFunctionByFullPath(exactPath);
+	if (exact.Found())
+		return exact.Function;
+	const Runtime::ReflectedFunction* found = nullptr;
+	for (const Runtime::ReflectedType& type : types.Types())
+	{
+		for (const Runtime::ReflectedFunction& function : type.DirectFunctions)
+		{
+			if (function.Name != functionName)
+				continue;
+			if (found)
+				return nullptr;
+			found = &function;
+		}
+	}
+	return found;
+}
+
+StringTextConversionSignature FindStringTextSignature(
+	const Runtime::ReflectedFunction& function,
+	const Runtime::PropertyKind inputKind,
+	const Runtime::PropertyKind outputKind) noexcept
+{
+	StringTextConversionSignature signature;
+	if (function.Parameters.size() != 2)
+		return signature;
+	for (const Runtime::ReflectedParameter& parameter : function.Parameters)
+	{
+		if (parameter.Property.State != Runtime::ReflectedMemberState::Supported
+			|| !parameter.Property.Descriptor
+			|| parameter.Property.ArrayDim != 1
+			|| parameter.Property.Descriptor->Kind != parameter.Property.Kind
+			|| parameter.Property.Descriptor->Size != parameter.Property.Size)
+		{
+			return {};
+		}
+		if (IsInputDirection(parameter.Direction)
+			&& parameter.Property.Kind == inputKind
+			&& !signature.Input)
+		{
+			signature.Input = &parameter;
+		}
+		else if (IsOutputDirection(parameter.Direction)
+			&& parameter.Property.Kind == outputKind
+			&& !signature.Output)
+		{
+			signature.Output = &parameter;
+		}
+		else
+		{
+			return {};
+		}
+	}
+	return signature;
+}
+
 } // namespace
 
 FunctionCallWork::FunctionCallWork(
@@ -832,6 +1108,69 @@ bool FunctionCallWork::Execute()
 			return true;
 		}
 	}
+	for (const FunctionCallInput& input : m_Inputs)
+	{
+		if (!input.Parameter
+			|| input.Parameter->Property.Kind != Runtime::PropertyKind::Text)
+		{
+			continue;
+		}
+		const auto* text = std::get_if<std::string>(&input.Value);
+		const Runtime::ReflectedFunction* conversion =
+			FindStringTextConversion(*m_Types, "Conv_StringToText");
+		const StringTextConversionSignature signature = conversion
+			? FindStringTextSignature(
+				*conversion,
+				Runtime::PropertyKind::String,
+				Runtime::PropertyKind::Text)
+			: StringTextConversionSignature{};
+		if (!text || !conversion || !signature.Valid()
+			|| !m_Engine.ValidateFunctionHandle(conversion->Handle).Ok())
+		{
+			m_Error = FunctionCallExecutionError::TextConversionUnavailable;
+			m_FailedArgument = input.Parameter->Property.Name;
+			return true;
+		}
+		Runtime::ParamFrame conversionFrame;
+		const Runtime::ParamFrameResult created = Runtime::ParamFrame::Create(
+			conversion->ParameterSize,
+			conversionFrame);
+		const Runtime::ParamFrameResult encoded = created.Ok()
+			? conversionFrame.SetInput(
+				signature.Input->Property,
+				input.Value,
+				*m_Reflection->Properties)
+			: created;
+		if (!encoded.Ok()
+			|| !m_GameThread.InvokeProcessEventFromCurrentTask(
+				reinterpret_cast<void*>(m_Target.Address),
+				reinterpret_cast<void*>(conversion->Handle.Function.Address),
+				conversionFrame.Data()))
+		{
+			m_Error = FunctionCallExecutionError::TextConversionFailed;
+			m_FailedArgument = input.Parameter->Property.Name;
+			return true;
+		}
+		const std::uintptr_t convertedAddress =
+			conversionFrame.ValueAddress(signature.Output->Property);
+		if (convertedAddress == 0)
+		{
+			m_Error = FunctionCallExecutionError::TextConversionFailed;
+			m_FailedArgument = input.Parameter->Property.Name;
+			return true;
+		}
+		const Runtime::ParamFrameResult copied = m_Frame.CopyValue(
+			input.Parameter->Property,
+			std::span<const std::byte>(
+				reinterpret_cast<const std::byte*>(convertedAddress),
+				signature.Output->Property.Size));
+		if (!copied.Ok())
+		{
+			m_Error = FunctionCallExecutionError::TextConversionFailed;
+			m_FailedArgument = input.Parameter->Property.Name;
+			return true;
+		}
+	}
 
 	if (!m_GameThread.InvokeProcessEventFromCurrentTask(
 		reinterpret_cast<void*>(m_Target.Address),
@@ -854,12 +1193,80 @@ bool FunctionCallWork::Execute()
 		},
 		.ReferenceResolver = &references
 	};
+	const auto decodeText = [&](const Runtime::ReflectedParameter& parameter) {
+		const auto failed = [&](std::string code, std::string message) {
+			return Runtime::PropertyValue{
+				.State = Runtime::PropertyValueState::Unavailable,
+				.Kind = Runtime::PropertyKind::Text,
+				.TypeName = parameter.Property.TypeName,
+				.ErrorCode = std::move(code),
+				.ErrorMessage = std::move(message)};
+		};
+		const Runtime::ReflectedFunction* conversion =
+			FindStringTextConversion(*m_Types, "Conv_TextToString");
+		const StringTextConversionSignature signature = conversion
+			? FindStringTextSignature(
+				*conversion,
+				Runtime::PropertyKind::Text,
+				Runtime::PropertyKind::String)
+			: StringTextConversionSignature{};
+		if (!conversion || !signature.Valid()
+			|| !m_Engine.ValidateFunctionHandle(conversion->Handle).Ok())
+		{
+			return failed(
+				"CALL_TEXT_CONVERSION_UNAVAILABLE",
+				"Conv_TextToString is absent or stale in the current TypeSnapshot");
+		}
+		Runtime::ParamFrame conversionFrame;
+		const Runtime::ParamFrameResult created = Runtime::ParamFrame::Create(
+			conversion->ParameterSize,
+			conversionFrame);
+		const std::uintptr_t sourceAddress = m_Frame.ValueAddress(parameter.Property);
+		if (!created.Ok() || sourceAddress == 0)
+		{
+			return failed(
+				"CALL_TEXT_CONVERSION_FAILED",
+				"The FText conversion frame could not be created");
+		}
+		const Runtime::ParamFrameResult copied = conversionFrame.CopyValue(
+			signature.Input->Property,
+			std::span<const std::byte>(
+				reinterpret_cast<const std::byte*>(sourceAddress),
+				parameter.Property.Size));
+		if (!copied.Ok()
+			|| !m_GameThread.InvokeProcessEventFromCurrentTask(
+				reinterpret_cast<void*>(m_Target.Address),
+				reinterpret_cast<void*>(conversion->Handle.Function.Address),
+				conversionFrame.Data()))
+		{
+			return failed(
+				"CALL_TEXT_CONVERSION_FAILED",
+				"Conv_TextToString did not execute for the returned FText");
+		}
+		const std::uintptr_t outputAddress =
+			conversionFrame.ValueAddress(signature.Output->Property);
+		if (outputAddress == 0)
+		{
+			return failed(
+				"CALL_TEXT_CONVERSION_FAILED",
+				"Conv_TextToString returned an invalid FString slot");
+		}
+		Runtime::PropertyValue value = m_Reflection->Properties->Decode(
+			outputAddress,
+			*signature.Output->Property.Descriptor,
+			options);
+		value.Kind = Runtime::PropertyKind::Text;
+		value.TypeName = parameter.Property.TypeName;
+		return value;
+	};
 	for (const Runtime::ReflectedParameter& parameter : m_Function->Parameters)
 	{
 		if (!IsOutputDirection(parameter.Direction))
 			continue;
 		const std::uintptr_t address = m_Frame.ValueAddress(parameter.Property);
-		Runtime::PropertyValue value = address == 0
+		Runtime::PropertyValue value = parameter.Property.Kind == Runtime::PropertyKind::Text
+			? decodeText(parameter)
+			: address == 0
 			? Runtime::PropertyValue{
 				.State = Runtime::PropertyValueState::Error,
 				.Kind = parameter.Property.Kind,
@@ -1020,7 +1427,8 @@ FunctionCallPreparation FunctionCallCommandService::PrepareInvoke(
 				|| property.Descriptor->Kind != property.Kind
 				|| property.Descriptor->TypeName != property.TypeName
 				|| !Runtime::ParamFrame::SupportsLifetime(*property.Descriptor)
-				|| !reflection->Properties->Supports(property.Kind))
+				|| (property.Kind != Runtime::PropertyKind::Text
+					&& !reflection->Properties->Supports(property.Kind)))
 			{
 				return {.Error = Error(
 					"CALL_PARAMETER_KIND_UNAVAILABLE",
@@ -1052,7 +1460,10 @@ FunctionCallPreparation FunctionCallCommandService::PrepareInvoke(
 						"A required input or inout argument is missing",
 						{{"parameter", property.Name}})};
 				}
-				if (!reflection->Properties->SupportsInput(*property.Descriptor))
+				const bool deferredStringLike = property.Kind == Runtime::PropertyKind::String
+					|| property.Kind == Runtime::PropertyKind::Text;
+				if (!deferredStringLike
+					&& !reflection->Properties->SupportsInput(*property.Descriptor))
 				{
 					return {.Error = Error(
 						"CALL_PARAMETER_INPUT_UNAVAILABLE",
@@ -1082,18 +1493,21 @@ FunctionCallPreparation FunctionCallCommandService::PrepareInvoke(
 							{{"parameter", property.Name}, {"index", reference->Handle.Index}})};
 					}
 				}
-				const Runtime::ParamFrameResult encoded = frame.SetInput(
-					property,
-					value,
-					*reflection->Properties);
-				if (!encoded.Ok())
+				if (property.Kind != Runtime::PropertyKind::Text)
 				{
-					return {.Error = Error(
-						encoded.EncodeError == Runtime::PropertyEncodeError::None
-							? Runtime::ToString(encoded.Error)
-							: Runtime::ToString(encoded.EncodeError),
-						encoded.Message,
-						{{"parameter", property.Name}})};
+					const Runtime::ParamFrameResult encoded = frame.SetInput(
+						property,
+						value,
+						*reflection->Properties);
+					if (!encoded.Ok())
+					{
+						return {.Error = Error(
+							encoded.EncodeError == Runtime::PropertyEncodeError::None
+								? Runtime::ToString(encoded.Error)
+								: Runtime::ToString(encoded.EncodeError),
+							encoded.Message,
+							{{"parameter", property.Name}})};
+					}
 				}
 				inputs.push_back(FunctionCallInput{
 					.Parameter = &parameter,
@@ -1185,6 +1599,16 @@ FunctionCallCommandResult FunctionCallCommandService::CompleteInvoke(
 					"An object argument identity changed before ProcessEvent",
 					{{"parameter", work.FailedArgument()},
 					 {"handle_error", Runtime::ToString(work.HandleError())}})};
+			case FunctionCallExecutionError::TextConversionUnavailable:
+				return {.Error = Error(
+					"CALL_TEXT_CONVERSION_UNAVAILABLE",
+					"Conv_StringToText is unavailable for the FText input",
+					{{"parameter", work.FailedArgument()}})};
+			case FunctionCallExecutionError::TextConversionFailed:
+				return {.Error = Error(
+					"CALL_TEXT_CONVERSION_FAILED",
+					"The FText input could not be constructed on the game thread",
+					{{"parameter", work.FailedArgument()}})};
 			case FunctionCallExecutionError::ProcessEventUnavailable:
 				return {.Error = Error(
 					"PROCESS_EVENT_UNAVAILABLE",

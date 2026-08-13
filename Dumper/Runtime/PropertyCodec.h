@@ -80,6 +80,9 @@ struct PropertyEnumInput
 	PropertyEnumSelection Selection;
 };
 
+struct PropertyStructInput;
+using PropertyStructInputPtr = std::shared_ptr<PropertyStructInput>;
+
 using PropertyScalar = std::variant<
 	std::monostate,
 	bool,
@@ -98,7 +101,20 @@ using PropertyInputValue = std::variant<
 	std::string,
 	PropertyObjectReference,
 	PropertyMathStructInput,
-	PropertyEnumInput>;
+	PropertyEnumInput,
+	PropertyStructInputPtr>;
+
+struct PropertyStructFieldInput
+{
+	std::string Name;
+	PropertyInputValue Value;
+};
+
+struct PropertyStructInput
+{
+	std::string TypeName;
+	std::vector<PropertyStructFieldInput> Fields;
+};
 
 struct PropertyValue
 {

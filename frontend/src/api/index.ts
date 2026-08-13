@@ -1086,6 +1086,7 @@ export type FunctionCallArgument =
   | { kind: 'int8' | 'int16' | 'int32' | 'int64'; value: string }
   | { kind: 'uint8' | 'uint16' | 'uint32' | 'uint64'; value: string }
   | { kind: 'float' | 'double'; value: string }
+  | { kind: 'string' | 'text'; value: string }
   | { kind: 'object'; value: StableObjectHandle | null }
   | {
       kind: 'enum';
@@ -1094,13 +1095,8 @@ export type FunctionCallArgument =
     }
   | {
       kind: 'struct';
-      type_name: '/Script/CoreUObject.Vector';
-      value: { X: string; Y: string; Z: string };
-    }
-  | {
-      kind: 'struct';
-      type_name: '/Script/CoreUObject.Rotator';
-      value: { Pitch: string; Yaw: string; Roll: string };
+      type_name: string;
+      value: Record<string, unknown>;
     };
 
 export interface FunctionCallResultData {

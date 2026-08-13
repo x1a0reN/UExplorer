@@ -79,6 +79,12 @@ These assets are available for development, but none changes the support rows ab
   work and the scale setter is code-reachable through exact `call.invoke`. This is source
   and implementation evidence only, not a supported target profile or a successful
   Shipping ProcessEvent round-trip.
+- The R5 call implementation now owns direct FString input buffers, uses reflected
+  `KismetTextLibrary` conversions for FText on the game thread, and recursively encodes
+  descriptor-backed value structs composed of scalar/object/enum/nested-struct fields.
+  Complete cleanup for UE-owned text/string return allocations, container/reference
+  struct fields, and target ProcessEvent round-trips remain unverified; this does not
+  upgrade any engine profile.
 - `D:\Steam\steamapps\common\Wandering Sword` is the designated real-game fixture.
   Earlier passive artifacts are consistent with an x64 UE4/PhysX Shipping build in the
   UE 4.26 family, but the 2026-08-11 inventory contains only the IDA

@@ -25,7 +25,7 @@ UExplorer 是一个面向 Unreal Engine 的 **SDK Dump + 实时游戏内省工�
 └──────────────────────────────────────────────┘
 ```
 
-当前分支已完成 R4 原子通信切换并继续 R5 领域实现。唯一桌面主链路仍是 React -> Tauri `domain_request` -> Rust `DomainService` -> PID-scoped Named Pipe -> `CoreCommandService`。除既有 Object/Type/property/call/World 与 stored/computed transform 外，当前代码检查点已加入 strict Memory、owned-binding Watch、descriptor-proven enum/destructor journal、generation-bound Blueprint raw Script capture、runtime-gated source-catalog bounded disassembly、单字段 reflected World transform mutation、generation-covered ProcessEvent Hook producer、immutable snapshot Dump worker、端到端 call.batch，以及独立 Watch/Hook push ring -> owned DomainEventPump -> Named Pipe Event -> Host EventHub/Tauri Channel -> React 增量消费链。World mutation 只开放 world/relative scale 和 world rotation；其余字段稳定拒绝。call.batch 由单 active coordinator 串行复用 exact single-call adapter；Hook 可选择 fixed metadata 或 generation-bound scalar parameter plan，callback 只复制最多 512 bytes 的 descriptor-proven trivial scalars，worker 才解码，通用 preencoded/non-trivial 参数仍拒绝；Dump 已有四格式 bounded generator/consumer，但仍缺 Host reload persistence 和真实目标 artifact fixture；Blueprint source profile 只有本机 UE 源码与合成 parser 证据，缺真实目标 opcode/operand witness，生产 UEnum entry table 也未见证。`D:\Steam\steamapps\common\Wandering Sword` 仍没有可启动游戏 `.exe`，所有新增路径都只有代码/合成边界证据，所有 profile 保持 `Not supported`。
+当前分支已完成 R4 原子通信切换并继续 R5 领域实现。唯一桌面主链路仍是 React -> Tauri `domain_request` -> Rust `DomainService` -> PID-scoped Named Pipe -> `CoreCommandService`。除既有 Object/Type/property/call/World 与 stored/computed transform 外，当前代码检查点已加入 strict Memory、owned-binding Watch、FString/FText/descriptor-backed Struct 调用、descriptor-proven enum/destructor journal、generation-bound Blueprint raw Script capture、runtime-gated source-catalog bounded disassembly、单字段 reflected World transform mutation、generation-covered ProcessEvent Hook producer、immutable snapshot Dump worker、端到端 call.batch，以及独立 Watch/Hook push ring -> owned DomainEventPump -> Named Pipe Event -> Host EventHub/Tauri Channel -> React 增量消费链。World mutation 只开放 world/relative scale 和 world rotation；其余字段稳定拒绝。call.batch 由单 active coordinator 串行复用 exact single-call adapter；Hook 可选择 fixed metadata 或 generation-bound scalar parameter plan，callback 只复制最多 512 bytes 的 descriptor-proven trivial scalars，worker 才解码，通用 preencoded/non-trivial 参数仍拒绝；Dump 已有四格式 bounded generator/consumer，但仍缺 Host reload persistence 和真实目标 artifact fixture；Blueprint source profile 只有本机 UE 源码与合成 parser 证据，缺真实目标 opcode/operand witness，生产 UEnum entry table 也未见证。`D:\Steam\steamapps\common\Wandering Sword` 仍没有可启动游戏 `.exe`，所有新增路径都只有代码/合成边界证据，所有 profile 保持 `Not supported`。
 
 ---
 
@@ -59,8 +59,8 @@ UExplorer/
 │   │   ├── EngineContext*.h/.cpp     #   一次性发布的引擎 profile/offset report
 │   │   ├── EngineFacade.h/.cpp       #   session/context/identity 的单一领域入口
 │   │   ├── EngineNameCodec.h/.cpp    #   immutable layout + SafeMemory 的严格 FName 解码
-│   │   ├── PropertyCodec.h/.cpp      #   显式状态、ScriptArray、struct 稳定快照与 canonical math owned encoder
-│   │   ├── ParamFrame.h/.cpp         #   ProcessEvent owned frame、enum/math codec 与逆序 destructor journal
+│   │   ├── PropertyCodec.h/.cpp      #   显式状态、ScriptArray、struct 稳定快照与递归 value-struct owned encoder
+│   │   ├── ParamFrame.h/.cpp         #   ProcessEvent owned frame、FString/FText/struct/enum 与 destructor journal
 │   │   ├── WatchScheduler.*          #   generation-bound 有界逐帧采样、history/event/drop 状态
 │   │   ├── HookEventCollector.*      #   预分配有界 ProcessEvent event collector
 │   │   ├── HookParameterCapture.*    #   exact ReflectedFunction scalar plan、callback copy、worker decode
@@ -597,7 +597,7 @@ Objects.tsx (三面板)
 
 Functions.tsx (四合一)
   ├─ types.functions.get            exact full path + immutable FunctionHandle
-  ├─ call.invoke                    exact target/function handle + owned ParamFrame
+  ├─ call.invoke                    exact handles + owned FString/FText/scalar/enum/descriptor-backed Struct frame
   ├─ static call target             types.classes.cdo -> explicit CDO handle
   ├─ blueprint.bytecode/decompile   exact FunctionHandle/generations；runtime dependencies 未选中 exact profile 时 unavailable
   ├─ call.batch                     owned coordinator -> exact single-call adapter -> game-thread queue
@@ -920,7 +920,7 @@ Rust `DomainService` 的显式 operation registry 为准。
 | R2 CoreRuntime/能力模型 | **实现阶段完成** | Runtime、Context、Capability、Handle、Snapshot、SafeMemory |
 | R3 Named Pipe/Rust Host | **实现阶段完成** | 严格 IPC、SessionManager、EventHub、注入与跨语言 fixture |
 | R4 通信原子切换 | **已完成** | React 只走 Tauri；Core release 只走 Named Pipe，无网络栈 |
-| R5 领域正确性 | **当前阶段** | Object/Type/property/call/World；strict Memory；bounded Watch pull/push；enum/destructor journal；runtime-gated source-catalog Blueprint；单字段 reflected transform setter；call.batch 跨层 exact-call adapter；Hook producer/push + bounded scalar parameter plan/copy/decode；immutable snapshot Dump worker。生产 UEnum、Hook 非平凡参数/caller/条件与真实 target witness、Dump Host persistence/目标 artifact fixture、FHitResult-backed setter、Blueprint 目标 opcode/operand witness 和真实 UE fixture 待办 |
+| R5 领域正确性 | **当前阶段** | Object/Type/property/call/World；FString/FText/descriptor-backed Struct 调用；strict Memory；bounded Watch pull/push；enum/destructor journal；runtime-gated source-catalog Blueprint；单字段 reflected transform setter；call.batch 跨层 exact-call adapter；Hook producer/push + bounded scalar parameter plan/copy/decode；immutable snapshot Dump worker。生产 UEnum、容器/引用型 Struct、FText allocation cleanup、Hook 非平凡参数/caller/条件与真实 target witness、Dump Host persistence/目标 artifact fixture、FHitResult-backed setter、Blueprint 目标 opcode/operand witness 和真实 UE fixture 待办 |
 | R6 前端状态重构 | **未开始** | session store、query lifecycle、BigInt 地址、能力驱动 UI |
 | R7 发布硬化 | **未开始** | UE fixture、性能/压力、卸载、发布与文档门禁 |
 

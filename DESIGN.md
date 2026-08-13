@@ -316,6 +316,13 @@ CoreHarness 覆盖 partial type/function coverage、错误 CDO、super cycle、d
 - `HookCommandService` worker drain 只用 record 保留的 exact plan 解码 copied payload，plan fingerprint、phase、field count 或 byte length 不一致均保持显式失败并累计 `parameter_decode_failure_total`。retained `hook.log` 与 `DomainEventPump` push 同时返回 `uexplorer.hook-parameters.v1` 的 canonical string values；schema、TypeScript guard 与 Functions UI 区分 fixed metadata/scalar capture、enter/exit、错误状态和 value direction。disabled-to-enabled 会重编译同 generation plan 并要求 fingerprint 完全相同；生产 `preencoded_payload` 仍关闭。
 - 当前证据是 Core Release、合成 CoreHarness、静态 contract、schema 与前端测试，不是 UE ABI/行为 witness。尚未运行 Wandering Sword/真实 UE 的真实 parameter frame、nested/recursive ProcessEvent、bool bitfield、out/return 写回、异常、GC/热重载、rate/overflow、restore 或卸载 fixture；caller identity、条件过滤和非平凡参数生命周期也未实现。因此 HOOK-003/005/006/007/008 继续 `in_progress`，所有 UE profile 保持 `Not supported`。
 
+### 0.30 R5.2 FString/FText 与 descriptor-backed Struct 调用
+
+- `ParamFrame` 现在可直接拥有 UTF-8 转 UTF-16 后的 FString backing buffer，并按当前 `DynamicArrayLayout` 写入 exact 参数 slot；buffer 生命周期覆盖整个 `ProcessEvent` work。协议和 TypeScript 参数契约新增 `string`/`text`，不再要求调用方伪造 UE 内存表示。
+- FText 输入在已见证游戏线程内通过当前 TypeSnapshot 中的 `KismetTextLibrary.Conv_StringToText` 构造，FText output/inout/return 通过 `Conv_TextToString` 转回 FString 后复用现有解码器。转换函数缺失、签名不符或 handle 陈旧时返回明确错误，不退回 raw FText 猜测。
+- 通用 Struct 输入改为消费 exact descriptor field set，并递归编码 bool、定宽整数、float/double、Object、descriptor-proven Enum 和嵌套 value Struct；canonical FVector/FRotator 快路径保留。Weak/Soft、Array/Map/Set、delegate 以及含这些字段的 Struct 仍明确不可用。
+- 本轮只运行 Core Release 编译与 JSON schema 解析；未运行真实 UE/Wandering Sword function round-trip。FText 转换产物及 UE 返回 FString 的完整析构/释放尚未接入，相关 lifecycle、GC 和 allocator 行为全部后置，因此 CALL-003 保持 `in_progress`，所有 UE profile 保持 `Not supported`。
+
 ## Context
 
 基于 Dumper-7 的实现原理，设计一个桌面端 Unreal Engine SDK Dump + 实时探索工具。

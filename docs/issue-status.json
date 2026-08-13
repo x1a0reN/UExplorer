@@ -633,7 +633,8 @@
 		"2026-08-10: owned ParamFrame construction and exact-width bool/integer/float/double/UObject input encoding are implemented; only zero-constructible, trivially destructible kinds are admitted",
 		"2026-08-11: descriptor-aware owned input/output now admits only exact CoreUObject FVector X/Y/Z or FRotator Pitch/Yaw/Roll with witnessed homogeneous float/double widths and packed offsets; arbitrary Struct remains closed",
 		"2026-08-13: descriptor-proven enum name/raw input and output decode require exact immutable entry tables and backing width; ParamFrame now owns a reverse-order destructor journal",
-		"Production UEnum entry-table witnesses, non-trivial FString/FText/arbitrary Struct/container construction, and real UE function round-trip remain pending"
+		"2026-08-14: call.invoke accepts owned FString input, converts FText input/output through reflected KismetTextLibrary functions on the game thread, and recursively encodes descriptor-backed scalar/object/enum/value-struct fields; Core Release compiles and the protocol schema parses",
+		"Production UEnum entry-table witnesses, Weak/Soft/container input, complete UE-owned FText/FString allocation cleanup, and real UE function round-trip remain pending"
 	  ]
 	},
     "CALL-004": {

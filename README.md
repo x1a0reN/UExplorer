@@ -216,6 +216,11 @@ added. A successful build or synthetic fixture does not establish target runtime
   one bounded serial job, total deadline, cancellation and retained per-item results; every
   item reuses the exact single-call preparation/game-thread/completion path. Snapshot drift
   fails closed, and no real UE batch round-trip has been run.
+- `call.invoke` now accepts owned FString input, converts FText through the reflected
+  `KismetTextLibrary` functions on the game thread, and recursively encodes descriptor-backed
+  value structs containing scalar/object/enum/nested-struct fields. Weak/Soft/container
+  fields and complete cleanup of UE-owned text/string return allocations remain unavailable;
+  no real UE string/text/struct round-trip has been run.
 - Hook now has a production `ProcessEventHookOwner`: current TypeSnapshot Class/CDO
   evidence is live-validated on the game thread, unique vtable slots retain their own
   originals, and bounded fixed-metadata or scalar-parameter enter/exit events reach

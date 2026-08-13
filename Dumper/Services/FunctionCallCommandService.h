@@ -32,6 +32,8 @@ enum class FunctionCallExecutionError : std::uint8_t
 	TargetHandleStale,
 	FunctionHandleStale,
 	ArgumentHandleStale,
+	TextConversionUnavailable,
+	TextConversionFailed,
 	ProcessEventUnavailable
 };
 

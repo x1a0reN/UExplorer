@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <string>
 #include <vector>
@@ -35,8 +36,8 @@ struct ParamFrameResult
 	bool Ok() const noexcept { return Error == ParamFrameError::None; }
 };
 
-// Owns the exact ProcessEvent parameter storage. It admits scalar/object slots
-// plus descriptor-proven canonical FVector/FRotator; other UE lifetimes remain closed.
+// Owns the exact ProcessEvent parameter storage, including direct FString buffers,
+// converted FText slots, and recursively descriptor-backed value structs.
 class ParamFrame final
 {
 public:
@@ -59,6 +60,9 @@ public:
 		const ReflectedProperty& property,
 		const PropertyInputValue& value,
 		const PropertyCodec& codec) noexcept;
+	ParamFrameResult CopyValue(
+		const ReflectedProperty& property,
+		std::span<const std::byte> value) noexcept;
 	ParamFrameResult RegisterDestructor(
 		const ReflectedProperty& property,
 		Destructor destructor,
@@ -82,6 +86,7 @@ private:
 
 	std::vector<std::byte> m_Bytes;
 	std::vector<DestructorSlot> m_DestructorJournal;
+	std::vector<std::unique_ptr<wchar_t[]>> m_StringBuffers;
 };
 
 } // namespace UExplorer::Runtime

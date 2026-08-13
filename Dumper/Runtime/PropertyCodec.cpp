@@ -2030,11 +2030,40 @@ bool PropertyCodec::SupportsInput(const PropertyKind kind) const noexcept
 
 bool PropertyCodec::SupportsInput(const PropertyDescriptor& descriptor) const noexcept
 {
-	return m_Configured
-		&& ((descriptor.Kind == PropertyKind::Enum
-			&& IsDescriptorProvenEnum(descriptor))
-		|| (descriptor.Kind != PropertyKind::Enum && SupportsInput(descriptor.Kind))
-		|| ClassifyCanonicalMathStruct(descriptor) != CanonicalMathStructKind::None);
+	if (!m_Configured)
+		return false;
+	const auto supports = [&](auto&& self,
+		const PropertyDescriptor& candidate,
+		const std::size_t depth) noexcept -> bool {
+		if (depth > 32)
+			return false;
+		if (candidate.Kind == PropertyKind::Enum)
+			return IsDescriptorProvenEnum(candidate);
+		if (candidate.Kind != PropertyKind::Struct)
+			return SupportsInput(candidate.Kind);
+		if (ClassifyCanonicalMathStruct(candidate) != CanonicalMathStructKind::None)
+			return true;
+		if (candidate.Size == 0 || candidate.Fields.empty()
+			|| candidate.Fields.size() > kMaximumDescriptorFields)
+		{
+			return false;
+		}
+		std::set<std::string> names;
+		for (const PropertyFieldDescriptor& field : candidate.Fields)
+		{
+			if (field.Name.empty()
+				|| !names.emplace(field.Name).second
+				|| !field.Descriptor
+				|| field.Offset > candidate.Size
+				|| field.Descriptor->Size > candidate.Size - field.Offset
+				|| !self(self, *field.Descriptor, depth + 1))
+			{
+				return false;
+			}
+		}
+		return true;
+	};
+	return supports(supports, descriptor, 0);
 }
 
 PropertyEncodeResult PropertyCodec::EncodeOwned(
@@ -2312,33 +2341,72 @@ PropertyEncodeResult PropertyCodec::EncodeOwned(
 		}
 		case PropertyKind::Struct:
 		{
-			if (ClassifyCanonicalMathStruct(descriptor) == CanonicalMathStructKind::None)
+			const CanonicalMathStructKind mathKind = ClassifyCanonicalMathStruct(descriptor);
+			if (const auto* input = std::get_if<PropertyMathStructInput>(&value))
 			{
-				return failure(
-					PropertyEncodeError::DescriptorInvalid,
-					"The struct descriptor is not an exact canonical FVector or FRotator");
+				if (mathKind == CanonicalMathStructKind::None
+					|| input->TypeName != descriptor.TypeName)
+				{
+					return failure(
+						PropertyEncodeError::ValueTypeMismatch,
+						"The math struct input type must match an exact FVector or FRotator descriptor");
+				}
+				std::array<std::byte, 3 * sizeof(double)> encoded{};
+				for (std::size_t index = 0; index < descriptor.Fields.size(); ++index)
+				{
+					const PropertyFieldDescriptor& field = descriptor.Fields[index];
+					const PropertyEncodeResult component = EncodeOwned(
+						std::span<std::byte>(encoded).subspan(
+							field.Offset,
+							field.Descriptor->Size),
+						*field.Descriptor,
+						PropertyInputValue{input->Components[index]});
+					if (!component.Ok())
+						return component;
+				}
+				std::memcpy(destination.data(), encoded.data(), descriptor.Size);
+				return {};
 			}
-			const auto* input = std::get_if<PropertyMathStructInput>(&value);
-			if (!input || input->TypeName != descriptor.TypeName)
+
+			const auto* input = std::get_if<PropertyStructInputPtr>(&value);
+			if (!input || !*input || (*input)->TypeName != descriptor.TypeName
+				|| (*input)->Fields.size() != descriptor.Fields.size())
 			{
 				return failure(
 					PropertyEncodeError::ValueTypeMismatch,
-					"The struct input type must match the exact reflected canonical type");
+					"The struct input must contain the exact reflected type and field set");
 			}
-			std::array<std::byte, 3 * sizeof(double)> encoded{};
-			for (std::size_t index = 0; index < descriptor.Fields.size(); ++index)
+			std::fill_n(destination.begin(), descriptor.Size, std::byte{0});
+			std::set<std::string> consumed;
+			for (const PropertyFieldDescriptor& field : descriptor.Fields)
 			{
-				const PropertyFieldDescriptor& field = descriptor.Fields[index];
+				if (!field.Descriptor
+					|| field.Offset > descriptor.Size
+					|| field.Descriptor->Size > descriptor.Size - field.Offset)
+				{
+					return failure(
+						PropertyEncodeError::DescriptorInvalid,
+						"A struct field descriptor is outside its reflected storage");
+				}
+				const auto supplied = std::ranges::find_if(
+					(*input)->Fields,
+					[&field](const PropertyStructFieldInput& candidate) {
+						return candidate.Name == field.Name;
+					});
+				if (supplied == (*input)->Fields.end()
+					|| !consumed.emplace(supplied->Name).second)
+				{
+					return failure(
+						PropertyEncodeError::ValueTypeMismatch,
+						"A required reflected struct field is missing or duplicated");
+				}
 				const PropertyEncodeResult component = EncodeOwned(
-					std::span<std::byte>(encoded).subspan(
-						field.Offset,
-						field.Descriptor->Size),
+					destination.subspan(field.Offset, field.Descriptor->Size),
 					*field.Descriptor,
-					PropertyInputValue{input->Components[index]});
+					supplied->Value);
 				if (!component.Ok())
 					return component;
 			}
-			std::memcpy(destination.data(), encoded.data(), descriptor.Size);
 			return {};
 		}
 		default:
