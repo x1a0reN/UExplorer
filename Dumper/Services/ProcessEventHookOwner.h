@@ -90,6 +90,10 @@ struct ProcessEventHookDiagnostics
 	std::uint32_t MaintenanceInFlight = 0;
 	std::uint64_t EnterPublished = 0;
 	std::uint64_t ExitPublished = 0;
+	std::uint64_t ParameterCaptureSucceeded = 0;
+	std::uint64_t ParameterFrameUnavailable = 0;
+	std::uint64_t ParameterReadFailed = 0;
+	std::uint64_t ParameterEncodeFailed = 0;
 	std::uint64_t UnmatchedFunction = 0;
 	std::uint64_t DispatchMiss = 0;
 	std::uint64_t CorrelationExhausted = 0;
@@ -99,7 +103,8 @@ struct ProcessEventHookDiagnostics
 // Owns every ProcessEvent vtable patch used by the release runtime. Class CDO
 // evidence is consumed only from the current immutable TypeSnapshot, all live
 // handle/vtable reads run on the witnessed game-thread executor, and callback
-// work is limited to immutable lookup plus bounded collector publication.
+// work is limited to immutable lookup, optional plan-bounded scalar copies, and
+// bounded collector publication. Parameter decoding never runs in the callback.
 class ProcessEventHookOwner final
 {
 public:

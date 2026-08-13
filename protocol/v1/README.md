@@ -319,12 +319,18 @@ gate and synthetic parser coverage do not establish support for any real UE targ
 
 Hook commands use the dynamically published `hook.monitor` capability. The release
 producer installs only after current TypeSnapshot Class/CDO evidence has complete
-game-thread-validated vtable coverage, publishes bounded fixed-metadata enter/exit records,
-and restores every owned slot before collector teardown. `preencoded_payload` is rejected
-until a witnessed parameter encoder exists. The same owned event worker drains the
+game-thread-validated vtable coverage and restores every owned slot before collector
+teardown. A subscription selects either `fixed_metadata` or `scalar_parameters`.
+Scalar admission compiles an immutable plan from the exact generation-bound reflected
+function and accepts only descriptor-proven bool/integer/float/double fields, at most 64
+fields, 512 payload bytes, and 8 KiB of name/type metadata per phase. The callback copies input/inout before ProcessEvent and
+output/inout/return afterward into the `HCP1` payload; frame/read/size failures are encoded
+explicitly, while fingerprint validation and canonical decoding run only on the worker.
+Unsupported lifecycle-bearing values fail with `HOOK_CAPTURE_PLAN_UNAVAILABLE`; the generic
+`preencoded_payload` producer remains rejected. The same owned event worker drains the
 independent Hook push ring and publishes typed `hook.process_event_enter/exit` Events outside
 the callback; collector, retained-log, push-ring, Pipe, and Host loss remain separately
-observable. This fixed-metadata push path is not parameter capture, target validation, or a
+observable. This bounded scalar path is code/synthetic evidence, not target validation or a
 legacy Hook fallback; `hook.events.push` is likewise a status capability key, not a request
 operation. Dump format capabilities require the owned snapshot worker plus the current
 immutable Object/Type inputs needed for a new start; `dump.jobs` independently exposes the

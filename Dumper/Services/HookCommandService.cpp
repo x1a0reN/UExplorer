@@ -11,6 +11,7 @@
 #include <limits>
 #include <new>
 #include <span>
+#include <stdexcept>
 #include <system_error>
 #include <utility>
 
@@ -230,7 +231,8 @@ bool TryParseCapturePolicy(const json& data, HookCapturePolicy& policy)
 		policy.MaxPayloadBytes = 0;
 		return true;
 	}
-	if (mode != "preencoded_payload" || data.size() != 2
+	if ((mode != "scalar_parameters" && mode != "preencoded_payload")
+		|| data.size() != 2
 		|| !data.contains("max_payload_bytes"))
 	{
 		return false;
@@ -238,13 +240,16 @@ bool TryParseCapturePolicy(const json& data, HookCapturePolicy& policy)
 	std::uint64_t maximum = 0;
 	if (!TryUnsigned(
 		data.at("max_payload_bytes"),
-		1,
+		mode == "scalar_parameters"
+			? Runtime::kHookParameterPayloadHeaderBytes : 1,
 		Runtime::HookEventCollector::kHardMaxPayloadBytes,
 		maximum))
 	{
 		return false;
 	}
-	policy.Mode = HookCaptureMode::PreEncodedPayload;
+	policy.Mode = mode == "scalar_parameters"
+		? HookCaptureMode::ScalarParameters
+		: HookCaptureMode::PreEncodedPayload;
 	policy.MaxPayloadBytes = static_cast<std::size_t>(maximum);
 	return true;
 }
@@ -417,6 +422,8 @@ const char* ErrorMessage(const HookSubscriptionError error) noexcept
 		return "The hook event collector could not be drained by the worker";
 	case HookSubscriptionError::CaptureModeUnavailable:
 		return "The installed ProcessEvent producer does not implement the requested capture mode";
+	case HookSubscriptionError::CapturePlanUnavailable:
+		return "The exact reflected function cannot produce the requested bounded scalar capture plan";
 	}
 	return "The hook operation failed";
 }
@@ -453,7 +460,7 @@ json SerializeFunctionHandle(const Runtime::FunctionHandle& handle)
 json SerializeCapturePolicy(const HookCapturePolicy& policy)
 {
 	json output = {{"mode", ToString(policy.Mode)}};
-	if (policy.Mode == HookCaptureMode::PreEncodedPayload)
+	if (policy.Mode != HookCaptureMode::FixedMetadata)
 		output["max_payload_bytes"] = policy.MaxPayloadBytes;
 	return output;
 }
@@ -506,6 +513,133 @@ std::string HexEncode(const std::span<const std::byte> bytes)
 	return encoded;
 }
 
+const char* ParameterCaptureErrorCode(
+	const Runtime::HookParameterPayloadStatus status) noexcept
+{
+	switch (status)
+	{
+	case Runtime::HookParameterPayloadStatus::Ok: return "NONE";
+	case Runtime::HookParameterPayloadStatus::FrameUnavailable:
+		return "HOOK_PARAMETER_FRAME_UNAVAILABLE";
+	case Runtime::HookParameterPayloadStatus::ReadFailed:
+		return "HOOK_PARAMETER_READ_FAILED";
+	case Runtime::HookParameterPayloadStatus::InvalidPlan:
+		return "HOOK_PARAMETER_PLAN_INVALID";
+	case Runtime::HookParameterPayloadStatus::OutputTooSmall:
+		return "HOOK_PARAMETER_OUTPUT_TOO_SMALL";
+	case Runtime::HookParameterPayloadStatus::MalformedPayload:
+		return "HOOK_PARAMETER_PAYLOAD_MALFORMED";
+	case Runtime::HookParameterPayloadStatus::PlanMismatch:
+		return "HOOK_PARAMETER_PLAN_MISMATCH";
+	}
+	return "HOOK_PARAMETER_CAPTURE_UNKNOWN";
+}
+
+json SerializeParameterCapture(
+	const std::shared_ptr<const Runtime::HookParameterCapturePlan>& plan,
+	const std::optional<Runtime::HookParameterDecodeResult>& decoded)
+{
+	if (!plan || !decoded)
+		return nullptr;
+	const auto& fields = decoded->Phase == Runtime::HookParameterCapturePhase::Enter
+		? plan->EnterFields : plan->ExitFields;
+	json values = json::array();
+	values.get_ref<json::array_t&>().reserve(decoded->Values.size());
+	for (const Runtime::HookCapturedParameter& value : decoded->Values)
+	{
+		if (value.FieldIndex >= fields.size())
+			throw std::runtime_error("Hook parameter field index escaped its immutable plan");
+		const Runtime::HookParameterCaptureField& field = fields[value.FieldIndex];
+		values.push_back({
+			{"name", field.Name},
+			{"type_name", field.TypeName},
+			{"direction", Runtime::ToString(field.Direction)},
+			{"kind", Runtime::ToString(field.Kind)},
+			{"value", value.CanonicalValue}
+		});
+	}
+	return {
+		{"encoding", "uexplorer.hook-parameters.v1"},
+		{"phase", Runtime::ToString(decoded->Phase)},
+		{"status", Runtime::ToString(decoded->Status)},
+		{"plan_fingerprint", std::format("{:016X}", decoded->PlanFingerprint)},
+		{"error_code", decoded->Ok()
+			? json(nullptr) : json(ParameterCaptureErrorCode(decoded->Status))},
+		{"values", std::move(values)}
+	};
+}
+
+bool TryAddAccountedBytes(std::size_t& total, const std::size_t value) noexcept
+{
+	if (value > (std::numeric_limits<std::size_t>::max)() - total)
+	{
+		total = (std::numeric_limits<std::size_t>::max)();
+		return false;
+	}
+	total += value;
+	return true;
+}
+
+std::size_t DecodedParameterBytes(
+	const std::optional<Runtime::HookParameterDecodeResult>& decoded) noexcept
+{
+	if (!decoded)
+		return 0;
+	std::size_t total = sizeof(Runtime::HookParameterDecodeResult);
+	if (!TryAddAccountedBytes(
+		total,
+		decoded->Values.size() * sizeof(Runtime::HookCapturedParameter)))
+	{
+		return total;
+	}
+	for (const Runtime::HookCapturedParameter& value : decoded->Values)
+	{
+		if (!TryAddAccountedBytes(total, value.CanonicalValue.size()))
+			break;
+	}
+	return total;
+}
+
+std::size_t ParameterPlanBytes(
+	const std::shared_ptr<const Runtime::HookParameterCapturePlan>& plan) noexcept
+{
+	if (!plan)
+		return 0;
+	std::size_t total = sizeof(Runtime::HookParameterCapturePlan);
+	const auto addFields = [&total](
+		const std::vector<Runtime::HookParameterCaptureField>& fields) noexcept {
+		if (!TryAddAccountedBytes(
+			total,
+			fields.size() * sizeof(Runtime::HookParameterCaptureField)))
+		{
+			return;
+		}
+		for (const Runtime::HookParameterCaptureField& field : fields)
+		{
+			if (!TryAddAccountedBytes(total, field.Name.size())
+				|| !TryAddAccountedBytes(total, field.TypeName.size()))
+			{
+				return;
+			}
+		}
+	};
+	addFields(plan->EnterFields);
+	addFields(plan->ExitFields);
+	return total;
+}
+
+std::size_t HookPushEventBytes(const HookPushEvent& event) noexcept
+{
+	std::size_t total = sizeof(HookPushEvent);
+	TryAddAccountedBytes(total, event.FunctionPath.size());
+	TryAddAccountedBytes(total, event.Payload.size());
+	TryAddAccountedBytes(total, DecodedParameterBytes(event.Parameters));
+	// Count the shared plan conservatively per queued event so removal of the
+	// subscription cannot leave unaccounted retained metadata in the push ring.
+	TryAddAccountedBytes(total, ParameterPlanBytes(event.ParameterPlan));
+	return total;
+}
+
 HookCommandResult BoundedSuccess(json data)
 {
 	try
@@ -534,6 +668,7 @@ HookCommandResult BoundedSuccess(json data)
 
 struct HookCommandService::LogRecord
 {
+	std::size_t AccountedBytes = 0;
 	std::uint64_t Sequence = 0;
 	std::uint64_t ConfigurationGeneration = 0;
 	Runtime::HookEventKind Kind = Runtime::HookEventKind::Diagnostic;
@@ -542,12 +677,14 @@ struct HookCommandService::LogRecord
 	std::uint64_t CoalescedBefore = 0;
 	std::uint64_t DrainedAtMonotonicUs = 0;
 	std::vector<std::byte> Payload;
+	std::optional<Runtime::HookParameterDecodeResult> Parameters;
 };
 
 struct HookCommandService::SubscriptionRecord
 {
 	HookSubscriptionId Id = 0;
 	HookSubscriptionSpec Spec;
+	std::shared_ptr<const Runtime::HookParameterCapturePlan> ParameterPlan;
 	bool Enabled = false;
 	bool Terminal = false;
 	std::uint64_t CreatedAtMonotonicUs = 0;
@@ -580,6 +717,7 @@ const char* ToString(const HookCaptureMode mode) noexcept
 	switch (mode)
 	{
 	case HookCaptureMode::FixedMetadata: return "fixed_metadata";
+	case HookCaptureMode::ScalarParameters: return "scalar_parameters";
 	case HookCaptureMode::PreEncodedPayload: return "preencoded_payload";
 	}
 	return "unknown";
@@ -627,6 +765,8 @@ const char* ToString(const HookSubscriptionError error) noexcept
 	case HookSubscriptionError::CollectorDrainFailed: return "HOOK_COLLECTOR_DRAIN_FAILED";
 	case HookSubscriptionError::CaptureModeUnavailable:
 		return "HOOK_CAPTURE_MODE_UNAVAILABLE";
+	case HookSubscriptionError::CapturePlanUnavailable:
+		return "HOOK_CAPTURE_PLAN_UNAVAILABLE";
 	}
 	return "HOOK_UNKNOWN_ERROR";
 }
@@ -783,12 +923,21 @@ HookSubscriptionError HookCommandService::ValidateSpec(
 	}
 	if ((spec.Capture.Mode == HookCaptureMode::FixedMetadata
 			&& spec.Capture.MaxPayloadBytes != 0)
-		|| (spec.Capture.Mode == HookCaptureMode::PreEncodedPayload
+		|| ((spec.Capture.Mode == HookCaptureMode::ScalarParameters
+				|| spec.Capture.Mode == HookCaptureMode::PreEncodedPayload)
 			&& (spec.Capture.MaxPayloadBytes == 0
 				|| spec.Capture.MaxPayloadBytes
-					> Runtime::HookEventCollector::kHardMaxPayloadBytes)))
+					> Runtime::HookEventCollector::kHardMaxPayloadBytes))
+		|| (spec.Capture.Mode == HookCaptureMode::ScalarParameters
+			&& spec.Capture.MaxPayloadBytes
+				< Runtime::kHookParameterPayloadHeaderBytes))
 	{
 		return HookSubscriptionError::CapturePolicyInvalid;
+	}
+	if (spec.Capture.Mode == HookCaptureMode::ScalarParameters
+		&& !m_Limits.AllowScalarParameters)
+	{
+		return HookSubscriptionError::CaptureModeUnavailable;
 	}
 	if (spec.Capture.Mode == HookCaptureMode::PreEncodedPayload
 		&& !m_Limits.AllowPreEncodedPayload)
@@ -796,7 +945,7 @@ HookSubscriptionError HookCommandService::ValidateSpec(
 		return HookSubscriptionError::CaptureModeUnavailable;
 	}
 	const Runtime::HookCollectorSnapshot collector = m_Collector.Snapshot();
-	if (spec.Capture.Mode == HookCaptureMode::PreEncodedPayload
+	if (spec.Capture.Mode != HookCaptureMode::FixedMetadata
 		&& (!collector.ConfigurationSnapshotStable
 			|| spec.Capture.MaxPayloadBytes > collector.Configuration.MaxPayloadBytes))
 	{
@@ -806,8 +955,17 @@ HookSubscriptionError HookCommandService::ValidateSpec(
 }
 
 HookSubscriptionError HookCommandService::ValidateCurrentSpec(
-	const HookSubscriptionSpec& spec) const noexcept
+	const HookSubscriptionSpec& spec,
+	std::shared_ptr<const Runtime::HookParameterCapturePlan>* const parameterPlan,
+	Runtime::HookParameterPlanError* const parameterPlanError,
+	std::string* const parameterPlanDetail) const noexcept
 {
+	if (parameterPlan)
+		parameterPlan->reset();
+	if (parameterPlanError)
+		*parameterPlanError = Runtime::HookParameterPlanError::None;
+	if (parameterPlanDetail)
+		parameterPlanDetail->clear();
 	if (!m_Runtime || !m_Engine || !m_GameThread || !m_Engine->IsConfigured())
 		return HookSubscriptionError::CurrentSnapshotUnavailable;
 
@@ -865,6 +1023,24 @@ HookSubscriptionError HookCommandService::ValidateCurrentSpec(
 			return HookSubscriptionError::FunctionSnapshotMismatch;
 		}
 
+		std::shared_ptr<const Runtime::HookParameterCapturePlan> compiledPlan;
+		if (spec.Capture.Mode == HookCaptureMode::ScalarParameters)
+		{
+			const Runtime::HookParameterPlanResult planned =
+				Runtime::BuildHookParameterCapturePlan(
+					*lookup.Function,
+					spec.Capture.MaxPayloadBytes);
+			if (!planned.Ok())
+			{
+				if (parameterPlanError)
+					*parameterPlanError = planned.Error;
+				if (parameterPlanDetail)
+					*parameterPlanDetail = planned.Detail;
+				return HookSubscriptionError::CapturePlanUnavailable;
+			}
+			compiledPlan = planned.Plan;
+		}
+
 		if (m_Engine->SessionId() != spec.SessionId
 			|| m_Engine->ContextGeneration() != spec.ContextGeneration
 			|| m_Engine->Snapshots().Current() != objects
@@ -885,6 +1061,8 @@ HookSubscriptionError HookCommandService::ValidateCurrentSpec(
 		const HookSubscriptionError liveError = validationWork->Result();
 		if (liveError != HookSubscriptionError::None)
 			return liveError;
+		if (parameterPlan)
+			*parameterPlan = std::move(compiledPlan);
 		return HookSubscriptionError::None;
 	}
 	catch (...)
@@ -924,7 +1102,8 @@ HookCommandService::BuildEnabledSnapshotLocked(
 		{
 			snapshot->m_Entries.push_back({
 				.Id = record->Id,
-				.Spec = record->Spec
+				.Spec = record->Spec,
+				.ParameterPlan = record->ParameterPlan
 			});
 		}
 	}
@@ -932,7 +1111,8 @@ HookCommandService::BuildEnabledSnapshotLocked(
 	{
 		snapshot->m_Entries.push_back({
 			.Id = overrideRecord->Id,
-			.Spec = overrideRecord->Spec
+			.Spec = overrideRecord->Spec,
+			.ParameterPlan = overrideRecord->ParameterPlan
 		});
 	}
 
@@ -1041,7 +1221,10 @@ HookCommandService::CollectorDrainSummary HookCommandService::DrainCollectorWork
 			const HookCapturePolicy& policy = record->Spec.Capture;
 			const bool policyAccepted = policy.Mode == HookCaptureMode::FixedMetadata
 				? event.PayloadSize == 0
-				: event.PayloadSize <= policy.MaxPayloadBytes;
+				: event.PayloadSize > 0
+					&& event.PayloadSize <= policy.MaxPayloadBytes
+					&& (policy.Mode != HookCaptureMode::ScalarParameters
+						|| static_cast<bool>(record->ParameterPlan));
 			if (!policyAccepted || event.PayloadSize > m_Limits.MaxLogBytesPerSubscription)
 			{
 				++m_PolicyRejectedEventCount;
@@ -1058,24 +1241,42 @@ HookCommandService::CollectorDrainSummary HookCommandService::DrainCollectorWork
 				.DrainedAtMonotonicUs = drainedAt
 			};
 			log.Payload.assign(event.Payload.begin(), event.Payload.begin() + event.PayloadSize);
+			if (policy.Mode == HookCaptureMode::ScalarParameters)
+			{
+				log.Parameters = Runtime::DecodeHookParameterPayload(
+					*record->ParameterPlan,
+					log.Payload);
+				if (!log.Parameters->Ok())
+					++m_ParameterDecodeFailureCount;
+			}
+			log.AccountedBytes = sizeof(LogRecord);
+			TryAddAccountedBytes(log.AccountedBytes, log.Payload.size());
+			TryAddAccountedBytes(
+				log.AccountedBytes,
+				DecodedParameterBytes(log.Parameters));
 			while (!record->Logs.empty()
 				&& (record->Logs.size() >= m_Limits.MaxLogEntriesPerSubscription
 					|| record->LogBytes > m_Limits.MaxLogBytesPerSubscription
-						- log.Payload.size()))
+						- (std::min)(
+							log.AccountedBytes,
+							m_Limits.MaxLogBytesPerSubscription)))
 			{
-				record->LogBytes -= record->Logs.front().Payload.size();
+				record->LogBytes -= record->Logs.front().AccountedBytes;
 				record->Logs.pop_front();
 				++record->LogDropCount;
 			}
-			record->LogBytes += log.Payload.size();
+			if (log.AccountedBytes > m_Limits.MaxLogBytesPerSubscription)
+			{
+				++record->LogDropCount;
+				continue;
+			}
+			record->LogBytes += log.AccountedBytes;
 			record->Logs.push_back(std::move(log));
 			record->LastEventSequence = event.Sequence;
 			record->LastCorrelation = event.Correlation;
 			if (event.Kind == Runtime::HookEventKind::ProcessEventEnter)
 				++record->HitCount;
 			const LogRecord& retained = record->Logs.back();
-			const std::size_t pushBytes = record->Spec.FunctionPath.size()
-				+ retained.Payload.size() + 256;
 			AppendPushEventLocked({
 				.Sequence = retained.Sequence,
 				.ConfigurationGeneration = retained.ConfigurationGeneration,
@@ -1088,11 +1289,13 @@ HookCommandService::CollectorDrainSummary HookCommandService::DrainCollectorWork
 				.FunctionPath = record->Spec.FunctionPath,
 				.Capture = record->Spec.Capture,
 				.Payload = retained.Payload,
+				.ParameterPlan = record->ParameterPlan,
+				.Parameters = retained.Parameters,
 				.RetainedLogDroppedBefore = record->LogDropCount,
 				.CollectorOverflowDroppedBefore = drained.DroppedOverflowTotal,
 				.CollectorOversizeDroppedBefore = drained.DroppedOversizeTotal,
 				.CollectorContentionDroppedBefore = drained.DroppedContentionTotal
-			}, pushBytes);
+			});
 		}
 		return {
 			.Error = HookSubscriptionError::None,
@@ -1117,30 +1320,30 @@ HookCommandService::CollectorDrainSummary HookCommandService::DrainCollectorWork
 }
 
 void HookCommandService::AppendPushEventLocked(
-	HookPushEvent event,
-	const std::size_t eventBytes) noexcept
+	HookPushEvent event) noexcept
 {
 	try
 	{
-		if (eventBytes > m_Limits.MaxPendingPushBytes)
+		event.AccountedBytes = HookPushEventBytes(event);
+		if (event.AccountedBytes > m_Limits.MaxPendingPushBytes)
 		{
 			++m_PushEventDropCount;
 			return;
 		}
 		while (!m_PushEvents.empty()
 			&& (m_PushEvents.size() >= m_Limits.MaxPendingPushEvents
-				|| m_PushEventBytes > m_Limits.MaxPendingPushBytes - eventBytes))
+				|| m_PushEventBytes
+					> m_Limits.MaxPendingPushBytes - event.AccountedBytes))
 		{
 			const HookPushEvent& oldest = m_PushEvents.front();
-			const std::size_t oldestBytes = oldest.FunctionPath.size()
-				+ oldest.Payload.size() + 256;
-			m_PushEventBytes = oldestBytes <= m_PushEventBytes
-				? m_PushEventBytes - oldestBytes
+			m_PushEventBytes = oldest.AccountedBytes <= m_PushEventBytes
+				? m_PushEventBytes - oldest.AccountedBytes
 				: 0;
 			m_PushEvents.pop_front();
 			++m_PushEventDropCount;
 		}
 		event.QueueDroppedBefore = m_PushEventDropCount;
+		const std::size_t eventBytes = event.AccountedBytes;
 		m_PushEvents.push_back(std::move(event));
 		m_PushEventBytes += eventBytes;
 	}
@@ -1173,10 +1376,8 @@ HookPushDrainResult HookCommandService::DrainPushEvents(const std::size_t maximu
 		for (std::size_t index = 0; index < count; ++index)
 		{
 			const HookPushEvent& oldest = m_PushEvents.front();
-			const std::size_t bytes = oldest.FunctionPath.size()
-				+ oldest.Payload.size() + 256;
-			m_PushEventBytes = bytes <= m_PushEventBytes
-				? m_PushEventBytes - bytes
+			m_PushEventBytes = oldest.AccountedBytes <= m_PushEventBytes
+				? m_PushEventBytes - oldest.AccountedBytes
 				: 0;
 			m_PushEvents.pop_front();
 		}
@@ -1269,9 +1470,25 @@ HookCommandResult HookCommandService::Add(const json& data) noexcept
 		const HookSubscriptionError specError = ValidateSpec(record->Spec);
 		if (specError != HookSubscriptionError::None)
 			return SubscriptionFailure(specError);
-		const HookSubscriptionError currentError = ValidateCurrentSpec(record->Spec);
+		Runtime::HookParameterPlanError parameterPlanError =
+			Runtime::HookParameterPlanError::None;
+		std::string parameterPlanDetail;
+		const HookSubscriptionError currentError = ValidateCurrentSpec(
+			record->Spec,
+			&record->ParameterPlan,
+			&parameterPlanError,
+			&parameterPlanDetail);
 		if (currentError != HookSubscriptionError::None)
-			return SubscriptionFailure(currentError);
+		{
+			json details = json::object();
+			if (currentError == HookSubscriptionError::CapturePlanUnavailable)
+			{
+				details["capture_error_code"] = Runtime::ToString(parameterPlanError);
+				if (!parameterPlanDetail.empty())
+					details["parameter"] = parameterPlanDetail;
+			}
+			return SubscriptionFailure(currentError, std::move(details));
+		}
 
 		HookSubscription subscription;
 		std::uint64_t snapshotGeneration = 0;
@@ -1342,6 +1559,7 @@ HookCommandResult HookCommandService::List(const json& data) noexcept
 		std::uint64_t snapshotGeneration = 0;
 		std::uint64_t unmatched = 0;
 		std::uint64_t policyRejected = 0;
+		std::uint64_t parameterDecodeFailures = 0;
 		std::uint64_t drainFailures = 0;
 		std::size_t pendingPushEvents = 0;
 		std::size_t pendingPushBytes = 0;
@@ -1357,6 +1575,7 @@ HookCommandResult HookCommandService::List(const json& data) noexcept
 			snapshotGeneration = m_EnabledSnapshotGeneration;
 			unmatched = m_UnmatchedEventCount;
 			policyRejected = m_PolicyRejectedEventCount;
+			parameterDecodeFailures = m_ParameterDecodeFailureCount;
 			drainFailures = m_DrainFailureCount;
 			pendingPushEvents = m_PushEvents.size();
 			pendingPushBytes = m_PushEventBytes;
@@ -1381,6 +1600,7 @@ HookCommandResult HookCommandService::List(const json& data) noexcept
 				{"coalesced_overflow_total", drain.CoalescedOverflowTotal},
 				{"unmatched_event_total", unmatched},
 				{"policy_rejected_event_total", policyRejected},
+				{"parameter_decode_failure_total", parameterDecodeFailures},
 				{"drain_failure_total", drainFailures},
 				{"pending_push_event_count", pendingPushEvents},
 				{"pending_push_event_bytes", pendingPushBytes},
@@ -1417,6 +1637,10 @@ HookCommandResult HookCommandService::Enable(const json& data) noexcept
 		HookSubscription subscription;
 		std::uint64_t snapshotGeneration = 0;
 		HookSubscriptionError mutationError = HookSubscriptionError::None;
+		Runtime::HookParameterPlanError parameterPlanError =
+			Runtime::HookParameterPlanError::None;
+		std::string parameterPlanDetail;
+		bool parameterPlanFingerprintChanged = false;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			SubscriptionRecord* record = FindLocked(id);
@@ -1427,7 +1651,28 @@ HookCommandResult HookCommandService::Enable(const json& data) noexcept
 			else if (record->Enabled != enabled)
 			{
 				if (enabled)
-					mutationError = ValidateCurrentSpec(record->Spec);
+				{
+					std::shared_ptr<const Runtime::HookParameterCapturePlan> revalidatedPlan;
+					mutationError = ValidateCurrentSpec(
+						record->Spec,
+						&revalidatedPlan,
+						&parameterPlanError,
+						&parameterPlanDetail);
+					if (mutationError == HookSubscriptionError::None
+						&& record->Spec.Capture.Mode == HookCaptureMode::ScalarParameters)
+					{
+						if (!record->ParameterPlan || !revalidatedPlan
+							|| record->ParameterPlan->Fingerprint != revalidatedPlan->Fingerprint)
+						{
+							mutationError = HookSubscriptionError::CapturePlanUnavailable;
+							parameterPlanFingerprintChanged = true;
+						}
+						else
+						{
+							record->ParameterPlan = std::move(revalidatedPlan);
+						}
+					}
+				}
 				if (mutationError == HookSubscriptionError::None)
 				{
 					if (m_EnabledSnapshotGeneration >= kMaxProtocolInteger)
@@ -1447,7 +1692,18 @@ HookCommandResult HookCommandService::Enable(const json& data) noexcept
 			}
 		}
 		if (mutationError != HookSubscriptionError::None)
-			return SubscriptionFailure(mutationError, {{"id", id}});
+		{
+			json details = {{"id", id}};
+			if (mutationError == HookSubscriptionError::CapturePlanUnavailable)
+			{
+				details["capture_error_code"] = parameterPlanFingerprintChanged
+					? "HOOK_PARAMETER_PLAN_FINGERPRINT_CHANGED"
+					: Runtime::ToString(parameterPlanError);
+				if (!parameterPlanDetail.empty())
+					details["parameter"] = parameterPlanDetail;
+			}
+			return SubscriptionFailure(mutationError, std::move(details));
+		}
 		return BoundedSuccess({
 			{"subscription", SerializeSubscription(subscription)},
 			{"enabled_snapshot_generation", snapshotGeneration}
@@ -1550,6 +1806,7 @@ HookCommandResult HookCommandService::Log(const json& data) noexcept
 		}
 
 		HookSubscription subscription;
+		std::shared_ptr<const Runtime::HookParameterCapturePlan> parameterPlan;
 		std::vector<LogRecord> logs;
 		bool removedDuringDrain = false;
 		{
@@ -1560,6 +1817,7 @@ HookCommandResult HookCommandService::Log(const json& data) noexcept
 			else
 			{
 				subscription = CopySubscriptionLocked(*record);
+				parameterPlan = record->ParameterPlan;
 				const std::size_t count = (std::min)(
 					static_cast<std::size_t>(limit),
 					record->Logs.size());
@@ -1590,7 +1848,8 @@ HookCommandResult HookCommandService::Log(const json& data) noexcept
 					{"encoding", "hex"},
 					{"size", log.Payload.size()},
 					{"data", HexEncode(log.Payload)}
-				}}
+				}},
+				{"parameters", SerializeParameterCapture(parameterPlan, log.Parameters)}
 			});
 		}
 		return BoundedSuccess({

@@ -84,7 +84,8 @@ export interface HookPushEventData {
   correlation: number;
   coalesced_before: number;
   drained_at_monotonic_us: number;
-  capture: { mode: 'fixed_metadata' | 'preencoded_payload' };
+  capture: { mode: 'fixed_metadata' | 'scalar_parameters' | 'preencoded_payload' };
+  parameters: HookParameterCapture | null;
   payload: { encoding: 'hex'; size: number; data: string } | null;
   payload_omitted: boolean;
   payload_omission_code?: string;
@@ -111,20 +112,112 @@ export function isWatchPushEventData(value: unknown): value is WatchPushEventDat
     && typeof data.value_omitted === 'boolean';
 }
 
+function isSafeIntegerAtLeast(value: unknown, minimum: number): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= minimum;
+}
+
+function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  return Object.keys(value).length === keys.length
+    && keys.every((key) => Object.prototype.hasOwnProperty.call(value, key));
+}
+
+const HOOK_PARAMETER_DIRECTIONS = new Set(['input', 'output', 'inout', 'return']);
+const HOOK_PARAMETER_KINDS = new Set([
+  'bool', 'int8', 'int16', 'int32', 'int64',
+  'uint8', 'uint16', 'uint32', 'uint64', 'float', 'double',
+]);
+const HOOK_PARAMETER_STATUSES = new Set([
+  'ok', 'frame_unavailable', 'read_failed', 'invalid_plan',
+  'output_too_small', 'malformed_payload', 'plan_mismatch',
+]);
+
+function expectedHookParameterError(status: string): string | null | undefined {
+  switch (status) {
+    case 'ok': return null;
+    case 'frame_unavailable': return 'HOOK_PARAMETER_FRAME_UNAVAILABLE';
+    case 'read_failed': return 'HOOK_PARAMETER_READ_FAILED';
+    case 'invalid_plan': return 'HOOK_PARAMETER_PLAN_INVALID';
+    case 'output_too_small': return 'HOOK_PARAMETER_OUTPUT_TOO_SMALL';
+    case 'malformed_payload': return 'HOOK_PARAMETER_PAYLOAD_MALFORMED';
+    case 'plan_mismatch': return 'HOOK_PARAMETER_PLAN_MISMATCH';
+    default: return undefined;
+  }
+}
+
+function isHookCapturedParameter(value: unknown): value is HookCapturedParameter {
+  if (!value || typeof value !== 'object') return false;
+  const parameter = value as Record<string, unknown>;
+  return hasExactKeys(parameter, ['name', 'type_name', 'direction', 'kind', 'value'])
+    && typeof parameter.name === 'string'
+    && parameter.name.length > 0 && parameter.name.length <= 4096
+    && typeof parameter.type_name === 'string'
+    && parameter.type_name.length > 0 && parameter.type_name.length <= 4096
+    && typeof parameter.direction === 'string' && HOOK_PARAMETER_DIRECTIONS.has(parameter.direction)
+    && typeof parameter.kind === 'string' && HOOK_PARAMETER_KINDS.has(parameter.kind)
+    && typeof parameter.value === 'string'
+    && parameter.value.length > 0 && parameter.value.length <= 64;
+}
+
+export function isHookParameterCapture(value: unknown): value is HookParameterCapture {
+  if (!value || typeof value !== 'object') return false;
+  const capture = value as Record<string, unknown>;
+  if (!hasExactKeys(capture, [
+    'encoding', 'phase', 'status', 'plan_fingerprint', 'error_code', 'values',
+  ])
+    || capture.encoding !== 'uexplorer.hook-parameters.v1'
+    || (capture.phase !== 'enter' && capture.phase !== 'exit')
+    || typeof capture.status !== 'string' || !HOOK_PARAMETER_STATUSES.has(capture.status)
+    || typeof capture.plan_fingerprint !== 'string'
+    || !/^[0-9A-F]{16}$/.test(capture.plan_fingerprint)
+    || !Array.isArray(capture.values) || capture.values.length > 64
+    || !capture.values.every(isHookCapturedParameter)) {
+    return false;
+  }
+  const expectedError = expectedHookParameterError(capture.status);
+  return expectedError !== undefined && capture.error_code === expectedError
+    && (capture.status === 'ok' || capture.values.length === 0);
+}
+
 export function isHookPushEventData(value: unknown): value is HookPushEventData {
   if (!value || typeof value !== 'object') return false;
   const data = value as Record<string, unknown>;
-  return typeof data.hook_name === 'string'
-    && typeof data.hook_id === 'string'
-    && typeof data.id === 'number' && Number.isSafeInteger(data.id) && data.id > 0
-    && typeof data.source_sequence === 'number'
-    && Number.isSafeInteger(data.source_sequence) && data.source_sequence > 0
-    && typeof data.configuration_generation === 'number'
-    && Number.isSafeInteger(data.configuration_generation)
+  const capture = data.capture as Record<string, unknown> | null;
+  const payload = data.payload as Record<string, unknown> | null;
+  const captureMode = capture?.mode;
+  const scalarParameters = captureMode === 'scalar_parameters';
+  const validPayload = payload !== null
+    && hasExactKeys(payload, ['encoding', 'size', 'data'])
+    && payload.encoding === 'hex'
+    && isSafeIntegerAtLeast(payload.size, 0) && payload.size <= 512
+    && typeof payload.data === 'string'
+    && payload.data.length === payload.size * 2
+    && /^(?:[0-9A-F]{2}){0,512}$/.test(payload.data);
+  return typeof data.hook_name === 'string' && data.hook_name.length > 0
+    && typeof data.hook_id === 'string' && /^[1-9][0-9]{0,15}$/.test(data.hook_id)
+    && isSafeIntegerAtLeast(data.id, 1) && data.hook_id === String(data.id)
+    && isSafeIntegerAtLeast(data.source_sequence, 1)
+    && isSafeIntegerAtLeast(data.configuration_generation, 1)
     && typeof data.function_path === 'string'
-    && typeof data.source === 'string'
-    && typeof data.correlation === 'number' && Number.isSafeInteger(data.correlation)
-    && typeof data.payload_omitted === 'boolean';
+    && typeof data.source === 'string' && /^0x[0-9A-F]{1,16}$/.test(data.source)
+    && isSafeIntegerAtLeast(data.correlation, 1)
+    && isSafeIntegerAtLeast(data.coalesced_before, 0)
+    && isSafeIntegerAtLeast(data.drained_at_monotonic_us, 1)
+    && capture !== null
+    && hasExactKeys(capture, ['mode'])
+    && (captureMode === 'fixed_metadata'
+      || captureMode === 'scalar_parameters'
+      || captureMode === 'preencoded_payload')
+    && (scalarParameters ? isHookParameterCapture(data.parameters) : data.parameters === null)
+    && typeof data.payload_omitted === 'boolean'
+    && (data.payload_omitted
+      ? payload === null && data.payload_omission_code === 'HOOK_PUSH_PAYLOAD_TOO_LARGE'
+      : validPayload && data.payload_omission_code === undefined)
+    && isSafeIntegerAtLeast(data.retained_log_dropped_before, 0)
+    && isSafeIntegerAtLeast(data.collector_overflow_dropped_before, 0)
+    && isSafeIntegerAtLeast(data.collector_oversize_dropped_before, 0)
+    && isSafeIntegerAtLeast(data.collector_contention_dropped_before, 0)
+    && isSafeIntegerAtLeast(data.push_dropped_before, 0)
+    && isSafeIntegerAtLeast(data.publisher_dropped_before, 0);
 }
 
 export interface SessionEventFilter {
@@ -886,7 +979,27 @@ export interface WatchListResponse {
 
 export type HookCapturePolicy =
   | { mode: 'fixed_metadata' }
+  | { mode: 'scalar_parameters'; max_payload_bytes: number }
   | { mode: 'preencoded_payload'; max_payload_bytes: number };
+
+export interface HookCapturedParameter {
+  name: string;
+  type_name: string;
+  direction: 'input' | 'output' | 'inout' | 'return';
+  kind: 'bool' | 'int8' | 'int16' | 'int32' | 'int64'
+    | 'uint8' | 'uint16' | 'uint32' | 'uint64' | 'float' | 'double';
+  value: string;
+}
+
+export interface HookParameterCapture {
+  encoding: 'uexplorer.hook-parameters.v1';
+  phase: 'enter' | 'exit';
+  status: 'ok' | 'frame_unavailable' | 'read_failed' | 'invalid_plan'
+    | 'output_too_small' | 'malformed_payload' | 'plan_mismatch';
+  plan_fingerprint: string;
+  error_code: string | null;
+  values: HookCapturedParameter[];
+}
 
 export interface HookSubscriptionSpec {
   session_id: string;
@@ -930,6 +1043,7 @@ export interface HookListResponse {
     coalesced_overflow_total: number;
     unmatched_event_total: number;
     policy_rejected_event_total: number;
+    parameter_decode_failure_total: number;
     drain_failure_total: number;
     pending_push_event_count: number;
     pending_push_event_bytes: number;
@@ -953,6 +1067,7 @@ export interface HookLogEntry {
   drained_at_monotonic_us: number;
   function_path: string;
   payload: { encoding: 'hex'; size: number; data: string };
+  parameters: HookParameterCapture | null;
   push_payload_omitted?: boolean;
   push_payload_omission_code?: string;
 }

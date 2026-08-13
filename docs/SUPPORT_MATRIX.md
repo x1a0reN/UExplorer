@@ -23,15 +23,17 @@ These assets are available for development, but none changes the support rows ab
   enum codecs and an owned destructor journal, generation-bound raw Blueprint Script
   capture plus a runtime-gated local-source profile catalog and bounded disassembly,
   generation-covered ProcessEvent Hook
-  production ownership, a single-active immutable-snapshot Dump worker, and
+  production ownership plus immutable-plan bounded trivial-scalar parameter capture,
+  a single-active immutable-snapshot Dump worker, and
   an end-to-end bounded call-batch command path that reuses the exact single-call adapter.
   Dump start pins exact EngineContext/ObjectSnapshot/TypeSnapshot pointers, uses a Host-owned
   UUID identity under `%LOCALAPPDATA%\UExplorer\Dumps`, and emits bounded SDK/USMAP/
   Dumpspace/IDA artifacts through structural consumers, no-replace commit, size/SHA-256
   verification, and a final manifest. The SDK artifact is an opaque exact-layout header,
   not a complete typed Dumper-7 SDK. It has no target-process evidence for any of them. Production
-  UEnum entry-table and real-target Blueprint profile/opcode/operand witnesses, Hook parameter
-  encoding, Watch/Hook reconnect/slow-consumer/target restore/rate fixtures, Host
+  UEnum entry-table and real-target Blueprint profile/opcode/operand witnesses, Hook
+  non-trivial parameter lifecycle/caller/filtering and real parameter-frame evidence,
+  Watch/Hook reconnect/slow-consumer/target restore/rate fixtures, Host
   dump-job reload persistence, real target/external
   semantic consumers for all four artifact formats, and a real batch ProcessEvent fixture are still missing, so no
   profile support claim follows from these source changes.

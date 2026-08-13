@@ -84,6 +84,12 @@ $hookApi = Read-ProjectFile 'Dumper\API\HookApi.cpp'
 $callApi = Read-ProjectFile 'Dumper\API\CallApi.cpp'
 $statusApi = Read-ProjectFile 'Dumper\API\StatusApi.cpp'
 $main = Read-ProjectFile 'Dumper\Main.cpp'
+$hookParameterCapture = (Read-ProjectFile 'Dumper\Runtime\HookParameterCapture.h') +
+	(Read-ProjectFile 'Dumper\Runtime\HookParameterCapture.cpp')
+$hookCommandService = (Read-ProjectFile 'Dumper\Services\HookCommandService.h') +
+	(Read-ProjectFile 'Dumper\Services\HookCommandService.cpp')
+$processEventHookOwner = Read-ProjectFile 'Dumper\Services\ProcessEventHookOwner.cpp'
+$domainEventPump = Read-ProjectFile 'Dumper\Services\DomainEventPump.cpp'
 $harness = Read-ProjectFile 'tests\core-harness\main.cpp'
 
 foreach ($token in @('Created', 'Initializing', 'Ready', 'Failed', 'Stopping', 'Stopped',
@@ -454,6 +460,49 @@ Assert-Contains $hookApi 'VTableHookToken::Install' 'Hook patching bypasses the 
 Assert-Contains $vtableHook 'CompareExchangePointer' 'VTable Hook patching bypasses atomic SafeMemory.'
 Assert-Contains $callbackBarrier 'WaitForDrain' 'Hook callback quiescence barrier is missing.'
 
+foreach ($token in @('HookParameterCapturePlan', 'FunctionSignatureFingerprint',
+		'kHookParameterPayloadHeaderBytes = 16', 'kHookParameterMaximumFields = 64',
+		'kHookParameterMaximumPayloadBytes = 512',
+		'kHookParameterMaximumMetadataBytes = 8 * 1024', 'MetadataLimitExceeded',
+		'ComputePlanFingerprint',
+		'HookParameterCapturePhase::Enter', 'HookParameterCapturePhase::Exit',
+		'CopyField', '__try', 'std::to_chars', 'FrameUnavailable', 'PlanMismatch')) {
+	Assert-Contains $hookParameterCapture $token 'Immutable bounded Hook scalar parameter codec regressed.'
+}
+foreach ($token in @('Off::', 'Settings::', 'ObjectArray::', 'ProcessEvent(')) {
+	Assert-NotContains $hookParameterCapture $token 'Hook parameter codec bypassed its immutable reflected-plan boundary.'
+}
+foreach ($token in @('HookCaptureMode::ScalarParameters', 'BuildHookParameterCapturePlan',
+		'HOOK_CAPTURE_PLAN_UNAVAILABLE', 'capture_error_code',
+		'DecodeHookParameterPayload', 'parameter_decode_failure_total',
+		'DecodedParameterBytes', 'ParameterPlanBytes', 'AccountedBytes')) {
+	Assert-Contains $hookCommandService $token 'Hook scalar plan admission or worker decoding regressed.'
+}
+foreach ($token in @('HookEventCollector::kHardMaxPayloadBytes',
+		'AllowScalarParameters = true', 'AllowPreEncodedPayload = false')) {
+	Assert-Contains $main $token 'Release Main no longer explicitly selects the witnessed Hook capture modes.'
+}
+foreach ($token in @('EncodeHookParameterPayload', 'HookParameterCapturePhase::Enter',
+		'HookParameterCapturePhase::Exit', 'ParameterCaptureSucceeded',
+		'ParameterFrameUnavailable', 'ParameterReadFailed', 'ParameterEncodeFailed')) {
+	Assert-Contains $processEventHookOwner $token 'ProcessEvent Hook scalar producer regressed.'
+}
+$hookCallbackMarker = 'void ProcessEventHookOwner::HookedProcessEvent('
+$hookCallbackOffset = $processEventHookOwner.IndexOf($hookCallbackMarker)
+if ($hookCallbackOffset -lt 0) {
+	throw 'ProcessEvent Hook callback body is missing.'
+}
+$hookCallback = $processEventHookOwner.Substring($hookCallbackOffset)
+foreach ($token in @('nlohmann::json', 'std::format', 'std::lock_guard', 'std::unique_lock',
+		'std::vector', 'std::string', 'BuildHookParameterCapturePlan',
+		'DecodeHookParameterPayload', 'NamedPipe', 'WriteFile', 'Sleep(')) {
+	Assert-NotContains $hookCallback $token 'ProcessEvent Hook callback regained allocation, locking, decoding, serialization, or I/O work.'
+}
+foreach ($token in @('SerializeHookParameters', 'uexplorer.hook-parameters.v1',
+		'HOOK_PARAMETER_PAYLOAD_MALFORMED', '{"parameters", SerializeHookParameters(event)}')) {
+	Assert-Contains $domainEventPump $token 'Worker-side Hook parameter event serialization regressed.'
+}
+
 foreach ($apiFile in Get-ChildItem -LiteralPath (Join-Path $root 'Dumper\API') -Filter '*.cpp') {
     $apiSource = Get-Content -LiteralPath $apiFile.FullName -Raw -Encoding UTF8
     Assert-NotContains $apiSource 'VirtualProtect' "API module $($apiFile.Name) bypasses SafeMemory."
@@ -568,7 +617,9 @@ foreach ($token in @('TestEngineContextAndCapabilities', 'TestCoreRuntimeStateAn
         'Non-canonical display path became a function execution identity',
         'TestFUObjectItemIdentityLayout', 'Custom FUObjectItem object offset was guessed',
         'Zero-only serial candidate was accepted',
-        'TestHookOwnershipAndCallbackDrain', 'Failed VTable restore discarded hook ownership',
+		'TestHookParameterCapture',
+		'Hook scalar parameter planning did not fail closed on unsupported lifecycle or byte budget',
+		'TestHookOwnershipAndCallbackDrain', 'Failed VTable restore discarded hook ownership',
         'TestGenericGameThreadWorkAndCancellation', 'explicitly cancelled',
 		'TestPostRenderFrameClientOwnershipAndDrain',
 		'PostRender frame-client detach ignored an in-flight callback',
@@ -591,7 +642,10 @@ $snapshotPageResponseFixture = Get-Content -LiteralPath (Join-Path $root 'protoc
 if ($null -eq $payloadSchema.'$defs'.objectHandle -or $null -eq $payloadSchema.'$defs'.functionHandle -or
         $null -eq $payloadSchema.'$defs'.handleIssueData -or $null -eq $payloadSchema.'$defs'.emptyCommandData -or
 		$null -eq $payloadSchema.'$defs'.snapshotCursor -or $null -eq $payloadSchema.'$defs'.snapshotPageData -or
-		$null -eq $payloadSchema.'$defs'.snapshotRecord -or $null -eq $payloadSchema.'$defs'.snapshotPageResult) {
+		$null -eq $payloadSchema.'$defs'.snapshotRecord -or $null -eq $payloadSchema.'$defs'.snapshotPageResult -or
+		$null -eq $payloadSchema.'$defs'.hookCapturePolicy -or
+		$null -eq $payloadSchema.'$defs'.hookParameterCapture -or
+		$null -eq $payloadSchema.'$defs'.hookPushEventData) {
 	throw 'IPC payload schema does not define stable handles and snapshot paging.'
 }
 if ($objectHandleFixture.serial -le 0 -or $objectHandleFixture.context_generation -le 0) {
@@ -638,4 +692,4 @@ foreach ($record in $snapshotPageResponseFixture.data.items) {
 	$previousSnapshotIndex = $record.handle.index
 }
 
-Write-Host 'Core runtime contract verified: immutable context, stable handles, generation-bound snapshot paging, capability readiness, SafeMemory, request drain, and coordinated shutdown.'
+Write-Host 'Core runtime contract verified: immutable context, stable handles, generation-bound snapshots, bounded Hook scalar capture, capability readiness, SafeMemory, request drain, and coordinated shutdown.'

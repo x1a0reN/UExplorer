@@ -1078,8 +1078,15 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 		g_HookCollector = std::make_unique<UExplorer::Runtime::HookEventCollector>(
 			runtimeSnapshot.SessionId,
 			runtimeSnapshot.Context->Generation(),
-			UExplorer::Runtime::HookCollectorLimits{},
-			UExplorer::Runtime::HookCollectorConfig{.Enabled = false});
+			UExplorer::Runtime::HookCollectorLimits{
+				.MaxPayloadBytes =
+					UExplorer::Runtime::HookEventCollector::kHardMaxPayloadBytes
+			},
+			UExplorer::Runtime::HookCollectorConfig{
+				.Enabled = false,
+				.MaxPayloadBytes =
+					UExplorer::Runtime::HookEventCollector::kHardMaxPayloadBytes
+			});
 		if (!g_HookCollector->IsConfigured())
 			throw std::runtime_error("Hook collector rejected the runtime session/context");
 		g_HookCommandService = std::make_unique<UExplorer::Services::HookCommandService>(
@@ -1087,6 +1094,7 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 			runtimeSnapshot.Context->Generation(),
 			*g_HookCollector,
 			UExplorer::Services::HookCommandLimits{
+				.AllowScalarParameters = true,
 				.AllowPreEncodedPayload = false
 			},
 			&g_Runtime,

@@ -468,9 +468,114 @@
           "additionalProperties": false,
           "required": ["mode", "max_payload_bytes"],
           "properties": {
+            "mode": { "const": "scalar_parameters" },
+            "max_payload_bytes": { "type": "integer", "minimum": 16, "maximum": 512 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "max_payload_bytes"],
+          "properties": {
             "mode": { "const": "preencoded_payload" },
             "max_payload_bytes": { "type": "integer", "minimum": 1, "maximum": 512 }
           }
+        }
+      ]
+    },
+    "hookParameterCapture": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "encoding", "phase", "status", "plan_fingerprint",
+            "error_code", "values"
+          ],
+          "properties": {
+            "encoding": { "const": "uexplorer.hook-parameters.v1" },
+            "phase": { "enum": ["enter", "exit"] },
+            "status": {
+              "enum": [
+                "ok", "frame_unavailable", "read_failed", "invalid_plan",
+                "output_too_small", "malformed_payload", "plan_mismatch"
+              ]
+            },
+            "plan_fingerprint": { "type": "string", "pattern": "^[0-9A-F]{16}$" },
+            "error_code": {
+              "oneOf": [
+                { "type": "null" },
+                {
+                  "enum": [
+                    "HOOK_PARAMETER_FRAME_UNAVAILABLE", "HOOK_PARAMETER_READ_FAILED",
+                    "HOOK_PARAMETER_PLAN_INVALID", "HOOK_PARAMETER_OUTPUT_TOO_SMALL",
+                    "HOOK_PARAMETER_PAYLOAD_MALFORMED", "HOOK_PARAMETER_PLAN_MISMATCH"
+                  ]
+                }
+              ]
+            },
+            "values": {
+              "type": "array",
+              "maxItems": 64,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "type_name", "direction", "kind", "value"],
+                "properties": {
+                  "name": { "type": "string", "minLength": 1, "maxLength": 4096 },
+                  "type_name": { "type": "string", "minLength": 1, "maxLength": 4096 },
+                  "direction": { "enum": ["input", "output", "inout", "return"] },
+                  "kind": {
+                    "enum": [
+                      "bool", "int8", "int16", "int32", "int64",
+                      "uint8", "uint16", "uint32", "uint64", "float", "double"
+                    ]
+                  },
+                  "value": { "type": "string", "minLength": 1, "maxLength": 64 }
+                }
+              }
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": { "status": { "const": "ok" } },
+                "required": ["status"]
+              },
+              "then": { "properties": { "error_code": { "type": "null" } } },
+              "else": {
+                "properties": {
+                  "error_code": { "type": "string" },
+                  "values": { "maxItems": 0 }
+                }
+              }
+            },
+            {
+              "if": { "properties": { "status": { "const": "frame_unavailable" } }, "required": ["status"] },
+              "then": { "properties": { "error_code": { "const": "HOOK_PARAMETER_FRAME_UNAVAILABLE" } } }
+            },
+            {
+              "if": { "properties": { "status": { "const": "read_failed" } }, "required": ["status"] },
+              "then": { "properties": { "error_code": { "const": "HOOK_PARAMETER_READ_FAILED" } } }
+            },
+            {
+              "if": { "properties": { "status": { "const": "invalid_plan" } }, "required": ["status"] },
+              "then": { "properties": { "error_code": { "const": "HOOK_PARAMETER_PLAN_INVALID" } } }
+            },
+            {
+              "if": { "properties": { "status": { "const": "output_too_small" } }, "required": ["status"] },
+              "then": { "properties": { "error_code": { "const": "HOOK_PARAMETER_OUTPUT_TOO_SMALL" } } }
+            },
+            {
+              "if": { "properties": { "status": { "const": "malformed_payload" } }, "required": ["status"] },
+              "then": { "properties": { "error_code": { "const": "HOOK_PARAMETER_PAYLOAD_MALFORMED" } } }
+            },
+            {
+              "if": { "properties": { "status": { "const": "plan_mismatch" } }, "required": ["status"] },
+              "then": { "properties": { "error_code": { "const": "HOOK_PARAMETER_PLAN_MISMATCH" } } }
+            }
+          ]
         }
       ]
     },
@@ -1761,7 +1866,7 @@
       "required": [
         "hook_name", "hook_id", "id", "function_path", "source_sequence",
         "configuration_generation", "source", "correlation", "coalesced_before",
-        "drained_at_monotonic_us", "capture", "payload", "payload_omitted",
+        "drained_at_monotonic_us", "capture", "parameters", "payload", "payload_omitted",
         "retained_log_dropped_before", "collector_overflow_dropped_before",
         "collector_oversize_dropped_before", "collector_contention_dropped_before",
         "push_dropped_before", "publisher_dropped_before"
@@ -1781,8 +1886,9 @@
           "type": "object",
           "additionalProperties": false,
           "required": ["mode"],
-          "properties": { "mode": { "enum": ["fixed_metadata", "preencoded_payload"] } }
+          "properties": { "mode": { "enum": ["fixed_metadata", "scalar_parameters", "preencoded_payload"] } }
         },
+        "parameters": { "$ref": "#/$defs/hookParameterCapture" },
         "payload": {
           "oneOf": [
             { "type": "null" },
@@ -1808,6 +1914,19 @@
         "publisher_dropped_before": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
       },
       "allOf": [
+        {
+          "if": {
+            "properties": {
+              "capture": {
+                "properties": { "mode": { "const": "scalar_parameters" } },
+                "required": ["mode"]
+              }
+            },
+            "required": ["capture"]
+          },
+          "then": { "properties": { "parameters": { "type": "object" } } },
+          "else": { "properties": { "parameters": { "type": "null" } } }
+        },
         {
           "if": { "properties": { "payload_omitted": { "const": true } }, "required": ["payload_omitted"] },
           "then": { "required": ["payload_omission_code"], "properties": { "payload": { "type": "null" } } },

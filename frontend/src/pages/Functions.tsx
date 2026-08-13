@@ -5,6 +5,7 @@ import api, {
   isHookPushEventData,
   type FunctionCallArgument,
   type FunctionDetail,
+  type HookCapturePolicy,
   type HookItem,
   type HookLogEntry,
   type ObjectDetail,
@@ -57,6 +58,26 @@ function parseObjectIndex(raw: string, label: string): number {
   return index;
 }
 
+function HookParameterSummary({ entry }: { entry: HookLogEntry }) {
+  if (!entry.parameters) return null;
+  return (
+    <div className="mt-1 rounded border border-border-subtle bg-surface-dark/70 px-2 py-1.5">
+      <div className={entry.parameters.status === 'ok' ? 'text-accent-green' : 'text-accent-yellow'}>
+        {entry.parameters.phase} · {entry.parameters.status}
+        {entry.parameters.error_code ? ` · ${entry.parameters.error_code}` : ''}
+      </div>
+      {entry.parameters.values.map((parameter) => (
+        <div key={`${entry.parameters?.phase}:${parameter.name}`} className="mt-0.5 text-text-mid">
+          <span className="text-text-low">{parameter.direction}</span>{' '}
+          <span>{parameter.name}</span>{' '}
+          <span className="text-text-low">({parameter.type_name})</span>{' '}
+          <span className="text-primary">= {parameter.value}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function Functions({ viewMode = 'function', onViewModeChange }: FunctionsProps) {
   const [activeTab, setActiveTab] = useState<FunctionTab>('Call');
   const [flagTab, setFlagTab] = useState<FlagTab>('All');
@@ -82,6 +103,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
   const [hooks, setHooks] = useState<HookItem[]>([]);
   const [hookLog, setHookLog] = useState<HookLogEntry[]>([]);
   const [hookBusy, setHookBusy] = useState(false);
+  const [hookCaptureMode, setHookCaptureMode] = useState<'fixed_metadata' | 'scalar_parameters'>('fixed_metadata');
   const [hookFilterKeyword, setHookFilterKeyword] = useState('');
   const [hookFilterClass, setHookFilterClass] = useState('');
   const [hookPage, setHookPage] = useState(1);
@@ -243,6 +265,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
               drained_at_monotonic_us: data.drained_at_monotonic_us,
               function_path: data.function_path,
               payload: data.payload ?? { encoding: 'hex', size: 0, data: '' },
+              parameters: data.parameters,
               push_payload_omitted: data.payload_omitted,
               push_payload_omission_code: data.payload_omission_code,
             };
@@ -489,10 +512,24 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
   const addHook = async () => {
     if (!functionMeta) return;
     setHookBusy(true);
-    const res = await api.addHook(functionMeta, { mode: 'fixed_metadata' }, false);
+    const capture: HookCapturePolicy = hookCaptureMode === 'scalar_parameters'
+      ? { mode: 'scalar_parameters', max_payload_bytes: 512 }
+      : { mode: 'fixed_metadata' };
+    const res = await api.addHook(functionMeta, capture, false);
     setHookBusy(false);
     if (!res.success) {
-      setDetailError(res.error || 'Failed to add hook');
+      const details = res.details && typeof res.details === 'object'
+        ? res.details as Record<string, unknown>
+        : null;
+      const captureError = typeof details?.capture_error_code === 'string'
+        ? details.capture_error_code
+        : null;
+      const parameter = typeof details?.parameter === 'string' ? details.parameter : null;
+      setDetailError([
+        res.error || 'Failed to add hook',
+        captureError,
+        parameter ? `parameter=${parameter}` : null,
+      ].filter(Boolean).join(' · '));
       return;
     }
     await refreshHooks();
@@ -819,6 +856,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
                     <div key={entry.sequence} className="text-xs font-mono text-text-high border-b border-border-subtle pb-1.5 pt-1">
                       <div className="text-text-low/60">#{entry.sequence} · {entry.drained_at_monotonic_us} us</div>
                       <div className="text-primary mt-0.5">{entry.function_path}</div>
+                      <HookParameterSummary entry={entry} />
                       {entry.push_payload_omitted && (
                         <div className="text-accent-yellow mt-0.5">
                           {entry.push_payload_omission_code ?? 'HOOK_PUSH_PAYLOAD_OMITTED'}
@@ -1034,6 +1072,15 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
                   {activeTab === 'Hook' && (
                     <div className="bg-surface-dark border border-border-subtle rounded-xl p-6 space-y-4 shadow-sm">
                       <div className="flex items-center gap-3">
+                        <select
+                          value={hookCaptureMode}
+                          onChange={(event) => setHookCaptureMode(event.target.value as 'fixed_metadata' | 'scalar_parameters')}
+                          disabled={hookBusy || !!currentHook}
+                          className="bg-background-base border border-border-subtle text-text-high text-xs rounded-lg px-3 py-2 outline-none focus:border-primary disabled:opacity-50"
+                        >
+                          <option value="fixed_metadata">Fixed metadata</option>
+                          <option value="scalar_parameters">Scalar parameters (bounded)</option>
+                        </select>
                         <button
                           onClick={() => void addHook()}
                           disabled={hookBusy || !!currentHook || !currentParts.functionPath}
@@ -1072,6 +1119,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
                           <div key={entry.sequence} className="text-xs font-mono text-text-high border-b border-border-subtle pb-1.5 pt-1">
                             <div className="text-text-low/60">#{entry.sequence} · {entry.drained_at_monotonic_us} us</div>
                             <div className="text-primary mt-0.5">{entry.function_path}</div>
+                            <HookParameterSummary entry={entry} />
                             {entry.push_payload_omitted && (
                               <div className="text-accent-yellow mt-0.5">
                                 {entry.push_payload_omission_code ?? 'HOOK_PUSH_PAYLOAD_OMITTED'}

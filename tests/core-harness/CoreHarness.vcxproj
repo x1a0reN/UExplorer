@@ -71,6 +71,7 @@
 	<ClCompile Include="..\..\Dumper\Runtime\GameThreadFrameScheduler.cpp" />
 	<ClCompile Include="..\..\Dumper\Runtime\GameThreadExecutor.cpp" />
 	<ClCompile Include="..\..\Dumper\Runtime\HookEventCollector.cpp" />
+	<ClCompile Include="..\..\Dumper\Runtime\HookParameterCapture.cpp" />
 	<ClCompile Include="..\..\Dumper\Runtime\ObjectArraySnapshotSource.cpp" />
 	<ClCompile Include="..\..\Dumper\Runtime\ObjectSnapshotReflectionCandidateSource.cpp" />
 	<ClCompile Include="..\..\Dumper\Runtime\ObjectSnapshotTypeCandidateSource.cpp" />
@@ -133,6 +134,7 @@
 	<ClInclude Include="..\..\Dumper\Runtime\GameThreadFrameScheduler.h" />
 	<ClInclude Include="..\..\Dumper\Runtime\GameThreadExecutor.h" />
 	<ClInclude Include="..\..\Dumper\Runtime\HookEventCollector.h" />
+	<ClInclude Include="..\..\Dumper\Runtime\HookParameterCapture.h" />
 	<ClInclude Include="..\..\Dumper\Runtime\ObjectArraySnapshotSource.h" />
 	<ClInclude Include="..\..\Dumper\Runtime\ObjectSnapshotReflectionCandidateSource.h" />
 	<ClInclude Include="..\..\Dumper\Runtime\ObjectSnapshotTypeCandidateSource.h" />

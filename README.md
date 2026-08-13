@@ -195,7 +195,7 @@ decoding. No Unreal Engine version
 is currently claimed as verified because the required target fixtures have not yet been
 added. A successful build or synthetic fixture does not establish target runtime safety.
 
-### R5 code checkpoint (2026-08-13)
+### R5 code checkpoint (2026-08-14)
 
 - Memory now has strict bounded commands, preimage-backed verified writes, bounded
   rollback, protection-race detection, and no executable-page fallback.
@@ -218,10 +218,15 @@ added. A successful build or synthetic fixture does not establish target runtime
   fails closed, and no real UE batch round-trip has been run.
 - Hook now has a production `ProcessEventHookOwner`: current TypeSnapshot Class/CDO
   evidence is live-validated on the game thread, unique vtable slots retain their own
-  originals, and bounded fixed-metadata enter/exit events reach `HookEventCollector`.
+  originals, and bounded fixed-metadata or scalar-parameter enter/exit events reach
+  `HookEventCollector`. Scalar capture compiles an immutable plan from the exact
+  generation-bound reflected function, admits only descriptor-proven trivial scalars,
+  copies input/inout before ProcessEvent and output/inout/return afterward into a fixed
+  512-byte callback buffer, caps per-phase name/type metadata at 8 KiB, and decodes only on the worker. Plan/frame/read/size failures
+  stay explicit; unsupported lifecycle-bearing values do not downgrade to metadata.
   Capability follows exact current-generation coverage; restore/drain failure blocks
-  unload. Fixed-metadata enter/exit records now use the bounded push chain above, but
-  parameter capture is not implemented and no real UE Hook fixture has run.
+  unload. The generic `preencoded_payload` producer remains disabled, and no real UE Hook
+  parameter or restore fixture has run.
 - Dump start pins the exact immutable EngineContext, ObjectSnapshot, and TypeSnapshot in
   one owned single-active job. Terminal records release those large inputs while retaining
   their admitted scope and bounded events/results, so polling is not coupled to the current

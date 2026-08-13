@@ -426,6 +426,7 @@
 		"2026-08-13: HookEventCollector exposes a bounded preallocated publish path and moves drain/serialization work out of the hot-path API",
 		"2026-08-13: ProcessEventHookOwner now emits paired fixed-metadata enter/exit records using immutable address/slot lookup, SEH-bounded vtable reads, and an atomic strong owner lifetime with no JSON, Pipe I/O, parameter decoding, or service mutex in the callback",
 		"2026-08-13: DomainEventPump performs Hook JSON serialization and Named Pipe publication only on its owned worker, after HookCommandService has boundedly drained the collector and updated retained logs",
+		"2026-08-14: scalar_parameters copies only immutable-plan-admitted trivial fields into a fixed 512-byte callback stack buffer; decoding, canonical formatting, retained-log serialization, and push JSON remain worker-only",
 		"No target hot-path rate/contention fixture has run"
 	  ]
 	},
@@ -434,6 +435,7 @@
 	  "verification": [
 		"2026-08-13: HookCommandService publishes immutable enabled-subscription snapshots rather than consulting disabled mutable records on the collector path",
 		"2026-08-13: the production callback performs bounded raw UFunction-address lookup against that snapshot; duplicate retained raw addresses are rejected",
+		"2026-08-14: each scalar subscription snapshot also owns the exact generation-bound parameter plan and fingerprint; disabled records cannot provide a plan to the producer",
 		"Real target hit filtering and address-reuse/GC behavior remain unverified"
 	  ]
 	},
@@ -442,14 +444,24 @@
 	  "verification": [
 		"2026-08-13: HookCommandService defines strict add/list/enable/remove/log state and explicit duplicate/not-found failures; add and re-enable validate current Object/Type snapshots, complete Function/Owner handles, path, signature, and generations",
 		"2026-08-13: add and disabled-to-enabled now also perform a live complete FunctionHandle validation through GameThreadExecutor; list/log/disable/remove remain admitted when producer coverage is unavailable so retained hooks can be withdrawn",
+		"2026-08-14: scalar add compiles an exact reflected plan before admission; re-enable recompiles the same generation and rejects fingerprint drift, while unsupported fields return HOOK_CAPTURE_PLAN_UNAVAILABLE with a stable capture_error_code and parameter name",
 		"The code path is not a target runtime support claim until the real UE fixture passes"
+	  ]
+	},
+	"HOOK-007": {
+	  "status": "in_progress",
+	  "verification": [
+		"2026-08-14: capture policy explicitly separates fixed_metadata, scalar_parameters, and the still-disabled generic preencoded_payload mode; scalar admission is bounded to 64 exact bool/integer/float/double fields, 512 payload bytes, and 8 KiB of name/type metadata per enter/exit phase",
+		"2026-08-14: the callback captures input/inout before original ProcessEvent and output/inout/return afterward using an HCP1 phase/status/fingerprint payload; worker decode exposes canonical values and explicit frame/read/plan/payload failure states through retained logs, push events, schema, typed guards, and the Functions UI",
+		"Caller identity, conditional filtering, lifecycle-bearing parameters, and a real target ProcessEvent parameter-frame fixture remain pending"
 	  ]
 	},
 	"HOOK-008": {
 	  "status": "in_progress",
 	  "verification": [
 		"2026-08-13: HookEventCollector bounds payload/queue storage and exports drop/coalesce diagnostics",
-		"2026-08-13: the production producer disables pair coalescing and emits only zero-payload fixed metadata; preencoded parameter capture is explicitly unavailable",
+		"2026-08-13: the production producer disables pair coalescing for paired enter/exit records",
+		"2026-08-14: scalar payloads remain bounded by the collector and per-subscription policy, parameter decode failures are counted separately, and the generic preencoded producer remains explicitly unavailable",
 		"2026-08-13: the independent Hook push ring, Pipe event queue, Host EventHub/subscriber queues, and React increment consumer expose queue/collector/transport drop snapshots without blocking the callback",
 		"Slow-consumer, nested-call pairing, and target-rate behavior remain unverified without a real ProcessEvent fixture"
 	  ]

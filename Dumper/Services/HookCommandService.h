@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Runtime/HookEventCollector.h"
+#include "Runtime/HookParameterCapture.h"
 #include "Runtime/ObjectHandle.h"
 #include "Utils/Json/json.hpp"
 
@@ -31,13 +32,16 @@ using HookSubscriptionId = std::uint64_t;
 enum class HookCaptureMode : std::uint8_t
 {
 	FixedMetadata,
+	ScalarParameters,
 	PreEncodedPayload
 };
 
 const char* ToString(HookCaptureMode mode) noexcept;
 
-// Neither policy authorizes reading or decoding a ProcessEvent parameter frame.
-// PreEncodedPayload only permits a producer-owned, already encoded byte span.
+// ScalarParameters uses a generation-bound immutable plan compiled from the
+// exact ReflectedFunction. The callback copies only admitted trivial scalars;
+// decoding remains worker-only. PreEncodedPayload is reserved for a separately
+// witnessed producer and stays disabled in the production Main graph.
 struct HookCapturePolicy
 {
 	HookCaptureMode Mode = HookCaptureMode::FixedMetadata;
@@ -85,7 +89,8 @@ enum class HookSubscriptionError : std::uint8_t
 	InvalidLimit,
 	AllocationFailed,
 	CollectorDrainFailed,
-	CaptureModeUnavailable
+	CaptureModeUnavailable,
+	CapturePlanUnavailable
 };
 
 const char* ToString(HookSubscriptionError error) noexcept;
@@ -113,6 +118,7 @@ struct HookProducerSubscription
 {
 	HookSubscriptionId Id = 0;
 	HookSubscriptionSpec Spec;
+	std::shared_ptr<const Runtime::HookParameterCapturePlan> ParameterPlan;
 };
 
 // Open-addressed immutable lookup table. Reads allocate nothing, acquire no
@@ -168,6 +174,7 @@ struct HookMutationResult
 
 struct HookPushEvent
 {
+	std::size_t AccountedBytes = 0;
 	std::uint64_t Sequence = 0;
 	std::uint64_t ConfigurationGeneration = 0;
 	Runtime::HookEventKind Kind = Runtime::HookEventKind::Diagnostic;
@@ -179,6 +186,8 @@ struct HookPushEvent
 	std::string FunctionPath;
 	HookCapturePolicy Capture;
 	std::vector<std::byte> Payload;
+	std::shared_ptr<const Runtime::HookParameterCapturePlan> ParameterPlan;
+	std::optional<Runtime::HookParameterDecodeResult> Parameters;
 	std::uint64_t RetainedLogDroppedBefore = 0;
 	std::uint64_t CollectorOverflowDroppedBefore = 0;
 	std::uint64_t CollectorOversizeDroppedBefore = 0;
@@ -205,7 +214,8 @@ struct HookCommandLimits
 	std::size_t MaxDrainBatch = 256;
 	std::size_t MaxPendingPushEvents = 1024;
 	std::size_t MaxPendingPushBytes = 4 * 1024 * 1024;
-	bool AllowPreEncodedPayload = true;
+	bool AllowScalarParameters = true;
+	bool AllowPreEncodedPayload = false;
 };
 
 // Transport-neutral subscription registry and worker-side collector drain.
@@ -261,7 +271,10 @@ private:
 
 	HookSubscriptionError ValidateSpec(const HookSubscriptionSpec& spec) const noexcept;
 	HookSubscriptionError ValidateCurrentSpec(
-		const HookSubscriptionSpec& spec) const noexcept;
+		const HookSubscriptionSpec& spec,
+		std::shared_ptr<const Runtime::HookParameterCapturePlan>* parameterPlan = nullptr,
+		Runtime::HookParameterPlanError* parameterPlanError = nullptr,
+		std::string* parameterPlanDetail = nullptr) const noexcept;
 	SubscriptionRecord* FindLocked(HookSubscriptionId id) const noexcept;
 	std::shared_ptr<const HookEnabledSnapshot> BuildEnabledSnapshotLocked(
 		const SubscriptionRecord* overrideRecord = nullptr,
@@ -271,7 +284,7 @@ private:
 		std::shared_ptr<const HookEnabledSnapshot> snapshot) noexcept;
 	HookSubscription CopySubscriptionLocked(const SubscriptionRecord& record) const;
 	CollectorDrainSummary DrainCollectorWorker(std::size_t maximum) noexcept;
-	void AppendPushEventLocked(HookPushEvent event, std::size_t eventBytes) noexcept;
+	void AppendPushEventLocked(HookPushEvent event) noexcept;
 
 	std::string m_SessionId;
 	std::uint64_t m_ContextGeneration = 0;
@@ -292,6 +305,7 @@ private:
 	std::uint64_t m_EnabledSnapshotGeneration = 0;
 	std::uint64_t m_UnmatchedEventCount = 0;
 	std::uint64_t m_PolicyRejectedEventCount = 0;
+	std::uint64_t m_ParameterDecodeFailureCount = 0;
 	std::uint64_t m_DrainFailureCount = 0;
 	std::uint64_t m_PushEventDropCount = 0;
 };

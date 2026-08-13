@@ -25,6 +25,8 @@
 #include "Runtime/FUObjectItemLayout.h"
 #include "Runtime/GameThreadExecutor.h"
 #include "Runtime/GameThreadFrameScheduler.h"
+#include "Runtime/HookEventCollector.h"
+#include "Runtime/HookParameterCapture.h"
 #include "Runtime/ObjectHandle.h"
 #include "Runtime/ObjectIdentityContext.h"
 #include "Runtime/ObjectArraySnapshotSource.h"
@@ -6308,6 +6310,208 @@ namespace
 			"Pipe runtime did not reach Stopped after transport drain");
 	}
 
+	void TestHookParameterCapture()
+	{
+		using namespace UExplorer::Runtime;
+
+		const auto int32Descriptor = std::make_shared<PropertyDescriptor>(PropertyDescriptor{
+			.Kind = PropertyKind::Int32,
+			.TypeName = "int32",
+			.Size = sizeof(std::int32_t)
+		});
+		const auto floatDescriptor = std::make_shared<PropertyDescriptor>(PropertyDescriptor{
+			.Kind = PropertyKind::Float,
+			.TypeName = "float",
+			.Size = sizeof(float)
+		});
+		const auto boolDescriptor = std::make_shared<PropertyDescriptor>(PropertyDescriptor{
+			.Kind = PropertyKind::Bool,
+			.TypeName = "bool",
+			.Size = sizeof(std::uint8_t),
+			.BoolByteOffset = 0,
+			.BoolMask = 0x04
+		});
+		const auto uint64Descriptor = std::make_shared<PropertyDescriptor>(PropertyDescriptor{
+			.Kind = PropertyKind::UInt64,
+			.TypeName = "uint64",
+			.Size = sizeof(std::uint64_t)
+		});
+		const auto property = [](std::string name,
+			const PropertyKind kind,
+			const std::uint32_t offset,
+			const std::uint32_t size,
+			std::shared_ptr<const PropertyDescriptor> descriptor) {
+			return ReflectedProperty{
+				.Name = std::move(name),
+				.TypeName = descriptor->TypeName,
+				.Kind = kind,
+				.Offset = offset,
+				.Size = size,
+				.ArrayDim = 1,
+				.State = ReflectedMemberState::Supported,
+				.Descriptor = std::move(descriptor)
+			};
+		};
+
+		ReflectedFunction function;
+		function.Handle.SignatureFingerprint = 0x1122334455667788ULL;
+		function.ParameterSize = 24;
+		function.Parameters = {
+			{
+				.Direction = ReflectedParameterDirection::Input,
+				.Property = property("Count", PropertyKind::Int32, 0, 4, int32Descriptor)
+			},
+			{
+				.Direction = ReflectedParameterDirection::InOut,
+				.Property = property("Ratio", PropertyKind::Float, 4, 4, floatDescriptor)
+			},
+			{
+				.Direction = ReflectedParameterDirection::Output,
+				.Property = property("Accepted", PropertyKind::Bool, 8, 1, boolDescriptor)
+			},
+			{
+				.Direction = ReflectedParameterDirection::Return,
+				.Property = property("ReturnValue", PropertyKind::UInt64, 16, 8, uint64Descriptor)
+			}
+		};
+		const HookParameterPlanResult planned =
+			BuildHookParameterCapturePlan(function, 64);
+		Require(
+			planned.Ok()
+				&& planned.Plan->Fingerprint != 0
+				&& planned.Plan->EnterFields.size() == 2
+				&& planned.Plan->ExitFields.size() == 3
+				&& planned.Plan->EnterPayloadBytes == 24
+				&& planned.Plan->ExitPayloadBytes == 29,
+			"Hook scalar parameter plan did not bind exact phase fields and payload bounds");
+
+		std::array<std::byte, 24> frame{};
+		const auto write = [&frame](const std::size_t offset, const auto value) {
+			std::memcpy(frame.data() + offset, &value, sizeof(value));
+		};
+		write(0, std::int32_t{-7});
+		write(4, 1.25F);
+		std::array<std::byte, HookEventCollector::kHardMaxPayloadBytes> payload{};
+		const HookParameterEncodeResult enterEncoded = EncodeHookParameterPayload(
+			*planned.Plan,
+			HookParameterCapturePhase::Enter,
+			frame.data(),
+			payload);
+		const HookParameterDecodeResult enterDecoded = DecodeHookParameterPayload(
+			*planned.Plan,
+			std::span<const std::byte>(payload.data(), enterEncoded.PayloadBytes));
+		Require(
+			enterEncoded.Status == HookParameterPayloadStatus::Ok
+				&& enterDecoded.Ok()
+				&& enterDecoded.Phase == HookParameterCapturePhase::Enter
+				&& enterDecoded.Values.size() == 2
+				&& enterDecoded.Values[0].CanonicalValue == "-7"
+				&& enterDecoded.Values[1].CanonicalValue == "1.25",
+			"Hook enter payload did not round-trip exact scalar values");
+
+		write(4, -2.5F);
+		frame[8] = std::byte{0x04};
+		write(16, (std::numeric_limits<std::uint64_t>::max)());
+		const HookParameterEncodeResult exitEncoded = EncodeHookParameterPayload(
+			*planned.Plan,
+			HookParameterCapturePhase::Exit,
+			frame.data(),
+			payload);
+		const HookParameterDecodeResult exitDecoded = DecodeHookParameterPayload(
+			*planned.Plan,
+			std::span<const std::byte>(payload.data(), exitEncoded.PayloadBytes));
+		Require(
+			exitEncoded.Status == HookParameterPayloadStatus::Ok
+				&& exitDecoded.Ok()
+				&& exitDecoded.Phase == HookParameterCapturePhase::Exit
+				&& exitDecoded.Values.size() == 3
+				&& exitDecoded.Values[0].CanonicalValue == "-2.5"
+				&& exitDecoded.Values[1].CanonicalValue == "true"
+				&& exitDecoded.Values[2].CanonicalValue == "18446744073709551615",
+			"Hook exit payload did not preserve inout, output, and return values");
+
+		const HookParameterEncodeResult missingFrame = EncodeHookParameterPayload(
+			*planned.Plan,
+			HookParameterCapturePhase::Enter,
+			nullptr,
+			payload);
+		const HookParameterDecodeResult missingDecoded = DecodeHookParameterPayload(
+			*planned.Plan,
+			std::span<const std::byte>(payload.data(), missingFrame.PayloadBytes));
+		Require(
+			missingFrame.Status == HookParameterPayloadStatus::FrameUnavailable
+				&& missingFrame.PayloadBytes == kHookParameterPayloadHeaderBytes
+				&& missingDecoded.Status == HookParameterPayloadStatus::FrameUnavailable,
+			"A missing ProcessEvent parameter frame was not encoded as an explicit capture state");
+		std::array<std::byte, kHookParameterPayloadHeaderBytes> headerOnly{};
+		const HookParameterEncodeResult outputTooSmall = EncodeHookParameterPayload(
+			*planned.Plan,
+			HookParameterCapturePhase::Enter,
+			frame.data(),
+			headerOnly);
+		Require(
+			outputTooSmall.Status == HookParameterPayloadStatus::OutputTooSmall
+				&& outputTooSmall.PayloadBytes == kHookParameterPayloadHeaderBytes
+				&& DecodeHookParameterPayload(*planned.Plan, headerOnly).Status
+					== HookParameterPayloadStatus::OutputTooSmall,
+			"An undersized Hook payload buffer was not preserved as an explicit capture state");
+
+		const HookParameterEncodeResult inaccessible = EncodeHookParameterPayload(
+			*planned.Plan,
+			HookParameterCapturePhase::Enter,
+			reinterpret_cast<const void*>(1),
+			payload);
+		Require(
+			inaccessible.Status == HookParameterPayloadStatus::ReadFailed
+				&& inaccessible.PayloadBytes == kHookParameterPayloadHeaderBytes,
+			"An inaccessible ProcessEvent parameter frame escaped the SEH-bounded copy");
+		payload[8] ^= std::byte{0x01};
+		Require(
+			DecodeHookParameterPayload(
+				*planned.Plan,
+				std::span<const std::byte>(payload.data(), inaccessible.PayloadBytes)).Status
+				== HookParameterPayloadStatus::PlanMismatch,
+			"Hook payload accepted a mismatched immutable capture-plan fingerprint");
+
+		ReflectedFunction unsupported = function;
+		unsupported.Parameters[0].Property.Kind = PropertyKind::String;
+		unsupported.Parameters[0].Property.TypeName = "string";
+		unsupported.Parameters[0].Property.Descriptor =
+			std::make_shared<PropertyDescriptor>(PropertyDescriptor{
+				.Kind = PropertyKind::String,
+				.TypeName = "string",
+				.Size = 16
+			});
+		unsupported.Parameters[0].Property.Size = 16;
+		ReflectedFunction invalidFunction = function;
+		invalidFunction.Handle.SignatureFingerprint = 0;
+		ReflectedFunction invalidDirection = function;
+		invalidDirection.Parameters[0].Direction =
+			static_cast<ReflectedParameterDirection>(0xFF);
+		ReflectedFunction oversizedMetadata = function;
+		for (ReflectedParameter& parameter : oversizedMetadata.Parameters)
+		{
+			parameter.Property.Name.assign(3000, 'N');
+			parameter.Property.TypeName.assign(3000, 'T');
+		}
+		Require(
+			BuildHookParameterCapturePlan(unsupported, 64).Error
+				== HookParameterPlanError::UnsupportedKind
+				&& BuildHookParameterCapturePlan(function, 20).Error
+					== HookParameterPlanError::PayloadLimitExceeded
+				&& BuildHookParameterCapturePlan(
+					function,
+					kHookParameterPayloadHeaderBytes - 1).Error
+					== HookParameterPlanError::InvalidLimit
+				&& BuildHookParameterCapturePlan(invalidFunction, 64).Error
+					== HookParameterPlanError::FunctionInvalid
+				&& BuildHookParameterCapturePlan(invalidDirection, 64).Error
+					== HookParameterPlanError::DescriptorInvalid
+				&& BuildHookParameterCapturePlan(oversizedMetadata, 64).Error
+					== HookParameterPlanError::MetadataLimitExceeded,
+			"Hook scalar parameter planning did not fail closed on unsupported lifecycle or byte budget");
+	}
+
 	void TestHookOwnershipAndCallbackDrain()
 	{
 		using namespace UExplorer::Runtime;
@@ -8033,6 +8237,7 @@ int main(const int argc, char** argv)
 		TestPeImageInspectionAndEngineVersionProbe();
 		TestBoundedBlueprintDisassembler();
 		TestGlobalPointerDiscovery();
+		TestHookParameterCapture();
 		TestHookOwnershipAndCallbackDrain();
 		TestSafeMemory();
 		TestQueueOwnershipAndBackpressure();
@@ -8043,7 +8248,7 @@ int main(const int argc, char** argv)
 		TestGameThreadFrameSchedulerBudgetFairnessAndDrain();
 		TestGameThreadMpscCapacity();
 		TestHttpServerLifecycle();
-		std::cout << "Core harness passed: deterministic bounded frame fuzz/disconnect matrix, secure sessions, real current-user Windows Named Pipe RPC/event lifecycle, runtime/capabilities, EngineFacade/immutable budgeted object/type/world snapshots, domain commands, stable handles/FUObjectItem layout, budgeted witnessed reflection capture/layouts, bounded property codecs, bounded PE/version/global-pointer probing, pattern scanning, Hook RAII/drain, SafeMemory, USMAP consumer, bounded queues, cancellable owned game-thread/frame-client work, SEH, HTTP lifecycle, and shutdown.\n";
+		std::cout << "Core harness passed: deterministic bounded frame fuzz/disconnect matrix, secure sessions, real current-user Windows Named Pipe RPC/event lifecycle, runtime/capabilities, EngineFacade/immutable budgeted object/type/world snapshots, domain commands, stable handles/FUObjectItem layout, budgeted witnessed reflection capture/layouts, bounded property codecs, bounded PE/version/global-pointer probing, pattern scanning, Hook scalar parameter capture/RAII/drain, SafeMemory, USMAP consumer, bounded queues, cancellable owned game-thread/frame-client work, SEH, HTTP lifecycle, and shutdown.\n";
 		return 0;
 	}
 	catch (const std::exception& error)

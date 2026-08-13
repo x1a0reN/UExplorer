@@ -14,6 +14,7 @@
 #include <Windows.h>
 
 #include <algorithm>
+#include <array>
 #include <condition_variable>
 #include <limits>
 #include <mutex>
@@ -697,6 +698,10 @@ struct ProcessEventHookOwner::State final : std::enable_shared_from_this<State>
 	std::atomic<std::uint64_t> NextCorrelation{1};
 	std::atomic<std::uint64_t> EnterPublished{0};
 	std::atomic<std::uint64_t> ExitPublished{0};
+	std::atomic<std::uint64_t> ParameterCaptureSucceeded{0};
+	std::atomic<std::uint64_t> ParameterFrameUnavailable{0};
+	std::atomic<std::uint64_t> ParameterReadFailed{0};
+	std::atomic<std::uint64_t> ParameterEncodeFailed{0};
 	std::atomic<std::uint64_t> UnmatchedFunction{0};
 	std::atomic<std::uint64_t> DispatchMiss{0};
 	std::atomic<std::uint64_t> CorrelationExhausted{0};
@@ -970,6 +975,14 @@ ProcessEventHookDiagnostics ProcessEventHookOwner::Diagnostics() const noexcept
 		.MaintenanceInFlight = m_State->MaintenanceInFlight.load(std::memory_order_acquire),
 		.EnterPublished = m_State->EnterPublished.load(std::memory_order_acquire),
 		.ExitPublished = m_State->ExitPublished.load(std::memory_order_acquire),
+		.ParameterCaptureSucceeded =
+			m_State->ParameterCaptureSucceeded.load(std::memory_order_acquire),
+		.ParameterFrameUnavailable =
+			m_State->ParameterFrameUnavailable.load(std::memory_order_acquire),
+		.ParameterReadFailed =
+			m_State->ParameterReadFailed.load(std::memory_order_acquire),
+		.ParameterEncodeFailed =
+			m_State->ParameterEncodeFailed.load(std::memory_order_acquire),
 		.UnmatchedFunction = m_State->UnmatchedFunction.load(std::memory_order_acquire),
 		.DispatchMiss = m_State->DispatchMiss.load(std::memory_order_acquire),
 		.CorrelationExhausted = m_State->CorrelationExhausted.load(std::memory_order_acquire),
@@ -1019,6 +1032,26 @@ void ProcessEventHookOwner::HookedProcessEvent(
 	const HookProducerSubscription* subscription = nullptr;
 	std::uint64_t correlation = 0;
 	bool enterPublished = false;
+	std::array<std::byte, Runtime::HookEventCollector::kHardMaxPayloadBytes>
+		parameterPayload;
+	const auto recordCaptureStatus = [&state](
+		const Runtime::HookParameterPayloadStatus status) noexcept {
+		switch (status)
+		{
+		case Runtime::HookParameterPayloadStatus::Ok:
+			state->ParameterCaptureSucceeded.fetch_add(1, std::memory_order_relaxed);
+			break;
+		case Runtime::HookParameterPayloadStatus::FrameUnavailable:
+			state->ParameterFrameUnavailable.fetch_add(1, std::memory_order_relaxed);
+			break;
+		case Runtime::HookParameterPayloadStatus::ReadFailed:
+			state->ParameterReadFailed.fetch_add(1, std::memory_order_relaxed);
+			break;
+		default:
+			state->ParameterEncodeFailed.fetch_add(1, std::memory_order_relaxed);
+			break;
+		}
+	};
 	if (callback.OwnedWorkAllowed()
 		&& !state->Stopping.load(std::memory_order_acquire)
 		&& function)
@@ -1027,8 +1060,12 @@ void ProcessEventHookOwner::HookedProcessEvent(
 		subscription = enabled
 			? enabled->FindByFunctionAddress(reinterpret_cast<std::uintptr_t>(function))
 			: nullptr;
-		if (subscription
-			&& subscription->Spec.Capture.Mode == HookCaptureMode::FixedMetadata)
+		const bool fixedMetadata = subscription
+			&& subscription->Spec.Capture.Mode == HookCaptureMode::FixedMetadata;
+		const bool scalarParameters = subscription
+			&& subscription->Spec.Capture.Mode == HookCaptureMode::ScalarParameters
+			&& subscription->ParameterPlan;
+		if (fixedMetadata || scalarParameters)
 		{
 			correlation = state->NextCorrelation.fetch_add(1, std::memory_order_relaxed);
 			if (correlation == 0 || correlation > kMaxProtocolInteger)
@@ -1038,18 +1075,41 @@ void ProcessEventHookOwner::HookedProcessEvent(
 			}
 			else
 			{
-				const Runtime::HookPublishResult published = state->Collector->TryPublish({
-					.Kind = Runtime::HookEventKind::ProcessEventEnter,
-					.Source = reinterpret_cast<std::uintptr_t>(function),
-					.Subject = subscription->Id,
-					.Correlation = correlation,
-					.Payload = {},
-					.Coalescible = false
-				});
-				if (published.Published())
+				std::span<const std::byte> payload;
+				bool payloadReady = true;
+				if (scalarParameters)
 				{
-					state->EnterPublished.fetch_add(1, std::memory_order_relaxed);
-					enterPublished = true;
+					const Runtime::HookParameterEncodeResult encoded =
+						Runtime::EncodeHookParameterPayload(
+							*subscription->ParameterPlan,
+							Runtime::HookParameterCapturePhase::Enter,
+							params,
+							parameterPayload);
+					recordCaptureStatus(encoded.Status);
+					payloadReady = encoded.Encoded();
+					payload = std::span<const std::byte>(
+						parameterPayload.data(),
+						encoded.PayloadBytes);
+				}
+				if (!payloadReady)
+				{
+					correlation = 0;
+				}
+				else
+				{
+					const Runtime::HookPublishResult published = state->Collector->TryPublish({
+						.Kind = Runtime::HookEventKind::ProcessEventEnter,
+						.Source = reinterpret_cast<std::uintptr_t>(function),
+						.Subject = subscription->Id,
+						.Correlation = correlation,
+						.Payload = payload,
+						.Coalescible = false
+					});
+					if (published.Published())
+					{
+						state->EnterPublished.fetch_add(1, std::memory_order_relaxed);
+						enterPublished = true;
+					}
 				}
 			}
 		}
@@ -1064,12 +1124,38 @@ void ProcessEventHookOwner::HookedProcessEvent(
 		&& callback.OwnedWorkAllowed()
 		&& !state->Stopping.load(std::memory_order_acquire))
 	{
+		std::span<const std::byte> payload;
+		bool payloadReady = true;
+		if (subscription->Spec.Capture.Mode == HookCaptureMode::ScalarParameters)
+		{
+			if (!subscription->ParameterPlan)
+			{
+				state->ParameterEncodeFailed.fetch_add(1, std::memory_order_relaxed);
+				payloadReady = false;
+			}
+			else
+			{
+				const Runtime::HookParameterEncodeResult encoded =
+					Runtime::EncodeHookParameterPayload(
+						*subscription->ParameterPlan,
+						Runtime::HookParameterCapturePhase::Exit,
+						params,
+						parameterPayload);
+				recordCaptureStatus(encoded.Status);
+				payloadReady = encoded.Encoded();
+				payload = std::span<const std::byte>(
+					parameterPayload.data(),
+					encoded.PayloadBytes);
+			}
+		}
+		if (!payloadReady)
+			return;
 		const Runtime::HookPublishResult published = state->Collector->TryPublish({
 			.Kind = Runtime::HookEventKind::ProcessEventExit,
 			.Source = reinterpret_cast<std::uintptr_t>(function),
 			.Subject = subscription->Id,
 			.Correlation = correlation,
-			.Payload = {},
+			.Payload = payload,
 			.Coalescible = false
 		});
 		if (published.Published())

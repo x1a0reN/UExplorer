@@ -10,6 +10,7 @@ vi.mock('@tauri-apps/api/core', () => ({
 }));
 
 import api from './client';
+import { isHookPushEventData } from './index';
 
 describe('UExplorerApi Tauri domain boundary', () => {
   beforeEach(() => {
@@ -177,5 +178,99 @@ describe('UExplorerApi Tauri domain boundary', () => {
       error: 'HOST_INVOKE_FAILED: channel closed',
     });
     expect(invokeMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Hook push event guard', () => {
+  const scalarEvent = {
+    hook_name: 'Function /Script/Fixture.Target',
+    hook_id: '7',
+    id: 7,
+    function_path: 'Function /Script/Fixture.Target',
+    source_sequence: 11,
+    configuration_generation: 3,
+    source: '0x7FF61234ABCD',
+    correlation: 9,
+    coalesced_before: 0,
+    drained_at_monotonic_us: 123456,
+    capture: { mode: 'scalar_parameters' },
+    parameters: {
+      encoding: 'uexplorer.hook-parameters.v1',
+      phase: 'enter',
+      status: 'ok',
+      plan_fingerprint: '0123456789ABCDEF',
+      error_code: null,
+      values: [{
+        name: 'Count',
+        type_name: 'int32',
+        direction: 'input',
+        kind: 'int32',
+        value: '-7',
+      }],
+    },
+    payload: { encoding: 'hex', size: 2, data: '00FF' },
+    payload_omitted: false,
+    retained_log_dropped_before: 0,
+    collector_overflow_dropped_before: 0,
+    collector_oversize_dropped_before: 0,
+    collector_contention_dropped_before: 0,
+    push_dropped_before: 0,
+    publisher_dropped_before: 0,
+  };
+
+  it('accepts a complete scalar capture and rejects crossed or malformed payload state', () => {
+    expect(isHookPushEventData(scalarEvent)).toBe(true);
+    expect(isHookPushEventData({ ...scalarEvent, parameters: null })).toBe(false);
+    expect(isHookPushEventData({
+      ...scalarEvent,
+      parameters: {
+        ...scalarEvent.parameters,
+        plan_fingerprint: '0123456789abcdef',
+      },
+    })).toBe(false);
+    expect(isHookPushEventData({
+      ...scalarEvent,
+      payload: { encoding: 'hex', size: 1, data: '00FF' },
+    })).toBe(false);
+    expect(isHookPushEventData({
+      ...scalarEvent,
+      capture: { mode: 'fixed_metadata' },
+    })).toBe(false);
+  });
+
+  it('accepts an explicit scalar capture failure without fabricating values', () => {
+    expect(isHookPushEventData({
+      ...scalarEvent,
+      parameters: {
+        ...scalarEvent.parameters,
+        status: 'read_failed',
+        error_code: 'HOOK_PARAMETER_READ_FAILED',
+        values: [],
+      },
+    })).toBe(true);
+    expect(isHookPushEventData({
+      ...scalarEvent,
+      parameters: {
+        ...scalarEvent.parameters,
+        status: 'read_failed',
+        error_code: 'HOOK_PARAMETER_READ_FAILED',
+      },
+    })).toBe(false);
+    expect(isHookPushEventData({
+      ...scalarEvent,
+      parameters: {
+        ...scalarEvent.parameters,
+        status: 'read_failed',
+        error_code: 'HOOK_PARAMETER_PLAN_MISMATCH',
+        values: [],
+      },
+    })).toBe(false);
+    expect(isHookPushEventData({
+      ...scalarEvent,
+      parameters: {
+        ...scalarEvent.parameters,
+        unexpected: true,
+      },
+    })).toBe(false);
   });
 });

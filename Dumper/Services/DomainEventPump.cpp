@@ -105,6 +105,62 @@ nlohmann::json SerializeWatchValue(
 	};
 }
 
+const char* ParameterCaptureErrorCode(
+	const Runtime::HookParameterPayloadStatus status) noexcept
+{
+	switch (status)
+	{
+	case Runtime::HookParameterPayloadStatus::Ok: return "NONE";
+	case Runtime::HookParameterPayloadStatus::FrameUnavailable:
+		return "HOOK_PARAMETER_FRAME_UNAVAILABLE";
+	case Runtime::HookParameterPayloadStatus::ReadFailed:
+		return "HOOK_PARAMETER_READ_FAILED";
+	case Runtime::HookParameterPayloadStatus::InvalidPlan:
+		return "HOOK_PARAMETER_PLAN_INVALID";
+	case Runtime::HookParameterPayloadStatus::OutputTooSmall:
+		return "HOOK_PARAMETER_OUTPUT_TOO_SMALL";
+	case Runtime::HookParameterPayloadStatus::MalformedPayload:
+		return "HOOK_PARAMETER_PAYLOAD_MALFORMED";
+	case Runtime::HookParameterPayloadStatus::PlanMismatch:
+		return "HOOK_PARAMETER_PLAN_MISMATCH";
+	}
+	return "HOOK_PARAMETER_CAPTURE_UNKNOWN";
+}
+
+nlohmann::json SerializeHookParameters(const HookPushEvent& event)
+{
+	if (!event.ParameterPlan || !event.Parameters)
+		return nullptr;
+	const auto& fields = event.Parameters->Phase
+		== Runtime::HookParameterCapturePhase::Enter
+		? event.ParameterPlan->EnterFields : event.ParameterPlan->ExitFields;
+	nlohmann::json values = nlohmann::json::array();
+	values.get_ref<nlohmann::json::array_t&>().reserve(event.Parameters->Values.size());
+	for (const Runtime::HookCapturedParameter& value : event.Parameters->Values)
+	{
+		if (value.FieldIndex >= fields.size())
+			return nullptr;
+		const Runtime::HookParameterCaptureField& field = fields[value.FieldIndex];
+		values.push_back({
+			{"name", field.Name},
+			{"type_name", field.TypeName},
+			{"direction", Runtime::ToString(field.Direction)},
+			{"kind", Runtime::ToString(field.Kind)},
+			{"value", value.CanonicalValue}
+		});
+	}
+	return {
+		{"encoding", "uexplorer.hook-parameters.v1"},
+		{"phase", Runtime::ToString(event.Parameters->Phase)},
+		{"status", Runtime::ToString(event.Parameters->Status)},
+		{"plan_fingerprint", std::format("{:016X}", event.Parameters->PlanFingerprint)},
+		{"error_code", event.Parameters->Ok()
+			? nlohmann::json(nullptr)
+			: nlohmann::json(ParameterCaptureErrorCode(event.Parameters->Status))},
+		{"values", std::move(values)}
+	};
+}
+
 } // namespace
 
 const char* ToString(const DomainEventPumpError error) noexcept
@@ -305,6 +361,7 @@ bool DomainEventPump::DrainHookBatch() noexcept
 				{"coalesced_before", event.CoalescedBefore},
 				{"drained_at_monotonic_us", event.DrainedAtMonotonicUs},
 				{"capture", {{"mode", ToString(event.Capture.Mode)}}},
+				{"parameters", SerializeHookParameters(event)},
 				{"payload", includePayload
 					? nlohmann::json{{"encoding", "hex"}, {"size", event.Payload.size()}, {"data", Hex(event.Payload)}}
 					: nlohmann::json(nullptr)},
