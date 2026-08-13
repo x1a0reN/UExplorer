@@ -220,7 +220,8 @@ added. A successful build or synthetic fixture does not establish target runtime
   `KismetTextLibrary` functions on the game thread, and recursively encodes descriptor-backed
   value structs containing scalar/object/enum/nested-struct fields. Weak/Soft/container
   fields and complete cleanup of UE-owned text/string return allocations remain unavailable;
-  no real UE string/text/struct round-trip has been run.
+  the Functions page exposes text and exact JSON struct editors, but no real UE
+  string/text/struct round-trip has been run.
 - Hook now has a production `ProcessEventHookOwner`: current TypeSnapshot Class/CDO
   evidence is live-validated on the game thread, unique vtable slots retain their own
   originals, and bounded fixed-metadata or scalar-parameter enter/exit events reach
@@ -247,7 +248,8 @@ added. A successful build or synthetic fixture does not establish target runtime
   real target artifact/consumer fixtures are not implemented.
 - World mutation is a strict single-field reflected command for world/relative location,
   rotation, and scale. FHitResult-backed setters receive a zero-initialized bounded output
-  slot which is discarded; no real target round-trip or FHitResult output presentation has run.
+  slot which is discarded. WorldBrowser exposes the complete field/space/options editor and
+  reloads the live transform after apply; no real target round-trip or FHitResult output presentation has run.
 - No new target UE or Wandering Sword fixture was run. Every profile remains
   `Not supported`.
 

@@ -266,6 +266,7 @@ CoreHarness 覆盖 partial type/function coverage、错误 CDO、super cycle、d
 - `WorldMutationCommandService` 的 `world.actor.transform.update` 请求固定 session/context/Object/Type/World generation 与 exact ActorHandle，并且一次只能提交一个字段。它现在覆盖 exact reflected `K2_SetActorLocation`、`K2_SetRelativeLocation`、`K2_SetActorRotation`、`K2_SetRelativeRotation`、`SetActorScale3D` 与 `SetRelativeScale3D` 签名；准备阶段不能证明全部依赖时保持零 mutation。
 - owned game-thread work 在 ProcessEvent 前后重验 Actor、RootComponent、FunctionHandle、snapshot/codec 依赖及实时 `AActor.RootComponent` 指针。没有直接写 `Relative*` 内存、没有 setter fallback，也不把多次调用描述为事务；调用已发生后若复核失败，错误明确携带 `mutation_state=unknown_after_invoke`。
 - location 与 relative rotation 复用参数帧中的 exact reflected `FHitResult` offset/size，保持其 slot 全零、允许 setter 写入并在返回后直接丢弃；请求中的 `sweep`/`teleport` 也写入对应 bool slot。该实现优先提供功能，尚未接入 FHitResult 输出展示或显式析构；本轮只做 Core Release 编译，没有 Wandering Sword/真实 UE round-trip，WORLD-006 保持 `in_progress`，所有 profile 继续 `Not supported`。
+- WorldBrowser 的 Transform 页新增直接编辑器，可选择 location/rotation/scale、world/relative，填写三个分量并设置 sweep/teleport/teleport physics；成功调用后显示 exact setter 结果并重新读取 live transform。前端 TypeScript/Vite production build 已通过，未运行真实目标行为验证。
 
 ### 0.24 R5.2 bounded call.batch 纵向切片
 
@@ -321,6 +322,7 @@ CoreHarness 覆盖 partial type/function coverage、错误 CDO、super cycle、d
 - `ParamFrame` 现在可直接拥有 UTF-8 转 UTF-16 后的 FString backing buffer，并按当前 `DynamicArrayLayout` 写入 exact 参数 slot；buffer 生命周期覆盖整个 `ProcessEvent` work。协议和 TypeScript 参数契约新增 `string`/`text`，不再要求调用方伪造 UE 内存表示。
 - FText 输入在已见证游戏线程内通过当前 TypeSnapshot 中的 `KismetTextLibrary.Conv_StringToText` 构造，FText output/inout/return 通过 `Conv_TextToString` 转回 FString 后复用现有解码器。转换函数缺失、签名不符或 handle 陈旧时返回明确错误，不退回 raw FText 猜测。
 - 通用 Struct 输入改为消费 exact descriptor field set，并递归编码 bool、定宽整数、float/double、Object、descriptor-proven Enum 和嵌套 value Struct；canonical FVector/FRotator 快路径保留。Weak/Soft、Array/Map/Set、delegate 以及含这些字段的 Struct 仍明确不可用。
+- Functions 调用页已增加 FString/FText 多行文本输入和通用 Struct JSON 输入；canonical FVector/FRotator 继续使用三分量快捷格式，其他 Struct 由用户提供 exact reflected field object 并直接交给 Core 校验。
 - 本轮只运行 Core Release 编译与 JSON schema 解析；未运行真实 UE/Wandering Sword function round-trip。FText 转换产物及 UE 返回 FString 的完整析构/释放尚未接入，相关 lifecycle、GC 和 allocator 行为全部后置，因此 CALL-003 保持 `in_progress`，所有 UE profile 保持 `Not supported`。
 
 ## Context

@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { t } from '../../i18n';
-import { Search, MapPin, Globe, ChevronDown, ChevronRight } from 'lucide-react';
+import { Search, MapPin, Globe, ChevronDown, ChevronRight, RefreshCw, Save } from 'lucide-react';
 import api, {
     type WorldLevelItem,
     type WorldActorDetail,
     type WorldActorComputedTransform,
     type WorldActorItem,
     type WorldActorStoredTransform,
+    type WorldActorTransformResponse,
+    type WorldActorTransformUpdate,
     type WorldQueryCursor,
     type WorldSnapshotObject,
+    type WorldTransformSpace,
 } from '../../api';
 import { Panel, HeaderCard, type BrowserPageProps } from './shared';
 
@@ -18,8 +21,78 @@ type WorldDetailTab = 'Transform' | 'Components';
 
 type LiveRelativeTransform =
     | { state: 'idle' | 'loading' }
-    | { state: 'available'; value: WorldActorStoredTransform; computed: WorldActorComputedTransform }
+    | {
+        state: 'available';
+        value: WorldActorStoredTransform;
+        computed: WorldActorComputedTransform;
+        scope: WorldActorTransformResponse;
+    }
     | { state: 'unavailable'; reasonCode: string; reason: string };
+
+type TransformEditorField = 'location' | 'rotation' | 'scale';
+
+interface TransformEditorState {
+    field: TransformEditorField;
+    space: WorldTransformSpace;
+    components: [string, string, string];
+    sweep: boolean;
+    teleport: boolean;
+    teleportPhysics: boolean;
+}
+
+type MutationFeedback =
+    | { kind: 'success'; message: string }
+    | { kind: 'error'; message: string }
+    | null;
+
+const EMPTY_TRANSFORM_EDITOR: TransformEditorState = {
+    field: 'location',
+    space: 'world',
+    components: ['', '', ''],
+    sweep: false,
+    teleport: false,
+    teleportPhysics: false,
+};
+
+function currentTransformComponents(
+    scope: WorldActorTransformResponse,
+    field: TransformEditorField,
+    space: WorldTransformSpace,
+): [string, string, string] {
+    if (space === 'world' && scope.computed_transform.state === 'available') {
+        const computed = scope.computed_transform;
+        if (field === 'location') {
+            return [computed.location.x, computed.location.y, computed.location.z].map(String) as [string, string, string];
+        }
+        if (field === 'rotation') {
+            return [computed.rotation.pitch, computed.rotation.yaw, computed.rotation.roll].map(String) as [string, string, string];
+        }
+        return [computed.scale.x, computed.scale.y, computed.scale.z].map(String) as [string, string, string];
+    }
+
+    const stored = scope.transform;
+    if (field === 'location') {
+        return [stored.location.x, stored.location.y, stored.location.z].map(String) as [string, string, string];
+    }
+    if (field === 'rotation') {
+        return [stored.rotation.pitch, stored.rotation.yaw, stored.rotation.roll].map(String) as [string, string, string];
+    }
+    return [stored.scale.x, stored.scale.y, stored.scale.z].map(String) as [string, string, string];
+}
+
+function createTransformEditor(
+    scope: WorldActorTransformResponse,
+    field: TransformEditorField,
+    space: WorldTransformSpace,
+    previous: TransformEditorState = EMPTY_TRANSFORM_EDITOR,
+): TransformEditorState {
+    return {
+        ...previous,
+        field,
+        space,
+        components: currentTransformComponents(scope, field, space),
+    };
+}
 
 // ─── Component ─────────────────────────────────────────────────
 
@@ -48,6 +121,9 @@ export default function WorldBrowser({ onSwitchMode }: BrowserPageProps) {
     const [detailLoading, setDetailLoading] = useState(false);
     const [detailError, setDetailError] = useState<string | null>(null);
     const [relativeTransform, setRelativeTransform] = useState<LiveRelativeTransform>({ state: 'idle' });
+    const [transformEditor, setTransformEditor] = useState<TransformEditorState>(EMPTY_TRANSFORM_EDITOR);
+    const [mutationBusy, setMutationBusy] = useState(false);
+    const [mutationFeedback, setMutationFeedback] = useState<MutationFeedback>(null);
 
     // ─── Data Loading ──────────────────────────────────────────
 
@@ -92,6 +168,9 @@ export default function WorldBrowser({ onSwitchMode }: BrowserPageProps) {
             setComponents([]);
             setNextComponentCursor(null);
             setRelativeTransform({ state: 'idle' });
+            setTransformEditor(EMPTY_TRANSFORM_EDITOR);
+            setMutationBusy(false);
+            setMutationFeedback(null);
         }
         try {
             const res = await api.getWorldActors(cursor, 128, search, classFilter);
@@ -114,6 +193,9 @@ export default function WorldBrowser({ onSwitchMode }: BrowserPageProps) {
         setNextComponentCursor(null);
         setDetailTab('Transform');
         setRelativeTransform({ state: 'loading' });
+        setTransformEditor(EMPTY_TRANSFORM_EDITOR);
+        setMutationBusy(false);
+        setMutationFeedback(null);
         const generation = actorGeneration;
         if (generation === null) {
             setDetailError('WORLD_SNAPSHOT_STALE: actor list generation is unavailable');
@@ -137,7 +219,13 @@ export default function WorldBrowser({ onSwitchMode }: BrowserPageProps) {
                         state: 'available',
                         value: transformRes.data.transform,
                         computed: transformRes.data.computed_transform,
+                        scope: transformRes.data,
                     });
+                    setTransformEditor(createTransformEditor(
+                        transformRes.data,
+                        'location',
+                        'world',
+                    ));
                 } else {
                     setRelativeTransform({
                         state: 'unavailable',
@@ -200,6 +288,114 @@ export default function WorldBrowser({ onSwitchMode }: BrowserPageProps) {
         }
     };
 
+    const selectTransformEditor = (
+        field: TransformEditorField,
+        space: WorldTransformSpace,
+    ) => {
+        setTransformEditor((current) => relativeTransform.state === 'available'
+            ? createTransformEditor(relativeTransform.scope, field, space, current)
+            : { ...current, field, space });
+        setMutationFeedback(null);
+    };
+
+    const reloadTransformEditor = () => {
+        if (relativeTransform.state !== 'available') return;
+        setTransformEditor((current) => createTransformEditor(
+            relativeTransform.scope,
+            current.field,
+            current.space,
+            current,
+        ));
+        setMutationFeedback(null);
+    };
+
+    const applyTransformMutation = async () => {
+        if (relativeTransform.state !== 'available' || mutationBusy) return;
+        const components = transformEditor.components.map((component) => component.trim());
+        if (components.some((component) => component === '' || !Number.isFinite(Number(component)))) {
+            setMutationFeedback({ kind: 'error', message: 'All three components must be finite numbers.' });
+            return;
+        }
+
+        let update: WorldActorTransformUpdate;
+        if (transformEditor.field === 'location') {
+            update = {
+                field: 'location',
+                space: transformEditor.space,
+                value: { x: components[0], y: components[1], z: components[2] },
+                sweep: transformEditor.sweep,
+                teleport: transformEditor.teleport,
+            };
+        } else if (transformEditor.field === 'rotation' && transformEditor.space === 'relative') {
+            update = {
+                field: 'rotation',
+                space: 'relative',
+                value: { pitch: components[0], yaw: components[1], roll: components[2] },
+                sweep: transformEditor.sweep,
+                teleport: transformEditor.teleport,
+            };
+        } else if (transformEditor.field === 'rotation') {
+            update = {
+                field: 'rotation',
+                space: 'world',
+                value: { pitch: components[0], yaw: components[1], roll: components[2] },
+                teleport_physics: transformEditor.teleportPhysics,
+            };
+        } else {
+            update = {
+                field: 'scale',
+                space: transformEditor.space,
+                value: { x: components[0], y: components[1], z: components[2] },
+            };
+        }
+
+        const requestEpoch = detailRequestEpoch.current;
+        const scope = relativeTransform.scope;
+        setMutationBusy(true);
+        setMutationFeedback(null);
+        try {
+            const response = await api.updateWorldActorTransform(scope, update);
+            if (requestEpoch !== detailRequestEpoch.current) return;
+            if (!response.success || !response.data) {
+                setMutationFeedback({
+                    kind: 'error',
+                    message: [response.error_code, response.error].filter(Boolean).join(' · ') || 'Transform update failed.',
+                });
+                return;
+            }
+
+            setMutationFeedback({
+                kind: 'success',
+                message: `${response.data.setter.function_path} · ${response.data.execution.mutation_state}`,
+            });
+            const refreshed = await api.getWorldActorTransform(scope.actor.handle, scope.generation);
+            if (requestEpoch !== detailRequestEpoch.current) return;
+            if (refreshed.success && refreshed.data) {
+                setRelativeTransform({
+                    state: 'available',
+                    value: refreshed.data.transform,
+                    computed: refreshed.data.computed_transform,
+                    scope: refreshed.data,
+                });
+                setTransformEditor((current) => createTransformEditor(
+                    refreshed.data!,
+                    current.field,
+                    current.space,
+                    current,
+                ));
+            }
+        } catch (error) {
+            if (requestEpoch === detailRequestEpoch.current) {
+                setMutationFeedback({
+                    kind: 'error',
+                    message: error instanceof Error ? error.message : String(error),
+                });
+            }
+        } finally {
+            if (requestEpoch === detailRequestEpoch.current) setMutationBusy(false);
+        }
+    };
+
     useEffect(() => {
         const timer = window.setTimeout(() => void loadWorld(null, false), 0);
         return () => window.clearTimeout(timer);
@@ -220,6 +416,12 @@ export default function WorldBrowser({ onSwitchMode }: BrowserPageProps) {
             return next;
         });
     };
+
+    const editorAxes = transformEditor.field === 'rotation'
+        ? ['Pitch', 'Yaw', 'Roll']
+        : ['X', 'Y', 'Z'];
+    const usesSweepOptions = transformEditor.field === 'location'
+        || (transformEditor.field === 'rotation' && transformEditor.space === 'relative');
 
     // ─── Render ────────────────────────────────────────────────
 
@@ -423,6 +625,145 @@ export default function WorldBrowser({ onSwitchMode }: BrowserPageProps) {
                                                 {relativeTransform.computed.reason}
                                             </div>
                                         )}
+                                        <div className="rounded-xl border border-primary/20 bg-background-base/60 p-4">
+                                            <div className="mb-4 flex items-start justify-between gap-4">
+                                                <div>
+                                                    <div className="text-sm font-semibold text-text-high">Edit transform</div>
+                                                    <div className="mt-1 text-[11px] text-text-low">
+                                                        Executes one reflected setter and reloads the live transform.
+                                                    </div>
+                                                </div>
+                                                <span className="rounded-full border border-primary/25 bg-primary/10 px-2 py-1 text-[10px] font-semibold text-primary">
+                                                    GAME THREAD
+                                                </span>
+                                            </div>
+
+                                            <div className="grid gap-3 md:grid-cols-2">
+                                                <label className="space-y-1.5">
+                                                    <span className="text-[10px] font-semibold uppercase tracking-wider text-text-low">Field</span>
+                                                    <select
+                                                        value={transformEditor.field}
+                                                        onChange={(event) => selectTransformEditor(
+                                                            event.target.value as TransformEditorField,
+                                                            transformEditor.space,
+                                                        )}
+                                                        className="h-9 w-full rounded-lg border border-border-subtle bg-background-base px-3 text-xs text-text-high outline-none transition-colors focus:border-primary"
+                                                    >
+                                                        <option value="location">Location</option>
+                                                        <option value="rotation">Rotation</option>
+                                                        <option value="scale">Scale</option>
+                                                    </select>
+                                                </label>
+                                                <label className="space-y-1.5">
+                                                    <span className="text-[10px] font-semibold uppercase tracking-wider text-text-low">Space</span>
+                                                    <select
+                                                        value={transformEditor.space}
+                                                        onChange={(event) => selectTransformEditor(
+                                                            transformEditor.field,
+                                                            event.target.value as WorldTransformSpace,
+                                                        )}
+                                                        className="h-9 w-full rounded-lg border border-border-subtle bg-background-base px-3 text-xs text-text-high outline-none transition-colors focus:border-primary"
+                                                    >
+                                                        <option value="world">World</option>
+                                                        <option value="relative">Relative</option>
+                                                    </select>
+                                                </label>
+                                            </div>
+
+                                            <div className="mt-3 grid grid-cols-3 gap-2">
+                                                {editorAxes.map((axis, index) => (
+                                                    <label key={axis} className="space-y-1.5">
+                                                        <span className="text-[10px] font-semibold uppercase tracking-wider text-text-low">{axis}</span>
+                                                        <input
+                                                            type="text"
+                                                            inputMode="decimal"
+                                                            value={transformEditor.components[index]}
+                                                            onChange={(event) => setTransformEditor((current) => {
+                                                                const components: [string, string, string] = [...current.components];
+                                                                components[index] = event.target.value;
+                                                                return { ...current, components };
+                                                            })}
+                                                            className="h-9 w-full rounded-lg border border-border-subtle bg-background-base px-3 font-mono text-xs text-text-high outline-none transition-colors placeholder:text-text-low/50 focus:border-primary"
+                                                        />
+                                                    </label>
+                                                ))}
+                                            </div>
+
+                                            <div className="mt-3 flex min-h-8 flex-wrap items-center gap-4 text-xs text-text-mid">
+                                                {usesSweepOptions && (
+                                                    <>
+                                                        <label className="flex cursor-pointer items-center gap-2">
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={transformEditor.sweep}
+                                                                onChange={(event) => setTransformEditor((current) => ({
+                                                                    ...current,
+                                                                    sweep: event.target.checked,
+                                                                }))}
+                                                                className="accent-primary"
+                                                            />
+                                                            Sweep
+                                                        </label>
+                                                        <label className="flex cursor-pointer items-center gap-2">
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={transformEditor.teleport}
+                                                                onChange={(event) => setTransformEditor((current) => ({
+                                                                    ...current,
+                                                                    teleport: event.target.checked,
+                                                                }))}
+                                                                className="accent-primary"
+                                                            />
+                                                            Teleport
+                                                        </label>
+                                                    </>
+                                                )}
+                                                {transformEditor.field === 'rotation' && transformEditor.space === 'world' && (
+                                                    <label className="flex cursor-pointer items-center gap-2">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={transformEditor.teleportPhysics}
+                                                            onChange={(event) => setTransformEditor((current) => ({
+                                                                ...current,
+                                                                teleportPhysics: event.target.checked,
+                                                            }))}
+                                                            className="accent-primary"
+                                                        />
+                                                        Teleport physics
+                                                    </label>
+                                                )}
+                                            </div>
+
+                                            <div className="mt-4 flex flex-wrap items-center gap-2">
+                                                <button
+                                                    type="button"
+                                                    onClick={reloadTransformEditor}
+                                                    disabled={mutationBusy}
+                                                    className="inline-flex h-9 items-center gap-2 rounded-lg border border-border-subtle bg-surface-dark px-3 text-xs font-semibold text-text-mid transition-colors hover:border-border-default hover:text-text-high disabled:opacity-40"
+                                                >
+                                                    <RefreshCw className="h-3.5 w-3.5" />
+                                                    Load current
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => void applyTransformMutation()}
+                                                    disabled={mutationBusy}
+                                                    className="inline-flex h-9 items-center gap-2 rounded-lg bg-primary px-4 text-xs font-semibold text-white transition-all hover:bg-primary/90 active:scale-[0.98] disabled:opacity-40"
+                                                >
+                                                    <Save className="h-3.5 w-3.5" />
+                                                    {mutationBusy ? 'Applying...' : 'Apply transform'}
+                                                </button>
+                                            </div>
+
+                                            {mutationFeedback && (
+                                                <div className={`mt-3 rounded-lg border px-3 py-2 font-mono text-[11px] ${mutationFeedback.kind === 'success'
+                                                    ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200'
+                                                    : 'border-red-500/20 bg-red-500/10 text-red-200'
+                                                    }`}>
+                                                    {mutationFeedback.message}
+                                                </div>
+                                            )}
+                                        </div>
                                         <div className="text-[11px] text-white/30">
                                             One game-thread work brackets the three reflected Actor getters with the stored RootComponent witness. Space labels apply bAbsoluteLocation/Rotation/Scale; stored and computed values remain explicitly separate.
                                         </div>

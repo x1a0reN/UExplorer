@@ -597,7 +597,7 @@ Objects.tsx (三面板)
 
 Functions.tsx (四合一)
   ├─ types.functions.get            exact full path + immutable FunctionHandle
-  ├─ call.invoke                    exact handles + owned FString/FText/scalar/enum/descriptor-backed Struct frame
+  ├─ call.invoke                    FString/FText editor + canonical math shortcut + exact Struct JSON -> owned frame
   ├─ static call target             types.classes.cdo -> explicit CDO handle
   ├─ blueprint.bytecode/decompile   exact FunctionHandle/generations；runtime dependencies 未选中 exact profile 时 unavailable
   ├─ call.batch                     owned coordinator -> exact single-call adapter -> game-thread queue
@@ -610,7 +610,7 @@ WorldBrowser.tsx
   ├─ world.actor.components           Actor-bound cursor page + explicit load-more
   ├─ world.shortcuts                  exact UWorld relations + witnessed LocalPlayers[0] 链；缺 metadata 显式 unavailable
   ├─ world.actor.transform.get         一个 owned game-thread work 读取 Relative* + bAbsolute*
-  └─ world.actor.transform.update       单字段 exact reflected setter；无 raw fallback
+  └─ world.actor.transform.update       location/rotation/scale + world/relative 编辑器 -> 单字段 exact setter
 
 Memory.tsx
   ├─ memory.raw/typed/pointer_chain strict bounded Core command

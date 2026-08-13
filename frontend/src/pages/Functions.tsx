@@ -383,7 +383,10 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
       const argumentsByName: Record<string, FunctionCallArgument> = {};
       for (const parameter of functionMeta.parameters) {
         if (parameter.direction !== 'input' && parameter.direction !== 'inout') continue;
-        const raw = (paramInputs[parameter.name] ?? '').trim();
+        const inputText = paramInputs[parameter.name] ?? '';
+        const raw = parameter.kind === 'string' || parameter.kind === 'text'
+          ? inputText
+          : inputText.trim();
         switch (parameter.kind) {
           case 'bool':
             if (raw !== 'true' && raw !== 'false') {
@@ -414,6 +417,10 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
             if (raw === '' || !Number.isFinite(Number(raw))) {
               throw new Error(`${parameter.name} must be a finite floating-point value`);
             }
+            argumentsByName[parameter.name] = { kind: parameter.kind, value: raw };
+            break;
+          case 'string':
+          case 'text':
             argumentsByName[parameter.name] = { kind: parameter.kind, value: raw };
             break;
           case 'object': {
@@ -470,7 +477,21 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
               };
               break;
             }
-            throw new Error(`${parameter.name} uses unsupported struct type ${parameter.type_name}`);
+            let parsed: unknown;
+            try {
+              parsed = JSON.parse(raw);
+            } catch {
+              throw new Error(`${parameter.name} must be a JSON object for ${parameter.type_name}`);
+            }
+            if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+              throw new Error(`${parameter.name} must be a JSON object for ${parameter.type_name}`);
+            }
+            argumentsByName[parameter.name] = {
+              kind: 'struct',
+              type_name: parameter.type_name,
+              value: parsed as Record<string, unknown>,
+            };
+            break;
           }
           default:
             throw new Error(`${parameter.name} uses unsupported input kind ${parameter.kind}`);
@@ -1010,37 +1031,64 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
 
                             {functionMeta?.parameters
                               .filter((p) => p.direction === 'input' || p.direction === 'inout')
-                              .map((p) => (
+                              .map((p) => {
+                                const isGenericStruct = p.kind === 'struct'
+                                  && p.type_name !== '/Script/CoreUObject.Vector'
+                                  && p.type_name !== '/Script/CoreUObject.Rotator';
+                                const placeholder = p.type_name === '/Script/CoreUObject.Vector'
+                                  ? 'X, Y, Z'
+                                  : p.type_name === '/Script/CoreUObject.Rotator'
+                                    ? 'Pitch, Yaw, Roll'
+                                    : p.kind === 'enum'
+                                      ? 'name:ExactEnumName or raw:0'
+                                      : isGenericStruct
+                                        ? '{"Field":"0","Enabled":true}'
+                                        : p.kind === 'object'
+                                          ? 'null or object index'
+                                          : p.kind === 'string' || p.kind === 'text'
+                                            ? 'Text value'
+                                            : undefined;
+                                const multiline = isGenericStruct || p.kind === 'string' || p.kind === 'text';
+                                return (
                                 <div key={p.name} className="space-y-1.5">
                                   <label className="text-[10px] font-bold text-text-low uppercase tracking-widest flex items-center justify-between font-display">
                                     <span>{p.name}</span>
-                                    <span className="text-primary lowercase font-mono">{p.type_name}</span>
+                                    <span className="text-primary normal-case font-mono">{p.type_name}</span>
                                   </label>
-                                  <input
-                                    type="text"
-                                    value={paramInputs[p.name] ?? ''}
-                                    placeholder={
-                                      p.type_name === '/Script/CoreUObject.Vector'
-                                        ? 'X, Y, Z'
-                                        : p.type_name === '/Script/CoreUObject.Rotator'
-                                          ? 'Pitch, Yaw, Roll'
-                                          : p.kind === 'enum'
-                                            ? 'name:ExactEnumName or raw:0'
-                                            : undefined
-                                    }
-                                    onChange={(e) =>
-                                      setParamInputs((prev) => ({
+                                  {multiline ? (
+                                    <textarea
+                                      rows={isGenericStruct ? 4 : 2}
+                                      value={paramInputs[p.name] ?? ''}
+                                      placeholder={placeholder}
+                                      onChange={(e) => setParamInputs((prev) => ({
                                         ...prev,
                                         [p.name]: e.target.value,
-                                      }))
-                                    }
-                                    className="w-full bg-background-base border border-border-subtle text-text-high font-mono text-[13px] rounded-lg px-3 py-2 outline-none focus:border-primary transition-colors placeholder:text-text-low/50"
-                                  />
+                                      }))}
+                                      className="w-full resize-y bg-background-base border border-border-subtle text-text-high font-mono text-[13px] leading-5 rounded-lg px-3 py-2 outline-none focus:border-primary transition-colors placeholder:text-text-low/50"
+                                    />
+                                  ) : (
+                                    <input
+                                      type="text"
+                                      value={paramInputs[p.name] ?? ''}
+                                      placeholder={placeholder}
+                                      onChange={(e) => setParamInputs((prev) => ({
+                                        ...prev,
+                                        [p.name]: e.target.value,
+                                      }))}
+                                      className="w-full bg-background-base border border-border-subtle text-text-high font-mono text-[13px] rounded-lg px-3 py-2 outline-none focus:border-primary transition-colors placeholder:text-text-low/50"
+                                    />
+                                  )}
+                                  {isGenericStruct && (
+                                    <div className="text-[10px] leading-4 text-text-low">
+                                      Use the exact reflected field names. Numeric fields are JSON strings; bool fields are booleans; nested structs are objects.
+                                    </div>
+                                  )}
                                 </div>
-                              ))}
+                                );
+                              })}
 
                             <div className="text-[11px] text-text-low font-display">
-                              Scalar and enum values use exact reflected kinds. Enum inputs require name: or raw:; object inputs accept null or an object index.
+                              FString/FText accept plain text. Enum inputs require name: or raw:; object inputs accept null or an object index; other structs accept exact JSON objects.
                             </div>
 
                             <button
