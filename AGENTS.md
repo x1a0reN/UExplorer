@@ -42,7 +42,7 @@ UExplorerCore.dll（目标进程内）
 - Core 在 Pipe bind 后安装生产 `PostRenderHook`，发布事实 capability/Ready 后才开放 admissions。
 - 当前没有外部 HTTP/WebSocket Gateway，也没有 `connection.ini`、`runtime.ini`、port 或 Token 运行依赖。
 - 未有任何 UE 4.26、4.27 或 UE5 profile 达到发布支持门；本机 UE 4.21、4.24-4.27、5.0-5.4、5.6、5.7 源码只能作为候选布局/语义证据，Wandering Sword 也必须通过实际运行 fixture 后才能改变支持声明。准确范围见 `docs/SUPPORT_MATRIX.md`。
-- R6 功能代码已完成目录分层、统一 session/query/event 状态、BigInt 地址、generation cursor 页面、增量 Hook/Watch、真实设置项、五层连接状态和共享编辑/错误/分页组件；本轮只执行 frontend production build，未执行 lint/unit/component/真实桌面交互验收。
+- R6 功能代码已完成目录分层、统一 session/query/event 状态、BigInt 地址、generation cursor 页面、增量 Hook/Watch、真实设置项、五层连接状态和共享编辑/错误/分页组件；本轮执行 frontend production build 与固定的 post-push Core Release build，未执行 lint/unit/component/真实桌面交互验收。
 - 已知仍未关闭的事实包括：默认 `AllocConsole` 与 F6 路径、Dump 之外的 Dumper 配置 current-directory/global-path 行为、剩余 `Off::*/Settings::*` 和 legacy domain monolith、Hook 非平凡参数生命周期/caller/条件过滤、Watch/Hook push 的断线重放/慢消费者/真实目标 rate fixture、Dump Host 重启/重载持久化及四格式真实目标 consumer/语义 fixture、生产 UEnum entry table 与 Blueprint 真实目标 opcode/operand witness、call.batch/Blueprint/Hook 真实 ProcessEvent/捕获/取消/超时/恢复 fixture，以及 R6 完整前端验收与真实 UE/GC/卸载/性能 fixture。
 
 ## 4. 事实优先级

@@ -270,9 +270,10 @@ Dashboard reports Host/IPC/Core/Engine/Capability layers; and Settings only expo
 values consumed by a real service. Shared property-value, error, value-parser, and
 pagination components replace the reachable duplicate implementations.
 
-This is a functionality-first code checkpoint. Only the TypeScript/Vite production
-build was run; lint, unit/component tests, browser automation, and real UE/Wandering
-Sword interaction were intentionally deferred. No runtime support profile is upgraded.
+This is a functionality-first code checkpoint. The TypeScript/Vite production build and
+the required post-push Core Release build succeeded; lint, unit/component tests, browser
+automation, and real UE/Wandering Sword interaction were intentionally deferred. No
+runtime support profile is upgraded.
 
 ## Repository layout
 

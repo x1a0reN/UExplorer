@@ -929,7 +929,7 @@ Rust `DomainService` 的显式 operation registry 为准。
 | R3 Named Pipe/Rust Host | **实现阶段完成** | 严格 IPC、SessionManager、EventHub、注入与跨语言 fixture |
 | R4 通信原子切换 | **已完成** | React 只走 Tauri；Core release 只走 Named Pipe，无网络栈 |
 | R5 领域正确性 | **功能优先代码阶段完成；验收未通过** | Object/Type/property/call/World；FString/FText/descriptor-backed Struct 调用；strict Memory；bounded Watch pull/push；enum/destructor journal；runtime-gated source-catalog Blueprint；world/relative location/rotation/scale 单字段 reflected setter；call.batch 跨层 exact-call adapter；Hook producer/push + bounded scalar parameter plan/copy/decode；immutable snapshot Dump worker。生产 UEnum、容器/引用型 Struct、FText allocation cleanup、FHitResult output 展示、Hook 非平凡参数/caller/条件与真实 target witness、Dump Host persistence/目标 artifact fixture、Blueprint 目标 opcode/operand witness 和真实 UE fixture 待办；相关 issue 继续 `in_progress` |
-| R6 前端状态重构 | **功能代码完成；完整验收未执行** | contracts/transport/services/session/features、统一 query/event 生命周期、BigInt 地址、三模式 Objects、真实 instance call target、五层连接状态和实际设置；仅完成 production build |
+| R6 前端状态重构 | **功能代码完成；完整验收未执行** | contracts/transport/services/session/features、统一 query/event 生命周期、BigInt 地址、三模式 Objects、真实 instance call target、五层连接状态和实际设置；frontend production 与 post-push Core Release build 成功 |
 | R7 发布硬化 | **未开始** | UE fixture、性能/压力、卸载、发布与文档门禁 |
 
 旧 Phase 1-5 的“功能已完成”结论已经废止；界面或 legacy handler 存在不代表能力
