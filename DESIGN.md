@@ -263,9 +263,9 @@ CoreHarness 覆盖 partial type/function coverage、错误 CDO、super cycle、d
 
 ### 0.23 R5.3 单字段 reflected World transform mutation
 
-- `WorldMutationCommandService` 新增严格 `world.actor.transform.update`：请求固定 session/context/Object/Type/World generation 与 exact ActorHandle，并且一次只能提交一个字段。它只接受 exact reflected `SetActorScale3D`、`SetRelativeScale3D` 或 world `K2_SetActorRotation` 签名；准备阶段不能证明全部依赖时保持零 mutation。
+- `WorldMutationCommandService` 的 `world.actor.transform.update` 请求固定 session/context/Object/Type/World generation 与 exact ActorHandle，并且一次只能提交一个字段。它现在覆盖 exact reflected `K2_SetActorLocation`、`K2_SetRelativeLocation`、`K2_SetActorRotation`、`K2_SetRelativeRotation`、`SetActorScale3D` 与 `SetRelativeScale3D` 签名；准备阶段不能证明全部依赖时保持零 mutation。
 - owned game-thread work 在 ProcessEvent 前后重验 Actor、RootComponent、FunctionHandle、snapshot/codec 依赖及实时 `AActor.RootComponent` 指针。没有直接写 `Relative*` 内存、没有 setter fallback，也不把多次调用描述为事务；调用已发生后若复核失败，错误明确携带 `mutation_state=unknown_after_invoke`。
-- location 与 relative rotation 的 reflected setter 含 `FHitResult&` output；当前没有见证其构造/析构 profile，因此即使 schema 能准确表达请求也稳定返回 lifetime unavailable。代码与跨层契约已编译接线，但没有 Wandering Sword/真实 UE round-trip，所有 profile 继续 `Not supported`。
+- location 与 relative rotation 复用参数帧中的 exact reflected `FHitResult` offset/size，保持其 slot 全零、允许 setter 写入并在返回后直接丢弃；请求中的 `sweep`/`teleport` 也写入对应 bool slot。该实现优先提供功能，尚未接入 FHitResult 输出展示或显式析构；本轮只做 Core Release 编译，没有 Wandering Sword/真实 UE round-trip，WORLD-006 保持 `in_progress`，所有 profile 继续 `Not supported`。
 
 ### 0.24 R5.2 bounded call.batch 纵向切片
 

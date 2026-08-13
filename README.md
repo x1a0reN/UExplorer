@@ -159,11 +159,11 @@ computed Actor world transform. The same UE 4.21-5.7 sources expose
 those exact reflected functions now fit the canonical-struct `call.invoke` contract.
 `world.actor.transform.update` accepts exactly one field per request and never presents
 multiple ProcessEvent calls as atomic. Exact `SetActorScale3D`, `SetRelativeScale3D`, and
-world `K2_SetActorRotation` signatures are admitted only after the same
+world/relative location, rotation, and scale signatures are admitted only after the same
 session/context/Object/Type/World generations and Actor/RootComponent/function handles
-are fixed and revalidated around ProcessEvent. Location and relative rotation remain
-fail-closed because their reflected setters contain an `FHitResult&` output whose
-lifetime is not witnessed. There is no direct memory-write or setter fallback, and a
+are fixed and revalidated around ProcessEvent. FHitResult-backed setters use the exact
+reflected output offset/size in a zero-initialized owned frame and discard that output.
+There is no direct memory-write or setter fallback, and a
 post-invoke identity failure reports an unknown mutation state. This is implemented code, not a
 target-runtime validation: `D:\Steam\steamapps\common\Wandering Sword` still has no
 launchable game `.exe`, no real UE getter/ProcessEvent round-trip has run, and every engine
@@ -245,9 +245,9 @@ added. A successful build or synthetic fixture does not establish target runtime
   `manifest.json` is validated and committed last with the pinned scope and artifact metadata. Cooperative
   cancellation/deadline and shutdown drain are wired, but Host restart persistence and
   real target artifact/consumer fixtures are not implemented.
-- World mutation is a strict single-field reflected command for world/relative scale and
-  world rotation. Location/relative rotation remain unavailable until `FHitResult` has a
-  witnessed construction/destruction profile.
+- World mutation is a strict single-field reflected command for world/relative location,
+  rotation, and scale. FHitResult-backed setters receive a zero-initialized bounded output
+  slot which is discarded; no real target round-trip or FHitResult output presentation has run.
 - No new target UE or Wandering Sword fixture was run. Every profile remains
   `Not supported`.
 

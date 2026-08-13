@@ -213,7 +213,7 @@ The v1 command registry is explicit. Unknown operations return
 | `world.actor.get` | `{"actor": object_handle, "world_snapshot_generation": uint53}` | Exact immutable Actor/Level/root-component detail; transform state remains explicit |
 | `world.actor.components` | `{"actor": object_handle, "world_snapshot_generation": uint53, "cursor": null \| world_cursor, "limit": 1..128}` | Cursor-paged immutable components owned by the exact Actor |
 | `world.actor.transform.get` | `{"actor": object_handle, "world_snapshot_generation": uint53}` | One game-thread work separates stored RootComponent `Relative*`/`bAbsolute*` from optional computed Actor values obtained through exact reflected getters |
-| `world.actor.transform.update` | exact session/context/Object/Type/World generations + Actor handle + one strict update union | One game-thread ProcessEvent mutation; world/relative scale and world rotation only, while FHitResult-backed variants fail closed |
+| `world.actor.transform.update` | exact session/context/Object/Type/World generations + Actor handle + one strict update union | One game-thread ProcessEvent mutation for world/relative location, rotation, or scale; FHitResult output slots are zero-initialized and discarded |
 | `types.classes.get` | `{"path": full_path}` | Worker-safe immutable class summary |
 | `types.classes.fields` | `{"path": full_path, "scope": "direct" \| "include_inherited", "cursor": null \| type_cursor, "limit": 1..128}` | Worker-safe immutable field page |
 | `types.classes.functions` | same member-page shape | Worker-safe immutable function page |
@@ -356,9 +356,9 @@ must resolve back to an Actor in that World. PlayerController/Pawn are admitted 
 through the witnessed `UGameInstance.LocalPlayers[0]` chain and otherwise stay explicitly
 unavailable. Transform reads use exact canonical math descriptors and keep stored values
 separate from reflected-getter computed Actor values. `world.mutate` admits only the
-strict single-field reflected setter service. Location and relative rotation return
-stable lifetime-unavailable errors until an exact `FHitResult` construction/destruction
-profile exists; there is no raw memory or alternate setter fallback.
+strict single-field reflected setter service. Location and relative rotation use the
+exact reflected `K2_*` signatures with a zero-initialized, bounded `FHitResult` output
+slot that is discarded after the call; there is no raw memory or alternate setter path.
 
 The shared Rust types live in `protocol/rust`; the Host must deserialize pages with
 unknown-field rejection. `frontend/src-tauri/src/session/snapshot_cache.rs` validates

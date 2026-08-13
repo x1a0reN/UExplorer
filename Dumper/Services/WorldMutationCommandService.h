@@ -64,6 +64,8 @@ enum class WorldMutationExecutionError : std::uint8_t
 struct WorldMutationValue
 {
 	std::array<double, 3> Components{};
+	bool Sweep = false;
+	bool Teleport = false;
 	bool TeleportPhysics = false;
 };
 

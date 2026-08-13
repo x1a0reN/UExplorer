@@ -883,6 +883,20 @@ export type WorldActorTransformAppliedUpdate =
       space: 'world';
       value: RotatorData;
       teleport_physics: boolean;
+    }
+  | {
+      field: 'location';
+      space: WorldTransformSpace;
+      value: Vec3Data;
+      sweep: boolean;
+      teleport: boolean;
+    }
+  | {
+      field: 'rotation';
+      space: 'relative';
+      value: RotatorData;
+      sweep: boolean;
+      teleport: boolean;
     };
 
 export interface WorldActorTransformUpdateResponse {

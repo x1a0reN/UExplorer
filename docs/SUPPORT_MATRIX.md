@@ -69,8 +69,9 @@ These assets are available for development, but none changes the support rows ab
   flags. It also preserves `K2_SetRelativeLocation(FVector, bool, FHitResult&, bool)` and
   `K2_SetRelativeRotation(FRotator, bool, FHitResult&, bool)`, while
   `SetRelativeScale3D(FVector)` has no `FHitResult` output. This is useful for selecting
-  semantic properties and planning the owned ProcessEvent frame lifecycle, but it is not
-  permission to assume offsets or zero-initialize an uncaptured Shipping `FHitResult`.
+  semantic properties and planning the owned ProcessEvent frame. R5 now uses the exact
+  reflected parameter offset/size for a zero-initialized FHitResult output slot and
+  discards it after ProcessEvent; no target runtime behavior is inferred from source.
 - `Actor.h`/`Actor.cpp` across the same source inventory preserves reflected
   `K2_GetActorLocation() -> FVector`, `K2_GetActorRotation() -> FRotator`,
   `GetActorScale3D() -> FVector`, and `SetActorScale3D(FVector)` without complex output
@@ -181,9 +182,9 @@ validates and invokes the location/rotation/scale getters with three owned canon
 return frames before the final RootComponent and byte-range comparison. The response
 keeps stored relative fields/`bAbsolute*` semantics separate from the reflected-getter
 computed Actor world transform; unavailable getter metadata is reported explicitly.
-The code path now admits one exact reflected mutation at a time for world/relative scale
-or world rotation, with identity revalidation around ProcessEvent. FHitResult-backed
-location/relative-rotation setters and every real UE target round-trip remain pending.
+The code path now admits one exact reflected mutation at a time for world/relative
+location, rotation, or scale, with identity revalidation around ProcessEvent.
+FHitResult output inspection/cleanup and every real UE target round-trip remain pending.
 Rust/schema fixtures and React builds cover their side of this contract. The real
 cross-language process fixture does not yet publish a production TypeSnapshot, and no
 target-process reflection/type run exists, so this does not change any support row.

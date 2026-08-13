@@ -23,17 +23,28 @@ constexpr std::string_view kActorClassPath = "/Script/Engine.Actor";
 constexpr std::string_view kSceneComponentClassPath = "/Script/Engine.SceneComponent";
 constexpr std::string_view kVectorStructPath = "/Script/CoreUObject.Vector";
 constexpr std::string_view kRotatorStructPath = "/Script/CoreUObject.Rotator";
+constexpr std::string_view kHitResultStructPath = "/Script/Engine.HitResult";
+constexpr std::string_view kActorLocationSetterPath =
+	"/Script/Engine.Actor.K2_SetActorLocation";
+constexpr std::string_view kRelativeLocationSetterPath =
+	"/Script/Engine.SceneComponent.K2_SetRelativeLocation";
 constexpr std::string_view kActorScaleSetterPath =
 	"/Script/Engine.Actor.SetActorScale3D";
 constexpr std::string_view kRelativeScaleSetterPath =
 	"/Script/Engine.SceneComponent.SetRelativeScale3D";
 constexpr std::string_view kActorRotationSetterPath =
 	"/Script/Engine.Actor.K2_SetActorRotation";
+constexpr std::string_view kRelativeRotationSetterPath =
+	"/Script/Engine.SceneComponent.K2_SetRelativeRotation";
 
 // UE 4.21-5.7 source exposes these three exact reflected signatures. Runtime
 // admission still depends only on the current immutable descriptors and handles.
 constexpr std::string_view kScaleParameterName = "NewScale3D";
+constexpr std::string_view kLocationParameterName = "NewLocation";
 constexpr std::string_view kRotationParameterName = "NewRotation";
+constexpr std::string_view kSweepParameterName = "bSweep";
+constexpr std::string_view kSweepHitResultParameterName = "SweepHitResult";
+constexpr std::string_view kTeleportParameterName = "bTeleport";
 constexpr std::string_view kTeleportPhysicsParameterName = "bTeleportPhysics";
 constexpr std::string_view kReturnParameterName = "ReturnValue";
 
@@ -382,6 +393,21 @@ bool ValidateBoolParameter(
 		&& parameter.Property.Descriptor->BoolByteOffset < parameter.Property.Size
 		&& (direction == Runtime::ReflectedParameterDirection::Return
 			|| codec.SupportsInput(*parameter.Property.Descriptor));
+}
+
+bool ValidateIgnoredHitResultParameter(
+	const Runtime::ReflectedParameter& parameter,
+	const std::uint32_t frameSize) noexcept
+{
+	const Runtime::ReflectedProperty& property = parameter.Property;
+	return (parameter.Direction == Runtime::ReflectedParameterDirection::Output
+			|| parameter.Direction == Runtime::ReflectedParameterDirection::InOut)
+		&& property.Kind == Runtime::PropertyKind::Struct
+		&& property.TypeName == kHitResultStructPath
+		&& property.ArrayDim == 1
+		&& property.Size != 0
+		&& property.Offset <= frameSize
+		&& property.Size <= frameSize - property.Offset;
 }
 
 bool ParseField(const json& update, WorldMutationField& field) noexcept
@@ -770,17 +796,10 @@ WorldMutationUpdatePreparation WorldMutationCommandService::PrepareUpdate(
 					"WORLD_TRANSFORM_UPDATE_VALUE_INVALID",
 					"Location and relative rotation require exact value, sweep, and teleport fields")};
 			}
-			return {.Error = Error(
-				field == WorldMutationField::Location
-					? "WORLD_TRANSFORM_LOCATION_LIFETIME_UNAVAILABLE"
-					: "WORLD_TRANSFORM_RELATIVE_ROTATION_LIFETIME_UNAVAILABLE",
-				"The exact reflected setter contains an FHitResult output whose construction and destruction profile is not verified",
-				{{"field", ToString(field)},
-				 {"space", ToString(space)},
-				 {"mutation_state", "not_invoked"},
-				 {"required_lifetime", "/Script/Engine.HitResult"}})};
+			value.Sweep = update.at("sweep").get<bool>();
+			value.Teleport = update.at("teleport").get<bool>();
 		}
-		if (field == WorldMutationField::Rotation)
+		else if (field == WorldMutationField::Rotation)
 		{
 			expectedUpdateSize = 4;
 			if (!update.contains("teleport_physics")
@@ -792,7 +811,8 @@ WorldMutationUpdatePreparation WorldMutationCommandService::PrepareUpdate(
 			}
 			value.TeleportPhysics = update.at("teleport_physics").get<bool>();
 		}
-		if (update.size() != expectedUpdateSize || !ParseComponents(update, field, value))
+		if (update.size() != expectedUpdateSize
+			|| !ParseComponents(update, field, value))
 		{
 			return {.Error = Error(
 				"WORLD_TRANSFORM_UPDATE_VALUE_INVALID",
@@ -896,11 +916,35 @@ WorldMutationUpdatePreparation WorldMutationCommandService::PrepareUpdate(
 		std::string_view functionPath;
 		const Runtime::ReflectedType* expectedOwner = nullptr;
 		Runtime::ObjectHandle target;
-		if (field == WorldMutationField::Rotation)
+		if (field == WorldMutationField::Location)
 		{
-			functionPath = kActorRotationSetterPath;
-			expectedOwner = actorType;
-			target = actorHandle;
+			if (space == WorldMutationSpace::World)
+			{
+				functionPath = kActorLocationSetterPath;
+				expectedOwner = actorType;
+				target = actorHandle;
+			}
+			else
+			{
+				functionPath = kRelativeLocationSetterPath;
+				expectedOwner = sceneComponentType;
+				target = root.Handle;
+			}
+		}
+		else if (field == WorldMutationField::Rotation)
+		{
+			if (space == WorldMutationSpace::World)
+			{
+				functionPath = kActorRotationSetterPath;
+				expectedOwner = actorType;
+				target = actorHandle;
+			}
+			else
+			{
+				functionPath = kRelativeRotationSetterPath;
+				expectedOwner = sceneComponentType;
+				target = root.Handle;
+			}
 		}
 		else if (space == WorldMutationSpace::World)
 		{
@@ -952,9 +996,77 @@ WorldMutationUpdatePreparation WorldMutationCommandService::PrepareUpdate(
 		}
 
 		const Runtime::ReflectedParameter* valueParameter = nullptr;
+		const Runtime::ReflectedParameter* sweepParameter = nullptr;
+		const Runtime::ReflectedParameter* hitResultParameter = nullptr;
 		const Runtime::ReflectedParameter* teleportParameter = nullptr;
 		const Runtime::ReflectedParameter* returnParameter = nullptr;
-		if (field == WorldMutationField::Rotation)
+		const bool hitResultSetter = field == WorldMutationField::Location
+			|| (field == WorldMutationField::Rotation
+				&& space == WorldMutationSpace::Relative);
+		if (hitResultSetter)
+		{
+			valueParameter = FindUniqueParameter(
+				*lookup.Function,
+				field == WorldMutationField::Location
+					? kLocationParameterName
+					: kRotationParameterName);
+			sweepParameter = FindUniqueParameter(*lookup.Function, kSweepParameterName);
+			hitResultParameter = FindUniqueParameter(
+				*lookup.Function, kSweepHitResultParameterName);
+			teleportParameter = FindUniqueParameter(
+				*lookup.Function, kTeleportParameterName);
+			if (field == WorldMutationField::Location
+				&& space == WorldMutationSpace::World)
+			{
+				returnParameter = FindUniqueParameter(
+					*lookup.Function, kReturnParameterName);
+			}
+			const std::string_view valueType = field == WorldMutationField::Location
+				? kVectorStructPath
+				: kRotatorStructPath;
+			const Runtime::CanonicalMathStructKind mathKind =
+				field == WorldMutationField::Location
+				? Runtime::CanonicalMathStructKind::Vector
+				: Runtime::CanonicalMathStructKind::Rotator;
+			const bool requiresReturn = field == WorldMutationField::Location
+				&& space == WorldMutationSpace::World;
+			const std::size_t expectedParameters = requiresReturn ? 5 : 4;
+			if (lookup.Function->Parameters.size() != expectedParameters
+				|| !valueParameter || !sweepParameter || !hitResultParameter
+				|| !teleportParameter
+				|| !ValidateCanonicalMathParameter(
+					*valueParameter,
+					valueType,
+					mathKind,
+					*reflection->Properties,
+					lookup.Function->ParameterSize)
+				|| !ValidateBoolParameter(
+					*sweepParameter,
+					Runtime::ReflectedParameterDirection::Input,
+					*reflection->Properties,
+					lookup.Function->ParameterSize)
+				|| !ValidateIgnoredHitResultParameter(
+					*hitResultParameter,
+					lookup.Function->ParameterSize)
+				|| !ValidateBoolParameter(
+					*teleportParameter,
+					Runtime::ReflectedParameterDirection::Input,
+					*reflection->Properties,
+					lookup.Function->ParameterSize)
+				|| (requiresReturn
+					&& (!returnParameter || !ValidateBoolParameter(
+						*returnParameter,
+						Runtime::ReflectedParameterDirection::Return,
+						*reflection->Properties,
+						lookup.Function->ParameterSize))))
+			{
+				return {.Error = Error(
+					"WORLD_TRANSFORM_HIT_RESULT_SETTER_SIGNATURE_UNAVAILABLE",
+					"The location/relative-rotation setter does not match the expected value, sweep, FHitResult, teleport, and optional return signature",
+					{{"function_path", functionPath}})};
+			}
+		}
+		else if (field == WorldMutationField::Rotation)
 		{
 			valueParameter = FindUniqueParameter(*lookup.Function, kRotationParameterName);
 			teleportParameter = FindUniqueParameter(
@@ -1036,7 +1148,7 @@ WorldMutationUpdatePreparation WorldMutationCommandService::PrepareUpdate(
 		{
 			encoded = frame.SetInput(
 				teleportParameter->Property,
-				value.TeleportPhysics,
+				hitResultSetter ? value.Teleport : value.TeleportPhysics,
 				*reflection->Properties);
 			if (!encoded.Ok())
 			{
@@ -1046,6 +1158,22 @@ WorldMutationUpdatePreparation WorldMutationCommandService::PrepareUpdate(
 						: Runtime::ToString(encoded.EncodeError),
 					encoded.Message,
 					{{"parameter", teleportParameter->Property.Name}})};
+			}
+		}
+		if (sweepParameter)
+		{
+			encoded = frame.SetInput(
+				sweepParameter->Property,
+				value.Sweep,
+				*reflection->Properties);
+			if (!encoded.Ok())
+			{
+				return {.Error = Error(
+					encoded.EncodeError == Runtime::PropertyEncodeError::None
+						? Runtime::ToString(encoded.Error)
+						: Runtime::ToString(encoded.EncodeError),
+					encoded.Message,
+					{{"parameter", sweepParameter->Property.Name}})};
 			}
 		}
 
@@ -1207,7 +1335,14 @@ WorldMutationCommandResult WorldMutationCommandService::CompleteUpdate(
 			{"space", ToString(work.Space())},
 			{"value", std::move(value)}
 		};
-		if (work.Field() == WorldMutationField::Rotation)
+		if (work.Field() == WorldMutationField::Location
+			|| (work.Field() == WorldMutationField::Rotation
+				&& work.Space() == WorldMutationSpace::Relative))
+		{
+			update["sweep"] = work.Value().Sweep;
+			update["teleport"] = work.Value().Teleport;
+		}
+		else if (work.Field() == WorldMutationField::Rotation)
 			update["teleport_physics"] = work.Value().TeleportPhysics;
 
 		return {.Data = {
