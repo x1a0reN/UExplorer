@@ -29,8 +29,9 @@ These assets are available for development, but none changes the support rows ab
   Dump start pins exact EngineContext/ObjectSnapshot/TypeSnapshot pointers, uses a Host-owned
   UUID identity under `%LOCALAPPDATA%\UExplorer\Dumps`, and emits bounded SDK/USMAP/
   Dumpspace/IDA artifacts through structural consumers, no-replace commit, size/SHA-256
-  verification, and a final manifest. The SDK artifact is an opaque exact-layout header,
-  not a complete typed Dumper-7 SDK. It has no target-process evidence for any of them. Production
+  verification, and a final manifest. The SDK artifact is a directly includable typed snapshot
+  header with fields, enums, parameter structs, padding/asserts, metadata, and ProcessEvent helpers;
+  it is not a complete Dumper-7 runtime framework. It has no target-process evidence for any of them. Production
   UEnum entry-table and real-target Blueprint profile/opcode/operand witnesses, Hook
   non-trivial parameter lifecycle/caller/filtering and real parameter-frame evidence,
   Watch/Hook reconnect/slow-consumer/target restore/rate fixtures, Host

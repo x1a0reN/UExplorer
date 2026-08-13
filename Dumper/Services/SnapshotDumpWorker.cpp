@@ -47,7 +47,7 @@ using Runtime::ReflectedTypeKind;
 
 constexpr std::string_view kOptionsSchema = "uexplorer.dump.start.v1";
 constexpr std::string_view kManifestSchema = "uexplorer.dump.manifest.v1";
-constexpr std::string_view kSdkSchema = "uexplorer.snapshot-sdk.v1";
+constexpr std::string_view kSdkSchema = "uexplorer.snapshot-sdk.v2";
 constexpr std::string_view kIdaSchema = "uexplorer.ida-script.v1";
 constexpr std::size_t kIoChunkBytes = 1024 * 1024;
 constexpr std::size_t kMaxWindowsPathChars = 32'767;
@@ -637,124 +637,809 @@ GenerationFailure GenerateSdk(
 	Runtime::IDumpJobExecutionContext& context,
 	std::vector<GeneratedArtifact>& artifacts)
 {
-	BoundedText text(limits.MaxArtifactBytes);
-	if (!text.Append("#pragma once\n\n#include <cstddef>\n#include <cstdint>\n\n")
-		|| !text.Append("namespace UExplorerSDK\n{\n")
-		|| !text.Append("inline constexpr char kSchema[] = \"")
-		|| !text.Append(kSdkSchema)
-		|| !text.Append("\";\n"))
+	struct TypeIndex
 	{
-		return {"DUMP_ARTIFACT_LIMIT_EXCEEDED", "SDK header exceeds the artifact limit."};
-	}
+		std::map<std::string, std::string, std::less<>> ByPath;
+		std::map<std::int32_t, std::string> ByObjectIndex;
+		std::map<std::string, std::string, std::less<>> ByLookup;
+		std::map<std::string, const ReflectedType*, std::less<>> Records;
+	};
+	struct ValueType
+	{
+		std::string Name;
+		std::uint32_t Size = 0;
+	};
+	struct LayoutMember
+	{
+		const ReflectedProperty* Property = nullptr;
+		std::string Direction;
+	};
+	struct FunctionRecord
+	{
+		const ReflectedType* Owner = nullptr;
+		const ReflectedFunction* Function = nullptr;
+		std::string Name;
+	};
 
-	std::size_t completed = 0;
+	const auto isKeyword = [](const std::string_view value) noexcept {
+		static constexpr std::array<std::string_view, 95> keywords{
+			"alignas", "alignof", "and", "and_eq", "asm", "auto", "bitand",
+			"bitor", "bool", "break", "case", "catch", "char", "char8_t",
+			"char16_t", "char32_t", "class", "compl", "concept", "const",
+			"consteval", "constexpr", "constinit", "const_cast", "continue",
+			"co_await", "co_return", "co_yield", "decltype", "default", "delete",
+			"do", "double", "dynamic_cast", "else", "enum", "explicit", "export",
+			"extern", "false", "float", "for", "friend", "goto", "if", "inline",
+			"int", "long", "mutable", "namespace", "new", "noexcept", "not",
+			"not_eq", "nullptr", "operator", "or", "or_eq", "private", "protected",
+			"public", "register", "reinterpret_cast", "requires", "return", "short",
+			"signed", "sizeof", "static", "static_assert", "static_cast", "struct",
+			"switch", "template", "this", "thread_local", "throw", "true", "try",
+			"typedef", "typeid", "typename", "union", "unsigned", "using", "virtual",
+			"void", "volatile", "wchar_t", "while", "xor", "xor_eq"};
+		return std::find(keywords.begin(), keywords.end(), value) != keywords.end();
+	};
+	const auto identifier = [&](const std::string_view value, const std::string_view fallback) {
+		std::string result;
+		result.reserve((std::min)(value.size(), std::size_t{96}) + 8);
+		for (const unsigned char character : value)
+		{
+			if (result.size() >= 96)
+				break;
+			const bool valid = (character >= 'a' && character <= 'z')
+				|| (character >= 'A' && character <= 'Z')
+				|| (character >= '0' && character <= '9');
+			result.push_back(valid ? static_cast<char>(character) : '_');
+		}
+		if (result.empty())
+			result.assign(fallback);
+		if (result.front() >= '0' && result.front() <= '9')
+			result.insert(result.begin(), '_');
+		if (isKeyword(result)
+			|| (result.size() >= 2 && result[0] == '_'
+				&& (result[1] == '_' || (result[1] >= 'A' && result[1] <= 'Z'))))
+		{
+			result.insert(0, "Sdk");
+		}
+		return result;
+	};
+	const auto uniqueIdentifier = [&](std::string base, std::set<std::string>& used, const std::uint64_t suffix) {
+		if (used.emplace(base).second)
+			return base;
+		const std::string original = base;
+		base += "_" + std::to_string(suffix);
+		std::uint64_t collision = 2;
+		while (!used.emplace(base).second)
+			base = original + "_" + std::to_string(suffix) + "_" + std::to_string(collision++);
+		return base;
+	};
+
+	TypeIndex names;
+	std::map<std::string, std::size_t, std::less<>> lookupCounts;
 	for (const ReflectedType& type : input.Types->Types())
 	{
-		if (context.IsCancellationRequested())
-			return {"DUMP_WORKER_CANCELLED", "SDK generation was cancelled."};
+		std::set<std::string> tokens{type.Name, LastPathToken(type.FullPath)};
+		for (const std::string& token : tokens)
+			++lookupCounts[token];
+	}
+	std::set<std::string> issuedTypeNames;
+	for (const ReflectedType& type : input.Types->Types())
+	{
 		const std::uint64_t suffix = static_cast<std::uint64_t>(
 			static_cast<std::uint32_t>(type.Handle.Index));
-		const std::string identifier = CppIdentifier(type.Name, suffix);
-		if (!text.Append("\ninline constexpr char ")
-			|| !text.Append(identifier)
+		const std::string symbol = uniqueIdentifier(
+			identifier(type.Name, "Type"),
+			issuedTypeNames,
+			suffix);
+		names.ByPath.emplace(type.FullPath, symbol);
+		names.ByObjectIndex.emplace(type.Handle.Index, symbol);
+		names.Records.emplace(type.FullPath, &type);
+		std::set<std::string> tokens{type.Name, LastPathToken(type.FullPath)};
+		for (const std::string& token : tokens)
+		{
+			if (lookupCounts[token] == 1)
+				names.ByLookup.emplace(token, symbol);
+		}
+	}
+	const auto findSymbol = [&](const std::string_view typeName) -> const std::string* {
+		const auto exact = names.ByPath.find(typeName);
+		if (exact != names.ByPath.end())
+			return &exact->second;
+		const auto lookup = names.ByLookup.find(typeName);
+		return lookup == names.ByLookup.end() ? nullptr : &lookup->second;
+	};
+	const auto findType = [&](const std::string_view typeName) -> const ReflectedType* {
+		const auto exact = names.Records.find(typeName);
+		if (exact != names.Records.end())
+			return exact->second;
+		const std::string* symbol = findSymbol(typeName);
+		if (!symbol)
+			return nullptr;
+		for (const ReflectedType& candidate : input.Types->Types())
+		{
+			const auto byPath = names.ByPath.find(candidate.FullPath);
+			if (byPath != names.ByPath.end() && byPath->second == *symbol)
+				return &candidate;
+		}
+		return nullptr;
+	};
+	const auto scalarSize = [](const PropertyKind kind) noexcept -> std::uint32_t {
+		switch (kind)
+		{
+		case PropertyKind::Int8:
+		case PropertyKind::UInt8: return 1;
+		case PropertyKind::Int16:
+		case PropertyKind::UInt16: return 2;
+		case PropertyKind::Int32:
+		case PropertyKind::UInt32:
+		case PropertyKind::Float: return 4;
+		case PropertyKind::Int64:
+		case PropertyKind::UInt64:
+		case PropertyKind::Double: return 8;
+		default: return 0;
+		}
+	};
+	const auto storageType = [](const std::uint32_t size) {
+		return ValueType{"::UExplorerSDK::TStorage<" + std::to_string(size) + ">", size};
+	};
+	const std::int32_t fNameSize = input.Context->NameProfile().Validated
+		? input.Context->NameProfile().FNameSize
+		: -1;
+
+	auto valueType = [&](auto&& self,
+		const PropertyKind kind,
+		const std::string_view typeName,
+		const std::shared_ptr<const PropertyDescriptor>& descriptor,
+		const std::uint32_t size,
+		const std::set<std::string>& definedTypes,
+		const bool allTypesDefined,
+		const std::size_t depth) -> ValueType {
+		if (depth > Runtime::TypeSnapshotStore::kMaxDescriptorDepth)
+			return storageType(size);
+		if (const char* scalar = IntegerCppType(kind))
+			return scalarSize(kind) == size ? ValueType{scalar, size} : storageType(size);
+		if (kind == PropertyKind::Float)
+			return size == sizeof(float) ? ValueType{"float", size} : storageType(size);
+		if (kind == PropertyKind::Double)
+			return size == sizeof(double) ? ValueType{"double", size} : storageType(size);
+		if (kind == PropertyKind::Bool)
+			return size == 1 ? ValueType{"std::uint8_t", size} : storageType(size);
+		if (kind == PropertyKind::Name)
+		{
+			return fNameSize > 0 && size == static_cast<std::uint32_t>(fNameSize)
+				? ValueType{"::UExplorerSDK::FName", size}
+				: ValueType{"::UExplorerSDK::TFName<" + std::to_string(size) + ">", size};
+		}
+		if (kind == PropertyKind::String)
+		{
+			return size == 16
+				? ValueType{"::UExplorerSDK::FString", size}
+				: ValueType{"::UExplorerSDK::TString<" + std::to_string(size) + ">", size};
+		}
+		if (kind == PropertyKind::Text)
+			return ValueType{"::UExplorerSDK::TText<" + std::to_string(size) + ">", size};
+		if (kind == PropertyKind::Object)
+		{
+			if (size != sizeof(std::uintptr_t))
+				return storageType(size);
+			const std::string* target = findSymbol(typeName);
+			return ValueType{target
+				? "::UExplorerSDK::Types::" + *target + "*"
+				: "void*", size};
+		}
+		if (kind == PropertyKind::WeakObject || kind == PropertyKind::SoftObject)
+		{
+			const std::string referenced = descriptor && !descriptor->TypeName.empty()
+				? descriptor->TypeName
+				: std::string(typeName);
+			const std::string* target = findSymbol(referenced);
+			const std::string pointee = target
+				? "::UExplorerSDK::Types::" + *target
+				: "void";
+			if (kind == PropertyKind::WeakObject && size == 8)
+				return ValueType{"::UExplorerSDK::TWeakObjectPtr<" + pointee + ">", size};
+			return ValueType{
+				kind == PropertyKind::WeakObject
+					? "::UExplorerSDK::TWeakObjectStorage<" + pointee + ", " + std::to_string(size) + ">"
+					: "::UExplorerSDK::TSoftObjectPtr<" + pointee + ", " + std::to_string(size) + ">",
+				size};
+		}
+		if (kind == PropertyKind::Enum)
+		{
+			const ReflectedType* targetType = findType(typeName);
+			const std::string* target = findSymbol(typeName);
+			if (targetType && target && targetType->Kind == ReflectedTypeKind::Enum
+				&& IntegerCppType(targetType->EnumUnderlyingKind)
+				&& scalarSize(targetType->EnumUnderlyingKind) == size)
+			{
+				return ValueType{"::UExplorerSDK::Types::" + *target, size};
+			}
+			return storageType(size);
+		}
+		if (kind == PropertyKind::Struct)
+		{
+			const ReflectedType* targetType = findType(typeName);
+			const std::string* target = findSymbol(typeName);
+			if (!targetType || !target || targetType->Kind == ReflectedTypeKind::Enum
+				|| targetType->PropertiesSize != size)
+			{
+				return storageType(size);
+			}
+			const std::string qualified = "::UExplorerSDK::Types::" + *target;
+			if (allTypesDefined || definedTypes.contains(targetType->FullPath))
+				return ValueType{qualified, size};
+			return ValueType{
+				"::UExplorerSDK::TInlineObject<" + qualified + ", " + std::to_string(size) + ">",
+				size};
+		}
+		if (kind == PropertyKind::Array && descriptor && descriptor->Element && size == 16)
+		{
+			const ValueType element = self(
+				self,
+				descriptor->Element->Kind,
+				descriptor->Element->TypeName,
+				descriptor->Element,
+				descriptor->Element->Size,
+				definedTypes,
+				true,
+				depth + 1);
+			return ValueType{"::UExplorerSDK::TArray<" + element.Name + ">", size};
+		}
+		if (kind == PropertyKind::Map && descriptor && descriptor->Key && descriptor->Mapped)
+		{
+			const ValueType key = self(
+				self, descriptor->Key->Kind, descriptor->Key->TypeName, descriptor->Key,
+				descriptor->Key->Size, definedTypes, true, depth + 1);
+			const ValueType mapped = self(
+				self, descriptor->Mapped->Kind, descriptor->Mapped->TypeName, descriptor->Mapped,
+				descriptor->Mapped->Size, definedTypes, true, depth + 1);
+			return ValueType{
+				"::UExplorerSDK::TMap<" + key.Name + ", " + mapped.Name + ", "
+					+ std::to_string(size) + ">",
+				size};
+		}
+		if (kind == PropertyKind::Set && descriptor && descriptor->Element)
+		{
+			const ValueType element = self(
+				self, descriptor->Element->Kind, descriptor->Element->TypeName, descriptor->Element,
+				descriptor->Element->Size, definedTypes, true, depth + 1);
+			return ValueType{
+				"::UExplorerSDK::TSet<" + element.Name + ", " + std::to_string(size) + ">",
+				size};
+		}
+		if (kind == PropertyKind::Delegate)
+			return ValueType{"::UExplorerSDK::TDelegate<" + std::to_string(size) + ">", size};
+		return storageType(size);
+	};
+
+	const auto appendLayout = [&](BoundedText& output,
+		const std::string& name,
+		const std::uint32_t ownerSize,
+		const std::uint32_t alignment,
+		const std::vector<LayoutMember>& sourceMembers,
+		const ReflectedType* superType,
+		const std::set<std::string>& definedTypes,
+		const bool allTypesDefined) {
+		struct PreparedMember
+		{
+			const ReflectedProperty* Property = nullptr;
+			std::string Field;
+			std::string Getter;
+			std::string Setter;
+			std::string Actual;
+			std::string Direction;
+			ValueType Type;
+			std::size_t Ordinal = 0;
+			bool Emitted = false;
+		};
+		std::vector<PreparedMember> members;
+		members.reserve(sourceMembers.size());
+		std::set<std::string> memberNames{"_Super"};
+		std::size_t ordinal = 0;
+		for (const LayoutMember& member : sourceMembers)
+		{
+			if (!member.Property)
+				continue;
+			PreparedMember prepared;
+			prepared.Property = member.Property;
+			prepared.Field = uniqueIdentifier(
+				identifier(member.Property->Name, "Field"),
+				memberNames,
+				ordinal + 1);
+			prepared.Direction = member.Direction;
+			prepared.Ordinal = ordinal++;
+			prepared.Type = valueType(
+				valueType,
+				member.Property->Kind,
+				member.Property->TypeName,
+				member.Property->Descriptor,
+				member.Property->Size,
+				definedTypes,
+				allTypesDefined,
+				0);
+			members.push_back(std::move(prepared));
+		}
+		for (PreparedMember& member : members)
+		{
+			member.Getter = uniqueIdentifier(
+				"Get_" + member.Field,
+				memberNames,
+				member.Ordinal + 1);
+			if (member.Property->Kind == PropertyKind::Bool)
+			{
+				member.Setter = uniqueIdentifier(
+					"Set_" + member.Field,
+					memberNames,
+					member.Ordinal + 1);
+			}
+		}
+		std::vector<std::size_t> layoutOrder(members.size());
+		for (std::size_t index = 0; index < layoutOrder.size(); ++index)
+			layoutOrder[index] = index;
+		std::sort(layoutOrder.begin(), layoutOrder.end(), [&](const std::size_t left, const std::size_t right) {
+			const ReflectedProperty& a = *members[left].Property;
+			const ReflectedProperty& b = *members[right].Property;
+			return a.Offset != b.Offset ? a.Offset < b.Offset : members[left].Ordinal < members[right].Ordinal;
+		});
+
+		std::ostringstream block;
+		block << "struct alignas(" << alignment << ") " << name << "\n{\n";
+		std::uint64_t cursor = 0;
+		if (superType && superType->Kind != ReflectedTypeKind::Enum
+			&& superType->PropertiesSize <= ownerSize
+			&& definedTypes.contains(superType->FullPath))
+		{
+			const std::string* superName = findSymbol(superType->FullPath);
+			if (superName)
+			{
+				block << "\t::UExplorerSDK::Types::" << *superName
+					<< " _Super; // 0x0 inherited layout\n";
+				cursor = superType->PropertiesSize;
+			}
+		}
+		std::size_t paddingOrdinal = 0;
+		for (const std::size_t memberIndex : layoutOrder)
+		{
+			PreparedMember& member = members[memberIndex];
+			const ReflectedProperty& property = *member.Property;
+			const std::uint64_t totalSize = static_cast<std::uint64_t>(property.Size)
+				* property.ArrayDim;
+			if (property.Offset < cursor)
+				continue;
+			if (property.Offset > cursor)
+			{
+				block << "\tstd::byte _Pad_" << std::hex << std::uppercase << cursor
+					<< "_" << std::dec << paddingOrdinal++ << "[" << (property.Offset - cursor)
+					<< "];\n";
+				cursor = property.Offset;
+			}
+			const bool bitBool = property.Kind == PropertyKind::Bool
+				&& property.Descriptor
+				&& property.Descriptor->Kind == PropertyKind::Bool
+				&& property.Descriptor->BoolMask != 0;
+			const bool directBool = bitBool
+				&& property.Descriptor->BoolByteOffset == 0
+				&& property.Descriptor->BoolMask == 0xFF
+				&& property.Size == 1;
+			if (bitBool && !directBool)
+			{
+				member.Actual = uniqueIdentifier(
+					member.Field + "_Storage",
+					memberNames,
+					member.Ordinal + 1);
+				block << "\tstd::byte " << member.Actual;
+				if (totalSize != 1)
+					block << "[" << totalSize << "]";
+			}
+			else
+			{
+				member.Actual = member.Field;
+				block << "\t" << (directBool ? "bool" : member.Type.Name)
+					<< " " << member.Actual;
+				if (property.ArrayDim != 1)
+					block << "[" << property.ArrayDim << "]";
+			}
+			block << "; // " << Hex(property.Offset) << " (" << Hex(totalSize) << ")";
+			if (!member.Direction.empty())
+				block << " " << member.Direction;
+			block << "\n";
+			member.Emitted = true;
+			cursor += totalSize;
+		}
+		if (cursor < ownerSize)
+		{
+			block << "\tstd::byte _Pad_" << std::hex << std::uppercase << cursor
+				<< "_" << std::dec << paddingOrdinal++ << "[" << (ownerSize - cursor)
+				<< "];\n";
+		}
+		block << "\n";
+		for (const PreparedMember& member : members)
+		{
+			const ReflectedProperty& property = *member.Property;
+			const bool bitBool = property.Kind == PropertyKind::Bool
+				&& property.Descriptor
+				&& property.Descriptor->Kind == PropertyKind::Bool
+				&& property.Descriptor->BoolMask != 0;
+			const std::string indexParameter = property.ArrayDim == 1
+				? std::string{}
+				: "std::size_t index";
+			const std::string indexExpression = property.ArrayDim == 1
+				? std::string{}
+				: " + index * " + std::to_string(property.Size);
+			if (bitBool)
+			{
+				const std::uint64_t byteOffset = static_cast<std::uint64_t>(property.Offset)
+					+ property.Descriptor->BoolByteOffset;
+				block << "\tbool " << member.Getter << "(" << indexParameter
+					<< ") const noexcept\n\t{\n"
+					<< "\t\tconst auto* bytes = reinterpret_cast<const std::uint8_t*>(this);\n"
+					<< "\t\treturn (bytes[" << byteOffset << indexExpression << "] & "
+					<< static_cast<std::uint32_t>(property.Descriptor->BoolMask) << ") != 0;\n\t}\n"
+					<< "\tvoid " << member.Setter << "(";
+				if (property.ArrayDim != 1)
+					block << "std::size_t index, ";
+				block << "bool value) noexcept\n\t{\n"
+					<< "\t\tauto* bytes = reinterpret_cast<std::uint8_t*>(this);\n"
+					<< "\t\tauto& byte = bytes[" << byteOffset << indexExpression << "];\n"
+					<< "\t\tif (value) byte |= "
+					<< static_cast<std::uint32_t>(property.Descriptor->BoolMask)
+					<< "; else byte &= static_cast<std::uint8_t>(~"
+					<< static_cast<std::uint32_t>(property.Descriptor->BoolMask) << ");\n\t}\n";
+			}
+			else
+			{
+				block << "\t" << member.Type.Name << "& " << member.Getter << "("
+					<< indexParameter << ") noexcept\n\t{\n"
+					<< "\t\treturn *reinterpret_cast<" << member.Type.Name
+					<< "*>(reinterpret_cast<std::byte*>(this) + " << property.Offset
+					<< indexExpression << ");\n\t}\n"
+					<< "\tconst " << member.Type.Name << "& " << member.Getter << "("
+					<< indexParameter << ") const noexcept\n\t{\n"
+					<< "\t\treturn *reinterpret_cast<const " << member.Type.Name
+					<< "*>(reinterpret_cast<const std::byte*>(this) + " << property.Offset
+					<< indexExpression << ");\n\t}\n";
+			}
+		}
+		block << "};\nstatic_assert(sizeof(" << name << ") == " << ownerSize << ");\n"
+			<< "static_assert(alignof(" << name << ") == " << alignment << ");\n";
+		if (superType && definedTypes.contains(superType->FullPath)
+			&& superType->PropertiesSize <= ownerSize)
+		{
+			block << "static_assert(offsetof(" << name << ", _Super) == 0);\n";
+		}
+		for (const PreparedMember& member : members)
+		{
+			const ReflectedProperty& property = *member.Property;
+			if (member.Emitted)
+			{
+				block << "static_assert(offsetof(" << name << ", " << member.Actual
+					<< ") == " << property.Offset << ");\n";
+			}
+			block << "inline constexpr std::size_t " << name << "_" << member.Field
+				<< "_Offset = " << property.Offset << ";\n"
+				<< "inline constexpr std::size_t " << name << "_" << member.Field
+				<< "_Size = " << property.Size << ";\n"
+				<< "inline constexpr std::size_t " << name << "_" << member.Field
+				<< "_ArrayDim = " << property.ArrayDim << ";\n";
+			if (property.Kind == PropertyKind::Bool && property.Descriptor
+				&& property.Descriptor->Kind == PropertyKind::Bool)
+			{
+				block << "inline constexpr std::uint8_t " << name << "_" << member.Field
+					<< "_Mask = " << static_cast<std::uint32_t>(property.Descriptor->BoolMask)
+					<< ";\n";
+			}
+		}
+		block << "\n";
+		return output.Append(block.str());
+	};
+
+	std::vector<const ReflectedType*> layoutTypes;
+	std::map<std::int32_t, std::size_t> layoutByIndex;
+	std::map<std::string, std::size_t, std::less<>> layoutByPath;
+	for (const ReflectedType& type : input.Types->Types())
+	{
+		if (type.Kind == ReflectedTypeKind::Enum)
+			continue;
+		layoutByIndex.emplace(type.Handle.Index, layoutTypes.size());
+		layoutByPath.emplace(type.FullPath, layoutTypes.size());
+		layoutTypes.push_back(&type);
+	}
+	std::vector<std::uint8_t> visitState(layoutTypes.size(), 0);
+	std::vector<const ReflectedType*> definitionOrder;
+	definitionOrder.reserve(layoutTypes.size());
+	auto visit = [&](auto&& self, const std::size_t index) -> void {
+		if (visitState[index] == 2)
+			return;
+		if (visitState[index] == 1)
+			return;
+		visitState[index] = 1;
+		const ReflectedType& type = *layoutTypes[index];
+		if (type.Super)
+		{
+			const auto dependency = layoutByIndex.find(type.Super->Index);
+			if (dependency != layoutByIndex.end())
+				self(self, dependency->second);
+		}
+		for (const ReflectedProperty& property : type.DirectProperties)
+		{
+			if (property.Kind != PropertyKind::Struct)
+				continue;
+			const ReflectedType* dependencyType = findType(property.TypeName);
+			if (!dependencyType || dependencyType->Kind == ReflectedTypeKind::Enum)
+				continue;
+			const auto dependency = layoutByPath.find(dependencyType->FullPath);
+			if (dependency != layoutByPath.end())
+				self(self, dependency->second);
+		}
+		visitState[index] = 2;
+		definitionOrder.push_back(&type);
+	};
+	for (std::size_t index = 0; index < layoutTypes.size(); ++index)
+		visit(visit, index);
+
+	std::vector<FunctionRecord> functions;
+	std::set<std::string> issuedFunctionNames;
+	for (const ReflectedType& type : input.Types->Types())
+	{
+		const std::string* ownerName = findSymbol(type.FullPath);
+		if (!ownerName)
+			continue;
+		for (const ReflectedFunction& function : type.DirectFunctions)
+		{
+			const std::uint64_t suffix = static_cast<std::uint64_t>(
+				static_cast<std::uint32_t>(function.Handle.Function.Index));
+			functions.push_back({
+				.Owner = &type,
+				.Function = &function,
+				.Name = uniqueIdentifier(
+					*ownerName + "_" + identifier(function.Name, "Function"),
+					issuedFunctionNames,
+					suffix)});
+		}
+	}
+
+	BoundedText text(limits.MaxArtifactBytes);
+	std::ostringstream preamble;
+	preamble << "#pragma once\n\n"
+		<< "#include <cstddef>\n#include <cstdint>\n#include <cstring>\n#include <string_view>\n\n"
+		<< "namespace UExplorerSDK\n{\n"
+		<< "inline constexpr char kSchema[] = \"" << kSdkSchema << "\";\n"
+		<< "inline constexpr char kTargetGame[] = " << json(input.Context->GameName()).dump() << ";\n"
+		<< "inline constexpr char kTargetVersion[] = " << json(input.Context->GameVersion()).dump() << ";\n"
+		<< "inline constexpr std::uint64_t kContextGeneration = " << input.Context->Generation() << ";\n"
+		<< "inline constexpr std::uint64_t kTypeSnapshotGeneration = " << input.Types->Generation() << ";\n"
+		<< "static_assert(sizeof(void*) == 8, \"UExplorer SDK requires a 64-bit target\");\n\n"
+		<< "template<std::size_t Size>\nstruct TStorage\n{\n"
+		<< "\tstatic_assert(Size > 0);\n\tstd::byte Data[Size];\n"
+		<< "\ttemplate<typename T> T& As() noexcept { return *reinterpret_cast<T*>(Data); }\n"
+		<< "\ttemplate<typename T> const T& As() const noexcept { return *reinterpret_cast<const T*>(Data); }\n};\n\n"
+		<< "template<typename T, std::size_t Size>\nstruct TInlineObject\n{\n"
+		<< "\tstd::byte Data[Size];\n\tT& Get() noexcept { return *reinterpret_cast<T*>(Data); }\n"
+		<< "\tconst T& Get() const noexcept { return *reinterpret_cast<const T*>(Data); }\n};\n\n"
+		<< "template<typename T>\nstruct TArray\n{\n"
+		<< "\tT* Data = nullptr;\n\tstd::int32_t Num = 0;\n\tstd::int32_t Max = 0;\n"
+		<< "\tbool IsValidIndex(std::int32_t index) const noexcept { return index >= 0 && index < Num; }\n"
+		<< "\tT& operator[](std::int32_t index) noexcept { return Data[index]; }\n"
+		<< "\tconst T& operator[](std::int32_t index) const noexcept { return Data[index]; }\n};\n"
+		<< "static_assert(sizeof(TArray<std::byte>) == 16);\n\n"
+		<< "struct FString : TArray<wchar_t>\n{\n"
+		<< "\tstd::wstring_view View() const noexcept\n\t{\n"
+		<< "\t\tconst std::size_t length = Num > 0 && Data && Data[Num - 1] == L'\\0'\n"
+		<< "\t\t\t? static_cast<std::size_t>(Num - 1) : static_cast<std::size_t>(Num > 0 ? Num : 0);\n"
+		<< "\t\treturn Data ? std::wstring_view(Data, length) : std::wstring_view{};\n\t}\n};\n"
+		<< "static_assert(sizeof(FString) == 16);\n\n"
+		<< "template<std::size_t Size> using TFName = TStorage<Size>;\n"
+		<< "template<std::size_t Size> using TString = TStorage<Size>;\n"
+		<< "template<std::size_t Size> using TText = TStorage<Size>;\n"
+		<< "template<std::size_t Size> using TDelegate = TStorage<Size>;\n"
+		<< "template<typename T, std::size_t Size>\nstruct TObjectStorage\n{\n"
+		<< "\tstd::byte Data[Size];\n\tT* Get() noexcept { return reinterpret_cast<T*>(Data); }\n"
+		<< "\tconst T* Get() const noexcept { return reinterpret_cast<const T*>(Data); }\n};\n"
+		<< "template<typename T, std::size_t Size> using TWeakObjectStorage = TObjectStorage<T, Size>;\n"
+		<< "template<typename T, std::size_t Size> using TSoftObjectPtr = TObjectStorage<T, Size>;\n"
+		<< "template<typename K, typename V, std::size_t Size> using TMap = TStorage<Size>;\n"
+		<< "template<typename T, std::size_t Size> using TSet = TStorage<Size>;\n\n"
+		<< "template<typename T>\nstruct TWeakObjectPtr\n{\n"
+		<< "\tstd::int32_t ObjectIndex = -1;\n\tstd::int32_t ObjectSerialNumber = 0;\n};\n"
+		<< "static_assert(sizeof(TWeakObjectPtr<void>) == 8);\n\n";
+	if (fNameSize > 0 && fNameSize <= 64)
+	{
+		const std::uint32_t fNameAlignment = static_cast<std::uint32_t>(fNameSize) % 4 == 0 ? 4 : 1;
+		preamble << "struct alignas(" << fNameAlignment << ") FName\n{\n"
+			<< "\tstd::byte Data[" << fNameSize << "];\n";
+		const std::int32_t comparisonOffset = input.Context->NameProfile().ComparisonIndexOffset;
+		const std::int32_t numberOffset = input.Context->NameProfile().NumberOffset;
+		if (comparisonOffset >= 0 && comparisonOffset <= fNameSize - 4)
+		{
+			preamble << "\tstd::uint32_t ComparisonIndex() const noexcept\n\t{\n"
+				<< "\t\tstd::uint32_t value = 0; std::memcpy(&value, Data + " << comparisonOffset
+				<< ", sizeof(value)); return value;\n\t}\n";
+		}
+		if (numberOffset >= 0 && numberOffset <= fNameSize - 4)
+		{
+			preamble << "\tstd::uint32_t Number() const noexcept\n\t{\n"
+				<< "\t\tstd::uint32_t value = 0; std::memcpy(&value, Data + " << numberOffset
+				<< ", sizeof(value)); return value;\n\t}\n";
+		}
+		preamble << "};\nstatic_assert(sizeof(FName) == " << fNameSize << ");\n\n";
+	}
+	preamble << "namespace Offsets\n{\n";
+	std::set<std::string> offsetNames;
+	for (const auto& [name, report] : input.Context->Offsets())
+	{
+		if (!report.IsValidated())
+			continue;
+		const std::string offsetName = uniqueIdentifier(
+			identifier(name, "Offset"), offsetNames, offsetNames.size() + 1);
+		preamble << "inline constexpr std::ptrdiff_t " << offsetName << " = " << report.Value << ";\n";
+	}
+	preamble << "} // namespace Offsets\n\n";
+	const Runtime::OffsetReport* processEventIndex = input.Context->FindOffset("process_event.index");
+	const Runtime::OffsetReport* processEventOffset = input.Context->FindOffset("process_event.offset");
+	const std::int64_t peIndex = processEventIndex && processEventIndex->IsValidated()
+		? processEventIndex->Value : -1;
+	const std::int64_t peOffset = processEventOffset && processEventOffset->IsValidated()
+		? processEventOffset->Value : -1;
+	preamble << "inline constexpr std::ptrdiff_t kProcessEventIndex = " << peIndex << ";\n"
+		<< "inline constexpr std::ptrdiff_t kProcessEventRva = " << peOffset << ";\n"
+		<< "using ProcessEventFn = void(*)(void*, void*, void*);\n"
+		<< "inline ProcessEventFn ResolveProcessEvent(void* object) noexcept\n{\n"
+		<< "\tif (!object || kProcessEventIndex < 0) return nullptr;\n"
+		<< "\tauto** table = *reinterpret_cast<void***>(object);\n"
+		<< "\treturn table ? reinterpret_cast<ProcessEventFn>(table[kProcessEventIndex]) : nullptr;\n}\n"
+		<< "inline bool Invoke(void* object, void* function, void* parameters) noexcept\n{\n"
+		<< "\tProcessEventFn processEvent = ResolveProcessEvent(object);\n"
+		<< "\tif (!processEvent || !function) return false;\n"
+		<< "\tprocessEvent(object, function, parameters);\n\treturn true;\n}\n\n"
+		<< "struct FunctionMetadata\n{\n"
+		<< "\tconst char* Path;\n\tstd::uint64_t Flags;\n\tstd::uint32_t ParameterSize;\n"
+		<< "\tstd::uintptr_t NativeRva;\n\tconst char* Implementation;\n};\n\n"
+		<< "#pragma pack(push, 1)\nnamespace Types\n{\n";
+	if (!text.Append(preamble.str()))
+		return {"DUMP_ARTIFACT_LIMIT_EXCEEDED", "SDK preamble exceeds the artifact limit."};
+
+	for (const ReflectedType& type : input.Types->Types())
+	{
+		const std::string* typeName = findSymbol(type.FullPath);
+		if (!typeName
+			|| !text.Append("inline constexpr char ")
+			|| !text.Append(*typeName)
 			|| !text.Append("_Path[] = ")
 			|| !text.AppendJson(json(type.FullPath))
 			|| !text.Append(";\n"))
 		{
-			return {"DUMP_ARTIFACT_LIMIT_EXCEEDED", "SDK header exceeds the artifact limit."};
+			return {"DUMP_ARTIFACT_LIMIT_EXCEEDED", "SDK type identity output exceeds the artifact limit."};
 		}
+	}
+	if (!text.Append("\n"))
+		return {"DUMP_ARTIFACT_LIMIT_EXCEEDED", "SDK header exceeds the artifact limit."};
+	for (const ReflectedType* type : layoutTypes)
+	{
+		const std::string* typeName = findSymbol(type->FullPath);
+		if (!typeName || !text.Append("struct ") || !text.Append(*typeName) || !text.Append(";\n"))
+			return {"DUMP_ARTIFACT_LIMIT_EXCEEDED", "SDK forward declarations exceed the artifact limit."};
+	}
+	if (!text.Append("\n"))
+		return {"DUMP_ARTIFACT_LIMIT_EXCEEDED", "SDK header exceeds the artifact limit."};
 
-		if (type.Kind == ReflectedTypeKind::Enum
-			&& type.EnumState == ReflectedMemberState::Supported
-			&& IntegerCppType(type.EnumUnderlyingKind))
+	for (const ReflectedType& type : input.Types->Types())
+	{
+		if (type.Kind != ReflectedTypeKind::Enum)
+			continue;
+		const char* underlying = IntegerCppType(type.EnumUnderlyingKind);
+		const std::string* typeName = findSymbol(type.FullPath);
+		if (!underlying || !typeName)
+			continue;
+		std::ostringstream encoded;
+		encoded << "enum class " << *typeName << " : " << underlying << "\n{\n";
+		std::set<std::string> entries;
+		std::size_t entryOrdinal = 0;
+		for (const auto& entry : type.EnumEntries)
 		{
-			if (!text.Append("enum class ")
-				|| !text.Append(identifier)
-				|| !text.Append(" : ")
-				|| !text.Append(IntegerCppType(type.EnumUnderlyingKind))
-				|| !text.Append("\n{\n"))
-			{
-				return {"DUMP_ARTIFACT_LIMIT_EXCEEDED", "SDK enum output exceeds the artifact limit."};
-			}
-			std::size_t ordinal = 0;
-			for (const auto& entry : type.EnumEntries)
-			{
-				if (!text.Append("\t")
-					|| !text.Append(CppIdentifier(entry.Name, ordinal++))
-					|| !text.Append(" = static_cast<")
-					|| !text.Append(IntegerCppType(type.EnumUnderlyingKind))
-					|| !text.Append(">(")
-					|| !text.Append(std::to_string(entry.Value))
-					|| !text.Append("),\n"))
-				{
-					return {"DUMP_ARTIFACT_LIMIT_EXCEEDED", "SDK enum output exceeds the artifact limit."};
-				}
-			}
-			if (!text.Append("};\n"))
-				return {"DUMP_ARTIFACT_LIMIT_EXCEEDED", "SDK enum output exceeds the artifact limit."};
+			const std::string entryName = uniqueIdentifier(
+				identifier(LastPathToken(entry.Name), "Value"), entries, ++entryOrdinal);
+			const std::uint64_t raw = std::bit_cast<std::uint64_t>(entry.Value);
+			encoded << "\t" << entryName << " = static_cast<" << underlying << ">(" << Hex(raw) << "ULL),\n";
 		}
-		else if (type.Kind != ReflectedTypeKind::Enum)
-		{
-			const std::uint32_t alignment = type.MinAlignment == 0 ? 1 : type.MinAlignment;
-			if (type.PropertiesSize == 0
-				|| !std::has_single_bit(alignment)
-				|| type.PropertiesSize % alignment != 0)
-			{
-				return {"DUMP_SDK_LAYOUT_INVALID", "A reflected type cannot be represented by an exact opaque C++ layout."};
-			}
-			if (!text.Append("struct alignas(")
-				|| !text.Append(std::to_string(alignment))
-				|| !text.Append(") ")
-				|| !text.Append(identifier)
-				|| !text.Append("\n{\n\tstd::byte Storage[")
-				|| !text.Append(std::to_string(type.PropertiesSize))
-				|| !text.Append("];\n};\nstatic_assert(sizeof(")
-				|| !text.Append(identifier)
-				|| !text.Append(") == ")
-				|| !text.Append(std::to_string(type.PropertiesSize))
-				|| !text.Append(");\n"))
-			{
-				return {"DUMP_ARTIFACT_LIMIT_EXCEEDED", "SDK type output exceeds the artifact limit."};
-			}
-			std::size_t ordinal = 0;
-			for (const ReflectedProperty& property : type.DirectProperties)
-			{
-				if (!text.Append("inline constexpr std::size_t ")
-					|| !text.Append(identifier)
-					|| !text.Append("_")
-					|| !text.Append(CppIdentifier(property.Name, ordinal++))
-					|| !text.Append("_Offset = ")
-					|| !text.Append(std::to_string(property.Offset))
-					|| !text.Append(";\n"))
-				{
-					return {"DUMP_ARTIFACT_LIMIT_EXCEEDED", "SDK property output exceeds the artifact limit."};
-				}
-			}
-			ordinal = 0;
-			for (const ReflectedFunction& function : type.DirectFunctions)
-			{
-				if (function.NativeAddress < input.Context->ModuleBase())
-					continue;
-				const std::uint64_t rva = static_cast<std::uint64_t>(
-					function.NativeAddress - input.Context->ModuleBase());
-				if (!text.Append("inline constexpr std::uintptr_t ")
-					|| !text.Append(identifier)
-					|| !text.Append("_")
-					|| !text.Append(CppIdentifier(function.Name, ordinal++))
-					|| !text.Append("_Rva = ")
-					|| !text.Append(Hex(rva))
-					|| !text.Append(";\n"))
-				{
-					return {"DUMP_ARTIFACT_LIMIT_EXCEEDED", "SDK function output exceeds the artifact limit."};
-				}
-			}
-		}
+		encoded << "};\nstatic_assert(sizeof(" << *typeName << ") == "
+			<< scalarSize(type.EnumUnderlyingKind) << ");\n\n";
+		if (!text.Append(encoded.str()))
+			return {"DUMP_ARTIFACT_LIMIT_EXCEEDED", "SDK enum output exceeds the artifact limit."};
+	}
 
+	std::set<std::string> definedTypes;
+	std::size_t completed = 0;
+	for (const ReflectedType* type : definitionOrder)
+	{
+		if (context.IsCancellationRequested())
+			return {"DUMP_WORKER_CANCELLED", "SDK generation was cancelled."};
+		const std::uint32_t alignment = type->MinAlignment == 0 ? 1 : type->MinAlignment;
+		if (type->PropertiesSize == 0
+			|| !std::has_single_bit(alignment)
+			|| type->PropertiesSize % alignment != 0)
+		{
+			return {"DUMP_SDK_LAYOUT_INVALID", "A reflected type cannot be represented by a typed C++ layout."};
+		}
+		const std::string* typeName = findSymbol(type->FullPath);
+		if (!typeName)
+			return {"DUMP_SDK_LAYOUT_INVALID", "A reflected type has no stable C++ identifier."};
+		const ReflectedType* superType = nullptr;
+		if (type->Super)
+			superType = input.Types->FindByObjectIndex(type->Super->Index);
+		std::vector<LayoutMember> members;
+		members.reserve(type->DirectProperties.size());
+		for (const ReflectedProperty& property : type->DirectProperties)
+			members.push_back({.Property = &property});
+		if (!appendLayout(
+			text,
+			*typeName,
+			type->PropertiesSize,
+			alignment,
+			members,
+			superType,
+			definedTypes,
+			false))
+		{
+			return {"DUMP_ARTIFACT_LIMIT_EXCEEDED", "SDK typed layout output exceeds the artifact limit."};
+		}
+		definedTypes.emplace(type->FullPath);
 		++completed;
-		if (!ReportTypeProgress(context, "sdk", completed, input.Types->Types().size()))
+		if (!ReportTypeProgress(context, "sdk-types", completed, definitionOrder.size()))
 			return {"DUMP_WORKER_CANCELLED", "SDK generation was cancelled."};
 	}
-	if (!text.Append("\n} // namespace UExplorerSDK\n"))
+	if (!text.Append("} // namespace Types\n\nnamespace Params\n{\n"))
+		return {"DUMP_ARTIFACT_LIMIT_EXCEEDED", "SDK type output exceeds the artifact limit."};
+
+	for (const FunctionRecord& record : functions)
+	{
+		if (context.IsCancellationRequested())
+			return {"DUMP_WORKER_CANCELLED", "SDK function generation was cancelled."};
+		std::vector<LayoutMember> parameters;
+		parameters.reserve(record.Function->Parameters.size());
+		for (const ReflectedParameter& parameter : record.Function->Parameters)
+		{
+			parameters.push_back({
+				.Property = &parameter.Property,
+				.Direction = ToString(parameter.Direction)});
+		}
+		if (record.Function->ParameterSize == 0)
+		{
+			if (!text.Append("struct ") || !text.Append(record.Name) || !text.Append(" {};\n\n"))
+				return {"DUMP_ARTIFACT_LIMIT_EXCEEDED", "SDK zero-parameter function output exceeds the artifact limit."};
+		}
+		else if (!appendLayout(
+			text,
+			record.Name,
+			record.Function->ParameterSize,
+			1,
+			parameters,
+			nullptr,
+			definedTypes,
+			true))
+		{
+			return {"DUMP_ARTIFACT_LIMIT_EXCEEDED", "SDK function parameter output exceeds the artifact limit."};
+		}
+	}
+	if (!text.Append("} // namespace Params\n#pragma pack(pop)\n\nnamespace Functions\n{\n"))
+		return {"DUMP_ARTIFACT_LIMIT_EXCEEDED", "SDK function output exceeds the artifact limit."};
+	for (const FunctionRecord& record : functions)
+	{
+		const std::uint64_t rva = record.Function->NativeAddress >= input.Context->ModuleBase()
+			? static_cast<std::uint64_t>(record.Function->NativeAddress - input.Context->ModuleBase())
+			: 0;
+		std::ostringstream encoded;
+		encoded << "inline constexpr FunctionMetadata " << record.Name << " = {"
+			<< json(record.Function->FullPath).dump() << ", " << record.Function->Flags << ", "
+			<< record.Function->ParameterSize << ", " << Hex(rva) << ", "
+			<< json(ToString(record.Function->Implementation)).dump() << "};\n"
+			<< "inline bool Invoke_" << record.Name
+			<< "(void* object, void* function, Params::" << record.Name << "& parameters) noexcept\n{\n"
+			<< "\treturn ::UExplorerSDK::Invoke(object, function, "
+			<< (record.Function->ParameterSize == 0 ? "nullptr" : "&parameters") << ");\n}\n\n";
+		if (!text.Append(encoded.str()))
+			return {"DUMP_ARTIFACT_LIMIT_EXCEEDED", "SDK function metadata output exceeds the artifact limit."};
+	}
+	if (!text.Append("} // namespace Functions\n\n} // namespace UExplorerSDK\n"))
 		return {"DUMP_ARTIFACT_LIMIT_EXCEEDED", "SDK header exceeds the artifact limit."};
 	artifacts.push_back({
 		"UExplorerSDK.hpp",

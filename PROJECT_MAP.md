@@ -667,8 +667,9 @@ React SDKDump.tsx
         -> dump.jobs.get/cancel 按 admitted scope 查询，不要求当前 snapshot 仍是同一代
 ```
 
-SDK 产物是 pinned TypeSnapshot 的 opaque exact-layout header，不是完整 typed
-Dumper-7 SDK。当前没有 Host reload persistence 或真实 UE artifact/consumer fixture。
+SDK 产物是 pinned TypeSnapshot 的可直接包含 typed header，包含字段/枚举/参数布局、
+padding/assert、native metadata 与 ProcessEvent helper；它还不包含完整 Dumper-7 object lookup/runtime framework。
+当前没有 Host reload persistence 或真实 UE artifact/consumer fixture。
 
 ### 5.1 对象属性读取流
 

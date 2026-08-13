@@ -754,6 +754,7 @@
 		"2026-08-13: dump submission pins exact immutable EngineContext/ObjectSnapshot/TypeSnapshot pointers; terminal records release the large input while retaining admitted scope/events/results for queries independent of the current snapshot generation",
 		"2026-08-13: the Host rejects caller output identities and injects a bounded UUIDv4 token; Core reserves only a canonical non-reparse session/job directory under %LOCALAPPDATA%\\UExplorer\\Dumps",
 		"2026-08-13: each bounded artifact passes its structural consumer and .partial size plus memory/disk SHA-256 comparison before no-replace commit; manifest.json is generated, verified, and committed last",
+		"2026-08-14: SDK artifact schema v2 emits directly includable typed fields/enums, explicit padding and layout asserts, UFunction parameter structs/metadata, and ProcessEvent helpers from the pinned TypeSnapshot; unavailable member semantics remain exact-size named storage",
 		"Host restart/reload persistence and a real UE four-format artifact/consumer fixture remain pending"
 	  ]
 	},

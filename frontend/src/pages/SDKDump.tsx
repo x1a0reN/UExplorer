@@ -34,7 +34,7 @@ interface ActiveJobBinding {
 
 function getFormats(): DumpFormat[] {
   return [
-    { id: 'sdk', capability: 'dump.cpp', name: t('C++ Headers'), icon: Code2, desc: t('Immutable opaque layouts, property offsets, and native RVAs') },
+    { id: 'sdk', capability: 'dump.cpp', name: t('C++ Headers'), icon: Code2, desc: t('Typed fields, enums, function parameters, and ProcessEvent helpers') },
     { id: 'usmap', capability: 'dump.usmap', name: t('USMAP'), icon: Database, desc: t('Exact USMAP mapping with fail-closed descriptor checks') },
     { id: 'dumpspace', capability: 'dump.dumpspace', name: t('Dumpspace JSON'), icon: LayoutTemplate, desc: t('Snapshot-derived Dumpspace JSON documents') },
     { id: 'ida-script', capability: 'dump.ida', name: t('IDA Script'), icon: Coffee, desc: t('IDA import script for witnessed native Function RVAs') },

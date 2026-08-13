@@ -232,8 +232,9 @@ added. A successful build or synthetic fixture does not establish target runtime
   their admitted scope and bounded events/results, so polling is not coupled to the current
   snapshot generation. The Host rejects caller output identities and injects a bounded
   UUID token; Core reserves only `%LOCALAPPDATA%\UExplorer\Dumps\<session>\<identity>`.
-- `SnapshotDumpWorker` emits a bounded opaque exact-layout C++ header (not a complete typed
-  Dumper-7 SDK), an uncompressed USMAP v4 container, five Dumpspace JSON documents, or an
+- `SnapshotDumpWorker` emits a directly includable snapshot C++ header with typed fields,
+  enums, padding/asserts, function parameter structs, metadata, and ProcessEvent helpers
+  (not a complete Dumper-7 runtime framework), an uncompressed USMAP v4 container, five Dumpspace JSON documents, or an
   IDA Python name script. Each path has a bounded structural consumer. Artifacts are written
   as `.partial`, checked by size plus SHA-256, then committed without replacement before
   `manifest.json` is validated and committed last with the pinned scope and artifact metadata. Cooperative
