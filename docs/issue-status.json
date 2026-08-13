@@ -729,7 +729,9 @@
 		"2026-08-11: struct values are decoded from one bounded stable byte snapshot, and WorldBrowser strictly parses exact RootComponent RelativeLocation/RelativeRotation/RelativeScale3D property reads",
 		"2026-08-11: world.actor.transform.get now fixes one World/Object/Type/codec generation and reads RelativeLocation/RelativeRotation/RelativeScale3D plus all three bAbsolute flags from one stable byte witness in one owned game-thread work; it rechecks RootComponent and live bytes before publishing",
 		"2026-08-11: the typed Host/React path reports float32/float64 and relative versus absolute-world storage semantics with computed_world=false",
-		"2026-08-11: canonical FVector input makes the reflected SetActorScale3D/SetRelativeScale3D signature executable through exact call.invoke without raw writes; full location/rotation mutation still requires FHitResult lifecycle and real UE4/UE5 round-trips"
+		"2026-08-11: canonical FVector input makes the reflected SetActorScale3D/SetRelativeScale3D signature executable through exact call.invoke without raw writes; full location/rotation mutation still requires FHitResult lifecycle and real UE4/UE5 round-trips",
+		"2026-08-13: world.actor.transform.get now prepares exact K2_GetActorLocation/K2_GetActorRotation/GetActorScale3D FunctionHandles and canonical owned return frames, executes all three inside the same game-thread work bracketed by the stored RootComponent witness, and returns stored and reflected-getter computed transforms as separate typed states",
+		"2026-08-13: this is code evidence only; Wandering Sword still has no launchable game executable, no real UE ProcessEvent/streaming/GC/precision fixture has run, WORLD-006 remains in_progress, and every engine profile remains Not supported"
       ]
     },
     "STATE-001": {

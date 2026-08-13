@@ -1015,7 +1015,8 @@ CoreCommandResponse CoreCommandService::ExecuteWorldTransformRead(
 	WorldTransformReadPreparation prepared = WorldTransformCommandService::PrepareRead(
 		request.Data,
 		std::move(*lease),
-		m_Engine);
+		m_Engine,
+		m_GameThread);
 	if (!prepared.Ok())
 	{
 		return Failure(

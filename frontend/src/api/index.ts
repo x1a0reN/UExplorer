@@ -622,6 +622,22 @@ export interface WorldActorStoredTransform {
   };
 }
 
+export type WorldActorComputedTransform =
+  | {
+      state: 'available';
+      source: 'actor_reflected_getters';
+      computed_world: true;
+      precision: 'float32' | 'float64';
+      location: Vec3Data;
+      rotation: RotatorData;
+      scale: Vec3Data;
+    }
+  | {
+      state: 'unavailable';
+      reason_code: string;
+      reason: string;
+    };
+
 export interface WorldActorTransformResponse {
   generation: number;
   context_generation: number;
@@ -630,6 +646,7 @@ export interface WorldActorTransformResponse {
   actor: WorldSnapshotObject;
   root_component: WorldSnapshotObject;
   transform: WorldActorStoredTransform;
+  computed_transform: WorldActorComputedTransform;
 }
 
 export interface WorldActorTransformUpdateResponse {

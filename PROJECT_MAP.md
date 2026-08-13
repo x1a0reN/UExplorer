@@ -25,7 +25,7 @@ UExplorer 是一个面向 Unreal Engine 的 **SDK Dump + 实时游戏内省工�
 └──────────────────────────────────────────────┘
 ```
 
-当前分支已完成 R4 原子通信切换并进入 R5.3。React -> Tauri `domain_request` -> Rust `DomainService` -> PID-scoped Named Pipe -> `CoreCommandService` 是唯一桌面主链路；release Core 不编译旧 HTTP/API，也不链接 WinSock。Object/Type 集合由 Host immutable SnapshotIndex 查询，详情由 `TypeCommandService` 读取 exact TypeSnapshot；`ObjectPropertyCommandService` 和 `FunctionCallCommandService` 分别执行稳定句柄属性读取与单目标函数调用。生产类型源现可冻结 flat descriptor、一层 `Array<flat>` descriptor，以及 exact `/Script/CoreUObject.Vector`/`Rotator` 的 float/double 三字段 descriptor；PropertyCodec 对 struct 先复制稳定整值再递归解码，并只把这两个 descriptor-proven math struct 纳入 owned ParamFrame 输入/输出生命周期。只读 World 链路由 `WorldSnapshotCapture` 构建并复核 immutable snapshot，`WorldCommandService` 提供 worker-only query；`WorldTransformCommandService` 另以一个 owned game-thread work 从同一稳定 byte witness 读取 RootComponent 三个 `Relative*` 和三个 `bAbsolute*`。WorldBrowser 通过单个 `world.actor.transform.get` 展示 scalar precision 和 relative/absolute-world 存储语义，明确不声称 computed `ComponentToWorld`。无复杂 output 的 scale setter 可经 exact `call.invoke` 执行；完整 transform setter、任意 Struct/复杂生命周期参数、batch job、Memory、Watch/Hook/Blueprint/Dump 仍未完成。真实 UE profile、调用/World round-trip、streaming、GC、Hook、目标规模和卸载证据仍以 `docs/SUPPORT_MATRIX.md` 为准，编译或 synthetic fixture 不改变支持声明。
+当前分支已完成 R4 原子通信切换并进入 R5.3。React -> Tauri `domain_request` -> Rust `DomainService` -> PID-scoped Named Pipe -> `CoreCommandService` 是唯一桌面主链路；release Core 不编译旧 HTTP/API，也不链接 WinSock。Object/Type 集合由 Host immutable SnapshotIndex 查询，详情由 `TypeCommandService` 读取 exact TypeSnapshot；`ObjectPropertyCommandService` 和 `FunctionCallCommandService` 分别执行稳定句柄属性读取与单目标函数调用。生产类型源现可冻结 flat descriptor、一层 `Array<flat>` descriptor，以及 exact `/Script/CoreUObject.Vector`/`Rotator` 的 float/double 三字段 descriptor；PropertyCodec 对 struct 先复制稳定整值再递归解码，并只把这两个 descriptor-proven math struct 纳入 owned ParamFrame 输入/输出生命周期。只读 World 链路由 `WorldSnapshotCapture` 构建并复核 immutable snapshot，`WorldCommandService` 提供 worker-only query；`WorldTransformCommandService` 以一个 owned game-thread work 从同一稳定 byte witness 读取 RootComponent 三个 `Relative*` 和三个 `bAbsolute*`，并在 witness 内通过 exact reflected Actor getter 与 owned return frame取得 computed world location/rotation/scale。WorldBrowser 通过单个 `world.actor.transform.get` 显式分开展示 stored storage-space 语义与 computed Actor world transform；getter capability/metadata 缺失时 computed 部分明确 unavailable。无复杂 output 的 scale setter 可经 exact `call.invoke` 执行；完整 transform setter、任意 Struct/复杂生命周期参数、batch job、Memory、Watch/Hook/Blueprint/Dump 仍未完成。`D:\Steam\steamapps\common\Wandering Sword` 仍没有可启动游戏 `.exe`，因此上述 computed 路径只有代码证据，没有真实 UE round-trip；真实 profile、streaming、GC、Hook、目标规模和卸载证据仍以 `docs/SUPPORT_MATRIX.md` 为准，所有 profile 保持 `Not supported`。
 
 ---
 
@@ -88,7 +88,7 @@ UExplorer/
 │   │   ├── ObjectPropertyCommandService.* # exact Handle/generation 的游戏线程属性读取
 │   │   ├── FunctionCallCommandService.* # exact Object/Function Handle 的单目标 ProcessEvent 调用
 │   │   ├── WorldCommandService.*     #   worker-only World inspect/detail/shortcut 与 Actor-bound cursor query
-│   │   ├── WorldTransformCommandService.* # game-thread same-witness stored transform read
+│   │   ├── WorldTransformCommandService.* # game-thread same-witness stored + reflected-getter computed transform read
 │   │   └── CoreStatusDiagnostics.*   #   只读诊断源
 │   ├── IPC/                           ★ Core Named Pipe RPC transport
 │   │   ├── Protocol.h                #   24-byte framing/有界协商 decoder/limits
@@ -855,7 +855,7 @@ Rust `DomainService` 的显式 operation registry 为准。
 | R2 CoreRuntime/能力模型 | **实现阶段完成** | Runtime、Context、Capability、Handle、Snapshot、SafeMemory |
 | R3 Named Pipe/Rust Host | **实现阶段完成** | 严格 IPC、SessionManager、EventHub、注入与跨语言 fixture |
 | R4 通信原子切换 | **已完成** | React 只走 Tauri；Core release 只走 Named Pipe，无网络栈 |
-| R5 领域正确性 | **当前阶段（R5.3）** | Property read、单目标 Call、单层 Array、exact FVector/FRotator descriptor + owned input/output、World 查询与 same-frame stored transform 已接入；完整 transform setter、computed transform、Memory/Watch/Hook/Blueprint/Dump 待办 |
+| R5 领域正确性 | **当前阶段（R5.3）** | Property read、单目标 Call、单层 Array、exact FVector/FRotator descriptor + owned input/output、World 查询与 same-work stored/reflected-getter computed Actor transform 已接入；真实 UE fixture、完整 transform setter、Memory/Watch/Hook/Blueprint/Dump 待办 |
 | R6 前端状态重构 | **未开始** | session store、query lifecycle、BigInt 地址、能力驱动 UI |
 | R7 发布硬化 | **未开始** | UE fixture、性能/压力、卸载、发布与文档门禁 |
 

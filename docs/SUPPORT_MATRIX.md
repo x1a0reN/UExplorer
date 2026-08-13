@@ -40,12 +40,14 @@ These assets are available for development, but none changes the support rows ab
   `SetRelativeScale3D(FVector)` has no `FHitResult` output. This is useful for selecting
   semantic properties and planning the owned ProcessEvent frame lifecycle, but it is not
   permission to assume offsets or zero-initialize an uncaptured Shipping `FHitResult`.
-- `Actor.h` across the same source inventory preserves reflected
-  `SetActorScale3D(FVector)` and `GetActorScale3D() -> FVector` without a complex output
-  parameter. R5 now admits only descriptor-proven canonical FVector/FRotator slots in the
-  owned ProcessEvent frame, so these signatures are code-reachable through exact
-  `call.invoke`; this source and synthetic frame evidence do not establish a supported
-  target profile or a successful Shipping ProcessEvent round-trip.
+- `Actor.h`/`Actor.cpp` across the same source inventory preserves reflected
+  `K2_GetActorLocation() -> FVector`, `K2_GetActorRotation() -> FRotator`,
+  `GetActorScale3D() -> FVector`, and `SetActorScale3D(FVector)` without complex output
+  parameters. R5 admits only descriptor-proven canonical FVector/FRotator slots in owned
+  ProcessEvent frames; the three getters are now wired into the same owned transform-read
+  work and the scale setter is code-reachable through exact `call.invoke`. This is source
+  and implementation evidence only, not a supported target profile or a successful
+  Shipping ProcessEvent round-trip.
 - `D:\Steam\steamapps\common\Wandering Sword` is the designated real-game fixture.
   Earlier passive artifacts are consistent with an x64 UE4/PhysX Shipping build in the
   UE 4.26 family, but the 2026-08-11 inventory contains only the IDA
@@ -136,9 +138,12 @@ revalidates the dependencies and handle on the game thread before SafeMemory dec
 Struct decoding reads a bounded whole-value witness twice, decodes children from that owned
 snapshot, and compares the live bytes again before returning. The dedicated
 `world.actor.transform.get` path now resolves the six exact SceneComponent properties and
-reads them in one owned game-thread work from a shared bounded byte witness, with final
-RootComponent and byte-range comparison. It reports the stored relative fields, scalar
-precision, and `bAbsolute*` semantics without claiming computed `ComponentToWorld`.
+reads them in one owned game-thread work from a shared bounded byte witness. When exact
+reflected Actor getter metadata and ProcessEvent capability are present, that work also
+validates and invokes the location/rotation/scale getters with three owned canonical
+return frames before the final RootComponent and byte-range comparison. The response
+keeps stored relative fields/`bAbsolute*` semantics separate from the reflected-getter
+computed Actor world transform; unavailable getter metadata is reported explicitly.
 Canonical setter mutation and a real UE target round-trip remain pending.
 Rust/schema fixtures and React builds cover their side of this contract. The real
 cross-language process fixture does not yet publish a production TypeSnapshot, and no

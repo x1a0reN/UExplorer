@@ -3,6 +3,7 @@
 #include "Runtime/CoreRuntime.h"
 #include "Runtime/EngineFacade.h"
 #include "Runtime/GameThreadExecutor.h"
+#include "Runtime/ParamFrame.h"
 #include "Runtime/PropertyCodec.h"
 #include "Runtime/SafeMemory.h"
 #include "Runtime/WorldSnapshot.h"
@@ -36,6 +37,8 @@ enum class WorldTransformExecutionError : std::uint8_t
 	ActorHandleStale,
 	RootComponentHandleStale,
 	RootComponentChanged,
+	FunctionHandleStale,
+	ProcessEventUnavailable,
 	AddressOverflow,
 	MemoryReadFailed,
 	ValueChangedDuringRead,
@@ -74,6 +77,13 @@ struct WorldTransformValue
 	bool AbsoluteScale = false;
 };
 
+struct WorldTransformGetterBinding
+{
+	const Runtime::ReflectedFunction* Function = nullptr;
+	const Runtime::ReflectedParameter* ReturnParameter = nullptr;
+	Runtime::ParamFrame Frame;
+};
+
 class WorldTransformReadWork final : public Runtime::IGameThreadWork
 {
 public:
@@ -86,6 +96,11 @@ public:
 	const Runtime::WorldSnapshotObject& Actor() const noexcept { return m_Actor; }
 	const Runtime::WorldSnapshotObject& RootComponent() const noexcept { return m_RootComponent; }
 	const WorldTransformValue& Value() const noexcept { return m_Value; }
+	bool HasComputedValue() const noexcept { return m_HasComputedValue; }
+	const WorldTransformValue& ComputedValue() const noexcept { return m_ComputedValue; }
+	const std::string& ComputedReasonCode() const noexcept { return m_ComputedReasonCode; }
+	const std::string& ComputedReason() const noexcept { return m_ComputedReason; }
+	const std::string& FailedFunction() const noexcept { return m_FailedFunction; }
 	std::uint64_t WorldSnapshotGeneration() const noexcept;
 	std::uint64_t ObjectSnapshotGeneration() const noexcept;
 	std::uint64_t TypeSnapshotGeneration() const noexcept;
@@ -95,6 +110,7 @@ private:
 	WorldTransformReadWork(
 		Runtime::CoreRuntime::RequestLease lease,
 		Runtime::EngineFacade& engine,
+		Runtime::GameThreadExecutor& gameThread,
 		std::shared_ptr<const Runtime::EngineSnapshot> objects,
 		std::shared_ptr<const Runtime::TypeSnapshot> types,
 		std::shared_ptr<const Runtime::ReflectionRuntimeSnapshot> reflection,
@@ -104,12 +120,16 @@ private:
 		const Runtime::ReflectedProperty& actorRootProperty,
 		std::array<const Runtime::ReflectedProperty*, 3> transformProperties,
 		std::array<const Runtime::ReflectedProperty*, 3> absoluteProperties,
+		std::array<WorldTransformGetterBinding, 3> computedGetters,
+		std::string computedReasonCode,
+		std::string computedReason,
 		WorldTransformPrecision precision,
 		std::uint32_t spanOffset,
 		std::uint32_t spanSize);
 
 	Runtime::CoreRuntime::RequestLease m_Lease;
 	Runtime::EngineFacade& m_Engine;
+	Runtime::GameThreadExecutor& m_GameThread;
 	std::shared_ptr<const Runtime::EngineSnapshot> m_Objects;
 	std::shared_ptr<const Runtime::TypeSnapshot> m_Types;
 	std::shared_ptr<const Runtime::ReflectionRuntimeSnapshot> m_Reflection;
@@ -119,6 +139,7 @@ private:
 	const Runtime::ReflectedProperty* m_ActorRootProperty = nullptr;
 	std::array<const Runtime::ReflectedProperty*, 3> m_TransformProperties{};
 	std::array<const Runtime::ReflectedProperty*, 3> m_AbsoluteProperties{};
+	std::array<WorldTransformGetterBinding, 3> m_ComputedGetters{};
 	std::uint32_t m_SpanOffset = 0;
 	std::vector<std::byte> m_FirstBytes;
 	std::vector<std::byte> m_StableBytes;
@@ -128,7 +149,12 @@ private:
 	Runtime::MemoryError m_MemoryError = Runtime::MemoryError::None;
 	std::string m_DecodeErrorCode;
 	std::string m_DecodeError;
+	std::string m_ComputedReasonCode;
+	std::string m_ComputedReason;
+	std::string m_FailedFunction;
 	WorldTransformValue m_Value;
+	WorldTransformValue m_ComputedValue;
+	bool m_HasComputedValue = false;
 };
 
 struct WorldTransformReadPreparation
@@ -155,7 +181,8 @@ public:
 	static WorldTransformReadPreparation PrepareRead(
 		const json& data,
 		Runtime::CoreRuntime::RequestLease lease,
-		Runtime::EngineFacade& engine) noexcept;
+		Runtime::EngineFacade& engine,
+		Runtime::GameThreadExecutor& gameThread) noexcept;
 	static WorldTransformCommandResult CompleteRead(
 		const WorldTransformReadWork& work) noexcept;
 };

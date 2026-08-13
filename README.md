@@ -43,8 +43,9 @@ injection-to-Core-Ready gating, cross-language Core/Host fixtures, and a live x6
 injection matrix are implemented. React domain calls now use one Tauri
 `domain_request` command and event consumers use caller-owned Tauri channels. The Host
 operation registry serves status, immutable-snapshot object/type queries, exact type
-details, stable-handle property reads, the bounded single-target `call.invoke`, and
-immutable current-world/level/actor queries;
+details, stable-handle property reads, the bounded single-target `call.invoke`,
+immutable current-world/level/actor queries, and exact-handle stored/computed Actor
+transform reads;
 domains not yet implemented return a stable capability error instead of reaching
 legacy code.
 Baseline Core initialization is also separated from optional reflection/generator
@@ -141,14 +142,22 @@ their witnessed `X/Y/Z` or `Pitch/Yaw/Roll` float/double fields.
 `WorldTransformCommandService` exposes `world.actor.transform.get`: one owned game-thread
 work freezes the exact World/Object/Type/codec generations, revalidates Actor and
 RootComponent handles, reads `RelativeLocation`, `RelativeRotation`, `RelativeScale3D`,
-and all three `bAbsolute*` flags from one bounded stable byte witness, then rechecks the
-root relation and live bytes before publishing. WorldBrowser displays the resulting
-float/double precision and relative-versus-absolute-world storage semantics. This is not
-computed `ComponentToWorld`. The same UE 4.21-5.7 sources expose
+and all three `bAbsolute*` flags from one bounded stable byte witness. When exact
+`call.invoke` capability and matching Type/Object snapshot metadata are present, the same
+work also revalidates and invokes `/Script/Engine.Actor.K2_GetActorLocation`,
+`K2_GetActorRotation`, and `GetActorScale3D` through ProcessEvent using three owned
+canonical return frames, then rechecks the root relation and stored live bytes before
+publishing. Missing getter capability/metadata produces an explicit unavailable
+`computed_transform`; it does not guess a layout or replace the stored result. WorldBrowser
+separates float/double stored relative/absolute-world semantics from the reflected-getter
+computed Actor world transform. The same UE 4.21-5.7 sources expose
 `SetActorScale3D(FVector)` and `SetRelativeScale3D(FVector)` without complex outputs, so
 those exact reflected functions now fit the canonical-struct `call.invoke` contract.
 Full transform mutation remains unavailable: location/rotation setters include an
-`FHitResult&` output whose lifetime is still closed. Real target evidence also remains unavailable.
+`FHitResult&` output whose lifetime is still closed. This is implemented code, not a
+target-runtime validation: `D:\Steam\steamapps\common\Wandering Sword` still has no
+launchable game `.exe`, no real UE getter/ProcessEvent round-trip has run, and every engine
+profile therefore remains `Not supported`.
 PostRender now drives one `GameThreadFrameScheduler` rather than giving the object
 snapshot producer an exclusive callback slot. The scheduler supports at most eight
 clients, shares a 32-unit frame budget in four-unit round-robin quanta, stops further

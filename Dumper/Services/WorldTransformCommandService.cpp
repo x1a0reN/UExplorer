@@ -22,6 +22,18 @@ constexpr std::string_view kActorClassPath = "/Script/Engine.Actor";
 constexpr std::string_view kSceneComponentClassPath = "/Script/Engine.SceneComponent";
 constexpr std::string_view kVectorStructPath = "/Script/CoreUObject.Vector";
 constexpr std::string_view kRotatorStructPath = "/Script/CoreUObject.Rotator";
+constexpr std::array<std::string_view, 3> kComputedFunctionPaths{
+	"/Script/Engine.Actor.K2_GetActorLocation",
+	"/Script/Engine.Actor.K2_GetActorRotation",
+	"/Script/Engine.Actor.GetActorScale3D"};
+constexpr std::array<std::string_view, 3> kComputedTypePaths{
+	kVectorStructPath,
+	kRotatorStructPath,
+	kVectorStructPath};
+constexpr std::array<std::array<std::string_view, 3>, 3> kComputedFieldNames{
+	std::array<std::string_view, 3>{"X", "Y", "Z"},
+	std::array<std::string_view, 3>{"Pitch", "Yaw", "Roll"},
+	std::array<std::string_view, 3>{"X", "Y", "Z"}};
 
 WorldTransformCommandError Error(
 	std::string code,
@@ -167,6 +179,16 @@ bool SameHandle(const Runtime::ObjectHandle& left, const Runtime::ObjectHandle& 
 		&& left.ClassFingerprint == right.ClassFingerprint;
 }
 
+bool SameFunctionHandle(
+	const Runtime::FunctionHandle& left,
+	const Runtime::FunctionHandle& right) noexcept
+{
+	return SameHandle(left.Function, right.Function)
+		&& SameHandle(left.Owner, right.Owner)
+		&& left.FullPath == right.FullPath
+		&& left.SignatureFingerprint == right.SignatureFingerprint;
+}
+
 const Runtime::ReflectedType* FindExactAncestor(
 	const Runtime::TypeSnapshot& types,
 	const std::string_view concretePath,
@@ -221,6 +243,14 @@ bool IsPropertyRangeValid(
 		&& property.Size <= declaringType.PropertiesSize - property.Offset;
 }
 
+bool IsParameterRangeValid(
+	const Runtime::ReflectedProperty& property,
+	const std::uint32_t frameSize) noexcept
+{
+	return property.Offset <= frameSize
+		&& property.Size <= frameSize - property.Offset;
+}
+
 bool ValidateRootProperty(
 	const Runtime::ReflectedProperty& property,
 	const Runtime::ReflectedType& declaringType,
@@ -255,6 +285,8 @@ bool ValidateMathProperty(
 		|| property.Descriptor->TypeName != typePath
 		|| property.Descriptor->Size != property.Size
 		|| property.Descriptor->Fields.size() != fieldNames.size()
+		|| Runtime::ClassifyCanonicalMathStruct(*property.Descriptor)
+			== Runtime::CanonicalMathStructKind::None
 		|| !IsPropertyRangeValid(property, declaringType)
 		|| !codec.Supports(property.Kind))
 	{
@@ -298,6 +330,113 @@ bool ValidateBoolProperty(
 		&& property.Descriptor->BoolByteOffset < property.Size
 		&& IsPropertyRangeValid(property, declaringType)
 		&& codec.Supports(property.Kind);
+}
+
+bool PrepareComputedGetters(
+	const Runtime::EngineSnapshot& objects,
+	const Runtime::TypeSnapshot& types,
+	const Runtime::PropertyCodec& codec,
+	const Runtime::ReflectedType& actorType,
+	const WorldTransformPrecision expectedPrecision,
+	std::array<WorldTransformGetterBinding, 3>& bindings,
+	std::string& reasonCode,
+	std::string& reason)
+{
+	std::size_t aggregateFrameBytes = 0;
+	for (std::size_t index = 0; index < kComputedFunctionPaths.size(); ++index)
+	{
+		const Runtime::ReflectedFunctionLookup lookup =
+			types.FindFunctionByFullPath(kComputedFunctionPaths[index]);
+		if (!lookup.Found()
+			|| lookup.DeclaringType->FullPath != kActorClassPath
+			|| !SameHandle(lookup.DeclaringType->Handle, actorType.Handle)
+			|| !SameHandle(lookup.Function->Handle.Owner, actorType.Handle)
+			|| lookup.Function->Parameters.size() != 1)
+		{
+			reasonCode = "WORLD_COMPUTED_TRANSFORM_GETTER_UNAVAILABLE";
+			reason = std::format(
+				"The exact reflected getter {} is absent or has an unexpected owner/signature",
+				kComputedFunctionPaths[index]);
+			return false;
+		}
+
+		const Runtime::EngineSnapshotObject* functionRecord =
+			objects.FindByIndex(lookup.Function->Handle.Function.Index);
+		const Runtime::EngineSnapshotObject* ownerRecord =
+			objects.FindByIndex(lookup.Function->Handle.Owner.Index);
+		if (!functionRecord || !ownerRecord
+			|| !SameHandle(functionRecord->Handle, lookup.Function->Handle.Function)
+			|| !SameHandle(ownerRecord->Handle, lookup.Function->Handle.Owner))
+		{
+			reasonCode = "WORLD_COMPUTED_TRANSFORM_FUNCTION_SNAPSHOT_MISMATCH";
+			reason = std::format(
+				"The getter {} is not an exact member of the current ObjectSnapshot",
+				kComputedFunctionPaths[index]);
+			return false;
+		}
+
+		const Runtime::ReflectedParameter& output = lookup.Function->Parameters.front();
+		const Runtime::ReflectedProperty& property = output.Property;
+		WorldTransformPrecision precision{};
+		if (output.Direction != Runtime::ReflectedParameterDirection::Return
+			|| property.State != Runtime::ReflectedMemberState::Supported
+			|| property.ArrayDim != 1
+			|| !property.Descriptor
+			|| property.Descriptor->Kind != property.Kind
+			|| property.Descriptor->TypeName != property.TypeName
+			|| property.TypeName != kComputedTypePaths[index]
+			|| Runtime::ClassifyCanonicalMathStruct(*property.Descriptor)
+				== Runtime::CanonicalMathStructKind::None
+			|| property.Descriptor->Fields.size() != kComputedFieldNames[index].size()
+			|| !IsParameterRangeValid(property, lookup.Function->ParameterSize)
+			|| !codec.Supports(property.Kind)
+			|| !Runtime::ParamFrame::SupportsLifetime(*property.Descriptor))
+		{
+			reasonCode = "WORLD_COMPUTED_TRANSFORM_SIGNATURE_UNAVAILABLE";
+			reason = std::format(
+				"The getter {} does not expose one matching canonical return frame",
+				kComputedFunctionPaths[index]);
+			return false;
+		}
+		const Runtime::PropertyKind componentKind =
+			property.Descriptor->Fields.front().Descriptor->Kind;
+		precision = componentKind == Runtime::PropertyKind::Double
+			? WorldTransformPrecision::Float64
+			: WorldTransformPrecision::Float32;
+		if (precision != expectedPrecision)
+		{
+			reasonCode = "WORLD_COMPUTED_TRANSFORM_PRECISION_MISMATCH";
+			reason = std::format(
+				"The getter {} return precision differs from the stored transform descriptor",
+				kComputedFunctionPaths[index]);
+			return false;
+		}
+		if (lookup.Function->ParameterSize > WorldTransformCommandService::kMaxAggregateBytes
+			|| aggregateFrameBytes > WorldTransformCommandService::kMaxAggregateBytes
+				- lookup.Function->ParameterSize)
+		{
+			reasonCode = "WORLD_COMPUTED_TRANSFORM_FRAME_LIMIT_EXCEEDED";
+			reason = "The three reflected getter frames exceed the 64 KiB aggregate limit";
+			return false;
+		}
+
+		Runtime::ParamFrame frame;
+		const Runtime::ParamFrameResult created = Runtime::ParamFrame::Create(
+			lookup.Function->ParameterSize,
+			frame);
+		if (!created.Ok())
+		{
+			reasonCode = Runtime::ToString(created.Error);
+			reason = created.Message;
+			return false;
+		}
+		aggregateFrameBytes += lookup.Function->ParameterSize;
+		bindings[index] = WorldTransformGetterBinding{
+			.Function = lookup.Function,
+			.ReturnParameter = &output,
+			.Frame = std::move(frame)};
+	}
+	return true;
 }
 
 bool ExtractMathValue(
@@ -399,6 +538,7 @@ json SerializeObject(const Runtime::WorldSnapshotObject& object)
 WorldTransformReadWork::WorldTransformReadWork(
 	Runtime::CoreRuntime::RequestLease lease,
 	Runtime::EngineFacade& engine,
+	Runtime::GameThreadExecutor& gameThread,
 	std::shared_ptr<const Runtime::EngineSnapshot> objects,
 	std::shared_ptr<const Runtime::TypeSnapshot> types,
 	std::shared_ptr<const Runtime::ReflectionRuntimeSnapshot> reflection,
@@ -408,11 +548,15 @@ WorldTransformReadWork::WorldTransformReadWork(
 	const Runtime::ReflectedProperty& actorRootProperty,
 	std::array<const Runtime::ReflectedProperty*, 3> transformProperties,
 	std::array<const Runtime::ReflectedProperty*, 3> absoluteProperties,
+	std::array<WorldTransformGetterBinding, 3> computedGetters,
+	std::string computedReasonCode,
+	std::string computedReason,
 	const WorldTransformPrecision precision,
 	const std::uint32_t spanOffset,
 	const std::uint32_t spanSize)
 	: m_Lease(std::move(lease)),
 	  m_Engine(engine),
+	  m_GameThread(gameThread),
 	  m_Objects(std::move(objects)),
 	  m_Types(std::move(types)),
 	  m_Reflection(std::move(reflection)),
@@ -422,16 +566,21 @@ WorldTransformReadWork::WorldTransformReadWork(
 	  m_ActorRootProperty(&actorRootProperty),
 	  m_TransformProperties(transformProperties),
 	  m_AbsoluteProperties(absoluteProperties),
+	  m_ComputedGetters(std::move(computedGetters)),
 	  m_SpanOffset(spanOffset),
 	  m_FirstBytes(spanSize),
 	  m_StableBytes(spanSize),
-	  m_FinalBytes(spanSize)
+	  m_FinalBytes(spanSize),
+	  m_ComputedReasonCode(std::move(computedReasonCode)),
+	  m_ComputedReason(std::move(computedReason))
 {
 	m_Value.Precision = precision;
+	m_ComputedValue.Precision = precision;
 }
 
 bool WorldTransformReadWork::Execute()
 {
+	const bool computedPrepared = m_ComputedReasonCode.empty();
 	if (!m_Lease.Context()
 		|| m_Engine.ContextGeneration() != m_Lease.Context()->Generation()
 		|| m_Engine.Snapshots().Current() != m_Objects
@@ -441,7 +590,11 @@ bool WorldTransformReadWork::Execute()
 		|| !m_Objects || !m_Types || !m_Reflection || !m_Reflection->Properties
 		|| !m_World || !m_ActorRootProperty
 		|| std::ranges::any_of(m_TransformProperties, [](const auto* value) { return !value; })
-		|| std::ranges::any_of(m_AbsoluteProperties, [](const auto* value) { return !value; }))
+		|| std::ranges::any_of(m_AbsoluteProperties, [](const auto* value) { return !value; })
+		|| (computedPrepared
+			&& std::ranges::any_of(m_ComputedGetters, [](const auto& binding) {
+				return !binding.Function || !binding.ReturnParameter;
+			})))
 	{
 		m_Error = WorldTransformExecutionError::DependencyChanged;
 		return true;
@@ -632,6 +785,85 @@ bool WorldTransformReadWork::Execute()
 		}
 	}
 
+	std::array<std::array<double, 3>, 3> computedValues{};
+	if (computedPrepared)
+	{
+		for (std::size_t index = 0; index < m_ComputedGetters.size(); ++index)
+		{
+			WorldTransformGetterBinding& binding = m_ComputedGetters[index];
+			const Runtime::ReflectedFunctionLookup metadata =
+				m_Types->FindFunctionByFullPath(kComputedFunctionPaths[index]);
+			if (!metadata.Found()
+				|| metadata.Function != binding.Function
+				|| !SameFunctionHandle(metadata.Function->Handle, binding.Function->Handle))
+			{
+				m_Error = WorldTransformExecutionError::DependencyChanged;
+				return true;
+			}
+			const Runtime::FunctionValidationResult validation =
+				m_Engine.ValidateFunctionHandle(binding.Function->Handle);
+			if (!validation.Ok())
+			{
+				m_Error = WorldTransformExecutionError::FunctionHandleStale;
+				m_HandleError = validation.Error;
+				m_FailedFunction = std::string(kComputedFunctionPaths[index]);
+				return true;
+			}
+			const Runtime::EngineSnapshotObject* functionRecord =
+				m_Objects->FindByIndex(binding.Function->Handle.Function.Index);
+			const Runtime::EngineSnapshotObject* ownerRecord =
+				m_Objects->FindByIndex(binding.Function->Handle.Owner.Index);
+			if (!functionRecord || !ownerRecord
+				|| !SameHandle(functionRecord->Handle, binding.Function->Handle.Function)
+				|| !SameHandle(ownerRecord->Handle, binding.Function->Handle.Owner))
+			{
+				m_Error = WorldTransformExecutionError::DependencyChanged;
+				return true;
+			}
+			if (!m_GameThread.InvokeProcessEventFromCurrentTask(
+				reinterpret_cast<void*>(m_Actor.Handle.Address),
+				reinterpret_cast<void*>(binding.Function->Handle.Function.Address),
+				binding.Frame.Data()))
+			{
+				m_Error = WorldTransformExecutionError::ProcessEventUnavailable;
+				m_FailedFunction = std::string(kComputedFunctionPaths[index]);
+				return true;
+			}
+
+			const std::uintptr_t returnAddress =
+				binding.Frame.ValueAddress(binding.ReturnParameter->Property);
+			if (returnAddress == 0)
+			{
+				m_Error = WorldTransformExecutionError::ValueShapeInvalid;
+				m_DecodeErrorCode = "WORLD_COMPUTED_TRANSFORM_FRAME_INVALID";
+				m_DecodeError = "A reflected getter return address is outside its owned frame";
+				return true;
+			}
+			const Runtime::PropertyValue decoded = m_Reflection->Properties->Decode(
+				returnAddress,
+				*binding.ReturnParameter->Property.Descriptor,
+				{.Limits = {
+					.MaxDepth = 3,
+					.MaxContainerElements = 8,
+					.MaxTotalNodes = 32,
+					.MaxStringCodeUnits = 0,
+					.MaxReadableContainerBytes = WorldTransformCommandService::kMaxAggregateBytes}});
+			if (!ExtractMathValue(
+				decoded,
+				kComputedTypePaths[index],
+				kComputedFieldNames[index],
+				computedValues[index],
+				m_DecodeErrorCode,
+				m_DecodeError))
+			{
+				m_Error = m_DecodeErrorCode == "WORLD_TRANSFORM_VALUE_SHAPE_INVALID"
+					? WorldTransformExecutionError::ValueShapeInvalid
+					: WorldTransformExecutionError::ValueDecodeFailed;
+				return true;
+			}
+		}
+	}
+
 	memory = Runtime::ReadMemory(liveSpanAddress, m_FinalBytes);
 	if (!memory.Ok())
 	{
@@ -672,6 +904,16 @@ bool WorldTransformReadWork::Execute()
 	m_Value.AbsoluteLocation = absolute[0];
 	m_Value.AbsoluteRotation = absolute[1];
 	m_Value.AbsoluteScale = absolute[2];
+	if (computedPrepared)
+	{
+		m_ComputedValue.Location = {
+			computedValues[0][0], computedValues[0][1], computedValues[0][2]};
+		m_ComputedValue.Rotation = {
+			computedValues[1][0], computedValues[1][1], computedValues[1][2]};
+		m_ComputedValue.Scale = {
+			computedValues[2][0], computedValues[2][1], computedValues[2][2]};
+		m_HasComputedValue = true;
+	}
 	return true;
 }
 
@@ -693,7 +935,8 @@ std::uint64_t WorldTransformReadWork::TypeSnapshotGeneration() const noexcept
 WorldTransformReadPreparation WorldTransformCommandService::PrepareRead(
 	const json& data,
 	Runtime::CoreRuntime::RequestLease lease,
-	Runtime::EngineFacade& engine) noexcept
+	Runtime::EngineFacade& engine,
+	Runtime::GameThreadExecutor& gameThread) noexcept
 {
 	try
 	{
@@ -919,9 +1162,38 @@ WorldTransformReadPreparation WorldTransformCommandService::PrepareRead(
 				"The witnessed SceneComponent transform property span is invalid or exceeds 64 KiB")};
 		}
 
+		std::array<WorldTransformGetterBinding, 3> computedGetters{};
+		std::string computedReasonCode;
+		std::string computedReason;
+		const Runtime::CapabilityStatus* callCapability = lease.Capabilities()
+			? lease.Capabilities()->Find("call.invoke")
+			: nullptr;
+		if (!callCapability || !callCapability->Available)
+		{
+			computedReasonCode = callCapability && !callCapability->ReasonCode.empty()
+				? callCapability->ReasonCode
+				: "WORLD_COMPUTED_TRANSFORM_CALL_UNAVAILABLE";
+			computedReason = callCapability && !callCapability->Reason.empty()
+				? callCapability->Reason
+				: "The exact ProcessEvent function-call capability is unavailable";
+		}
+		else if (!PrepareComputedGetters(
+			*objects,
+			*types,
+			*reflection->Properties,
+			*actorType,
+			locationPrecision,
+			computedGetters,
+			computedReasonCode,
+			computedReason))
+		{
+			computedGetters = {};
+		}
+
 		auto work = std::shared_ptr<WorldTransformReadWork>(new WorldTransformReadWork(
 			std::move(lease),
 			engine,
+			gameThread,
 			objects,
 			types,
 			reflection,
@@ -931,6 +1203,9 @@ WorldTransformReadPreparation WorldTransformCommandService::PrepareRead(
 			*actorRootProperty,
 			transformProperties,
 			absoluteProperties,
+			std::move(computedGetters),
+			std::move(computedReasonCode),
+			std::move(computedReason),
 			locationPrecision,
 			static_cast<std::uint32_t>(spanBegin),
 			static_cast<std::uint32_t>(spanEnd - spanBegin)));
@@ -981,6 +1256,17 @@ WorldTransformCommandResult WorldTransformCommandService::CompleteRead(
 				return {.Error = Error(
 					"WORLD_ROOT_COMPONENT_CHANGED",
 					"AActor.RootComponent changed during the same-frame transform read")};
+			case WorldTransformExecutionError::FunctionHandleStale:
+				return {.Error = Error(
+					"WORLD_COMPUTED_TRANSFORM_FUNCTION_STALE",
+					"A reflected Actor transform getter changed before execution",
+					{{"function_path", work.FailedFunction()},
+					 {"handle_error", Runtime::ToString(work.HandleError())}})};
+			case WorldTransformExecutionError::ProcessEventUnavailable:
+				return {.Error = Error(
+					"WORLD_COMPUTED_TRANSFORM_PROCESS_EVENT_UNAVAILABLE",
+					"A reflected Actor transform getter could not enter ProcessEvent",
+					{{"function_path", work.FailedFunction()}})};
 			case WorldTransformExecutionError::AddressOverflow:
 				return {.Error = Error(
 					"WORLD_TRANSFORM_ADDRESS_OVERFLOW",
@@ -1012,6 +1298,41 @@ WorldTransformCommandResult WorldTransformCommandService::CompleteRead(
 		const char* precision = value.Precision == WorldTransformPrecision::Float64
 			? "float64"
 			: "float32";
+		json computedTransform;
+		if (work.HasComputedValue())
+		{
+			const WorldTransformValue& computed = work.ComputedValue();
+			computedTransform = {
+				{"state", "available"},
+				{"source", "actor_reflected_getters"},
+				{"computed_world", true},
+				{"precision", precision},
+				{"location", {
+					{"x", computed.Location.X},
+					{"y", computed.Location.Y},
+					{"z", computed.Location.Z}}},
+				{"rotation", {
+					{"pitch", computed.Rotation.Pitch},
+					{"yaw", computed.Rotation.Yaw},
+					{"roll", computed.Rotation.Roll}}},
+				{"scale", {
+					{"x", computed.Scale.X},
+					{"y", computed.Scale.Y},
+					{"z", computed.Scale.Z}}}
+			};
+		}
+		else
+		{
+			computedTransform = {
+				{"state", "unavailable"},
+				{"reason_code", work.ComputedReasonCode().empty()
+					? "WORLD_COMPUTED_TRANSFORM_UNAVAILABLE"
+					: work.ComputedReasonCode()},
+				{"reason", work.ComputedReason().empty()
+					? "The exact reflected Actor transform getters are unavailable"
+					: work.ComputedReason()}
+			};
+		}
 		return {.Data = {
 			{"generation", work.WorldSnapshotGeneration()},
 			{"context_generation", work.Actor().Handle.ContextGeneration},
@@ -1019,6 +1340,7 @@ WorldTransformCommandResult WorldTransformCommandService::CompleteRead(
 			{"type_snapshot_generation", work.TypeSnapshotGeneration()},
 			{"actor", SerializeObject(work.Actor())},
 			{"root_component", SerializeObject(work.RootComponent())},
+			{"computed_transform", std::move(computedTransform)},
 			{"transform", {
 				{"source", "scene_component_stored_relative"},
 				{"computed_world", false},

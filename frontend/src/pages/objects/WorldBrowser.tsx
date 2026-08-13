@@ -4,6 +4,7 @@ import { Search, MapPin, Globe, ChevronDown, ChevronRight } from 'lucide-react';
 import api, {
     type WorldLevelItem,
     type WorldActorDetail,
+    type WorldActorComputedTransform,
     type WorldActorItem,
     type WorldActorStoredTransform,
     type WorldQueryCursor,
@@ -17,7 +18,7 @@ type WorldDetailTab = 'Transform' | 'Components';
 
 type LiveRelativeTransform =
     | { state: 'idle' | 'loading' }
-    | { state: 'available'; value: WorldActorStoredTransform }
+    | { state: 'available'; value: WorldActorStoredTransform; computed: WorldActorComputedTransform }
     | { state: 'unavailable'; reasonCode: string; reason: string };
 
 // ─── Component ─────────────────────────────────────────────────
@@ -132,7 +133,11 @@ export default function WorldBrowser({ onSwitchMode }: BrowserPageProps) {
                 const transformRes = await api.getWorldActorTransform(actor.handle, generation);
                 if (requestEpoch !== detailRequestEpoch.current) return;
                 if (transformRes.success && transformRes.data) {
-                    setRelativeTransform({ state: 'available', value: transformRes.data.transform });
+                    setRelativeTransform({
+                        state: 'available',
+                        value: transformRes.data.transform,
+                        computed: transformRes.data.computed_transform,
+                    });
                 } else {
                     setRelativeTransform({
                         state: 'unavailable',
@@ -373,8 +378,53 @@ export default function WorldBrowser({ onSwitchMode }: BrowserPageProps) {
                                                 </div>
                                             ))}
                                         </div>
+                                        {relativeTransform.computed.state === 'available' ? (
+                                            <div className="space-y-3 rounded-lg border border-primary/20 bg-primary/5 p-3">
+                                                <div className="flex items-center justify-between text-[11px] text-text-low">
+                                                    <span>Computed actor world transform via reflected getters</span>
+                                                    <span className="rounded border border-primary/25 px-2 py-0.5 font-mono text-primary">
+                                                        {relativeTransform.computed.precision}
+                                                    </span>
+                                                </div>
+                                                <div className="grid gap-3 xl:grid-cols-3">
+                                                    {[
+                                                        {
+                                                            label: 'Location',
+                                                            values: [['X', relativeTransform.computed.location.x], ['Y', relativeTransform.computed.location.y], ['Z', relativeTransform.computed.location.z]],
+                                                        },
+                                                        {
+                                                            label: 'Rotation',
+                                                            values: [['Pitch', relativeTransform.computed.rotation.pitch], ['Yaw', relativeTransform.computed.rotation.yaw], ['Roll', relativeTransform.computed.rotation.roll]],
+                                                        },
+                                                        {
+                                                            label: 'Scale',
+                                                            values: [['X', relativeTransform.computed.scale.x], ['Y', relativeTransform.computed.scale.y], ['Z', relativeTransform.computed.scale.z]],
+                                                        },
+                                                    ].map((group) => (
+                                                        <div key={group.label} className="rounded-lg border border-white/5 bg-black/20 p-3">
+                                                            <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-white/40">
+                                                                {group.label}
+                                                            </div>
+                                                            <div className="space-y-1.5">
+                                                                {group.values.map(([axis, value]) => (
+                                                                    <div key={axis} className="flex items-center justify-between gap-3 font-mono text-xs">
+                                                                        <span className="text-white/35">{axis}</span>
+                                                                        <span className="truncate text-white/85">{String(value)}</span>
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                                                <span className="mr-2 font-mono text-amber-300/70">{relativeTransform.computed.reason_code}</span>
+                                                {relativeTransform.computed.reason}
+                                            </div>
+                                        )}
                                         <div className="text-[11px] text-white/30">
-                                            One game-thread work witnessed all six fields together. Space labels apply bAbsoluteLocation/Rotation/Scale; this remains stored component state, not computed ComponentToWorld.
+                                            One game-thread work brackets the three reflected Actor getters with the stored RootComponent witness. Space labels apply bAbsoluteLocation/Rotation/Scale; stored and computed values remain explicitly separate.
                                         </div>
                                     </div>
                                 )}
