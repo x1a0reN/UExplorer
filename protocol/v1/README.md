@@ -268,9 +268,12 @@ the batch terminal state. Batch IDs remain canonical decimal strings across Rust
 Memory writes retain a bounded preimage, verify the committed bytes, and report rollback
 and protection-race outcomes. There is no executable/code-write fallback. Watch events
 are currently consumed only through `watch.events.drain`; the existing transport Event
-frame does not imply a Watch producer. Blueprint request schemas are registered, but Main
-publishes neither a Script layout witness nor a bytecode profile, so capability gating
-fails before capture/decompile.
+frame does not imply a Watch producer. Main now publishes `blueprint.bytecode` dynamically
+only when a high-confidence `UFunction::Script` report, current Object/Type generations,
+and the game-thread executor all agree. Capture revalidates the exact FunctionHandle and
+stable Script-array header and requires the copied stream to end in `EX_EndOfScript`.
+`blueprint.decompile` remains unavailable because no immutable exact UE opcode/operand
+profile is published; raw opcode values are never inferred from the parser semantic enum.
 
 Hook and Dump command layers exist only behind unavailable capabilities at this
 checkpoint. `call.batch.jobs` is independently advertised when its coordinator is owned,

@@ -122,6 +122,7 @@
 	<ClCompile Include="IPC\NamedPipeRpcServer.cpp" />
 	<ClCompile Include="Runtime\BlueprintBytecodeCapture.cpp" />
 	<ClCompile Include="Runtime\BlueprintBytecodeEvidence.cpp" />
+	<ClCompile Include="Runtime\BlueprintBytecodeRuntime.cpp" />
 	<ClCompile Include="Runtime\CoreSession.cpp" />
 	<ClCompile Include="Runtime\DumpJobCoordinator.cpp" />
 	<ClCompile Include="Runtime\FunctionCallBatchCoordinator.cpp" />
@@ -226,6 +227,7 @@
 	<ClInclude Include="IPC\Protocol.h" />
 	<ClInclude Include="Runtime\BlueprintBytecodeCapture.h" />
 	<ClInclude Include="Runtime\BlueprintBytecodeEvidence.h" />
+	<ClInclude Include="Runtime\BlueprintBytecodeRuntime.h" />
 	<ClInclude Include="Runtime\BoundedQueue.h" />
     <ClInclude Include="Runtime\CapabilityRegistry.h" />
     <ClInclude Include="Runtime\CoreCapabilities.h" />

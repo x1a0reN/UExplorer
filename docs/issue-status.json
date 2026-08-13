@@ -822,20 +822,20 @@
 	  "status": "in_progress",
 	  "verification": [
 		"2026-08-13: BlueprintDecompiler returns structured parse status, coverage, instruction records, unknown count, and first error rather than treating incomplete parsing as complete pseudocode",
-		"No production bytecode capture/profile or target Blueprint fixture exists"
+		"2026-08-13: Main now owns a generation-bound raw Script capture source behind a high-confidence runtime layout witness; no exact opcode/operand profile or target Blueprint fixture exists"
 	  ]
 	},
 	"BP-002": {
 	  "status": "in_progress",
 	  "verification": [
 		"2026-08-13: bytecode capture/decompile require an explicit immutable BytecodeProfile and exact FunctionHandle/context/Object/Type generations; no engine-version or pointer-size fallback is used",
-		"Main publishes no Script layout/profile witness, so both Blueprint capabilities remain false"
+		"2026-08-13: Main dynamically publishes raw bytecode capture only from the high-confidence UFunction::Script report and current snapshots; UE4/UE5 raw opcode differences keep decompile unavailable until an exact immutable profile is witnessed"
 	  ]
 	},
 	"BP-003": {
 	  "status": "in_progress",
 	  "verification": [
-		"2026-08-13: bounded bytecode reader/capture records truncation and range errors, validates Script header/content witnesses, and fails closed instead of returning zero bytes on overrun",
+		"2026-08-13: bounded bytecode reader/capture records truncation and range errors, validates exact FunctionHandle plus stable Script header/content witnesses, requires EX_EndOfScript at the copied tail, and fails closed instead of returning zero bytes on overrun",
 		"Target Blueprint bytecode behavior remains unverified"
 	  ]
 	},

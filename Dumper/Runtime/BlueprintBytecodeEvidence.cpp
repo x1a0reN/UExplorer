@@ -181,6 +181,7 @@ bool IsValidCapture(const BlueprintBytecodeCapture& capture) noexcept
 		&& !capture.Script.empty()
 		&& capture.Script.size() <= BlueprintBytecodeEvidenceStore::kMaxScriptBytes
 		&& capture.Script.size() == static_cast<std::size_t>(capture.ScriptNum)
+		&& capture.Script.back() == 0x53
 		&& capture.ScriptDataAddress
 			<= (std::numeric_limits<std::uintptr_t>::max)() - capture.Script.size()
 		&& capture.CapturedAtMonotonicUs != 0
@@ -314,7 +315,7 @@ std::uint64_t ComputeBlueprintBytecodeProfileFingerprint(
 	const BlueprintBytecodeProfileRecord& profile) noexcept
 {
 	std::uint64_t hash = kFnvOffset;
-	AppendText(hash, "UExplorer.BlueprintBytecodeProfile.v1");
+	AppendText(hash, "UExplorer.BlueprintBytecodeProfile.v2");
 	AppendBinding(hash, profile.Binding);
 	AppendText(hash, profile.Source);
 	const auto& definition = profile.Definition;

@@ -94,15 +94,15 @@ captures complete structural type/function coverage through stable handles and
 SafeMemory, incrementally revalidates every live evidence record, and is attached by
 Main to the same scheduler. It publishes witnessed super/CDO, direct property/parameter,
 flat property descriptors, enum identity/backing candidates, and native-exec structure
-while keeping enum entry tables and bytecode unavailable until their own immutable
-witnesses exist. A worker-only `TypeCommandService` now exposes exact-path
+while keeping enum entry tables and bytecode profiles unavailable until their own
+immutable witnesses exist. A worker-only `TypeCommandService` now exposes exact-path
 Class/Struct/Enum/Function detail, explicitly scoped direct/inherited member pages,
 direct-child hierarchy pages, and CDO identity through Named Pipe. It reads only the
 current immutable type snapshot: pages are capped at 128 records, cursors bind the
 session/context, snapshot generation, and query fingerprint, serialized command data is capped at 4 MiB,
 64-bit flags stay canonical hex strings, and enum int64 values stay decimal strings.
 It does not enter the game thread, rescan live UE memory, fabricate CDO property values,
-or make unavailable descriptors/enum layouts/bytecode appear supported. No UE profile
+or make unavailable descriptors/enum layouts/bytecode profiles appear supported. No UE profile
 is claimed until the target-process fixtures pass.
 `ObjectPropertyCommandService` accepts only an exact ObjectSnapshot handle plus the
 matching TypeSnapshot generation, declaring full path, exact property name, and fixed
@@ -201,8 +201,11 @@ added. A successful build or synthetic fixture does not establish target runtime
 - Watch is generation-bound and budgeted, with per-subscription pinned immutable
   bindings, bounded history/events, a visible snapshot/history UI, and explicit
   `watch.events.drain`; Named Pipe/Tauri push is not implemented.
-- Blueprint has explicit-profile bounded capture/disassembly code, but no published
-  Script-layout/profile witness, so both capabilities remain unavailable.
+- Blueprint raw bytecode capture is now wired through a generation-bound runtime source.
+  It is advertised only when `UFunction::Script` passes the high-confidence multi-function
+  witness gate and current Object/Type snapshots match; copied streams must retain a stable
+  TArray header and end in `EX_EndOfScript`. `blueprint.decompile` remains unavailable
+  because no exact UE opcode/operand profile is published.
 - The call-batch coordinator is now wired through Main/Core/Host/schema/TypeScript. It owns
   one bounded serial job, total deadline, cancellation and retained per-item results; every
   item reuses the exact single-call preparation/game-thread/completion path. Snapshot drift

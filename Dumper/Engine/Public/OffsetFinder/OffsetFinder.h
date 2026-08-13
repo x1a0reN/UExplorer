@@ -1,5 +1,8 @@
 #pragma once
 
+#include <cstdint>
+#include <limits>
+#include <string>
 #include <vector>
 
 #include "Unreal/ObjectArray.h"
@@ -10,6 +13,29 @@ namespace OffsetFinder
 {
 	constexpr int32 OffsetNotFound = -1;
 	constexpr int32 OffsetFinderMinValue = Platform::Is32Bit() ? 0x18 : 0x28;
+
+	struct FunctionScriptOffsetDiagnostics
+	{
+		int32 SelectedOffset = OffsetNotFound;
+		int32 SelectedScore = (std::numeric_limits<int32>::min)();
+		int32 ScoreGapTop2 = 0;
+		int32 BpEndHits = 0;
+		int32 WeightedBpEndHits = 0;
+		int32 GenericScriptHits = 0;
+		int32 VerifyProbed = 0;
+		int32 VerifyHeaderValid = 0;
+		int32 VerifyEndHits = 0;
+		int32 VerifyFirstOpcodeValid = 0;
+		int32 VerifySizeSane = 0;
+		int32 VerifyEndRate = 0;
+		int32 VerifyOpcodeRate = 0;
+		std::string Confidence = "unknown";
+		std::string AnomalyTags;
+		bool FromCache = false;
+		std::uint64_t CacheKey = 0;
+	};
+
+	FunctionScriptOffsetDiagnostics GetFunctionScriptOffsetDiagnostics();
 
 	template<int Alignement = 4, typename T>
 	inline int32_t FindOffset(const std::vector<std::pair<void*, T>>& ObjectValuePair, int MinOffset = OffsetFinderMinValue, int MaxOffset = 0x1A0)

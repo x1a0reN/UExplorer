@@ -30,43 +30,28 @@ namespace
 		}
 	}
 
-	struct ScriptOffsetDiagnostics
-	{
-		int32 SelectedOffset = OffsetFinder::OffsetNotFound;
-		int32 SelectedScore = INT32_MIN;
-		int32 ScoreGapTop2 = 0;
-		int32 BpEndHits = 0;
-		int32 WeightedBpEndHits = 0;
-		int32 GenericScriptHits = 0;
-
-		int32 VerifyProbed = 0;
-		int32 VerifyHeaderValid = 0;
-		int32 VerifyEndHits = 0;
-		int32 VerifyFirstOpcodeValid = 0;
-		int32 VerifySizeSane = 0;
-		int32 VerifyEndRate = 0;
-		int32 VerifyOpcodeRate = 0;
-
-		std::string Confidence = "unknown"; // unknown/high/medium/low
-		std::string AnomalyTags = "";
-		bool FromCache = false;
-		uint64 CacheKey = 0;
-	};
-
 	static std::mutex sScriptOffsetDiagnosticsMutex;
-	static ScriptOffsetDiagnostics sScriptOffsetDiagnostics;
+	static OffsetFinder::FunctionScriptOffsetDiagnostics sScriptOffsetDiagnostics;
 
-	static void SetScriptOffsetDiagnostics(const ScriptOffsetDiagnostics& in)
+	static void SetScriptOffsetDiagnostics(
+		const OffsetFinder::FunctionScriptOffsetDiagnostics& in)
 	{
 		std::lock_guard<std::mutex> lock(sScriptOffsetDiagnosticsMutex);
 		sScriptOffsetDiagnostics = in;
 	}
 
-	static ScriptOffsetDiagnostics GetScriptOffsetDiagnosticsSnapshot()
+	static OffsetFinder::FunctionScriptOffsetDiagnostics
+	GetScriptOffsetDiagnosticsSnapshot()
 	{
 		std::lock_guard<std::mutex> lock(sScriptOffsetDiagnosticsMutex);
 		return sScriptOffsetDiagnostics;
 	}
+}
+
+OffsetFinder::FunctionScriptOffsetDiagnostics
+OffsetFinder::GetFunctionScriptOffsetDiagnostics()
+{
+	return GetScriptOffsetDiagnosticsSnapshot();
 }
 
 extern "C" const char* UExplorer_GetScriptOffsetConfidence()
@@ -1023,7 +1008,7 @@ int32_t OffsetFinder::FindFunctionScriptOffset()
 	};
 
 	static std::unordered_map<uint64, int32> sRuntimeCache;
-	static std::unordered_map<uint64, ScriptOffsetDiagnostics> sRuntimeDiagCache;
+	static std::unordered_map<uint64, FunctionScriptOffsetDiagnostics> sRuntimeDiagCache;
 	const uint64 runtimeCacheKey = BuildRuntimeCacheKey();
 	if (runtimeCacheKey != 0)
 	{
@@ -1031,7 +1016,7 @@ int32_t OffsetFinder::FindFunctionScriptOffset()
 		if (it != sRuntimeCache.end())
 		{
 			std::cerr << "[UExplorer] Script offset cache hit: 0x" << std::hex << it->second << std::dec << std::endl;
-			ScriptOffsetDiagnostics diag;
+			FunctionScriptOffsetDiagnostics diag;
 			auto diagIt = sRuntimeDiagCache.find(runtimeCacheKey);
 			if (diagIt != sRuntimeDiagCache.end())
 			{
@@ -1216,7 +1201,7 @@ int32_t OffsetFinder::FindFunctionScriptOffset()
 	if (GeneralFuncs.empty())
 	{
 		std::cerr << "Dumper-7 WARNING: Could not gather function samples for Script offset discovery." << std::endl;
-		ScriptOffsetDiagnostics diag;
+		FunctionScriptOffsetDiagnostics diag;
 		diag.SelectedOffset = OffsetNotFound;
 		diag.Confidence = "low";
 		diag.AnomalyTags = "no_function_samples";
@@ -1824,7 +1809,7 @@ int32_t OffsetFinder::FindFunctionScriptOffset()
 			anomalyCsv += anomalyTags[i];
 		}
 
-		ScriptOffsetDiagnostics diag;
+		FunctionScriptOffsetDiagnostics diag;
 		diag.SelectedOffset = selectedOffset;
 		diag.SelectedScore = selectedCandidate->Score;
 		diag.ScoreGapTop2 = scoreGapTop2;
@@ -1854,7 +1839,7 @@ int32_t OffsetFinder::FindFunctionScriptOffset()
 	}
 
 	std::cerr << "Dumper-7 WARNING: Could not find UFunction::Script offset." << std::endl;
-	ScriptOffsetDiagnostics diag;
+	FunctionScriptOffsetDiagnostics diag;
 	diag.SelectedOffset = OffsetNotFound;
 	diag.Confidence = "low";
 	diag.AnomalyTags = "no_candidate_found";

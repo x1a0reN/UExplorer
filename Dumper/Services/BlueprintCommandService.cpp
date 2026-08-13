@@ -398,7 +398,7 @@ json SerializeDisassembly(const BlueprintDecompiler::DisassemblyResult& result)
 			{"semantic", OpcodeSemanticName(instruction.Semantic)},
 			{"token", hasToken ? json(GetExprTokenName(instruction.Token)) : json(nullptr)},
 			{"token_value", hasToken
-				? json(std::format("0x{:02X}", static_cast<std::uint8_t>(instruction.Token)))
+				? json(std::format("0x{:02X}", instruction.RawOpcode))
 				: json(nullptr)},
 			{"text", instruction.Text}
 		});
@@ -457,6 +457,7 @@ bool ValidateCapture(
 		&& !capture.Script.empty()
 		&& capture.Script.size() <= request.MaxScriptBytes
 		&& capture.Script.size() == static_cast<std::size_t>(capture.ScriptNum)
+		&& capture.Script.back() == 0x53
 		&& capture.ScriptDataAddress
 			<= (std::numeric_limits<std::uintptr_t>::max)() - capture.Script.size()
 		&& capture.CapturedAtMonotonicUs != 0

@@ -302,6 +302,7 @@ BlueprintEvidenceSourceError MapSourceError(
 	case BlueprintBytecodeLiveCaptureError::HeaderInvalid:
 	case BlueprintBytecodeLiveCaptureError::ScriptAddressInvalid:
 	case BlueprintBytecodeLiveCaptureError::ScriptReadFailed:
+	case BlueprintBytecodeLiveCaptureError::ScriptTerminatorInvalid:
 	case BlueprintBytecodeLiveCaptureError::PublishFailed:
 		return BlueprintEvidenceSourceError::InvalidEvidence;
 	case BlueprintBytecodeLiveCaptureError::AllocationFailed:
@@ -599,6 +600,14 @@ private:
 			m_Error = BlueprintBytecodeLiveCaptureError::HeaderChangedDuringCopy;
 			return true;
 		}
+		// Every supported UE4/UE5 Script bytecode stream is terminated by
+		// EX_EndOfScript (0x53). Do not publish a plausible TArray from a
+		// wrong/custom layout as bytecode evidence.
+		if (script.empty() || script.back() != 0x53)
+		{
+			m_Error = BlueprintBytecodeLiveCaptureError::ScriptTerminatorInvalid;
+			return true;
+		}
 		if (!ValidateFunctionIdentity())
 			return true;
 		if (!DependenciesCurrent() || !MetadataMatches())
@@ -729,6 +738,7 @@ const char* ToString(const BlueprintBytecodeLiveCaptureError error) noexcept
 	case BlueprintBytecodeLiveCaptureError::ScriptAddressInvalid: return "BLUEPRINT_SCRIPT_ADDRESS_INVALID";
 	case BlueprintBytecodeLiveCaptureError::ScriptLimitExceeded: return "BLUEPRINT_SCRIPT_LIMIT_EXCEEDED";
 	case BlueprintBytecodeLiveCaptureError::ScriptReadFailed: return "BLUEPRINT_SCRIPT_READ_FAILED";
+	case BlueprintBytecodeLiveCaptureError::ScriptTerminatorInvalid: return "BLUEPRINT_SCRIPT_TERMINATOR_INVALID";
 	case BlueprintBytecodeLiveCaptureError::HeaderChangedDuringCopy: return "BLUEPRINT_SCRIPT_HEADER_CHANGED_DURING_COPY";
 	case BlueprintBytecodeLiveCaptureError::ExecutorDisabled: return "BLUEPRINT_CAPTURE_EXECUTOR_DISABLED";
 	case BlueprintBytecodeLiveCaptureError::ExecutorCancelled: return "BLUEPRINT_CAPTURE_EXECUTOR_CANCELLED";

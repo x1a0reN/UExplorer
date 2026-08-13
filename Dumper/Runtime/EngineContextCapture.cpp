@@ -64,6 +64,60 @@ OffsetReport MemberOffset(
 		{"positive_member_offset", "member_offset_in_range"});
 }
 
+OffsetReport FunctionScriptOffset()
+{
+	const OffsetFinder::FunctionScriptOffsetDiagnostics diagnostics =
+		OffsetFinder::GetFunctionScriptOffsetDiagnostics();
+	const std::int32_t value = Off::UFunction::Script;
+	const bool discovered = value != OffsetFinder::OffsetNotFound
+		&& value > 0
+		&& diagnostics.SelectedOffset == value;
+	const bool validated = discovered
+		&& value <= 0x10000
+		&& diagnostics.Confidence == "high"
+		&& diagnostics.AnomalyTags.empty()
+		&& diagnostics.SelectedScore > 0
+		&& diagnostics.ScoreGapTop2 >= 180
+		&& diagnostics.BpEndHits >= 4
+		&& diagnostics.WeightedBpEndHits >= 16
+		&& diagnostics.VerifyProbed >= 4
+		&& diagnostics.VerifyHeaderValid >= 4
+		&& diagnostics.VerifyEndHits >= 4
+		&& diagnostics.VerifyFirstOpcodeValid >= 4
+		&& diagnostics.VerifySizeSane >= 4
+		&& diagnostics.VerifyEndRate >= 55
+		&& diagnostics.VerifyOpcodeRate >= 80;
+	OffsetReport report = MakeOffsetReport(
+		"ufunction.script",
+		value,
+		false,
+		discovered,
+		validated,
+		"scored_runtime_blueprint_script_validation_v2",
+		{
+			"selected_offset_matches_runtime_discovery",
+			"unique_candidate_score_gap_at_least_180",
+			"blueprint_end_token_witnesses_at_least_4",
+			"stable_tarray_headers_and_sane_sizes",
+			"verification_end_rate_at_least_55_percent",
+			"verification_opcode_rate_at_least_80_percent",
+			"no_layout_anomaly_tags"
+		});
+	report.Confidence = diagnostics.Confidence;
+	if (diagnostics.SelectedOffset > 0)
+		report.Candidates.push_back(diagnostics.SelectedOffset);
+	if (!validated)
+	{
+		report.ReasonCode = discovered
+			? "UFUNCTION_SCRIPT_WITNESS_INSUFFICIENT"
+			: "UFUNCTION_SCRIPT_OFFSET_NOT_FOUND";
+		report.Reason = discovered
+			? "The selected UFunction::Script candidate did not satisfy the high-confidence multi-function witness gate"
+			: "No UFunction::Script candidate matched the recorded runtime discovery";
+	}
+	return report;
+}
+
 OffsetReport ModuleOffset(
 	std::string name,
 	const std::int32_t value,
@@ -305,7 +359,7 @@ std::shared_ptr<const EngineContext> CaptureEngineContext(const std::uint64_t ge
 	builder.AddOffset(MemberOffset("uclass.default_object", Off::UClass::ClassDefaultObject, true));
 	builder.AddOffset(MemberOffset("ufunction.function_flags", Off::UFunction::FunctionFlags, true));
 	builder.AddOffset(MemberOffset("ufunction.exec_function", Off::UFunction::ExecFunction, false));
-	builder.AddOffset(MemberOffset("ufunction.script", Off::UFunction::Script, false, "scored_runtime_validation"));
+	builder.AddOffset(FunctionScriptOffset());
 	builder.AddOffset(MemberOffset("property.array_dim", Off::Property::ArrayDim, false));
 	builder.AddOffset(MemberOffset("property.element_size", Off::Property::ElementSize, false));
 	builder.AddOffset(MemberOffset("property.flags", Off::Property::PropertyFlags, false));

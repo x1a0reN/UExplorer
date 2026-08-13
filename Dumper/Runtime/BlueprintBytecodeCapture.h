@@ -69,6 +69,7 @@ enum class BlueprintBytecodeLiveCaptureError : std::uint8_t
 	ScriptAddressInvalid,
 	ScriptLimitExceeded,
 	ScriptReadFailed,
+	ScriptTerminatorInvalid,
 	HeaderChangedDuringCopy,
 	ExecutorDisabled,
 	ExecutorCancelled,

@@ -25,7 +25,7 @@ UExplorer 是一个面向 Unreal Engine 的 **SDK Dump + 实时游戏内省工�
 └──────────────────────────────────────────────┘
 ```
 
-当前分支已完成 R4 原子通信切换并继续 R5 领域实现。唯一桌面主链路仍是 React -> Tauri `domain_request` -> Rust `DomainService` -> PID-scoped Named Pipe -> `CoreCommandService`。除既有 Object/Type/property/call/World 与 stored/computed transform 外，当前代码检查点已加入 strict Memory、owned-binding Watch pull、descriptor-proven enum/destructor journal、explicit-profile Blueprint capture/disassembly、单字段 reflected World transform mutation，以及 Hook collector/command、Dump coordinator/command和端到端 call.batch。World mutation 只开放 world/relative scale 和 world rotation；其余字段稳定拒绝。call.batch 由单 active coordinator 串行复用 exact single-call adapter；Hook/Dump 仍缺 ProcessEvent producer/generator worker，Blueprint 尚缺生产 Script/profile witness，生产 UEnum entry table 也未见证。`D:\Steam\steamapps\common\Wandering Sword` 仍没有可启动游戏 `.exe`，所有新增路径都只有代码/合成边界证据，所有 profile 保持 `Not supported`。
+当前分支已完成 R4 原子通信切换并继续 R5 领域实现。唯一桌面主链路仍是 React -> Tauri `domain_request` -> Rust `DomainService` -> PID-scoped Named Pipe -> `CoreCommandService`。除既有 Object/Type/property/call/World 与 stored/computed transform 外，当前代码检查点已加入 strict Memory、owned-binding Watch pull、descriptor-proven enum/destructor journal、generation-bound Blueprint raw Script capture、explicit-profile bounded disassembly、单字段 reflected World transform mutation，以及 Hook collector/command、Dump coordinator/command和端到端 call.batch。World mutation 只开放 world/relative scale 和 world rotation；其余字段稳定拒绝。call.batch 由单 active coordinator 串行复用 exact single-call adapter；Hook/Dump 仍缺 ProcessEvent producer/generator worker，Blueprint decompile 仍缺 exact opcode/operand profile，生产 UEnum entry table 也未见证。`D:\Steam\steamapps\common\Wandering Sword` 仍没有可启动游戏 `.exe`，所有新增路径都只有代码/合成边界证据，所有 profile 保持 `Not supported`。
 
 ---
 
@@ -67,6 +67,7 @@ UExplorer/
 │   │   ├── FunctionCallBatchCoordinator.* # single-active bounded batch/deadline/cancel/retained result owner
 │   │   ├── BlueprintBytecodeCapture.* # exact generation + explicit Script layout bounded capture
 │   │   ├── BlueprintBytecodeEvidence.* # immutable bytecode/profile publication boundaries
+│   │   ├── BlueprintBytecodeRuntime.* # production generation router、capture store/source 与 drain owner
 │   │   ├── ReflectionLayout.h/.cpp   #   U/FProperty 字段 witness、尺寸边界与分阶段原子 snapshot
 │   │   ├── ReflectionLayoutCapture.* #   单条 evidence/预检预算、依赖复核、同线程发布与 drain owner
 │   │   ├── ObjectSnapshotReflectionCandidateSource.* # snapshot + SafeMemory 的生产反射候选源
@@ -142,8 +143,8 @@ UExplorer/
 │   │   │   ├── Offsets.h             #   Off::* 全部偏移定义 (30+ 命名空间)
 │   │   │   └── OffsetFinder.h        #   自动偏移探测函数 (FindUObjectClassOffset 等)
 │   │   ├── Public/Blueprint/
-│   │   │   ├── EExprToken.h          #   Blueprint VM 操作码枚举 (80+ 操作码)
-│   │   │   └── BlueprintDecompiler.h #   字节码反编译器 (Decompile/ParseExpression)
+│   │   │   ├── EExprToken.h          #   与 raw opcode 解耦的 Blueprint parser semantic IDs
+│   │   │   └── BlueprintDecompiler.h #   explicit-profile bounded byte-span disassembler
 │   │   └── Private/                  #   对应 .cpp 实现
 │   │       ├── Blueprint/BlueprintDecompiler.cpp
 │   │       ├── OffsetFinder/OffsetDiscovery.cpp, OffsetFinder.cpp, Offsets.cpp

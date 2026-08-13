@@ -23,6 +23,7 @@ $gameThreadImplementation = Read-ProjectFile 'Dumper\Runtime\GameThreadExecutor.
 $gameThreadAdapter = Read-ProjectFile 'Dumper\API\GameThreadQueue.h'
 $gameThread = $gameThreadHeader + $gameThreadImplementation
 $commandService = Read-ProjectFile 'Dumper\Services\CoreCommandService.cpp'
+$capabilities = Read-ProjectFile 'Dumper\Runtime\CoreCapabilities.h'
 $callApi = Read-ProjectFile 'Dumper\API\CallApi.cpp'
 $hookApi = Read-ProjectFile 'Dumper\API\HookApi.cpp'
 $postRenderHook = Read-ProjectFile 'Dumper\Runtime\PostRenderHook.cpp'
@@ -120,7 +121,10 @@ Assert-NotContains $memoryPage "connectWebSocket('/ws/console'" 'The fake WebSoc
 Assert-NotContains $memoryPage "subscribeEventStream('/events/watches'" 'Polling-driven watches must not claim SSE real-time behavior.'
 Assert-Contains $functionsPage 'subscribeSessionEvents' 'Hook events must use the owned Tauri Channel bridge.'
 Assert-NotContains $functionsPage 'subscribeEventStream' 'Functions UI reintroduced the legacy event transport.'
-Assert-Contains $domainService 'DomainRoute::Unavailable("hook.monitor")' 'Unsafe Hook monitoring must remain capability-gated.'
+Assert-Contains $domainService '"hook.add" => DomainRoute::Core("hook.add")' 'Hook commands must use the Core capability boundary.'
+Assert-Contains $main 'probes.HookProducerInstalled = false' 'Main must not advertise Hook monitoring without a producer.'
+Assert-Contains $capabilities 'probes.HookCommandServiceEnabled && probes.HookProducerInstalled' 'Unsafe Hook monitoring must remain producer-gated.'
+Assert-Contains $capabilities 'HOOK_PRODUCER_NOT_INSTALLED' 'Missing Hook producer must have a stable capability reason.'
 
 foreach ($token in @('DUMP_EXECUTOR_BUSY', 'DUMP_OPTIONS_UNAVAILABLE', 'g_DumpThread',
         'g_DumpStoppedCV.wait_for')) {

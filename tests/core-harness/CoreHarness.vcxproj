@@ -58,6 +58,7 @@
 	<ClCompile Include="..\..\Dumper\Platform\Private\PeImage.cpp" />
 	<ClCompile Include="..\..\Dumper\Runtime\BlueprintBytecodeCapture.cpp" />
 	<ClCompile Include="..\..\Dumper\Runtime\BlueprintBytecodeEvidence.cpp" />
+	<ClCompile Include="..\..\Dumper\Runtime\BlueprintBytecodeRuntime.cpp" />
 	<ClCompile Include="..\..\Dumper\Runtime\CoreSession.cpp" />
 	<ClCompile Include="..\..\Dumper\Runtime\DumpJobCoordinator.cpp" />
 	<ClCompile Include="..\..\Dumper\Runtime\FunctionCallBatchCoordinator.cpp" />
@@ -110,6 +111,7 @@
 	<ClInclude Include="..\..\Dumper\Platform\Public\PeImage.h" />
 	<ClInclude Include="..\..\Dumper\Runtime\BlueprintBytecodeCapture.h" />
 	<ClInclude Include="..\..\Dumper\Runtime\BlueprintBytecodeEvidence.h" />
+	<ClInclude Include="..\..\Dumper\Runtime\BlueprintBytecodeRuntime.h" />
 	<ClInclude Include="..\..\Dumper\Runtime\BoundedQueue.h" />
     <ClInclude Include="..\..\Dumper\Runtime\CapabilityRegistry.h" />
     <ClInclude Include="..\..\Dumper\Runtime\CoreCapabilities.h" />

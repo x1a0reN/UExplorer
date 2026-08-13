@@ -18,13 +18,13 @@ These assets are available for development, but none changes the support rows ab
 
 - The current R5 code checkpoint adds strict Memory commands, a bounded Watch scheduler
   with pinned immutable subscription bindings and explicit pull drain, descriptor-proven
-  enum codecs and an owned destructor journal, explicit-profile bounded Blueprint
-  capture/disassembly, Hook/Dump ownership primitives, and an end-to-end bounded call-batch
-  command path that reuses the exact single-call adapter.
+  enum codecs and an owned destructor journal, generation-bound raw Blueprint Script
+  capture plus explicit-profile bounded disassembly, Hook/Dump ownership primitives, and
+  an end-to-end bounded call-batch command path that reuses the exact single-call adapter.
   It has no target-process evidence for any of them. Production
-  UEnum and Blueprint layout/profile witnesses, the ProcessEvent Hook producer, generator
-  worker, and real batch ProcessEvent fixture are still missing, so no profile support claim
-  follows from these source changes.
+  UEnum entry-table and Blueprint opcode/operand profile witnesses, the ProcessEvent Hook
+  producer, generator worker, and real batch ProcessEvent fixture are still missing, so no
+  profile support claim follows from these source changes.
 
 - `D:\Projects\UnrealEngine` contains source trees for UE 4.21.2, 4.24.3,
   4.25.4, 4.26.2, 4.27.2, 5.0.3, 5.1.1, 5.2.1, 5.3.2, 5.4.4,
@@ -37,6 +37,11 @@ These assets are available for development, but none changes the support rows ab
   `LocalPlayers[0]`. The corresponding World/GameInstance/Player/Controller fields remain
   reflected across those versions. This supports the Windows x64 ScriptArray and local-player
   candidates implemented in R5; it does not prove a Shipping binary uses those candidates.
+- UE 4.21-4.27 and UE 5.0-5.7 `Script.h` source also proves that opcode assignments are
+  not one universal table: for example UE4 uses raw `0x38` for `EX_PrimitiveCast`, while
+  UE5 uses `0x37` for `EX_DoubleConst`. The parser therefore keeps semantic token IDs
+  separate from caller-supplied raw mappings. This source inventory is insufficient to
+  select a target profile without a matching runtime/build witness.
 - UE 4.21/4.27 `Vector.h` and `Rotator.h` define `X/Y/Z` and `Pitch/Yaw/Roll`
   as three packed `float` fields. UE5 LWC math declarations use the same semantic field
   names, while 5.4/5.7 `MathFwd.h` aliases the default FVector/FRotator to the `double`
@@ -136,7 +141,7 @@ identity, mutation rejection, fixed-capacity retirement/backpressure, deep-froze
   requires the element class full path from the same ObjectSnapshot. The Windows x64 profile
   opens scalar/bool/FName/FString/UObject, bounded array decoding, and the canonical math
   structs above; FText, Weak/Soft, arbitrary/deeper Struct/container descriptors, Map/Set,
-  UEnum layout, and Blueprint bytecode
+  UEnum entry tables, and Blueprint decompile profiles
   are still explicitly unavailable without their own witnessed layouts. The same
 harness exercises the worker-only immutable `TypeCommandService` for exact-path
 Class/Struct/Enum/Function detail, explicit member scope, hierarchy/CDO metadata,

@@ -9,6 +9,7 @@
 
 #include "Generators/Generator.h"
 #include "IPC/NamedPipeRpcServer.h"
+#include "Runtime/BlueprintBytecodeRuntime.h"
 #include "Runtime/CoreCapabilities.h"
 #include "Runtime/CoreRuntimeAccess.h"
 #include "Runtime/CoreSession.h"
@@ -56,6 +57,8 @@ static std::unique_ptr<UExplorer::Runtime::FunctionCallBatchCoordinator>
 	g_CallBatchCoordinator;
 static std::unique_ptr<UExplorer::Services::FunctionCallBatchCommandService>
 	g_CallBatchCommandService;
+static std::unique_ptr<UExplorer::Runtime::BlueprintBytecodeRuntimeSource>
+	g_BlueprintBytecodeSource;
 static std::unique_ptr<UExplorer::Services::ObjectPropertyWatchSampleSource> g_WatchSource;
 static std::unique_ptr<UExplorer::Runtime::WatchScheduler> g_WatchScheduler;
 static std::unique_ptr<UExplorer::Runtime::HookEventCollector> g_HookCollector;
@@ -111,6 +114,11 @@ namespace
 		probes.FunctionCallServiceEnabled = true;
 		probes.FunctionCallBatchCommandServiceEnabled = g_CallBatchCommandService
 			&& g_CallBatchCommandService->IsConfigured();
+		probes.BlueprintBytecodeCaptureEnabled = g_BlueprintBytecodeSource
+			&& g_BlueprintBytecodeSource->IsCaptureConfigured();
+		// Raw Script capture is witnessed independently. No exact opcode/operand
+		// profile is published until its compile-time UE layout is also proved.
+		probes.BlueprintBytecodeProfileEnabled = false;
 		probes.MemoryReadCommandServiceEnabled = true;
 		probes.MemoryWriteCommandServiceEnabled = true;
 		probes.WatchCommandServiceEnabled = g_WatchScheduler
@@ -712,6 +720,19 @@ namespace
 			FreeConsole();
 			ExitThread(1);
 		}
+		if (g_BlueprintBytecodeSource
+			&& !g_BlueprintBytecodeSource->StopAndDrain(
+				std::chrono::milliseconds(5000)))
+		{
+			g_Runtime.RecordShutdownFailure(
+				"BLUEPRINT_CAPTURE_INITIALIZATION_STOP_TIMEOUT",
+				"Blueprint capture work did not drain after initialization failed");
+			std::cerr << "[UExplorer] Blueprint capture work did not drain; DLL remains loaded.\n";
+			if (consoleFile)
+				fclose(consoleFile);
+			FreeConsole();
+			ExitThread(1);
+		}
 		if (!g_Runtime.WaitForRequests(std::chrono::milliseconds(5000)))
 		{
 			g_Runtime.RecordShutdownFailure(
@@ -749,6 +770,7 @@ namespace
 		}
 		g_PostRenderHook.reset();
 		g_CommandService.reset();
+		g_BlueprintBytecodeSource.reset();
 		g_CallBatchCommandService.reset();
 		g_CallBatchCoordinator.reset();
 		g_CallBatchWorker.reset();
@@ -978,6 +1000,20 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 				g_CallBatchCoordinator.get());
 		if (!g_CallBatchCommandService->IsConfigured())
 			throw std::runtime_error("Call batch command service rejected the owned coordinator");
+		if (runtimeSnapshot.Context->HasValidatedOffset("ufunction.script"))
+		{
+			g_BlueprintBytecodeSource = std::make_unique<
+				UExplorer::Runtime::BlueprintBytecodeRuntimeSource>(
+					runtimeSnapshot.Context,
+					*g_EngineFacade,
+					UExplorer::Runtime::GetGameThreadExecutor());
+			if (!g_BlueprintBytecodeSource->IsConfigured())
+				throw std::runtime_error("Blueprint bytecode source rejected the witnessed Script layout");
+		}
+		else
+		{
+			std::cerr << "[UExplorer] Blueprint bytecode capture unavailable: UFunction::Script lacks a high-confidence runtime witness.\n";
+		}
 		g_CommandService = std::make_unique<UExplorer::Services::CoreCommandService>(
 			g_Runtime,
 			UExplorer::Runtime::GetGameThreadExecutor(),
@@ -986,7 +1022,7 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 			g_ReflectionSource.get(),
 			g_TypeSource.get(),
 			g_WatchScheduler.get(),
-			nullptr,
+			g_BlueprintBytecodeSource.get(),
 			nullptr,
 			g_HookCommandService.get(),
 			g_DumpCommandService.get(),
@@ -1172,6 +1208,7 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 	UExplorer::Services::SetCoreCommandService(nullptr);
 	bool pipeStopped = true;
 	bool callBatchStopped = true;
+	bool blueprintCaptureStopped = true;
 	bool hooksStopped = true;
 	bool worldFrameStopped = true;
 	bool watchFrameStopped = true;
@@ -1195,8 +1232,16 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 				std::chrono::milliseconds(5000)).Ok();
 		return callBatchStopped;
 	});
-	shutdown.AddStage("runtime_requests", [&] {
+	shutdown.AddStage("blueprint_capture", [&] {
 		if (!pipeStopped || !callBatchStopped)
+			return false;
+		blueprintCaptureStopped = !g_BlueprintBytecodeSource
+			|| g_BlueprintBytecodeSource->StopAndDrain(
+				std::chrono::milliseconds(5000));
+		return blueprintCaptureStopped;
+	});
+	shutdown.AddStage("runtime_requests", [&] {
+		if (!pipeStopped || !callBatchStopped || !blueprintCaptureStopped)
 			return false;
 		requestsDrained = g_Runtime.WaitForRequests(std::chrono::milliseconds(5000));
 		return requestsDrained;
@@ -1284,6 +1329,7 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 	shutdown.AddStage("engine_facade", [&] {
 		return pipeStopped
 			&& callBatchStopped
+			&& blueprintCaptureStopped
 			&& requestsDrained
 			&& worldFrameStopped
 			&& watchFrameStopped
@@ -1314,6 +1360,7 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 		return 1;
 	}
 	g_CommandService.reset();
+	g_BlueprintBytecodeSource.reset();
 	g_CallBatchCommandService.reset();
 	g_CallBatchCoordinator.reset();
 	g_CallBatchWorker.reset();
