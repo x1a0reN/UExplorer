@@ -48,7 +48,12 @@ foreach ($token in @(
 foreach ($token in @(
         'IPC\NamedPipeRpcServer.cpp', 'Runtime\PostRenderHook.cpp',
         'Runtime\WorldSnapshotCapture.cpp', 'Services\CoreCommandService.cpp',
-        'Services\WorldCommandService.cpp', 'Services\WorldTransformCommandService.cpp',
+        'Services\MemoryCommandService.cpp', 'Services\WorldCommandService.cpp',
+        'Services\WorldTransformCommandService.cpp', 'Services\WorldMutationCommandService.cpp',
+        'Runtime\WatchScheduler.cpp',
+        'Services\WatchCommandService.cpp', 'Runtime\HookEventCollector.cpp',
+        'Services\HookCommandService.cpp', 'Runtime\DumpJobCoordinator.cpp',
+        'Services\DumpCommandService.cpp',
         'advapi32.lib')) {
     Assert-Contains $coreProject $token 'Release Core project omitted a required Pipe/domain component.'
 }
@@ -59,17 +64,28 @@ foreach ($path in @('Dumper\Server\HttpServer.cpp', 'Dumper\API\Router.cpp')) {
 }
 
 foreach ($token in @(
-        '"memory.raw_read",', '"memory.raw_write",', '"engine.world_snapshot",',
-        '"world.inspect",', '"world.details",', 'MEMORY_READ_COMMAND_NOT_IMPLEMENTED',
-        'WorldInspectServiceEnabled', 'WORLD_COMMAND_NOT_READY')) {
+        '"memory.raw_read",', '"memory.raw_write",', '"memory.typed_read",',
+        '"memory.typed_write",', '"memory.pointer_chain",', '"engine.world_snapshot",',
+        '"world.inspect",', '"world.details",', 'MemoryReadCommandServiceEnabled',
+        'MemoryWriteCommandServiceEnabled',
+        'WorldInspectServiceEnabled', 'WORLD_COMMAND_NOT_READY',
+        'WorldMutationServiceEnabled', '"world.mutate",',
+        'HookProducerInstalled', 'HOOK_PRODUCER_NOT_INSTALLED',
+        'DumpWorkerEnabled', 'DUMP_WORKER_NOT_INJECTED', '"dump.jobs",')) {
     Assert-Contains $capabilities $token 'Core capability publication lost a required domain boundary.'
 }
 foreach ($token in @(
         'pub struct DomainService', 'pub fn execute(&self, request: DomainRequest)',
         'OPERATION_NOT_SUPPORTED', 'CAPABILITY_UNAVAILABLE',
         'DomainRoute::ObjectsList', 'DomainRoute::TypeList',
-        'DomainRoute::Unavailable("memory.raw_read")',
+        'DomainRoute::Core("memory.raw.read")',
+        'DomainRoute::Core("memory.raw.write")',
+        'DomainRoute::Core("memory.typed.read")',
+        'DomainRoute::Core("memory.typed.write")',
+        'DomainRoute::Core("memory.pointer_chain.resolve")',
         'DomainRoute::Core("call.invoke")',
+        'DomainRoute::Unavailable("call.static")',
+        'DomainRoute::Unavailable("call.batch")',
         'DomainRoute::Core("world.inspect")',
         'DomainRoute::Core("world.levels")',
         'DomainRoute::Core("world.actors.list")',
@@ -77,9 +93,27 @@ foreach ($token in @(
         'DomainRoute::Core("world.actor.get")',
         'DomainRoute::Core("world.actor.components")',
         'DomainRoute::Core("world.actor.transform.get")',
-        'DomainRoute::Unavailable("watch.properties")',
-        'DomainRoute::Unavailable("hook.monitor")',
-        'DomainRoute::Unavailable("dump.cpp")')) {
+        'DomainRoute::Core("world.actor.transform.update")',
+        'DomainRoute::Core("watch.add")',
+        'DomainRoute::Core("watch.list")',
+        'DomainRoute::Core("watch.enable")',
+        'DomainRoute::Core("watch.remove")',
+        'DomainRoute::Core("watch.snapshot")',
+        'DomainRoute::Core("watch.events.drain")',
+		'DomainRoute::Core("blueprint.bytecode")',
+		'DomainRoute::Core("blueprint.decompile")',
+        'DomainRoute::Core("hook.add")',
+        'DomainRoute::Core("hook.list")',
+        'DomainRoute::Core("hook.enable")',
+        'DomainRoute::Core("hook.remove")',
+        'DomainRoute::Core("hook.log")',
+        'DomainRoute::Core("dump.sdk.start")',
+        'DomainRoute::Core("dump.usmap.start")',
+        'DomainRoute::Core("dump.dumpspace.start")',
+        'DomainRoute::Core("dump.ida.start")',
+        'DomainRoute::Core("dump.jobs.list")',
+        'DomainRoute::Core("dump.jobs.get")',
+        'DomainRoute::Core("dump.jobs.cancel")')) {
     Assert-Contains $domain $token 'Rust Host DomainService lost an explicit domain or error boundary.'
 }
 foreach ($token in @(

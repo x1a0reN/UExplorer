@@ -118,7 +118,11 @@
           "required": ["kind", "value"],
           "properties": {
             "kind": { "enum": ["float", "double"] },
-            "value": { "type": "string", "minLength": 1, "maxLength": 128 }
+            "value": {
+              "type": "string",
+              "pattern": "^-?(?:(?:0|[1-9][0-9]*)(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+              "maxLength": 128
+            }
           }
         },
         {
@@ -135,6 +139,35 @@
           "additionalProperties": false,
           "required": ["kind", "type_name", "value"],
           "properties": {
+            "kind": { "const": "enum" },
+            "type_name": { "$ref": "#/$defs/typePath" },
+            "value": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["name"],
+                  "properties": {
+                    "name": { "type": "string", "minLength": 1, "maxLength": 4096 }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["raw"],
+                  "properties": {
+                    "raw": { "type": "string", "pattern": "^(0|-?[1-9][0-9]*)$", "maxLength": 32 }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "type_name", "value"],
+          "properties": {
             "kind": { "const": "struct" },
             "type_name": { "const": "/Script/CoreUObject.Vector" },
             "value": {
@@ -142,9 +175,9 @@
               "additionalProperties": false,
               "required": ["X", "Y", "Z"],
               "properties": {
-                "X": { "type": "string", "minLength": 1, "maxLength": 128 },
-                "Y": { "type": "string", "minLength": 1, "maxLength": 128 },
-                "Z": { "type": "string", "minLength": 1, "maxLength": 128 }
+                "X": { "type": "string", "pattern": "^-?(?:(?:0|[1-9][0-9]*)(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$", "maxLength": 128 },
+                "Y": { "type": "string", "pattern": "^-?(?:(?:0|[1-9][0-9]*)(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$", "maxLength": 128 },
+                "Z": { "type": "string", "pattern": "^-?(?:(?:0|[1-9][0-9]*)(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$", "maxLength": 128 }
               }
             }
           }
@@ -161,9 +194,9 @@
               "additionalProperties": false,
               "required": ["Pitch", "Yaw", "Roll"],
               "properties": {
-                "Pitch": { "type": "string", "minLength": 1, "maxLength": 128 },
-                "Yaw": { "type": "string", "minLength": 1, "maxLength": 128 },
-                "Roll": { "type": "string", "minLength": 1, "maxLength": 128 }
+                "Pitch": { "type": "string", "pattern": "^-?(?:(?:0|[1-9][0-9]*)(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$", "maxLength": 128 },
+                "Yaw": { "type": "string", "pattern": "^-?(?:(?:0|[1-9][0-9]*)(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$", "maxLength": 128 },
+                "Roll": { "type": "string", "pattern": "^-?(?:(?:0|[1-9][0-9]*)(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$", "maxLength": 128 }
               }
             }
           }
@@ -189,6 +222,327 @@
           "propertyNames": { "minLength": 1, "maxLength": 1024 },
           "additionalProperties": { "$ref": "#/$defs/callArgument" }
         }
+      }
+    },
+    "memoryAddress": {
+      "type": "string",
+      "pattern": "^0x(?:[1-9A-F][0-9A-F]{0,15}|0)$"
+    },
+    "memoryTargetAddress": {
+      "type": "string",
+      "pattern": "^0x[1-9A-F][0-9A-F]{0,15}$"
+    },
+    "memoryRawReadData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["address", "size"],
+      "properties": {
+        "address": { "$ref": "#/$defs/memoryTargetAddress" },
+        "size": { "type": "integer", "minimum": 1, "maximum": 4096 }
+      }
+    },
+    "memoryRawWriteData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["address", "bytes"],
+      "properties": {
+        "address": { "$ref": "#/$defs/memoryTargetAddress" },
+        "bytes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "items": { "type": "integer", "minimum": 0, "maximum": 255 }
+        }
+      }
+    },
+    "memoryScalarType": {
+      "enum": [
+        "int8", "uint8", "byte", "int16", "uint16", "int32", "uint32",
+        "int64", "uint64", "float", "double", "pointer"
+      ]
+    },
+    "memoryTypedReadData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["address", "type"],
+      "properties": {
+        "address": { "$ref": "#/$defs/memoryTargetAddress" },
+        "type": { "$ref": "#/$defs/memoryScalarType" }
+      }
+    },
+    "memoryTypedWriteData": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["address", "type", "value"],
+          "properties": {
+            "address": { "$ref": "#/$defs/memoryTargetAddress" },
+            "type": { "enum": ["int8", "int16", "int32", "int64"] },
+            "value": { "type": "string", "pattern": "^(0|-?[1-9][0-9]*)$", "maxLength": 32 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["address", "type", "value"],
+          "properties": {
+            "address": { "$ref": "#/$defs/memoryTargetAddress" },
+            "type": { "enum": ["uint8", "byte", "uint16", "uint32", "uint64"] },
+            "value": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 32 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["address", "type", "value"],
+          "properties": {
+            "address": { "$ref": "#/$defs/memoryTargetAddress" },
+            "type": { "enum": ["float", "double"] },
+            "value": {
+              "type": "string",
+              "pattern": "^-?(?:(?:0|[1-9][0-9]*)(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+              "maxLength": 128
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["address", "type", "value"],
+          "properties": {
+            "address": { "$ref": "#/$defs/memoryTargetAddress" },
+            "type": { "const": "pointer" },
+            "value": { "$ref": "#/$defs/memoryAddress" }
+          }
+        }
+      ]
+    },
+    "memoryPointerChainData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["base", "offsets"],
+      "properties": {
+        "base": { "$ref": "#/$defs/memoryTargetAddress" },
+        "offsets": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "string",
+            "pattern": "^(0|-?[1-9][0-9]*)$",
+            "maxLength": 32
+          }
+        }
+      }
+    },
+    "watchAddData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "object", "object_snapshot_generation", "type_snapshot_generation",
+        "declaring_type_path", "property_name", "array_index", "interval_ms", "enabled"
+      ],
+      "properties": {
+        "object": { "$ref": "#/$defs/objectHandle" },
+        "object_snapshot_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "type_snapshot_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "declaring_type_path": { "$ref": "#/$defs/typePath" },
+        "property_name": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "array_index": { "type": "integer", "minimum": 0, "maximum": 1023 },
+        "interval_ms": { "type": "integer", "minimum": 16, "maximum": 3600000 },
+        "enabled": { "type": "boolean" }
+      }
+    },
+    "watchEnableData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "enabled"],
+      "properties": {
+        "id": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "enabled": { "type": "boolean" }
+      }
+    },
+    "watchIdData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
+      }
+    },
+    "watchSnapshotData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "history_limit": { "type": "integer", "minimum": 1, "maximum": 32 }
+      }
+    },
+    "watchDrainData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["limit"],
+      "properties": {
+        "limit": { "type": "integer", "minimum": 1, "maximum": 32 }
+      }
+    },
+    "hookCapturePolicy": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode"],
+          "properties": { "mode": { "const": "fixed_metadata" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "max_payload_bytes"],
+          "properties": {
+            "mode": { "const": "preencoded_payload" },
+            "max_payload_bytes": { "type": "integer", "minimum": 1, "maximum": 512 }
+          }
+        }
+      ]
+    },
+    "hookAddData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "object_snapshot_generation", "type_snapshot_generation", "function",
+        "function_path", "capture", "enabled"
+      ],
+      "properties": {
+        "object_snapshot_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "type_snapshot_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "function": { "$ref": "#/$defs/functionHandle" },
+        "function_path": { "$ref": "#/$defs/typePath" },
+        "capture": { "$ref": "#/$defs/hookCapturePolicy" },
+        "enabled": { "type": "boolean" }
+      }
+    },
+    "hookEnableData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "enabled"],
+      "properties": {
+        "id": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "enabled": { "type": "boolean" }
+      }
+    },
+    "hookIdData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
+      }
+    },
+    "hookLogData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 128 }
+      }
+    },
+    "dumpStartData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "session_id", "context_generation", "object_snapshot_generation",
+        "type_snapshot_generation", "format", "output_path_identity",
+        "deadline_ms", "options"
+      ],
+      "properties": {
+        "session_id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[^\\u0000-\\u001F\\u007F]+$" },
+        "context_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "object_snapshot_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "type_snapshot_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "format": { "enum": ["sdk", "usmap", "dumpspace", "ida-script"] },
+        "output_path_identity": { "type": "string", "minLength": 1, "maxLength": 32768, "pattern": "^[^\\u0000-\\u001F\\u007F]+$" },
+        "deadline_ms": { "type": "integer", "minimum": 1, "maximum": 86400000 },
+        "options": { "type": "object", "additionalProperties": false, "maxProperties": 0 }
+      }
+    },
+    "dumpJobsListData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "session_id", "context_generation", "object_snapshot_generation",
+        "type_snapshot_generation", "max_jobs"
+      ],
+      "properties": {
+        "session_id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[^\\u0000-\\u001F\\u007F]+$" },
+        "context_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "object_snapshot_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "type_snapshot_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "max_jobs": { "type": "integer", "minimum": 1, "maximum": 64 }
+      }
+    },
+    "dumpJobsGetData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "session_id", "context_generation", "object_snapshot_generation",
+        "type_snapshot_generation", "job_id", "after_event_sequence", "max_events"
+      ],
+      "properties": {
+        "session_id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[^\\u0000-\\u001F\\u007F]+$" },
+        "context_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "object_snapshot_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "type_snapshot_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "job_id": { "type": "string", "pattern": "^[1-9][0-9]{0,15}$" },
+        "after_event_sequence": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "max_events": { "type": "integer", "minimum": 1, "maximum": 512 }
+      }
+    },
+    "dumpJobsCancelData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "session_id", "context_generation", "object_snapshot_generation",
+        "type_snapshot_generation", "job_id"
+      ],
+      "properties": {
+        "session_id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[^\\u0000-\\u001F\\u007F]+$" },
+        "context_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "object_snapshot_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "type_snapshot_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "job_id": { "type": "string", "pattern": "^[1-9][0-9]{0,15}$" }
+      }
+    },
+    "blueprintBytecodeData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "function", "function_path", "context_generation",
+        "object_snapshot_generation", "type_snapshot_generation"
+      ],
+      "properties": {
+        "function": { "$ref": "#/$defs/functionHandle" },
+        "function_path": { "$ref": "#/$defs/typePath" },
+        "context_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "object_snapshot_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "type_snapshot_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
+      }
+    },
+    "blueprintDecompileData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "function", "function_path", "context_generation",
+        "object_snapshot_generation", "type_snapshot_generation", "profile_id"
+      ],
+      "properties": {
+        "function": { "$ref": "#/$defs/functionHandle" },
+        "function_path": { "$ref": "#/$defs/typePath" },
+        "context_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "object_snapshot_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "type_snapshot_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "profile_id": { "type": "string", "minLength": 1, "maxLength": 256 }
       }
     },
     "snapshotCursor": {
@@ -296,6 +650,97 @@
           "minimum": 1,
           "maximum": 9007199254740991
         }
+      }
+    },
+    "worldTransformNumber": {
+      "type": "string",
+      "pattern": "^-?(?:(?:0|[1-9][0-9]*)(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+      "maxLength": 128
+    },
+    "worldTransformVector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y", "z"],
+      "properties": {
+        "x": { "$ref": "#/$defs/worldTransformNumber" },
+        "y": { "$ref": "#/$defs/worldTransformNumber" },
+        "z": { "$ref": "#/$defs/worldTransformNumber" }
+      }
+    },
+    "worldTransformRotator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pitch", "yaw", "roll"],
+      "properties": {
+        "pitch": { "$ref": "#/$defs/worldTransformNumber" },
+        "yaw": { "$ref": "#/$defs/worldTransformNumber" },
+        "roll": { "$ref": "#/$defs/worldTransformNumber" }
+      }
+    },
+    "worldTransformUpdate": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["field", "space", "value"],
+          "properties": {
+            "field": { "const": "scale" },
+            "space": { "enum": ["world", "relative"] },
+            "value": { "$ref": "#/$defs/worldTransformVector" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["field", "space", "value", "teleport_physics"],
+          "properties": {
+            "field": { "const": "rotation" },
+            "space": { "const": "world" },
+            "value": { "$ref": "#/$defs/worldTransformRotator" },
+            "teleport_physics": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["field", "space", "value", "sweep", "teleport"],
+          "properties": {
+            "field": { "const": "location" },
+            "space": { "enum": ["world", "relative"] },
+            "value": { "$ref": "#/$defs/worldTransformVector" },
+            "sweep": { "type": "boolean" },
+            "teleport": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["field", "space", "value", "sweep", "teleport"],
+          "properties": {
+            "field": { "const": "rotation" },
+            "space": { "const": "relative" },
+            "value": { "$ref": "#/$defs/worldTransformRotator" },
+            "sweep": { "type": "boolean" },
+            "teleport": { "type": "boolean" }
+          }
+        }
+      ]
+    },
+    "worldActorTransformUpdateData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "session_id", "context_generation", "object_snapshot_generation",
+        "type_snapshot_generation", "world_snapshot_generation", "actor", "update"
+      ],
+      "properties": {
+        "session_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "context_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "object_snapshot_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "type_snapshot_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "world_snapshot_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "actor": { "$ref": "#/$defs/objectHandle" },
+        "update": { "$ref": "#/$defs/worldTransformUpdate" }
       }
     },
     "worldActorComponentData": {
@@ -872,6 +1317,164 @@
         },
         {
           "if": {
+            "properties": { "operation": { "const": "memory.raw.read" } },
+            "required": ["operation"]
+          },
+          "then": { "properties": { "data": { "$ref": "#/$defs/memoryRawReadData" } } }
+        },
+        {
+          "if": {
+            "properties": { "operation": { "const": "memory.raw.write" } },
+            "required": ["operation"]
+          },
+          "then": { "properties": { "data": { "$ref": "#/$defs/memoryRawWriteData" } } }
+        },
+        {
+          "if": {
+            "properties": { "operation": { "const": "memory.typed.read" } },
+            "required": ["operation"]
+          },
+          "then": { "properties": { "data": { "$ref": "#/$defs/memoryTypedReadData" } } }
+        },
+        {
+          "if": {
+            "properties": { "operation": { "const": "memory.typed.write" } },
+            "required": ["operation"]
+          },
+          "then": { "properties": { "data": { "$ref": "#/$defs/memoryTypedWriteData" } } }
+        },
+        {
+          "if": {
+            "properties": { "operation": { "const": "memory.pointer_chain.resolve" } },
+            "required": ["operation"]
+          },
+          "then": { "properties": { "data": { "$ref": "#/$defs/memoryPointerChainData" } } }
+        },
+        {
+          "if": {
+            "properties": { "operation": { "const": "watch.add" } },
+            "required": ["operation"]
+          },
+          "then": { "properties": { "data": { "$ref": "#/$defs/watchAddData" } } }
+        },
+        {
+          "if": {
+            "properties": { "operation": { "const": "watch.list" } },
+            "required": ["operation"]
+          },
+          "then": { "properties": { "data": { "$ref": "#/$defs/emptyCommandData" } } }
+        },
+        {
+          "if": {
+            "properties": { "operation": { "const": "watch.enable" } },
+            "required": ["operation"]
+          },
+          "then": { "properties": { "data": { "$ref": "#/$defs/watchEnableData" } } }
+        },
+        {
+          "if": {
+            "properties": { "operation": { "const": "watch.remove" } },
+            "required": ["operation"]
+          },
+          "then": { "properties": { "data": { "$ref": "#/$defs/watchIdData" } } }
+        },
+        {
+          "if": {
+            "properties": { "operation": { "const": "watch.snapshot" } },
+            "required": ["operation"]
+          },
+          "then": { "properties": { "data": { "$ref": "#/$defs/watchSnapshotData" } } }
+        },
+        {
+          "if": {
+            "properties": { "operation": { "const": "watch.events.drain" } },
+            "required": ["operation"]
+          },
+          "then": { "properties": { "data": { "$ref": "#/$defs/watchDrainData" } } }
+        },
+        {
+          "if": {
+            "properties": { "operation": { "const": "hook.add" } },
+            "required": ["operation"]
+          },
+          "then": { "properties": { "data": { "$ref": "#/$defs/hookAddData" } } }
+        },
+        {
+          "if": {
+            "properties": { "operation": { "const": "hook.list" } },
+            "required": ["operation"]
+          },
+          "then": { "properties": { "data": { "$ref": "#/$defs/emptyCommandData" } } }
+        },
+        {
+          "if": {
+            "properties": { "operation": { "const": "hook.enable" } },
+            "required": ["operation"]
+          },
+          "then": { "properties": { "data": { "$ref": "#/$defs/hookEnableData" } } }
+        },
+        {
+          "if": {
+            "properties": { "operation": { "const": "hook.remove" } },
+            "required": ["operation"]
+          },
+          "then": { "properties": { "data": { "$ref": "#/$defs/hookIdData" } } }
+        },
+        {
+          "if": {
+            "properties": { "operation": { "const": "hook.log" } },
+            "required": ["operation"]
+          },
+          "then": { "properties": { "data": { "$ref": "#/$defs/hookLogData" } } }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "enum": ["dump.sdk.start", "dump.usmap.start", "dump.dumpspace.start", "dump.ida.start"]
+              }
+            },
+            "required": ["operation"]
+          },
+          "then": { "properties": { "data": { "$ref": "#/$defs/dumpStartData" } } }
+        },
+        {
+          "if": {
+            "properties": { "operation": { "const": "dump.jobs.list" } },
+            "required": ["operation"]
+          },
+          "then": { "properties": { "data": { "$ref": "#/$defs/dumpJobsListData" } } }
+        },
+        {
+          "if": {
+            "properties": { "operation": { "const": "dump.jobs.get" } },
+            "required": ["operation"]
+          },
+          "then": { "properties": { "data": { "$ref": "#/$defs/dumpJobsGetData" } } }
+        },
+        {
+          "if": {
+            "properties": { "operation": { "const": "dump.jobs.cancel" } },
+            "required": ["operation"]
+          },
+          "then": { "properties": { "data": { "$ref": "#/$defs/dumpJobsCancelData" } } }
+        },
+        {
+          "if": {
+            "properties": { "operation": { "const": "blueprint.bytecode" } },
+            "required": ["operation"]
+          },
+          "then": { "properties": { "data": { "$ref": "#/$defs/blueprintBytecodeData" } } }
+        },
+        {
+          "if": {
+            "properties": { "operation": { "const": "blueprint.decompile" } },
+            "required": ["operation"]
+          },
+          "then": { "properties": { "data": { "$ref": "#/$defs/blueprintDecompileData" } } }
+        },
+        {
+          "if": {
             "properties": {
               "operation": { "const": "world.levels" }
             },
@@ -898,6 +1501,15 @@
             "required": ["operation"]
           },
           "then": { "properties": { "data": { "$ref": "#/$defs/worldActorIdentityData" } } }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation": { "const": "world.actor.transform.update" }
+            },
+            "required": ["operation"]
+          },
+          "then": { "properties": { "data": { "$ref": "#/$defs/worldActorTransformUpdateData" } } }
         },
         {
           "if": {

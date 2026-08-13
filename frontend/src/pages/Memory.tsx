@@ -2,37 +2,57 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Terminal, Binary, Bookmark, Search, ArrowRight, ArrowLeft, RefreshCw, Layers } from 'lucide-react';
 import { t } from '../i18n';
 import api from '../api';
+import type { WatchDrainData, WatchHistoryData, WatchItem, WatchValue } from '../api';
 
 const READ_SIZE = 256;
 
 function parseAddress(value: string): string {
   const v = value.trim();
   if (!v) return '0x0';
-  if (v.startsWith('0x') || v.startsWith('0X')) return v;
-  const asNum = Number(v);
-  if (!Number.isNaN(asNum)) return `0x${asNum.toString(16).toUpperCase()}`;
-  return v;
+  try {
+    const parsed = BigInt(v);
+    if (parsed < 0n || parsed > 0xFFFF_FFFF_FFFF_FFFFn) return v;
+    return `0x${parsed.toString(16).toUpperCase()}`;
+  } catch {
+    return v;
+  }
 }
 
-function parseOffsets(raw: string): number[] {
-  return raw
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .map((s) => {
-      if (s.startsWith('0x') || s.startsWith('0X')) return Number.parseInt(s.slice(2), 16);
-      return Number.parseInt(s, 16) || Number.parseInt(s, 10);
-    })
-    .filter((n) => !Number.isNaN(n));
+function parseOffsets(raw: string): string[] {
+  if (!raw.trim()) return [];
+  const tokens = raw.split(',').map((token) => token.trim());
+  if (tokens.some((token) => !/^(0|-?[1-9][0-9]*)$/.test(token))) {
+    throw new Error('Every pointer offset must be a canonical signed decimal integer');
+  }
+  const minimum = -(1n << 63n);
+  const maximum = (1n << 63n) - 1n;
+  return tokens.map((token) => {
+    const parsed = BigInt(token);
+    if (parsed < minimum || parsed > maximum) {
+      throw new Error('Pointer offset is outside the signed 64-bit range');
+    }
+    return parsed.toString(10);
+  });
 }
 
 function bytesToArray(input: string): number[] {
-  return input
-    .split(/[\s,]+/)
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .map((token) => Number.parseInt(token.replace(/^0x/i, ''), 16))
-    .filter((n) => !Number.isNaN(n) && n >= 0 && n <= 255);
+  const trimmed = input.trim();
+  if (!trimmed) throw new Error('Raw write requires at least one byte');
+  const tokens = trimmed.split(/[\s,]+/);
+  if (tokens.some((token) => !/^(?:0[xX])?[0-9A-Fa-f]{1,2}$/.test(token))) {
+    throw new Error('Every raw byte must be one or two hexadecimal digits');
+  }
+  return tokens.map((token) => Number.parseInt(token.replace(/^0x/i, ''), 16));
+}
+
+function watchValueText(value: WatchValue | null): string {
+  if (!value) return 'No sampled value';
+  return value.display_value || value.canonical_value || '(empty value)';
+}
+
+function apiError(code: string | null | undefined, message: string | null, fallback: string): string {
+  if (code && message) return `${code}: ${message}`;
+  return code || message || fallback;
 }
 
 export default function Memory() {
@@ -54,6 +74,14 @@ export default function Memory() {
   const [pointerBase, setPointerBase] = useState('0x0');
   const [pointerOffsets, setPointerOffsets] = useState('10, 20');
   const [pointerResult, setPointerResult] = useState('');
+  const [watches, setWatches] = useState<WatchItem[]>([]);
+  const [watchError, setWatchError] = useState<string | null>(null);
+  const [watchListLoading, setWatchListLoading] = useState(false);
+  const [expandedWatchId, setExpandedWatchId] = useState<number | null>(null);
+  const [watchSnapshot, setWatchSnapshot] = useState<WatchHistoryData | null>(null);
+  const [watchSnapshotLoadingId, setWatchSnapshotLoadingId] = useState<number | null>(null);
+  const [watchDrain, setWatchDrain] = useState<WatchDrainData | null>(null);
+  const [watchDrainLoading, setWatchDrainLoading] = useState(false);
 
   const [consoleInput, setConsoleInput] = useState('');
   const [consoleLogs, setConsoleLogs] = useState<string[]>([
@@ -63,10 +91,15 @@ export default function Memory() {
 
   const rows = useMemo(() => {
     const result: Array<{ addr: string; chunk: string[]; ascii: string }> = [];
-    const base = Number.parseInt(currentAddress.replace(/^0x/i, ''), 16) || 0;
+    let base = 0n;
+    try {
+      base = BigInt(currentAddress);
+    } catch {
+      return result;
+    }
     for (let i = 0; i < hexBytes.length; i += 16) {
       const chunk = hexBytes.slice(i, i + 16);
-      const addr = `0x${(base + i).toString(16).toUpperCase()}`;
+      const addr = `0x${(base + BigInt(i)).toString(16).toUpperCase()}`;
       const ascii = chunk
         .map((b) => {
           const n = Number.parseInt(b, 16);
@@ -121,8 +154,8 @@ export default function Memory() {
   }, [updateHistoryIndex]);
 
   const loadTypedValues = useCallback(async () => {
-    const base = Number.parseInt(currentAddress.replace(/^0x/i, ''), 16) || 0;
-    const at = `0x${(base + cursorOffset).toString(16).toUpperCase()}`;
+    const base = BigInt(currentAddress);
+    const at = `0x${(base + BigInt(cursorOffset)).toString(16).toUpperCase()}`;
     const types = ['byte', 'int32', 'uint32', 'int64', 'uint64', 'float', 'double', 'pointer'];
 
     const results = await Promise.all(types.map((t) => api.readTypedMemory(at, t)));
@@ -134,12 +167,7 @@ export default function Memory() {
   }, [currentAddress, cursorOffset]);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => void loadMemory('0x0', false), 0);
-    return () => window.clearTimeout(timer);
-  }, [loadMemory]);
-
-  useEffect(() => {
-    if (!currentAddress) return;
+    if (!currentAddress || currentAddress === '0x0') return;
     const timer = window.setTimeout(() => void loadTypedValues(), 0);
     return () => window.clearTimeout(timer);
   }, [currentAddress, hexBytes.length, loadTypedValues]);
@@ -163,25 +191,126 @@ export default function Memory() {
   };
 
   const writeTypedValue = async () => {
-    const base = Number.parseInt(currentAddress.replace(/^0x/i, ''), 16) || 0;
-    const at = `0x${(base + cursorOffset).toString(16).toUpperCase()}`;
-    const value = Number.isNaN(Number(writeValue)) ? writeValue : Number(writeValue);
-    const res = await api.writeTypedMemory(at, writeType, value);
-    if (!res.success) {
-      setReadError(res.error || 'Write failed');
-      return;
+    try {
+      const base = BigInt(currentAddress);
+      const at = `0x${(base + BigInt(cursorOffset)).toString(16).toUpperCase()}`;
+      const res = await api.writeTypedMemory(at, writeType, writeValue.trim());
+      if (!res.success) {
+        setReadError(res.error || 'Write failed');
+        return;
+      }
+      await loadMemory(currentAddress, false);
+    } catch (error) {
+      setReadError(error instanceof Error ? error.message : String(error));
     }
-    await loadMemory(currentAddress, false);
   };
 
   const resolvePointerChain = async () => {
-    const offsets = parseOffsets(pointerOffsets);
-    const res = await api.resolvePointerChain(parseAddress(pointerBase), offsets);
-    if (!res.success || !res.data) {
-      setPointerResult(res.error || 'Pointer chain failed');
+    try {
+      const offsets = parseOffsets(pointerOffsets);
+      const res = await api.resolvePointerChain(parseAddress(pointerBase), offsets);
+      if (!res.success || !res.data) {
+        setPointerResult(res.error || 'Pointer chain failed');
+        return;
+      }
+      setPointerResult(JSON.stringify(res.data, null, 2));
+    } catch (error) {
+      setPointerResult(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const refreshWatches = useCallback(async () => {
+    setWatchListLoading(true);
+    setWatchError(null);
+    try {
+      const res = await api.listWatches();
+      if (!res.success || !res.data) {
+        setWatchError(apiError(res.error_code, res.error, 'Watch list unavailable'));
+        return;
+      }
+      setWatches(res.data.subscriptions);
+    } catch (error) {
+      setWatchError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setWatchListLoading(false);
+    }
+  }, []);
+
+  const setWatchEnabled = async (watch: WatchItem) => {
+    setWatchError(null);
+    try {
+      const res = await api.setWatchEnabled(watch.id, watch.state !== 'enabled');
+      if (!res.success) {
+        setWatchError(apiError(res.error_code, res.error, 'Watch state update failed'));
+        return;
+      }
+      await refreshWatches();
+    } catch (error) {
+      setWatchError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const removeWatch = async (id: number) => {
+    setWatchError(null);
+    try {
+      const res = await api.removeWatch(id);
+      if (!res.success) {
+        setWatchError(apiError(res.error_code, res.error, 'Watch removal failed'));
+        return;
+      }
+      if (expandedWatchId === id) {
+        setExpandedWatchId(null);
+        setWatchSnapshot(null);
+      }
+      await refreshWatches();
+    } catch (error) {
+      setWatchError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const fetchWatchSnapshot = async (id: number) => {
+    setWatchSnapshotLoadingId(id);
+    setWatchError(null);
+    try {
+      const res = await api.getWatchHistory(id, 32);
+      if (!res.success || !res.data) {
+        setWatchError(apiError(res.error_code, res.error, 'Watch snapshot unavailable'));
+        return;
+      }
+      setWatchSnapshot(res.data);
+    } catch (error) {
+      setWatchError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setWatchSnapshotLoadingId(null);
+    }
+  };
+
+  const toggleWatchSnapshot = async (id: number) => {
+    if (expandedWatchId === id) {
+      setExpandedWatchId(null);
+      setWatchSnapshot(null);
       return;
     }
-    setPointerResult(JSON.stringify(res.data, null, 2));
+    setExpandedWatchId(id);
+    setWatchSnapshot(null);
+    await fetchWatchSnapshot(id);
+  };
+
+  const drainWatchEvents = async () => {
+    setWatchDrainLoading(true);
+    setWatchError(null);
+    try {
+      const res = await api.drainWatchEvents(32);
+      if (!res.success || !res.data) {
+        setWatchError(apiError(res.error_code, res.error, 'Watch event drain unavailable'));
+        return;
+      }
+      setWatchDrain(res.data);
+    } catch (error) {
+      setWatchError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setWatchDrainLoading(false);
+    }
   };
 
   const runConsoleCommand = async () => {
@@ -374,11 +503,165 @@ export default function Memory() {
         <div className="w-[320px] flex-none bg-surface-dark flex flex-col">
           <div className="h-8 border-b border-border-subtle flex items-center px-4 bg-surface-dark">
             <span className="text-[10px] font-bold text-text-low uppercase tracking-widest font-display">{t('Watch Panel')}</span>
+            <button
+              disabled={watchDrainLoading}
+              onClick={() => void drainWatchEvents()}
+              className="ml-auto rounded border border-border-subtle px-2 py-0.5 text-[10px] text-text-mid hover:text-text-high disabled:opacity-40"
+              title={t('Drain watch events')}
+            >
+              {watchDrainLoading ? t('Draining...') : t('Drain Events')}
+            </button>
+            <button
+              disabled={watchListLoading}
+              onClick={() => void refreshWatches()}
+              className="ml-2 text-text-low hover:text-text-high transition-colors disabled:opacity-40"
+              title={t('Refresh')}
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${watchListLoading ? 'animate-spin' : ''}`} />
+            </button>
           </div>
-          <div className="flex-1 p-4">
-            <div className="rounded-lg border border-accent-yellow/20 bg-accent-yellow/5 p-3 text-xs text-text-mid font-display leading-relaxed">
-              {t('Unavailable: property watches are disabled until the IPC WatchScheduler is active.')}
-            </div>
+          <div className="flex-1 p-4 overflow-auto space-y-2">
+            {watchError && (
+              <div className="rounded-lg border border-accent-red/20 bg-accent-red/5 p-3 text-xs text-accent-red font-display">
+                {watchError}
+              </div>
+            )}
+            {watchDrain && (
+              <div className="rounded-lg border border-border-subtle bg-background-base p-3 space-y-2">
+                <div className="flex items-center justify-between text-[10px] text-text-low">
+                  <span>{watchDrain.count} events</span>
+                  <span>{watchDrain.more_available ? t('More pending') : t('Queue drained')}</span>
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-[10px] font-mono">
+                  <span className={watchDrain.dropped_total > 0 ? 'text-accent-red' : 'text-text-mid'}>
+                    dropped {watchDrain.dropped_total}
+                  </span>
+                  <span className={watchDrain.coalesced_total > 0 ? 'text-accent-yellow' : 'text-text-mid'}>
+                    coalesced {watchDrain.coalesced_total}
+                  </span>
+                </div>
+                {watchDrain.events.length === 0 ? (
+                  <div className="text-[10px] text-text-low">{t('No pending watch events.')}</div>
+                ) : (
+                  <div className="max-h-40 overflow-auto space-y-1.5">
+                    {watchDrain.events.map((event) => (
+                      <div key={event.sequence} className="rounded border border-border-subtle bg-surface-dark p-2 space-y-1">
+                        <div className="flex items-center gap-2 text-[10px] font-mono">
+                          <span className="text-primary">#{event.sequence}</span>
+                          <span className="text-text-low">watch {event.id}</span>
+                          <span className="ml-auto text-text-mid">{event.kind}</span>
+                        </div>
+                        <div className="break-all text-[10px] text-text-high font-mono">
+                          {event.value ? watchValueText(event.value) : event.reason || event.reason_code || t('No value')}
+                        </div>
+                        {(event.drop_count > 0 || event.coalesce_count > 0) && (
+                          <div className="text-[10px] text-accent-yellow font-mono">
+                            drop +{event.drop_count}, coalesce +{event.coalesce_count}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+            {!watchListLoading && watches.length === 0 && (
+              <div className="rounded-lg border border-border-subtle bg-background-base p-3 text-xs text-text-low font-display">
+                {t('No active property watches. Add one from an object property.')}
+              </div>
+            )}
+            {watches.map((watch) => (
+              <div key={watch.id} className="rounded-lg border border-border-subtle bg-background-base p-3 space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-[11px] text-primary">#{watch.id}</span>
+                  <span className="text-[10px] uppercase text-text-low">{watch.state}</span>
+                  <span className="ml-auto text-[10px] text-text-low">{watch.sample_count} samples</span>
+                </div>
+                <div className="font-mono text-[11px] text-text-high break-all">
+                  {watch.spec.declaring_type_path}.{watch.spec.property_name}
+                  {watch.spec.array_index > 0 ? `[${watch.spec.array_index}]` : ''}
+                </div>
+                <div className="grid grid-cols-3 gap-1 text-[9px] text-text-low font-mono">
+                  <span>history {watch.history_count}</span>
+                  <span>fail {watch.failure_count}</span>
+                  <span className={watch.history_drop_count > 0 ? 'text-accent-yellow' : ''}>
+                    drop {watch.history_drop_count}
+                  </span>
+                </div>
+                {watch.terminal_reason && (
+                  <div className="rounded border border-accent-red/20 bg-accent-red/5 p-2 text-[10px] text-accent-red">
+                    {watch.terminal_reason_code ? `${watch.terminal_reason_code}: ` : ''}{watch.terminal_reason}
+                  </div>
+                )}
+                <button
+                  disabled={watchSnapshotLoadingId !== null && watchSnapshotLoadingId !== watch.id}
+                  onClick={() => void toggleWatchSnapshot(watch.id)}
+                  className="w-full rounded border border-border-subtle py-1 text-[10px] text-text-mid hover:text-text-high disabled:opacity-40"
+                >
+                  {watchSnapshotLoadingId === watch.id
+                    ? t('Loading Snapshot...')
+                    : expandedWatchId === watch.id
+                      ? t('Hide Snapshot')
+                      : t('Load Snapshot')}
+                </button>
+                {expandedWatchId === watch.id && watchSnapshot?.subscription.id === watch.id && (
+                  <div className="rounded border border-border-subtle bg-surface-dark p-2 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-bold uppercase tracking-wide text-text-low">{t('Last Value')}</span>
+                      <button
+                        disabled={watchSnapshotLoadingId === watch.id}
+                        onClick={() => void fetchWatchSnapshot(watch.id)}
+                        className="text-[10px] text-primary hover:underline disabled:opacity-40"
+                      >
+                        {t('Refresh')}
+                      </button>
+                    </div>
+                    <div className="break-all text-[10px] text-text-high font-mono">
+                      {watchValueText(watchSnapshot.last_value)}
+                    </div>
+                    {watchSnapshot.last_value && (
+                      <div className="text-[9px] text-text-low font-mono break-all">
+                        {watchSnapshot.last_value.type_name} / {watchSnapshot.last_value.canonical_value}
+                      </div>
+                    )}
+                    <div className="flex items-center justify-between text-[9px] text-text-low">
+                      <span>{watchSnapshot.history_returned}/{watchSnapshot.history_total} history</span>
+                      {watchSnapshot.history_truncated && <span className="text-accent-yellow">{t('truncated')}</span>}
+                    </div>
+                    {watchSnapshot.history.length === 0 ? (
+                      <div className="text-[10px] text-text-low">{t('No samples recorded.')}</div>
+                    ) : (
+                      <div className="max-h-40 overflow-auto space-y-1">
+                        {watchSnapshot.history.map((entry) => (
+                          <div key={entry.sequence} className="border-t border-border-subtle pt-1 text-[10px] font-mono">
+                            <div className="flex justify-between text-text-low">
+                              <span>#{entry.sequence}</span>
+                              <span>{entry.captured_at_monotonic_us} us</span>
+                            </div>
+                            <div className="break-all text-text-high">{watchValueText(entry.value)}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+                <div className="flex gap-2">
+                  <button
+                    disabled={watch.state === 'terminal'}
+                    onClick={() => void setWatchEnabled(watch)}
+                    className="flex-1 rounded border border-border-subtle py-1 text-[10px] text-text-mid hover:text-text-high disabled:opacity-40"
+                  >
+                    {watch.state === 'enabled' ? t('Disable') : t('Enable')}
+                  </button>
+                  <button
+                    onClick={() => void removeWatch(watch.id)}
+                    className="flex-1 rounded border border-accent-red/20 py-1 text-[10px] text-accent-red hover:bg-accent-red/10"
+                  >
+                    {t('Remove')}
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       </div>

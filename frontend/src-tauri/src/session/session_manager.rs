@@ -410,11 +410,9 @@ impl ManagedSession {
                 "snapshot timeout must be positive",
             ));
         }
-        if self.welcome().capabilities.get("objects.snapshot") != Some(&true) {
-            return Err(SessionManagerError::CapabilityUnavailable(
-                "objects.snapshot".to_string(),
-            ));
-        }
+        // Welcome is a handshake-time snapshot; dynamic Core capabilities may
+        // become ready after multi-frame capture. Let the current Core gate
+        // every page request rather than freezing readiness at connection time.
         let _refresh_guard = lock(&self.refresh_lock, "snapshot refresh")?;
         let deadline = Instant::now().checked_add(timeout).ok_or(
             SessionManagerError::InvalidConfiguration("snapshot deadline overflow"),

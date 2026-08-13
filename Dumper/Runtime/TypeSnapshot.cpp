@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <limits>
 #include <new>
 #include <set>
 #include <unordered_map>
@@ -686,11 +687,177 @@ TQueryResult QueryMembers(
 
 } // namespace
 
-std::size_t ResolveCanonicalMathStructDescriptors(
+std::size_t ResolveDeferredPropertyDescriptors(
 	TypeSnapshotCandidate& candidate) noexcept
 {
+	const auto clearPendingEnumDescriptors = [&candidate]() noexcept {
+		const auto clear = [](ReflectedProperty& property) noexcept {
+			if (property.Kind == PropertyKind::Enum
+				&& property.State == ReflectedMemberState::Unavailable
+				&& property.ReasonCode == "ENUM_TYPE_METADATA_UNAVAILABLE")
+			{
+				property.Descriptor.reset();
+			}
+		};
+		for (ReflectedType& type : candidate.Types)
+		{
+			for (ReflectedProperty& property : type.DirectProperties)
+				clear(property);
+			for (ReflectedFunction& function : type.DirectFunctions)
+			{
+				for (ReflectedParameter& parameter : function.Parameters)
+					clear(parameter.Property);
+			}
+		}
+	};
 	try
 	{
+		constexpr std::size_t kMaxCodecEnumEntries = 65'536;
+		std::size_t resolved = 0;
+		std::map<std::string_view, const ReflectedType*, std::less<>> enumTypes;
+		for (const ReflectedType& type : candidate.Types)
+		{
+			if (type.Kind == ReflectedTypeKind::Enum)
+				enumTypes.emplace(type.FullPath, &type);
+		}
+		const auto enumValueFits = [](
+			const PropertyKind kind,
+			const std::int64_t value) noexcept {
+			switch (kind)
+			{
+			case PropertyKind::Int8:
+				return value >= (std::numeric_limits<std::int8_t>::min)()
+					&& value <= (std::numeric_limits<std::int8_t>::max)();
+			case PropertyKind::Int16:
+				return value >= (std::numeric_limits<std::int16_t>::min)()
+					&& value <= (std::numeric_limits<std::int16_t>::max)();
+			case PropertyKind::Int32:
+				return value >= (std::numeric_limits<std::int32_t>::min)()
+					&& value <= (std::numeric_limits<std::int32_t>::max)();
+			case PropertyKind::Int64: return true;
+			case PropertyKind::UInt8:
+				return value >= 0
+					&& static_cast<std::uint64_t>(value)
+						<= (std::numeric_limits<std::uint8_t>::max)();
+			case PropertyKind::UInt16:
+				return value >= 0
+					&& static_cast<std::uint64_t>(value)
+						<= (std::numeric_limits<std::uint16_t>::max)();
+			case PropertyKind::UInt32:
+				return value >= 0
+					&& static_cast<std::uint64_t>(value)
+						<= (std::numeric_limits<std::uint32_t>::max)();
+			case PropertyKind::UInt64: return value >= 0;
+			default: return false;
+			}
+		};
+		const auto resolveEnum = [
+			&enumTypes,
+			&enumValueFits,
+			&resolved](ReflectedProperty& property) {
+			if (property.Kind != PropertyKind::Enum
+				|| property.State != ReflectedMemberState::Unavailable
+				|| property.ReasonCode != "ENUM_TYPE_METADATA_UNAVAILABLE")
+			{
+				return;
+			}
+			const auto unavailable = [&property](
+				std::string code,
+				std::string reason) {
+				property.Descriptor.reset();
+				property.ReasonCode = std::move(code);
+				property.Reason = std::move(reason);
+			};
+			const std::shared_ptr<const PropertyDescriptor> witnessed =
+				property.Descriptor;
+			if (!witnessed
+				|| witnessed->Kind != PropertyKind::Enum
+				|| witnessed->TypeName != property.TypeName
+				|| witnessed->Size != property.Size
+				|| !witnessed->Element
+				|| !IsIntegerKind(witnessed->Element->Kind)
+				|| witnessed->Element->Size != witnessed->Size
+				|| !witnessed->EnumEntries.empty())
+			{
+				unavailable(
+					"ENUM_DESCRIPTOR_NOT_PROVEN",
+					"The captured enum identity or integer backing property is incomplete");
+				return;
+			}
+			const auto enumType = enumTypes.find(property.TypeName);
+			if (enumType == enumTypes.end()
+				|| !enumType->second
+				|| enumType->second->EnumState != ReflectedMemberState::Supported)
+			{
+				unavailable(
+					"ENUM_TYPE_METADATA_UNAVAILABLE",
+					"The exact referenced UEnum has no supported immutable entry table");
+				return;
+			}
+			if (enumType->second->EnumUnderlyingKind != witnessed->Element->Kind)
+			{
+				unavailable(
+					"ENUM_UNDERLYING_KIND_MISMATCH",
+					"The exact UEnum metadata and property backing kinds disagree");
+				return;
+			}
+			if (enumType->second->EnumEntries.empty()
+				|| enumType->second->EnumEntries.size() > kMaxCodecEnumEntries)
+			{
+				unavailable(
+					"ENUM_ENTRY_TABLE_UNAVAILABLE",
+					"The exact UEnum entry table is empty or exceeds the codec limit");
+				return;
+			}
+
+			auto descriptor = std::make_shared<PropertyDescriptor>();
+			descriptor->Kind = PropertyKind::Enum;
+			descriptor->TypeName = property.TypeName;
+			descriptor->Size = property.Size;
+			descriptor->Element = witnessed->Element;
+			descriptor->EnumEntries.reserve(enumType->second->EnumEntries.size());
+			std::set<std::string_view> names;
+			std::set<std::uint64_t> rawValues;
+			for (const ReflectedEnumEntry& entry : enumType->second->EnumEntries)
+			{
+				const std::uint64_t raw = static_cast<std::uint64_t>(entry.Value);
+				if (entry.Name.empty()
+					|| !names.emplace(entry.Name).second
+					|| !rawValues.emplace(raw).second
+					|| !enumValueFits(witnessed->Element->Kind, entry.Value))
+				{
+					unavailable(
+						"ENUM_ENTRY_TABLE_INVALID",
+						"The exact UEnum table cannot be represented by the witnessed integer width");
+					return;
+				}
+				descriptor->EnumEntries.push_back({raw, entry.Name});
+			}
+			if (!IsDescriptorProvenEnum(*descriptor))
+			{
+				unavailable(
+					"ENUM_DESCRIPTOR_NOT_PROVEN",
+					"The exact UEnum table and integer backing property do not form a supported descriptor");
+				return;
+			}
+			property.Descriptor = std::shared_ptr<const PropertyDescriptor>(
+				std::move(descriptor));
+			property.State = ReflectedMemberState::Supported;
+			property.ReasonCode.clear();
+			property.Reason.clear();
+			++resolved;
+		};
+		for (ReflectedType& type : candidate.Types)
+		{
+			for (ReflectedProperty& property : type.DirectProperties)
+				resolveEnum(property);
+			for (ReflectedFunction& function : type.DirectFunctions)
+			{
+				for (ReflectedParameter& parameter : function.Parameters)
+					resolveEnum(parameter.Property);
+			}
+		}
+
 		struct CanonicalStruct final
 		{
 			std::string_view Path;
@@ -784,7 +951,6 @@ std::size_t ResolveCanonicalMathStructDescriptors(
 			descriptors.emplace(canonical.Path, std::move(descriptor));
 		}
 
-		std::size_t resolved = 0;
 		const auto resolveProperty = [&descriptors, &resolved](ReflectedProperty& property) {
 			if (property.Kind != PropertyKind::Struct
 				|| property.State != ReflectedMemberState::Unavailable
@@ -819,6 +985,7 @@ std::size_t ResolveCanonicalMathStructDescriptors(
 	}
 	catch (...)
 	{
+		clearPendingEnumDescriptors();
 		return 0;
 	}
 }

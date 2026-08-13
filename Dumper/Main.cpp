@@ -17,15 +17,20 @@
 #include "Runtime/EngineVersionProbe.h"
 #include "Runtime/GameThreadExecutor.h"
 #include "Runtime/GameThreadFrameScheduler.h"
+#include "Runtime/HookEventCollector.h"
 #include "Runtime/ObjectArrayIdentitySource.h"
 #include "Runtime/ObjectArraySnapshotSource.h"
 #include "Runtime/ObjectSnapshotReflectionCandidateSource.h"
 #include "Runtime/ObjectSnapshotTypeCandidateSource.h"
 #include "Runtime/PostRenderHook.h"
 #include "Runtime/ShutdownCoordinator.h"
+#include "Runtime/WatchScheduler.h"
 #include "Services/CoreCommandService.h"
 #include "Services/CoreCommandServiceAccess.h"
 #include "Services/CoreStatusDiagnostics.h"
+#include "Services/DumpCommandService.h"
+#include "Services/HookCommandService.h"
+#include "Services/WatchCommandService.h"
 #include "Settings.h"
 #include "OffsetFinder/Offsets.h"
 
@@ -41,12 +46,18 @@ static std::unique_ptr<UExplorer::Runtime::ObjectSnapshotReflectionCandidateSour
 static std::unique_ptr<UExplorer::Runtime::ObjectSnapshotTypeCandidateSource>
 	g_TypeSource;
 static std::unique_ptr<UExplorer::Services::CoreCommandService> g_CommandService;
+static std::unique_ptr<UExplorer::Services::ObjectPropertyWatchSampleSource> g_WatchSource;
+static std::unique_ptr<UExplorer::Runtime::WatchScheduler> g_WatchScheduler;
+static std::unique_ptr<UExplorer::Runtime::HookEventCollector> g_HookCollector;
+static std::unique_ptr<UExplorer::Services::HookCommandService> g_HookCommandService;
+static std::unique_ptr<UExplorer::Services::DumpCommandService> g_DumpCommandService;
 static std::unique_ptr<UExplorer::Runtime::PostRenderHook> g_PostRenderHook;
 static bool g_FrameSchedulerPumpAttached = false;
 static bool g_SnapshotFrameClientAttached = false;
 static bool g_ReflectionFrameClientAttached = false;
 static bool g_TypeFrameClientAttached = false;
 static bool g_WorldFrameClientAttached = false;
+static bool g_WatchFrameClientAttached = false;
 
 namespace
 {
@@ -88,11 +99,24 @@ namespace
 			: nullptr;
 		probes.ObjectPropertyServiceEnabled = true;
 		probes.FunctionCallServiceEnabled = true;
+		probes.MemoryReadCommandServiceEnabled = true;
+		probes.MemoryWriteCommandServiceEnabled = true;
+		probes.WatchCommandServiceEnabled = g_WatchScheduler
+			&& g_WatchScheduler->IsConfigured()
+			&& g_WatchFrameClientAttached;
+		probes.HookCommandServiceEnabled = g_HookCommandService
+			&& g_HookCommandService->IsConfigured();
+		// No ProcessEvent owner is installed in this checkpoint.
+		probes.HookProducerInstalled = false;
+		probes.DumpCommandServiceEnabled = static_cast<bool>(g_DumpCommandService);
+		// The coordinator is intentionally absent until an owned generator worker exists.
+		probes.DumpWorkerEnabled = false;
 		probes.World = g_EngineFacade
 			? g_EngineFacade->Worlds().Current()
 			: nullptr;
 		probes.WorldInspectServiceEnabled =
 			g_EngineFacade && g_EngineFacade->WorldCapture();
+		probes.WorldMutationServiceEnabled = true;
 		probes.NamedPipeListening = g_PipeServer && g_PipeServer->IsListening();
 		const auto capabilities = UExplorer::Runtime::BuildCoreCapabilities(*snapshot.Context, probes);
 		if (!g_Runtime.PublishCapabilities(capabilities))
@@ -169,6 +193,21 @@ namespace
 			return false;
 		}
 		g_WorldFrameClientAttached = false;
+		return true;
+	}
+
+	bool DetachWatchFrameClient(const std::chrono::milliseconds timeout)
+	{
+		if (!g_WatchFrameClientAttached)
+			return true;
+		if (!g_WatchScheduler
+			|| !UExplorer::Runtime::GetGameThreadFrameScheduler().DetachClient(
+				*g_WatchScheduler,
+				timeout))
+		{
+			return false;
+		}
+		g_WatchFrameClientAttached = false;
 		return true;
 	}
 
@@ -589,6 +628,14 @@ namespace
 
 	bool DetachFrameScheduling(const std::chrono::milliseconds timeout)
 	{
+		// Stop producing samples before waiting for the scheduler callback barrier.
+		if (g_WatchScheduler
+			&& !g_WatchScheduler->StopAndDrain(timeout).Ok())
+		{
+			return false;
+		}
+		if (!DetachWatchFrameClient(timeout))
+			return false;
 		if (!DetachWorldFrameClient(timeout))
 			return false;
 		if (!DetachTypeFrameClient(timeout))
@@ -625,6 +672,44 @@ namespace
 
 	void StopFailedInitialization(HMODULE module, FILE* consoleFile, const char* code, const std::string& message)
 	{
+		g_Runtime.MarkFailed(code, message);
+		g_Runtime.BeginStopping();
+		UExplorer::Services::SetCoreCommandService(nullptr);
+		if (g_PipeServer
+			&& !g_PipeServer->Stop(std::chrono::milliseconds(5000)))
+		{
+			g_Runtime.RecordShutdownFailure(
+				"PIPE_INITIALIZATION_STOP_TIMEOUT",
+				"Named-pipe threads did not drain after initialization failed");
+			std::cerr << "[UExplorer] Named-pipe threads did not drain; DLL remains loaded.\n";
+			if (consoleFile)
+				fclose(consoleFile);
+			FreeConsole();
+			ExitThread(1);
+		}
+		if (!g_Runtime.WaitForRequests(std::chrono::milliseconds(5000)))
+		{
+			g_Runtime.RecordShutdownFailure(
+				"REQUEST_INITIALIZATION_DRAIN_TIMEOUT",
+				"Core requests did not drain after initialization failed");
+			std::cerr << "[UExplorer] Core requests did not drain; DLL remains loaded.\n";
+			if (consoleFile)
+				fclose(consoleFile);
+			FreeConsole();
+			ExitThread(1);
+		}
+		g_PipeServer.reset();
+		if (!DetachFrameScheduling(std::chrono::milliseconds(5000)))
+		{
+			g_Runtime.RecordShutdownFailure(
+				"FRAME_SCHEDULER_INITIALIZATION_STOP_TIMEOUT",
+				"Frame scheduler or one of its clients did not drain after initialization failed");
+			std::cerr << "[UExplorer] Frame scheduling did not drain; DLL remains loaded.\n";
+			if (consoleFile)
+				fclose(consoleFile);
+			FreeConsole();
+			ExitThread(1);
+		}
 		if (g_PostRenderHook
 			&& !g_PostRenderHook->Stop(std::chrono::milliseconds(5000)))
 		{
@@ -638,32 +723,24 @@ namespace
 			ExitThread(1);
 		}
 		g_PostRenderHook.reset();
-		if (!DetachFrameScheduling(std::chrono::milliseconds(5000)))
-		{
-			g_Runtime.RecordShutdownFailure(
-				"FRAME_SCHEDULER_INITIALIZATION_STOP_TIMEOUT",
-				"Frame scheduler or one of its clients did not drain after initialization failed");
-			std::cerr << "[UExplorer] Frame scheduling did not drain; DLL remains loaded.\n";
-			if (consoleFile)
-				fclose(consoleFile);
-			FreeConsole();
-			ExitThread(1);
-		}
-		if (g_PipeServer
-			&& !g_PipeServer->Stop(std::chrono::milliseconds(5000)))
-		{
-			g_Runtime.RecordShutdownFailure(
-				"PIPE_INITIALIZATION_STOP_TIMEOUT",
-				"Named-pipe threads did not drain after initialization failed");
-			std::cerr << "[UExplorer] Named-pipe threads did not drain; DLL remains loaded.\n";
-			if (consoleFile)
-				fclose(consoleFile);
-			FreeConsole();
-			ExitThread(1);
-		}
-		g_PipeServer.reset();
-		UExplorer::Services::SetCoreCommandService(nullptr);
 		g_CommandService.reset();
+		g_HookCommandService.reset();
+		if (g_HookCollector
+			&& !g_HookCollector->StopAndDrain(std::chrono::milliseconds(5000)).Ok())
+		{
+			g_Runtime.RecordShutdownFailure(
+				"HOOK_COLLECTOR_INITIALIZATION_STOP_TIMEOUT",
+				"Bounded hook collector did not drain after initialization failed");
+			std::cerr << "[UExplorer] Hook collector did not drain; DLL remains loaded.\n";
+			if (consoleFile)
+				fclose(consoleFile);
+			FreeConsole();
+			ExitThread(1);
+		}
+		g_HookCollector.reset();
+		g_DumpCommandService.reset();
+		g_WatchScheduler.reset();
+		g_WatchSource.reset();
 		if (g_EngineFacade
 			&& !g_EngineFacade->Stop(std::chrono::milliseconds(5000)))
 		{
@@ -681,8 +758,6 @@ namespace
 		g_SnapshotSource.reset();
 		g_EngineFacade.reset();
 		g_IdentitySource.reset();
-		g_Runtime.MarkFailed(code, message);
-		g_Runtime.BeginStopping();
 		g_Runtime.MarkStopped();
 		UExplorer::Runtime::SetCoreRuntime(nullptr);
 		if (consoleFile)
@@ -823,13 +898,46 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 		{
 			std::cerr << "[UExplorer] Object snapshot unavailable: immutable names or serial-backed object slots are not validated.\n";
 		}
+		g_WatchSource = std::make_unique<UExplorer::Services::ObjectPropertyWatchSampleSource>(
+			g_Runtime,
+			*g_EngineFacade);
+		g_WatchScheduler = std::make_unique<UExplorer::Runtime::WatchScheduler>(
+			runtimeSnapshot.SessionId,
+			runtimeSnapshot.Context->Generation(),
+			*g_WatchSource);
+		if (!g_WatchScheduler->IsConfigured())
+			throw std::runtime_error("Watch scheduler rejected the runtime session/context");
+		g_HookCollector = std::make_unique<UExplorer::Runtime::HookEventCollector>(
+			runtimeSnapshot.SessionId,
+			runtimeSnapshot.Context->Generation(),
+			UExplorer::Runtime::HookCollectorLimits{},
+			UExplorer::Runtime::HookCollectorConfig{.Enabled = false});
+		if (!g_HookCollector->IsConfigured())
+			throw std::runtime_error("Hook collector rejected the runtime session/context");
+		g_HookCommandService = std::make_unique<UExplorer::Services::HookCommandService>(
+			runtimeSnapshot.SessionId,
+			runtimeSnapshot.Context->Generation(),
+			*g_HookCollector,
+			UExplorer::Services::HookCommandLimits{},
+			&g_Runtime,
+			g_EngineFacade.get());
+		if (!g_HookCommandService->IsConfigured())
+			throw std::runtime_error("Hook command service rejected the bounded collector");
+		// Keep the strict service boundary present, but fail every operation until an owned worker exists.
+		g_DumpCommandService = std::make_unique<UExplorer::Services::DumpCommandService>(
+			nullptr);
 		g_CommandService = std::make_unique<UExplorer::Services::CoreCommandService>(
 			g_Runtime,
 			UExplorer::Runtime::GetGameThreadExecutor(),
 			*g_EngineFacade,
 			g_StatusDiagnostics,
 			g_ReflectionSource.get(),
-			g_TypeSource.get());
+			g_TypeSource.get(),
+			g_WatchScheduler.get(),
+			nullptr,
+			nullptr,
+			g_HookCommandService.get(),
+			g_DumpCommandService.get());
 		if (!g_CommandService->IsConfigured())
 			throw std::runtime_error("Core command service rejected the runtime session/context");
 		UExplorer::Services::SetCoreCommandService(g_CommandService.get());
@@ -884,6 +992,9 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 		if (!UExplorer::Runtime::GetPostRenderPumpBackend().AttachFrameClient(frameScheduler))
 			throw std::runtime_error("PostRender frame scheduler attachment failed");
 		g_FrameSchedulerPumpAttached = true;
+		if (!frameScheduler.AttachClient(*g_WatchScheduler))
+			throw std::runtime_error("watch scheduler frame-client attachment failed");
+		g_WatchFrameClientAttached = true;
 		if (UExplorer::Runtime::EngineSnapshotCapture* capture =
 			g_EngineFacade ? g_EngineFacade->SnapshotCapture() : nullptr)
 		{
@@ -1009,37 +1120,68 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 	bool pipeStopped = true;
 	bool hooksStopped = true;
 	bool worldFrameStopped = true;
+	bool watchFrameStopped = true;
 	bool typeFrameStopped = true;
 	bool reflectionFrameStopped = true;
 	bool snapshotFrameStopped = true;
 	bool frameSchedulerStopped = true;
+	bool hookCollectorStopped = true;
+	bool requestsDrained = false;
 	UExplorer::Runtime::ShutdownCoordinator shutdown;
 	shutdown.AddStage("named_pipe", [&] {
 		pipeStopped = !g_PipeServer
 			|| g_PipeServer->Stop(std::chrono::milliseconds(5000));
 		return pipeStopped;
 	});
-	shutdown.AddStage("post_render_hook", [&] {
-		hooksStopped = !g_PostRenderHook
-			|| g_PostRenderHook->Stop(std::chrono::milliseconds(5000));
-		return hooksStopped;
+	shutdown.AddStage("runtime_requests", [&] {
+		requestsDrained = g_Runtime.WaitForRequests(std::chrono::milliseconds(5000));
+		return requestsDrained;
+	});
+	shutdown.AddStage("hook_collector", [&] {
+		if (!pipeStopped || !requestsDrained)
+			return false;
+		hookCollectorStopped = !g_HookCollector
+			|| g_HookCollector->StopAndDrain(std::chrono::milliseconds(5000)).Ok();
+		return hookCollectorStopped;
 	});
 	shutdown.AddStage("world_frame_client", [&] {
+		if (!pipeStopped || !requestsDrained)
+			return false;
 		worldFrameStopped = DetachWorldFrameClient(
 			std::chrono::milliseconds(5000));
 		return worldFrameStopped;
 	});
+	shutdown.AddStage("watch_frame_client", [&] {
+		if (!pipeStopped || !requestsDrained)
+			return false;
+		if (g_WatchScheduler)
+		{
+			watchFrameStopped = g_WatchScheduler->StopAndDrain(
+				std::chrono::milliseconds(5000)).Ok();
+			if (!watchFrameStopped)
+				return false;
+		}
+		watchFrameStopped = DetachWatchFrameClient(
+			std::chrono::milliseconds(5000));
+		return watchFrameStopped;
+	});
 	shutdown.AddStage("type_frame_client", [&] {
+		if (!pipeStopped || !requestsDrained)
+			return false;
 		typeFrameStopped = DetachTypeFrameClient(
 			std::chrono::milliseconds(5000));
 		return typeFrameStopped;
 	});
 	shutdown.AddStage("reflection_frame_client", [&] {
+		if (!pipeStopped || !requestsDrained)
+			return false;
 		reflectionFrameStopped = DetachReflectionFrameClient(
 			std::chrono::milliseconds(5000));
 		return reflectionFrameStopped;
 	});
 	shutdown.AddStage("snapshot_frame_client", [&] {
+		if (!pipeStopped || !requestsDrained)
+			return false;
 		if (!g_SnapshotFrameClientAttached)
 			return true;
 		UExplorer::Runtime::EngineSnapshotCapture* capture =
@@ -1054,26 +1196,40 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 		return snapshotFrameStopped;
 	});
 	shutdown.AddStage("frame_scheduler", [&] {
-		if (!g_FrameSchedulerPumpAttached)
-			return true;
-		auto& scheduler = UExplorer::Runtime::GetGameThreadFrameScheduler();
-		frameSchedulerStopped = UExplorer::Runtime::GetPostRenderPumpBackend().DetachFrameClient(
-			scheduler,
-			std::chrono::milliseconds(5000));
-		if (frameSchedulerStopped)
-			g_FrameSchedulerPumpAttached = false;
+		if (!pipeStopped || !requestsDrained)
+			return false;
+		if (g_FrameSchedulerPumpAttached)
+		{
+			auto& scheduler = UExplorer::Runtime::GetGameThreadFrameScheduler();
+			frameSchedulerStopped = UExplorer::Runtime::GetPostRenderPumpBackend().DetachFrameClient(
+				scheduler,
+				std::chrono::milliseconds(5000));
+			if (frameSchedulerStopped)
+				g_FrameSchedulerPumpAttached = false;
+		}
 		return frameSchedulerStopped;
 	});
+	shutdown.AddStage("post_render_hook", [&] {
+		if (!pipeStopped || !requestsDrained)
+			return false;
+		// The game-thread pump remains active until every frame client has drained.
+		hooksStopped = !g_PostRenderHook
+			|| g_PostRenderHook->Stop(std::chrono::milliseconds(5000));
+		return hooksStopped;
+	});
 	shutdown.AddStage("engine_facade", [&] {
-		return worldFrameStopped
+		return pipeStopped
+			&& requestsDrained
+			&& worldFrameStopped
+			&& watchFrameStopped
 			&& typeFrameStopped
 			&& reflectionFrameStopped
 			&& snapshotFrameStopped
+			&& frameSchedulerStopped
+			&& hookCollectorStopped
+			&& hooksStopped
 			&& (!g_EngineFacade
 				|| g_EngineFacade->Stop(std::chrono::milliseconds(5000)));
-	});
-	shutdown.AddStage("runtime_requests", [&] {
-		return g_Runtime.WaitForRequests(std::chrono::milliseconds(5000));
 	});
 	const UExplorer::Runtime::ShutdownReport shutdownReport = shutdown.Run();
 	unloadSafe = unloadSafe && shutdownReport.SafeToUnload;
@@ -1093,6 +1249,11 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 		return 1;
 	}
 	g_CommandService.reset();
+	g_HookCommandService.reset();
+	g_HookCollector.reset();
+	g_DumpCommandService.reset();
+	g_WatchScheduler.reset();
+	g_WatchSource.reset();
 	g_TypeSource.reset();
 	g_ReflectionSource.reset();
 	g_SnapshotSource.reset();

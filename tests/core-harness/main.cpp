@@ -687,6 +687,16 @@ namespace
 				&& !withoutCallService->IsAvailable("objects.snapshot")
 				&& !withoutCallService->IsAvailable("call.invoke"),
 			"Handle capability falsely enabled an unregistered function-call command");
+		const CapabilityStatus* batchCall = withoutCallService->Find("call.batch");
+		const CapabilityStatus* staticCall = withoutCallService->Find("call.static");
+		Require(
+			batchCall
+				&& !batchCall->Available
+				&& batchCall->ReasonCode == "CALL_BATCH_ADAPTER_NOT_READY"
+				&& staticCall
+				&& !staticCall->Available
+				&& staticCall->ReasonCode == "CALL_STATIC_OPERATION_RETIRED",
+			"Unavailable call operations borrowed call.invoke capability diagnostics");
 		probes.ObjectSnapshotPublished = true;
 		probes.FunctionCallServiceEnabled = true;
 		const auto withoutPipe = BuildCoreCapabilities(*context, probes);
@@ -1708,7 +1718,7 @@ namespace
 		TypeSnapshotCandidate malformed = candidate;
 		malformed.Types[1].DirectProperties[0].Name = "X";
 		Require(
-			ResolveCanonicalMathStructDescriptors(malformed) == 2
+			ResolveDeferredPropertyDescriptors(malformed) == 2
 				&& malformed.Types[2].DirectProperties[0].State
 					== ReflectedMemberState::Supported
 				&& malformed.Types[2].DirectProperties[1].State
@@ -1718,7 +1728,7 @@ namespace
 			"A Rotator with FVector field identity produced a canonical descriptor");
 
 		Require(
-			ResolveCanonicalMathStructDescriptors(candidate) == 4
+			ResolveDeferredPropertyDescriptors(candidate) == 4
 				&& candidate.Types[2].DirectProperties[0].Descriptor
 				&& candidate.Types[2].DirectProperties[0].Descriptor->Fields[0].Name == "X"
 				&& candidate.Types[2].DirectProperties[1].Descriptor
@@ -1728,6 +1738,63 @@ namespace
 				&& candidate.Types[2].DirectFunctions[0].Parameters[0].Property.State
 					== ReflectedMemberState::Supported,
 			"Canonical UE5 double FVector/FRotator descriptors were not resolved by exact identity");
+
+		const auto enumBacking = std::make_shared<PropertyDescriptor>(
+			PropertyDescriptor{
+				.Kind = PropertyKind::UInt8,
+				.TypeName = "uint8",
+				.Size = 1
+			});
+		const auto provisionalEnum = std::make_shared<PropertyDescriptor>(
+			PropertyDescriptor{
+				.Kind = PropertyKind::Enum,
+				.TypeName = "/Script/Fixture.EState",
+				.Size = 1,
+				.Element = enumBacking
+			});
+		TypeSnapshotCandidate enumCandidate;
+		enumCandidate.Types.push_back(ReflectedType{
+			.Kind = ReflectedTypeKind::Enum,
+			.Name = "EState",
+			.FullPath = "/Script/Fixture.EState",
+			.PackagePath = "/Script/Fixture",
+			.EnumState = ReflectedMemberState::Supported,
+			.EnumUnderlyingKind = PropertyKind::UInt8,
+			.EnumEntries = {
+				{.Name = "EState::Idle", .Value = 0},
+				{.Name = "EState::Running", .Value = 2}
+			}
+		});
+		enumCandidate.Types.push_back(ReflectedType{
+			.Kind = ReflectedTypeKind::Class,
+			.Name = "FixtureOwner",
+			.FullPath = "/Script/Fixture.FixtureOwner",
+			.PackagePath = "/Script/Fixture",
+			.PropertiesSize = 1,
+			.MinAlignment = 1,
+			.DirectProperties = {
+				ReflectedProperty{
+					.Name = "State",
+					.TypeName = "/Script/Fixture.EState",
+					.Kind = PropertyKind::Enum,
+					.Offset = 0,
+					.Size = 1,
+					.ArrayDim = 1,
+					.State = ReflectedMemberState::Unavailable,
+					.ReasonCode = "ENUM_TYPE_METADATA_UNAVAILABLE",
+					.Reason = "fixture",
+					.Descriptor = provisionalEnum
+				}
+			}
+		});
+		Require(
+			ResolveDeferredPropertyDescriptors(enumCandidate) == 1
+				&& enumCandidate.Types[1].DirectProperties[0].State
+					== ReflectedMemberState::Supported
+				&& enumCandidate.Types[1].DirectProperties[0].Descriptor
+				&& IsDescriptorProvenEnum(
+					*enumCandidate.Types[1].DirectProperties[0].Descriptor),
+			"A witnessed enum identity/backing/table did not resolve to an exact descriptor");
 	}
 
 	void TestReflectionLayout()

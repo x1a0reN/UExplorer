@@ -164,6 +164,7 @@ export interface ObjectProperty {
   array_index: number;
   array_dim: number;
   object: StableObjectHandle;
+  object_snapshot_generation: number;
   type_snapshot_generation: number;
   declaring_type_path: string;
   descriptor_available: boolean;
@@ -649,11 +650,72 @@ export interface WorldActorTransformResponse {
   computed_transform: WorldActorComputedTransform;
 }
 
+export type WorldTransformInputNumber = string;
+
+export type WorldActorTransformUpdate =
+  | {
+      field: 'scale';
+      space: WorldTransformSpace;
+      value: { x: WorldTransformInputNumber; y: WorldTransformInputNumber; z: WorldTransformInputNumber };
+    }
+  | {
+      field: 'rotation';
+      space: 'world';
+      value: { pitch: WorldTransformInputNumber; yaw: WorldTransformInputNumber; roll: WorldTransformInputNumber };
+      teleport_physics: boolean;
+    }
+  | {
+      field: 'location';
+      space: WorldTransformSpace;
+      value: { x: WorldTransformInputNumber; y: WorldTransformInputNumber; z: WorldTransformInputNumber };
+      sweep: boolean;
+      teleport: boolean;
+    }
+  | {
+      field: 'rotation';
+      space: 'relative';
+      value: { pitch: WorldTransformInputNumber; yaw: WorldTransformInputNumber; roll: WorldTransformInputNumber };
+      sweep: boolean;
+      teleport: boolean;
+    };
+
+export type WorldActorTransformAppliedUpdate =
+  | {
+      field: 'scale';
+      space: WorldTransformSpace;
+      value: Vec3Data;
+    }
+  | {
+      field: 'rotation';
+      space: 'world';
+      value: RotatorData;
+      teleport_physics: boolean;
+    };
+
 export interface WorldActorTransformUpdateResponse {
-  actor_index: number;
-  updated: boolean;
-  rolled_back?: boolean;
-  transform: ActorTransformData;
+  session_id: string;
+  context_generation: number;
+  object_snapshot_generation: number;
+  type_snapshot_generation: number;
+  world_snapshot_generation: number;
+  actor: WorldSnapshotObject;
+  root_component: WorldSnapshotObject;
+  target: StableObjectHandle;
+  setter: {
+    function_path: string;
+    handle: StableFunctionHandle;
+  };
+  update: WorldActorTransformAppliedUpdate;
+  execution: {
+    invoked: true;
+    atomicity: 'single_field_process_event';
+    post_identity_validated: true;
+    setter_result: boolean | null;
+    mutation_state:
+      | 'setter_reported_applied'
+      | 'setter_reported_not_applied'
+      | 'setter_returned_without_result';
+  };
 }
 
 export interface WorldShortcuts {
@@ -688,45 +750,115 @@ export interface PointerChainData {
   error?: string;
 }
 
+export interface WatchSpec {
+  object: StableObjectHandle;
+  context_generation: number;
+  object_snapshot_generation: number;
+  type_snapshot_generation: number;
+  declaring_type_path: string;
+  property_name: string;
+  array_index: number;
+  interval_ms: number;
+}
+
 export interface WatchItem {
   id: number;
-  object_index: number;
-  property: string;
-  value: unknown;
-  changed: boolean;
-  last_change: number;
-  created: number;
+  state: 'enabled' | 'disabled' | 'terminal';
+  spec: WatchSpec;
+  created_at_monotonic_us: number;
+  next_due_monotonic_us: number;
+  last_sampled_at_monotonic_us: number;
+  last_change_sequence: number;
+  sample_count: number;
+  failure_count: number;
+  history_count: number;
+  history_bytes: number;
+  history_drop_count: number;
+  terminal_reason_code: string | null;
+  terminal_reason: string | null;
 }
 
 export interface WatchListResponse {
-  watches: WatchItem[];
-  count: number;
+  enabled_snapshot_generation: number;
+  subscriptions: WatchItem[];
+  scheduler: Record<string, unknown>;
+}
+
+export type HookCapturePolicy =
+  | { mode: 'fixed_metadata' }
+  | { mode: 'preencoded_payload'; max_payload_bytes: number };
+
+export interface HookSubscriptionSpec {
+  session_id: string;
+  context_generation: number;
+  object_snapshot_generation: number;
+  type_snapshot_generation: number;
+  function: StableFunctionHandle;
+  function_path: string;
+  capture: HookCapturePolicy;
 }
 
 export interface HookItem {
   id: number;
+  state: 'enabled' | 'disabled' | 'terminal';
   function_path: string;
   enabled: boolean;
   hit_count: number;
-  last_hit_time: number;
+  spec: HookSubscriptionSpec;
+  created_at_monotonic_us: number;
+  last_event_sequence: number;
+  last_correlation: number;
+  log_count: number;
+  log_bytes: number;
+  log_drop_count: number;
+  terminal_reason_code: string | null;
+  terminal_reason: string | null;
 }
 
 export interface HookListResponse {
   hooks: HookItem[];
   monitored_count: number;
-  total_pe_calls: number;
-  vtable_hook_installed: boolean;
-  game_thread_enabled: boolean;
+  enabled_snapshot_generation: number;
+  collector: {
+    drained_count: number;
+    more_available: boolean;
+    published_total: number;
+    drained_total: number;
+    dropped_overflow_total: number;
+    dropped_oversize_total: number;
+    dropped_contention_total: number;
+    coalesced_overflow_total: number;
+    unmatched_event_total: number;
+    policy_rejected_event_total: number;
+    drain_failure_total: number;
+  };
+}
+
+export interface HookMutationResponse {
+  subscription: HookItem;
+  enabled_snapshot_generation: number;
 }
 
 export interface HookLogEntry {
-  timestamp: number;
-  function_name: string;
-  caller_name: string;
+  sequence: number;
+  configuration_generation: number;
+  kind: 'post_render' | 'process_event_enter' | 'process_event_exit' | 'diagnostic';
+  source: string;
+  subject: number;
+  correlation: number;
+  coalesced_before: number;
+  drained_at_monotonic_us: number;
+  function_path: string;
+  payload: { encoding: 'hex'; size: number; data: string };
 }
 
 export interface HookLogResponse {
+  subscription: HookItem;
   entries: HookLogEntry[];
+  returned: number;
+  total: number;
+  truncated: boolean;
+  collector_more_available: boolean;
 }
 
 export type FunctionCallArgument =
@@ -735,6 +867,11 @@ export type FunctionCallArgument =
   | { kind: 'uint8' | 'uint16' | 'uint32' | 'uint64'; value: string }
   | { kind: 'float' | 'double'; value: string }
   | { kind: 'object'; value: StableObjectHandle | null }
+  | {
+      kind: 'enum';
+      type_name: string;
+      value: { name: string } | { raw: string };
+    }
   | {
       kind: 'struct';
       type_name: '/Script/CoreUObject.Vector';
@@ -760,44 +897,163 @@ export interface FunctionCallResultData {
   }>;
 }
 
-export interface BlueprintDecompileData {
-  function: string;
-  class: string;
-  flags: string;
-  script_size: number;
-  pseudocode: string;
+export interface BlueprintCaptureData {
+  function: StableFunctionHandle;
+  function_path: string;
+  context_generation: number;
+  object_snapshot_generation: number;
+  type_snapshot_generation: number;
+  byte_length: number;
+  capture_source: string;
+  captured_at_monotonic_us: string;
+  script_field_offset: number;
+  script_data_address: string;
+  script_num: number;
+  script_max: number;
+  header_witness_fingerprint: string;
+  capture_fingerprint: string;
 }
 
-export interface BlueprintBytecodeData {
-  function: string;
+export interface BlueprintInstruction {
+  offset: number;
   size: number;
-  hex: string;
+  depth: number;
+  raw_opcode: string;
+  semantic: 'unknown' | 'expr_token' | 'primitive_cast';
+  token: string | null;
+  token_value: string | null;
+  text: string;
+}
+
+export interface BlueprintDecompileData extends BlueprintCaptureData {
+  profile: { id: string; source: string; fingerprint: string };
+  disassembly: {
+    status: 'complete' | 'incomplete' | 'error';
+    profile_id: string;
+    input_size: number;
+    bytes_consumed: number;
+    coverage: number;
+    unknown_count: number;
+    saw_end_of_script: boolean;
+    first_error: { offset: number; code: string; message: string } | null;
+    instructions: BlueprintInstruction[];
+    pseudocode: string;
+  };
+}
+
+export interface BlueprintBytecodeData extends BlueprintCaptureData {
+  encoding: 'hex_upper';
+  bytecode: string;
 }
 
 export interface WatchHistoryEntry {
-  timestamp: number;
-  value: unknown;
+  sequence: number;
+  captured_at_monotonic_us: number;
+  value: WatchValue | null;
 }
 
 export interface WatchHistoryData {
-  id: number;
-  object_index: number;
-  property: string;
+  subscription: WatchItem;
+  last_value: WatchValue | null;
   history: WatchHistoryEntry[];
-  total: number;
+  history_returned: number;
+  history_total: number;
+  history_truncated: boolean;
+}
+
+export interface WatchValue {
+  encoding: 'uexplorer.property-value.v1.base64';
+  type_name: string;
+  canonical_value: string;
+  display_value: string;
+}
+
+export type WatchEventKind =
+  | 'value_changed'
+  | 'sample_unavailable'
+  | 'sample_failed'
+  | 'terminal_stale';
+
+export interface WatchEvent {
+  sequence: number;
+  id: number;
+  kind: WatchEventKind;
+  captured_at_monotonic_us: number;
+  value: WatchValue | null;
+  reason_code: string | null;
+  reason: string | null;
+  drop_count: number;
+  coalesce_count: number;
+}
+
+export interface WatchDrainData {
+  events: WatchEvent[];
+  count: number;
+  dropped_total: number;
+  coalesced_total: number;
+  more_available: boolean;
 }
 
 export type DumpType = 'sdk' | 'usmap' | 'dumpspace' | 'ida-script';
 
-export interface DumpJob {
-  id: string;
+export interface DumpScope {
+  session_id: string;
+  context_generation: number;
+  object_snapshot_generation: number;
+  type_snapshot_generation: number;
+}
+
+export interface DumpStartRequest extends DumpScope {
   format: DumpType;
-  status: 'running' | 'completed' | 'failed';
-  output_path?: string;
-  start_time: number;
-  end_time: number;
-  duration_ms: number;
-  error?: string;
+  output_path_identity: string;
+  deadline_ms: number;
+  options: Record<string, never>;
+}
+
+export interface DumpJobRecord {
+  job_id: string;
+  format: DumpType;
+  state: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+  scope: DumpScope;
+  output_path_identity: string;
+  submitted_at_monotonic_us: number;
+  deadline_at_monotonic_us: number;
+  started_at_monotonic_us: number;
+  finished_at_monotonic_us: number;
+  cancellation_requested: boolean;
+  deadline_exceeded: boolean;
+  error: { code: string; message: string } | null;
+  retained_event_count: number;
+  retained_event_bytes: number;
+  dropped_event_count: number;
+  last_event_sequence: number;
+}
+
+export type DumpJobEvent = {
+  sequence: number;
+  recorded_at_monotonic_us: number;
+} & (
+  | {
+      kind: 'progress';
+      payload: { phase: string; completed: number; total: number; message: string };
+    }
+  | {
+      kind: 'diagnostic';
+      payload: { severity: 'info' | 'warning' | 'error'; code: string; message: string };
+    }
+);
+
+export interface DumpJobListResponse {
+  scope: DumpScope;
+  jobs: DumpJobRecord[];
+  more_jobs_available: boolean;
+}
+
+export interface DumpJobSnapshotResponse {
+  job: DumpJobRecord;
+  events: DumpJobEvent[];
+  more_events_available: boolean;
+  event_gap_detected: boolean;
 }
 
 export { api, default } from './client';

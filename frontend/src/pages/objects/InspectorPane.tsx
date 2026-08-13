@@ -188,7 +188,8 @@ export default function InspectorPane({ selectedClass, selectedType, selectedInd
 
     const handleWatchObject = async () => {
         if (!isInstanceMode || selectedIndex === null || properties.length === 0) return;
-        await api.addWatch(selectedIndex, properties[0].name);
+        const response = await api.addWatch(properties[0]);
+        if (!response.success) setError(response.error || 'Watch creation failed');
     };
 
     const handlePropertyRefresh = async (property: ObjectProperty) => {

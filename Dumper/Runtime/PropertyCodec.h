@@ -69,6 +69,17 @@ struct PropertyMathStructInput
 	std::array<double, 3> Components{};
 };
 
+using PropertyEnumSelection = std::variant<
+	std::string,
+	std::int64_t,
+	std::uint64_t>;
+
+struct PropertyEnumInput
+{
+	std::string TypeName;
+	PropertyEnumSelection Selection;
+};
+
 using PropertyScalar = std::variant<
 	std::monostate,
 	bool,
@@ -86,7 +97,8 @@ using PropertyInputValue = std::variant<
 	double,
 	std::string,
 	PropertyObjectReference,
-	PropertyMathStructInput>;
+	PropertyMathStructInput,
+	PropertyEnumInput>;
 
 struct PropertyValue
 {
@@ -217,6 +229,10 @@ struct PropertyDescriptor
 	std::vector<PropertyFieldDescriptor> Fields;
 	std::vector<PropertyEnumEntry> EnumEntries;
 };
+
+// Enum input is admitted only when its immutable descriptor proves the exact
+// enum table and a width-correct signed or unsigned integer backing property.
+bool IsDescriptorProvenEnum(const PropertyDescriptor& descriptor) noexcept;
 
 enum class CanonicalMathStructKind : std::uint8_t
 {

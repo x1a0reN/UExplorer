@@ -18,6 +18,10 @@ const MAX_ERROR_CODE_BYTES: usize = 64;
 const MAX_ERROR_MESSAGE_BYTES: usize = 1_024;
 const MAX_RETIRED_REQUESTS: usize = 512;
 const RETIRED_REQUEST_TTL_US: u64 = 30_000_000;
+// Core uses timeout_ms as its execution deadline. Keep the transport request
+// pending briefly afterward so an explicit unknown-mutation outcome is not
+// retired as a generic client deadline before Core can serialize it.
+const REQUEST_SETTLEMENT_GRACE_US: u64 = 1_000_000;
 const MAX_RECEIVE_CHUNK_BYTES: usize = 64 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -150,6 +154,7 @@ enum PendingKind {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct PendingRequest {
     deadline_us: u64,
+    timeout_ms: u32,
     kind: PendingKind,
 }
 
@@ -271,7 +276,7 @@ impl CoreRpcSession {
         if self.pending.len() >= pending_limit {
             return Err(RpcSessionError::PendingLimitReached);
         }
-        let deadline_us = deadline_from_timeout(now_us, timeout_ms)?;
+        let deadline_us = deadline_from_request_timeout(now_us, timeout_ms)?;
         let request_id = self.allocate_request_id()?;
         let payload = RequestPayload {
             operation: operation.clone(),
@@ -284,10 +289,30 @@ impl CoreRpcSession {
             request_id,
             PendingRequest {
                 deadline_us,
+                timeout_ms,
                 kind: PendingKind::Request { operation },
             },
         );
         Ok(frame)
+    }
+
+    /// Rebase the local settlement deadline after the request frame is fully
+    /// written. The peer cannot start its execution budget before this point.
+    pub fn mark_request_sent(
+        &mut self,
+        request_id: u64,
+        sent_at_us: u64,
+    ) -> Result<(), RpcSessionError> {
+        self.require_state("mark_request_sent", &[RpcSessionState::Ready])?;
+        let pending = self
+            .pending
+            .get_mut(&request_id)
+            .ok_or(RpcSessionError::RequestNotPending)?;
+        if !matches!(pending.kind, PendingKind::Request { .. }) {
+            return Err(RpcSessionError::RequestNotPending);
+        }
+        pending.deadline_us = deadline_from_request_timeout(sent_at_us, pending.timeout_ms)?;
+        Ok(())
     }
 
     pub fn start_ping(
@@ -330,6 +355,7 @@ impl CoreRpcSession {
             request_id,
             PendingRequest {
                 deadline_us,
+                timeout_ms,
                 kind: PendingKind::Ping { nonce },
             },
         );
@@ -901,6 +927,12 @@ fn deadline_from_timeout(now_us: u64, timeout_ms: u32) -> Result<u64, RpcSession
         .ok_or(RpcSessionError::DeadlineOverflow)
 }
 
+fn deadline_from_request_timeout(now_us: u64, timeout_ms: u32) -> Result<u64, RpcSessionError> {
+    deadline_from_timeout(now_us, timeout_ms)?
+        .checked_add(REQUEST_SETTLEMENT_GRACE_US)
+        .ok_or(RpcSessionError::DeadlineOverflow)
+}
+
 fn retirement_expiry(now_us: u64) -> Result<u64, RpcSessionError> {
     now_us
         .checked_add(RETIRED_REQUEST_TTL_US)
@@ -1115,7 +1147,12 @@ mod tests {
         let expiring = session
             .start_request("status.health", 1, json!({}), 2_000_000)
             .unwrap();
-        let expired = session.expire_requests(2_001_000).unwrap();
+        assert!(session.expire_requests(2_001_000).unwrap().is_empty());
+        session
+            .mark_request_sent(expiring.request_id, 2_500_000)
+            .unwrap();
+        assert!(session.expire_requests(3_001_000).unwrap().is_empty());
+        let expired = session.expire_requests(3_501_000).unwrap();
         assert_eq!(expired.len(), 1);
         assert_eq!(expired[0].request_id, expiring.request_id);
         assert_eq!(expired[0].cancel.as_ref().unwrap().kind, FrameKind::Cancel);

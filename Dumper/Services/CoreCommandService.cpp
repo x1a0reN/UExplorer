@@ -2,10 +2,16 @@
 
 #include "Runtime/ObjectSnapshotReflectionCandidateSource.h"
 #include "Runtime/ObjectSnapshotTypeCandidateSource.h"
+#include "BlueprintCommandService.h"
+#include "DumpCommandService.h"
 #include "FunctionCallCommandService.h"
+#include "HookCommandService.h"
+#include "MemoryCommandService.h"
 #include "ObjectPropertyCommandService.h"
 #include "TypeCommandService.h"
+#include "WatchCommandService.h"
 #include "WorldCommandService.h"
+#include "WorldMutationCommandService.h"
 #include "WorldTransformCommandService.h"
 
 #include <algorithm>
@@ -34,6 +40,7 @@ constexpr std::string_view kFunctionHandleIssue = "functions.handle.issue";
 constexpr std::string_view kObjectPropertyRead = "objects.property.read";
 constexpr std::string_view kFunctionCallInvoke = "call.invoke";
 constexpr std::string_view kWorldActorTransformGet = "world.actor.transform.get";
+constexpr std::string_view kWorldActorTransformUpdate = "world.actor.transform.update";
 constexpr std::size_t kMaxSnapshotPageRecords = 128;
 
 std::uint64_t ElapsedMicroseconds(const std::chrono::steady_clock::time_point started) noexcept
@@ -637,13 +644,23 @@ CoreCommandService::CoreCommandService(
 	Runtime::EngineFacade& engine,
 	ICoreStatusDiagnosticsSource& statusDiagnostics,
 	const Runtime::ObjectSnapshotReflectionCandidateSource* reflectionSource,
-	const Runtime::ObjectSnapshotTypeCandidateSource* typeSource)
+	const Runtime::ObjectSnapshotTypeCandidateSource* typeSource,
+	Runtime::WatchScheduler* watchScheduler,
+	Runtime::IBlueprintBytecodeCaptureSource* blueprintCaptureSource,
+	const Runtime::IBlueprintBytecodeProfileSource* blueprintProfileSource,
+	HookCommandService* hookCommandService,
+	DumpCommandService* dumpCommandService)
 	: m_Runtime(runtime),
 	  m_GameThread(gameThread),
 	  m_Engine(engine),
 	  m_StatusDiagnostics(statusDiagnostics),
 	  m_ReflectionSource(reflectionSource),
-	  m_TypeSource(typeSource)
+	  m_TypeSource(typeSource),
+	  m_WatchScheduler(watchScheduler),
+	  m_BlueprintCaptureSource(blueprintCaptureSource),
+	  m_BlueprintProfileSource(blueprintProfileSource),
+	  m_HookCommandService(hookCommandService),
+	  m_DumpCommandService(dumpCommandService)
 {
 	const Runtime::CoreRuntimeSnapshot snapshot = m_Runtime.Snapshot();
 	m_SessionId = snapshot.SessionId;
@@ -661,7 +678,9 @@ bool CoreCommandService::IsConfigured() const noexcept
 		&& (!m_ReflectionSource
 			|| m_ReflectionSource->ContextGeneration() == m_ContextGeneration)
 		&& (!m_TypeSource
-			|| m_TypeSource->ContextGeneration() == m_ContextGeneration);
+			|| m_TypeSource->ContextGeneration() == m_ContextGeneration)
+		&& (!m_WatchScheduler || m_WatchScheduler->IsConfigured())
+		&& (!m_HookCommandService || m_HookCommandService->IsConfigured());
 }
 
 CoreCommandResponse CoreCommandService::Execute(
@@ -730,6 +749,25 @@ CoreCommandResponse CoreCommandService::Execute(
 			return ExecuteFunctionCall(request, onGameThreadQueued);
 		if (request.Operation == kWorldActorTransformGet)
 			return ExecuteWorldTransformRead(request, onGameThreadQueued);
+		if (request.Operation == kWorldActorTransformUpdate)
+			return ExecuteWorldTransformUpdate(request, onGameThreadQueued);
+		if (MemoryCommandService::Handles(request.Operation))
+			return ExecuteMemoryCommand(request);
+		if (request.Operation == "watch.add"
+			|| request.Operation == "watch.list"
+			|| request.Operation == "watch.enable"
+			|| request.Operation == "watch.remove"
+			|| request.Operation == "watch.snapshot"
+			|| request.Operation == "watch.events.drain")
+		{
+			return ExecuteWatchCommand(request);
+		}
+		if (BlueprintCommandService::Handles(request.Operation))
+			return ExecuteBlueprintCommand(request);
+		if (HookCommandService::Handles(request.Operation))
+			return ExecuteHookCommand(request);
+		if (DumpCommandService::Handles(request.Operation))
+			return ExecuteDumpCommand(request);
 		if (WorldCommandService::Handles(request.Operation))
 			return ExecuteWorldCommand(request);
 		if (TypeCommandService::Handles(request.Operation))
@@ -1099,6 +1137,517 @@ CoreCommandResponse CoreCommandService::ExecuteWorldTransformRead(
 			timing);
 	}
 	return Success(request, std::move(result.Data), timing);
+}
+
+CoreCommandResponse CoreCommandService::ExecuteWorldTransformUpdate(
+	const CoreCommandRequest& request,
+	const GameThreadQueuedCallback& onGameThreadQueued)
+{
+	if (m_GameThread.IsCurrentPumpThread())
+	{
+		return Failure(
+			request,
+			"GAME_THREAD_REENTRANT_WAIT_DENIED",
+			"Synchronous world mutation cannot be submitted from the pump thread",
+			{{"mutation_state", "not_invoked"}});
+	}
+	std::string admissionError;
+	auto lease = m_Runtime.TryAcquireRequest(&admissionError);
+	if (!lease)
+	{
+		return Failure(
+			request,
+			admissionError.empty() ? "CORE_NOT_READY" : admissionError,
+			"CoreRuntime is not accepting world transform mutations");
+	}
+	constexpr const char* capabilityName = "world.mutate";
+	const Runtime::CapabilityStatus* capability = lease->Capabilities()
+		? lease->Capabilities()->Find(capabilityName)
+		: nullptr;
+	if (!capability || !capability->Available)
+	{
+		return Failure(
+			request,
+			capability && !capability->ReasonCode.empty()
+				? capability->ReasonCode
+				: "WORLD_MUTATION_CAPABILITY_UNAVAILABLE",
+			capability && !capability->Reason.empty()
+				? capability->Reason
+				: "Strict reflected world mutation is unavailable",
+			{{"capability", capabilityName}});
+	}
+
+	WorldMutationUpdatePreparation prepared =
+		WorldMutationCommandService::PrepareUpdate(
+			request.Data,
+			std::move(*lease),
+			m_Engine,
+			m_GameThread);
+	if (!prepared.Ok())
+	{
+		return Failure(
+			request,
+			prepared.Error
+				? std::move(prepared.Error->Code)
+				: "WORLD_TRANSFORM_UPDATE_PREPARATION_FAILED",
+			prepared.Error
+				? std::move(prepared.Error->Message)
+				: "World transform update preparation failed",
+			prepared.Error ? std::move(prepared.Error->Details) : json::object());
+	}
+
+	Runtime::GameThreadTicket ticket;
+	const Runtime::GameThreadQueueResult queued = m_GameThread.Enqueue(
+		prepared.Work,
+		std::chrono::steady_clock::now() + std::chrono::milliseconds(request.TimeoutMs),
+		ticket);
+	if (queued != Runtime::GameThreadQueueResult::Accepted)
+	{
+		switch (queued)
+		{
+		case Runtime::GameThreadQueueResult::Disabled:
+			return Failure(request, "GAME_THREAD_UNAVAILABLE", "Game-thread executor is disabled");
+		case Runtime::GameThreadQueueResult::QueueBusy:
+			return Failure(request, "GAME_THREAD_QUEUE_BUSY", "Game-thread queue capacity is exhausted");
+		case Runtime::GameThreadQueueResult::Invalid:
+			return Failure(request, "GAME_THREAD_TASK_INVALID", "Game-thread task or deadline is invalid");
+		case Runtime::GameThreadQueueResult::Accepted:
+			break;
+		}
+	}
+
+	if (onGameThreadQueued)
+	{
+		try
+		{
+			onGameThreadQueued(ticket);
+		}
+		catch (...)
+		{
+			const Runtime::GameThreadCancelResult cancelled = m_GameThread.Cancel(ticket);
+			const bool executionMayHaveStarted =
+				cancelled != Runtime::GameThreadCancelResult::Cancelled;
+			return Failure(
+				request,
+				"COMMAND_OBSERVER_FAILED",
+				"Request task observer raised an exception",
+				{{"mutation_state", executionMayHaveStarted
+					? "unknown_while_running"
+					: "not_invoked"}});
+		}
+	}
+
+	const Runtime::GameThreadSubmitResult submitted = m_GameThread.Wait(ticket);
+	Runtime::GameThreadTaskTiming taskTiming;
+	m_GameThread.TryGetTiming(ticket, taskTiming);
+	const CoreCommandTiming timing = ToCommandTiming(taskTiming);
+	switch (submitted)
+	{
+	case Runtime::GameThreadSubmitResult::Completed:
+		break;
+	case Runtime::GameThreadSubmitResult::Disabled:
+		return Failure(request, "GAME_THREAD_UNAVAILABLE", "Game-thread executor is disabled", json::object(), timing);
+	case Runtime::GameThreadSubmitResult::Cancelled:
+		return Failure(request, "REQUEST_CANCELLED", "Queued world transform update was cancelled", json::object(), timing);
+	case Runtime::GameThreadSubmitResult::PumpThreadWaitDenied:
+	{
+		const Runtime::GameThreadCancelResult cancelled = m_GameThread.Cancel(ticket);
+		return Failure(
+			request,
+			"GAME_THREAD_REENTRANT_WAIT_DENIED",
+			"Synchronous waits are forbidden on the pump thread",
+			{{"mutation_state", cancelled == Runtime::GameThreadCancelResult::Running
+				? "unknown_while_running"
+				: "not_invoked"}},
+			timing);
+	}
+	case Runtime::GameThreadSubmitResult::QueueBusy:
+		return Failure(request, "GAME_THREAD_QUEUE_BUSY", "Game-thread queue capacity is exhausted", json::object(), timing);
+	case Runtime::GameThreadSubmitResult::TimedOutBeforeStart:
+		return Failure(request, "GAME_THREAD_TIMEOUT_BEFORE_START", "World transform update expired before execution", json::object(), timing);
+	case Runtime::GameThreadSubmitResult::TimedOutWhileRunning:
+		return Failure(
+			request,
+			"GAME_THREAD_TIMEOUT_WHILE_RUNNING",
+			"World transform update is still running; mutation state is unknown",
+			{{"mutation_state", "unknown_while_running"}},
+			timing);
+	case Runtime::GameThreadSubmitResult::ExecutionFailed:
+		return Failure(
+			request,
+			"GAME_THREAD_EXECUTION_FAILED",
+			"World transform update failed during guarded execution; mutation state is unknown",
+			{{"mutation_state", "unknown_during_invoke"}},
+			timing);
+	}
+
+	WorldMutationCommandResult result =
+		WorldMutationCommandService::CompleteUpdate(*prepared.Work);
+	if (!result.Ok())
+	{
+		return Failure(
+			request,
+			std::move(result.Error->Code),
+			std::move(result.Error->Message),
+			std::move(result.Error->Details),
+			timing);
+	}
+	return Success(request, std::move(result.Data), timing);
+}
+
+CoreCommandResponse CoreCommandService::ExecuteMemoryCommand(
+	const CoreCommandRequest& request)
+{
+	const auto started = std::chrono::steady_clock::now();
+	const auto timing = [&started]() noexcept {
+		return CoreCommandTiming{.ExecuteUs = ElapsedMicroseconds(started)};
+	};
+
+	std::string admissionError;
+	auto lease = m_Runtime.TryAcquireRequest(&admissionError);
+	if (!lease)
+	{
+		return Failure(
+			request,
+			admissionError.empty() ? "CORE_NOT_READY" : admissionError,
+			"CoreRuntime is not accepting memory commands");
+	}
+	const char* capabilityName = nullptr;
+	if (request.Operation == "memory.raw.read") capabilityName = "memory.raw_read";
+	else if (request.Operation == "memory.raw.write") capabilityName = "memory.raw_write";
+	else if (request.Operation == "memory.typed.read") capabilityName = "memory.typed_read";
+	else if (request.Operation == "memory.typed.write") capabilityName = "memory.typed_write";
+	else if (request.Operation == "memory.pointer_chain.resolve") capabilityName = "memory.pointer_chain";
+	if (!capabilityName)
+		return Failure(request, "MEMORY_OPERATION_NOT_SUPPORTED", "Unknown memory operation", {}, timing());
+	const Runtime::CapabilityStatus* capability = lease->Capabilities()
+		? lease->Capabilities()->Find(capabilityName)
+		: nullptr;
+	if (!capability || !capability->Available)
+	{
+		return Failure(
+			request,
+			capability && !capability->ReasonCode.empty()
+				? capability->ReasonCode
+				: "MEMORY_CAPABILITY_UNAVAILABLE",
+			capability && !capability->Reason.empty()
+				? capability->Reason
+				: "The bounded memory command is unavailable",
+			{{"capability", capabilityName}},
+			timing());
+	}
+
+	MemoryCommandResult result = MemoryCommandService::Execute(
+		request.Operation,
+		request.Data);
+	if (!result.Ok())
+	{
+		return Failure(
+			request,
+			result.Error ? std::move(result.Error->Code) : "MEMORY_COMMAND_FAILED",
+			result.Error ? std::move(result.Error->Message) : "Memory command failed",
+			result.Error ? std::move(result.Error->Details) : json::object(),
+			timing());
+	}
+	return Success(request, std::move(result.Data), timing());
+}
+
+CoreCommandResponse CoreCommandService::ExecuteWatchCommand(
+	const CoreCommandRequest& request)
+{
+	const auto started = std::chrono::steady_clock::now();
+	const auto timing = [&started]() noexcept {
+		return CoreCommandTiming{.ExecuteUs = ElapsedMicroseconds(started)};
+	};
+	std::string admissionError;
+	auto lease = m_Runtime.TryAcquireRequest(&admissionError);
+	if (!lease)
+	{
+		return Failure(
+			request,
+			admissionError.empty() ? "CORE_NOT_READY" : admissionError,
+			"CoreRuntime is not accepting watch commands");
+	}
+	constexpr const char* capabilityName = "watch.properties";
+	const Runtime::CapabilityStatus* capability = lease->Capabilities()
+		? lease->Capabilities()->Find(capabilityName)
+		: nullptr;
+	if (!capability || !capability->Available || !m_WatchScheduler)
+	{
+		return Failure(
+			request,
+			capability && !capability->ReasonCode.empty()
+				? capability->ReasonCode
+				: "WATCH_CAPABILITY_UNAVAILABLE",
+			capability && !capability->Reason.empty()
+				? capability->Reason
+				: "The bounded property-watch scheduler is unavailable",
+			{{"capability", capabilityName}},
+			timing());
+	}
+	WatchCommandService service(*m_WatchScheduler, &m_Runtime, &m_Engine);
+	WatchCommandResult result = service.Execute(request.Operation, request.Data);
+	if (!result.Ok())
+	{
+		return Failure(
+			request,
+			result.Error ? std::move(result.Error->Code) : "WATCH_COMMAND_FAILED",
+			result.Error ? std::move(result.Error->Message) : "Watch command failed",
+			result.Error ? std::move(result.Error->Details) : json::object(),
+			timing());
+	}
+	return Success(request, std::move(result.Data), timing());
+}
+
+CoreCommandResponse CoreCommandService::ExecuteBlueprintCommand(
+	const CoreCommandRequest& request)
+{
+	const auto started = std::chrono::steady_clock::now();
+	const auto timing = [&started]() noexcept {
+		return CoreCommandTiming{.ExecuteUs = ElapsedMicroseconds(started)};
+	};
+	std::string admissionError;
+	auto lease = m_Runtime.TryAcquireRequest(&admissionError);
+	if (!lease)
+	{
+		return Failure(
+			request,
+			admissionError.empty() ? "CORE_NOT_READY" : admissionError,
+			"CoreRuntime is not accepting Blueprint commands",
+			json::object(),
+			timing());
+	}
+
+	const char* capabilityName = request.Operation == "blueprint.decompile"
+		? "blueprint.decompile"
+		: "blueprint.bytecode";
+	const Runtime::CapabilityStatus* capability = lease->Capabilities()
+		? lease->Capabilities()->Find(capabilityName)
+		: nullptr;
+	if (!capability || !capability->Available)
+	{
+		return Failure(
+			request,
+			capability && !capability->ReasonCode.empty()
+				? capability->ReasonCode
+				: "BLUEPRINT_CAPABILITY_UNAVAILABLE",
+			capability && !capability->Reason.empty()
+				? capability->Reason
+				: "No witnessed Blueprint bytecode source is available",
+			{{"capability", capabilityName}},
+			timing());
+	}
+
+	const std::shared_ptr<const Runtime::EngineSnapshot> objects =
+		m_Engine.Snapshots().Current();
+	const std::shared_ptr<const Runtime::TypeSnapshot> types =
+		m_Engine.Types().Current();
+	if (!objects || !types || !lease->Context())
+	{
+		return Failure(
+			request,
+			"BLUEPRINT_SNAPSHOT_UNAVAILABLE",
+			"Blueprint capability dependencies are not currently published",
+			{{"capability", capabilityName}},
+			timing());
+	}
+
+	BlueprintCommandResult result = BlueprintCommandService::Execute(
+		types,
+		request.Operation,
+		request.Data,
+		m_SessionId,
+		lease->Context()->Generation(),
+		objects->Generation,
+		m_BlueprintCaptureSource,
+		m_BlueprintProfileSource);
+	if (!result.Ok())
+	{
+		return Failure(
+			request,
+			result.Error ? std::move(result.Error->Code) : "BLUEPRINT_COMMAND_FAILED",
+			result.Error ? std::move(result.Error->Message) : "Blueprint command failed",
+			result.Error ? std::move(result.Error->Details) : json::object(),
+			timing());
+	}
+	return Success(request, std::move(result.Data), timing());
+}
+
+CoreCommandResponse CoreCommandService::ExecuteHookCommand(
+	const CoreCommandRequest& request)
+{
+	const auto started = std::chrono::steady_clock::now();
+	const auto timing = [&started]() noexcept {
+		return CoreCommandTiming{.ExecuteUs = ElapsedMicroseconds(started)};
+	};
+	std::string admissionError;
+	auto lease = m_Runtime.TryAcquireRequest(&admissionError);
+	if (!lease)
+	{
+		return Failure(
+			request,
+			admissionError.empty() ? "CORE_NOT_READY" : admissionError,
+			"CoreRuntime is not accepting hook commands",
+			json::object(),
+			timing());
+	}
+
+	constexpr const char* capabilityName = "hook.monitor";
+	const Runtime::CapabilityStatus* capability = lease->Capabilities()
+		? lease->Capabilities()->Find(capabilityName)
+		: nullptr;
+	if (!capability || !capability->Available)
+	{
+		return Failure(
+			request,
+			capability && !capability->ReasonCode.empty()
+				? capability->ReasonCode
+				: "HOOK_CAPABILITY_UNAVAILABLE",
+			capability && !capability->Reason.empty()
+				? capability->Reason
+				: "No validated ProcessEvent producer is installed",
+			{{"capability", capabilityName}},
+			timing());
+	}
+	if (!m_HookCommandService || !m_HookCommandService->IsConfigured())
+	{
+		return Failure(
+			request,
+			"HOOK_COMMAND_SERVICE_NOT_READY",
+			"The bounded hook subscription registry is not configured",
+			{{"capability", capabilityName}},
+			timing());
+	}
+
+	HookCommandResult result = m_HookCommandService->Execute(
+		request.Operation,
+		request.Data);
+	if (!result.Ok())
+	{
+		return Failure(
+			request,
+			result.Error ? std::move(result.Error->Code) : "HOOK_COMMAND_FAILED",
+			result.Error ? std::move(result.Error->Message) : "Hook command failed",
+			result.Error ? std::move(result.Error->Details) : json::object(),
+			timing());
+	}
+	return Success(request, std::move(result.Data), timing());
+}
+
+CoreCommandResponse CoreCommandService::ExecuteDumpCommand(
+	const CoreCommandRequest& request)
+{
+	const auto started = std::chrono::steady_clock::now();
+	const auto timing = [&started]() noexcept {
+		return CoreCommandTiming{.ExecuteUs = ElapsedMicroseconds(started)};
+	};
+	std::string admissionError;
+	auto lease = m_Runtime.TryAcquireRequest(&admissionError);
+	if (!lease)
+	{
+		return Failure(
+			request,
+			admissionError.empty() ? "CORE_NOT_READY" : admissionError,
+			"CoreRuntime is not accepting dump commands",
+			json::object(),
+			timing());
+	}
+
+	const char* capabilityName = "dump.jobs";
+	if (request.Operation == "dump.sdk.start") capabilityName = "dump.cpp";
+	else if (request.Operation == "dump.usmap.start") capabilityName = "dump.usmap";
+	else if (request.Operation == "dump.dumpspace.start") capabilityName = "dump.dumpspace";
+	else if (request.Operation == "dump.ida.start") capabilityName = "dump.ida";
+	const Runtime::CapabilityStatus* capability = lease->Capabilities()
+		? lease->Capabilities()->Find(capabilityName)
+		: nullptr;
+	if (!capability || !capability->Available)
+	{
+		return Failure(
+			request,
+			capability && !capability->ReasonCode.empty()
+				? capability->ReasonCode
+				: "DUMP_CAPABILITY_UNAVAILABLE",
+			capability && !capability->Reason.empty()
+				? capability->Reason
+				: "No owned dump worker is available",
+			{{"capability", capabilityName}},
+			timing());
+	}
+	if (!m_DumpCommandService)
+	{
+		return Failure(
+			request,
+			"DUMP_COMMAND_SERVICE_NOT_READY",
+			"The dump command boundary is not registered",
+			{{"capability", capabilityName}},
+			timing());
+	}
+
+	const std::shared_ptr<const Runtime::EngineSnapshot> objects =
+		m_Engine.Snapshots().Current();
+	const std::shared_ptr<const Runtime::TypeSnapshot> types =
+		m_Engine.Types().Current();
+	if (!objects || !types || !lease->Context())
+	{
+		return Failure(
+			request,
+			"DUMP_SCOPE_UNAVAILABLE",
+			"No complete immutable object/type snapshot scope is published",
+			{{"capability", capabilityName}},
+			timing());
+	}
+
+	const auto unsignedField = [&request](const char* key)
+		-> std::optional<std::uint64_t> {
+		if (!request.Data.is_object() || !request.Data.contains(key))
+			return std::nullopt;
+		const json& value = request.Data.at(key);
+		if (value.is_number_unsigned())
+			return value.get<std::uint64_t>();
+		if (!value.is_number_integer())
+			return std::nullopt;
+		const std::int64_t signedValue = value.get<std::int64_t>();
+		return signedValue < 0
+			? std::nullopt
+			: std::optional<std::uint64_t>(static_cast<std::uint64_t>(signedValue));
+	};
+	const bool scopeFieldsPresent = request.Data.is_object()
+		&& request.Data.contains("session_id")
+		&& request.Data.at("session_id").is_string()
+		&& unsignedField("context_generation")
+		&& unsignedField("object_snapshot_generation")
+		&& unsignedField("type_snapshot_generation");
+	if (scopeFieldsPresent
+		&& (request.Data.at("session_id").get_ref<const std::string&>() != m_SessionId
+			|| *unsignedField("context_generation") != lease->Context()->Generation()
+			|| *unsignedField("object_snapshot_generation") != objects->Generation
+			|| *unsignedField("type_snapshot_generation") != types->Generation()))
+	{
+		return Failure(
+			request,
+			"DUMP_SCOPE_MISMATCH",
+			"The requested dump scope does not match the active immutable generations",
+			{{"active_session_id", m_SessionId},
+			 {"active_context_generation", lease->Context()->Generation()},
+			 {"active_object_snapshot_generation", objects->Generation},
+			 {"active_type_snapshot_generation", types->Generation()}},
+			timing());
+	}
+
+	DumpCommandResult result = m_DumpCommandService->Execute(
+		request.Operation,
+		request.Data);
+	if (!result.Ok())
+	{
+		return Failure(
+			request,
+			result.Error ? std::move(result.Error->Code) : "DUMP_COMMAND_FAILED",
+			result.Error ? std::move(result.Error->Message) : "Dump command failed",
+			result.Error ? std::move(result.Error->Details) : json::object(),
+			timing());
+	}
+	return Success(request, std::move(result.Data), timing());
 }
 
 CoreCommandResponse CoreCommandService::ExecuteWorldCommand(

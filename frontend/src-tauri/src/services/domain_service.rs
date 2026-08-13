@@ -346,27 +346,35 @@ fn resolve_operation(operation: &str) -> Option<DomainRoute> {
         "world.actor.get" => DomainRoute::Core("world.actor.get"),
         "world.actor.components" => DomainRoute::Core("world.actor.components"),
         "world.actor.transform.get" => DomainRoute::Core("world.actor.transform.get"),
-        "world.actor.transform.update" => DomainRoute::Unavailable("world.mutate"),
-        "memory.raw.read" => DomainRoute::Unavailable("memory.raw_read"),
-        "memory.raw.write" => DomainRoute::Unavailable("memory.raw_write"),
-        "memory.typed.read" | "memory.typed.write" => DomainRoute::Unavailable("memory.typed"),
-        "memory.pointer_chain.resolve" => DomainRoute::Unavailable("memory.pointer_chain"),
+        "world.actor.transform.update" => DomainRoute::Core("world.actor.transform.update"),
+        "memory.raw.read" => DomainRoute::Core("memory.raw.read"),
+        "memory.raw.write" => DomainRoute::Core("memory.raw.write"),
+        "memory.typed.read" => DomainRoute::Core("memory.typed.read"),
+        "memory.typed.write" => DomainRoute::Core("memory.typed.write"),
+        "memory.pointer_chain.resolve" => DomainRoute::Core("memory.pointer_chain.resolve"),
         "call.invoke" => DomainRoute::Core("call.invoke"),
-        "call.static" | "call.batch" => DomainRoute::Unavailable("call.invoke"),
-        "watch.add" | "watch.list" | "watch.remove" | "watch.history" => {
-            DomainRoute::Unavailable("watch.properties")
-        }
-        "hook.add" | "hook.list" | "hook.enable" | "hook.remove" | "hook.log" => {
-            DomainRoute::Unavailable("hook.monitor")
-        }
-        "blueprint.bytecode" | "blueprint.decompile" => {
-            DomainRoute::Unavailable("blueprint.decompile")
-        }
-        "dump.sdk.start" => DomainRoute::Unavailable("dump.cpp"),
-        "dump.usmap.start" => DomainRoute::Unavailable("dump.usmap"),
-        "dump.dumpspace.start" => DomainRoute::Unavailable("dump.dumpspace"),
-        "dump.ida.start" => DomainRoute::Unavailable("dump.ida"),
-        "dump.jobs.list" | "dump.jobs.get" => DomainRoute::Unavailable("dump.jobs"),
+        "call.static" => DomainRoute::Unavailable("call.static"),
+        "call.batch" => DomainRoute::Unavailable("call.batch"),
+        "watch.add" => DomainRoute::Core("watch.add"),
+        "watch.list" => DomainRoute::Core("watch.list"),
+        "watch.enable" => DomainRoute::Core("watch.enable"),
+        "watch.remove" => DomainRoute::Core("watch.remove"),
+        "watch.snapshot" => DomainRoute::Core("watch.snapshot"),
+        "watch.events.drain" => DomainRoute::Core("watch.events.drain"),
+        "hook.add" => DomainRoute::Core("hook.add"),
+        "hook.list" => DomainRoute::Core("hook.list"),
+        "hook.enable" => DomainRoute::Core("hook.enable"),
+        "hook.remove" => DomainRoute::Core("hook.remove"),
+        "hook.log" => DomainRoute::Core("hook.log"),
+        "blueprint.bytecode" => DomainRoute::Core("blueprint.bytecode"),
+        "blueprint.decompile" => DomainRoute::Core("blueprint.decompile"),
+        "dump.sdk.start" => DomainRoute::Core("dump.sdk.start"),
+        "dump.usmap.start" => DomainRoute::Core("dump.usmap.start"),
+        "dump.dumpspace.start" => DomainRoute::Core("dump.dumpspace.start"),
+        "dump.ida.start" => DomainRoute::Core("dump.ida.start"),
+        "dump.jobs.list" => DomainRoute::Core("dump.jobs.list"),
+        "dump.jobs.get" => DomainRoute::Core("dump.jobs.get"),
+        "dump.jobs.cancel" => DomainRoute::Core("dump.jobs.cancel"),
         _ => return None,
     };
     Some(route)
@@ -877,6 +885,14 @@ mod tests {
             Some(DomainRoute::Core("call.invoke"))
         );
         assert_eq!(
+            resolve_operation("call.static"),
+            Some(DomainRoute::Unavailable("call.static"))
+        );
+        assert_eq!(
+            resolve_operation("call.batch"),
+            Some(DomainRoute::Unavailable("call.batch"))
+        );
+        assert_eq!(
             resolve_operation("world.inspect"),
             Some(DomainRoute::Core("world.inspect"))
         );
@@ -901,8 +917,28 @@ mod tests {
             Some(DomainRoute::Core("world.actor.transform.get"))
         );
         assert_eq!(
+            resolve_operation("world.actor.transform.update"),
+            Some(DomainRoute::Core("world.actor.transform.update"))
+        );
+        assert_eq!(
             resolve_operation("world.shortcuts"),
             Some(DomainRoute::Core("world.shortcuts"))
+        );
+        assert_eq!(
+            resolve_operation("hook.add"),
+            Some(DomainRoute::Core("hook.add"))
+        );
+        assert_eq!(
+            resolve_operation("hook.list"),
+            Some(DomainRoute::Core("hook.list"))
+        );
+        assert_eq!(
+            resolve_operation("dump.sdk.start"),
+            Some(DomainRoute::Core("dump.sdk.start"))
+        );
+        assert_eq!(
+            resolve_operation("dump.jobs.cancel"),
+            Some(DomainRoute::Core("dump.jobs.cancel"))
         );
     }
 

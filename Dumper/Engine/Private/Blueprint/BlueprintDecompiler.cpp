@@ -1,1027 +1,1243 @@
 #include "Blueprint/BlueprintDecompiler.h"
-#include "Unreal/ObjectArray.h"
-#include "Unreal/NameArray.h"
-#include "OffsetFinder/Offsets.h"
-#include "Platform.h"
-#include "Settings.h"
 
-#include <format>
+#include <algorithm>
 #include <cstring>
+#include <format>
+#include <limits>
+#include <string_view>
 
-static bool TryResolveNameByCompIdxSafe(int32_t compIdx, std::string& outName);
-static bool IsUE426Bytecode();
-static EExprToken NormalizeToken(uint8_t rawToken);
-
-static bool IsUE426Bytecode()
+namespace
 {
-	return Settings::Generator::GameVersion.find("4.26") != std::string::npos;
+using ErrorCode = BlueprintDecompiler::DisassemblyErrorCode;
+using Instruction = BlueprintDecompiler::DisassembledInstruction;
+using OpcodeMapping = BlueprintDecompiler::OpcodeMapping;
+using OpcodeSemantic = BlueprintDecompiler::OpcodeSemantic;
+using Profile = BlueprintDecompiler::BytecodeProfile;
+using Result = BlueprintDecompiler::DisassemblyResult;
+using Status = BlueprintDecompiler::DisassemblyStatus;
+
+constexpr std::string_view ProfileRequiredText =
+	"// unavailable: BYTECODE_PROFILE_REQUIRED (supply an immutable witnessed BytecodeProfile)\n";
+
+bool IsIntegerWidth(const uint8_t Width)
+{
+	return Width == 1 || Width == 2 || Width == 4 || Width == 8;
 }
 
-static EExprToken NormalizeToken(uint8_t rawToken)
+bool IsOptionalIntegerWidth(const uint8_t Width)
 {
-	// This decompiler enum table follows newer layouts for part of the opcode range.
-	// UE4.26 uses older values around 0x29..0x36, so normalize here to avoid stream desync.
-	if (!IsUE426Bytecode())
-		return static_cast<EExprToken>(rawToken);
-
-	switch (rawToken)
-	{
-	case 0x29: return EExprToken::EX_TextConst;
-	case 0x2C: return EExprToken::EX_IntConstByte;
-	case 0x2D: return EExprToken::EX_NoInterface;
-	case 0x2E: return EExprToken::EX_DynamicCast;
-	case 0x2F: return EExprToken::EX_StructConst;
-	case 0x30: return EExprToken::EX_EndStructConst;
-	case 0x31: return EExprToken::EX_SetArray;
-	case 0x32: return EExprToken::EX_EndArray;
-	case 0x33: return EExprToken::EX_PropertyConst;
-	case 0x34: return EExprToken::EX_UnicodeStringConst;
-	case 0x35: return EExprToken::EX_Int64Const;
-	case 0x36: return EExprToken::EX_UInt64Const;
-	default: return static_cast<EExprToken>(rawToken);
-	}
+	return Width == 0 || IsIntegerWidth(Width);
 }
 
-// ============================================================
-// BytecodeReader implementation
-// ============================================================
-
-BlueprintDecompiler::BytecodeReader::BytecodeReader(const std::vector<uint8_t>& InScript)
-	: Script(InScript), Position(0)
+bool FitsLayoutField(const uint8_t Offset, const uint8_t Width, const uint8_t TotalWidth)
 {
+	return Width == 0 ||
+		(static_cast<size_t>(Offset) + static_cast<size_t>(Width) <= static_cast<size_t>(TotalWidth));
 }
 
-bool BlueprintDecompiler::BytecodeReader::HasMore() const
+std::string BytesToHex(const std::span<const uint8_t> Bytes)
 {
-	return Position < Script.size();
+	std::string ResultText;
+	ResultText.reserve(Bytes.size() * 2);
+	for (const uint8_t Byte : Bytes)
+		ResultText += std::format("{:02X}", Byte);
+	return ResultText;
 }
 
-size_t BlueprintDecompiler::BytecodeReader::GetPosition() const
-{
-	return Position;
-}
-
-size_t BlueprintDecompiler::BytecodeReader::GetSize() const
-{
-	return Script.size();
-}
-
-uint8_t BlueprintDecompiler::BytecodeReader::ReadByte()
-{
-	if (Position >= Script.size()) return 0;
-	return Script[Position++];
-}
-
-int32_t BlueprintDecompiler::BytecodeReader::ReadInt32()
-{
-	int32_t Value = 0;
-	if (Position + 4 <= Script.size())
-	{
-		std::memcpy(&Value, &Script[Position], 4);
-		Position += 4;
-	}
-	return Value;
-}
-
-int64_t BlueprintDecompiler::BytecodeReader::ReadInt64()
-{
-	int64_t Value = 0;
-	if (Position + 8 <= Script.size())
-	{
-		std::memcpy(&Value, &Script[Position], 8);
-		Position += 8;
-	}
-	return Value;
-}
-
-uint64_t BlueprintDecompiler::BytecodeReader::ReadUInt64()
+uint64_t DecodeUnsignedLittleEndian(
+	const std::span<const uint8_t> Bytes,
+	const size_t Offset,
+	const size_t Width)
 {
 	uint64_t Value = 0;
-	if (Position + 8 <= Script.size())
-	{
-		std::memcpy(&Value, &Script[Position], 8);
-		Position += 8;
-	}
+	for (size_t Index = 0; Index < Width; ++Index)
+		Value |= static_cast<uint64_t>(Bytes[Offset + Index]) << (Index * 8);
 	return Value;
 }
 
-float BlueprintDecompiler::BytecodeReader::ReadFloat()
+void AppendEscapedByte(std::string& Output, const uint8_t Value)
 {
-	float Value = 0.0f;
-	if (Position + 4 <= Script.size())
-	{
-		std::memcpy(&Value, &Script[Position], 4);
-		Position += 4;
-	}
-	return Value;
-}
-
-double BlueprintDecompiler::BytecodeReader::ReadDouble()
-{
-	double Value = 0.0;
-	if (Position + 8 <= Script.size())
-	{
-		std::memcpy(&Value, &Script[Position], 8);
-		Position += 8;
-	}
-	return Value;
-}
-
-uint16_t BlueprintDecompiler::BytecodeReader::ReadUInt16()
-{
-	uint16_t Value = 0;
-	if (Position + 2 <= Script.size())
-	{
-		std::memcpy(&Value, &Script[Position], 2);
-		Position += 2;
-	}
-	return Value;
-}
-
-std::string BlueprintDecompiler::BytecodeReader::ReadString()
-{
-	std::string Result;
-	while (Position < Script.size())
-	{
-		char Ch = static_cast<char>(Script[Position++]);
-		if (Ch == '\0') break;
-		Result += Ch;
-	}
-	return Result;
-}
-
-std::string BlueprintDecompiler::BytecodeReader::ReadUnicodeString()
-{
-	std::string Result;
-	while (Position + 1 < Script.size())
-	{
-		uint16_t Ch;
-		std::memcpy(&Ch, &Script[Position], 2);
-		Position += 2;
-		if (Ch == 0) break;
-		if (Ch < 128)
-			Result += static_cast<char>(Ch);
-		else
-			Result += std::format("\\u{:04X}", Ch);
-	}
-	return Result;
-}
-
-uint64_t BlueprintDecompiler::BytecodeReader::ReadPointer()
-{
-	return ReadUInt64();
-}
-
-std::string BlueprintDecompiler::BytecodeReader::ReadName()
-{
-	if (Position + 4 > Script.size())
-		return "None";
-
-	const int32 compIdx = ReadInt32();
-	int32 raw1 = 0;
-	int32 raw2 = 0;
-	bool hasRaw1 = false;
-	bool hasRaw2 = false;
-
-	if (Position + 4 <= Script.size())
-	{
-		std::memcpy(&raw1, &Script[Position], 4);
-		hasRaw1 = true;
-	}
-	if (Position + 8 <= Script.size())
-	{
-		std::memcpy(&raw2, &Script[Position + 4], 4);
-		hasRaw2 = true;
-	}
-
-	int32 scriptFNameSize = (Off::InSDK::Name::FNameSize > 0) ? Off::InSDK::Name::FNameSize : 0x8;
-	if (scriptFNameSize < 0x8)
-		scriptFNameSize = 0x8;
-	if (scriptFNameSize > 0x10)
-		scriptFNameSize = 0x10;
-
-	// UE4.26 ScriptSerialization uses FScriptName (12 bytes) for XFERNAME().
-	if (IsUE426Bytecode())
-		scriptFNameSize = 0xC;
-
-	// Fallback heuristic for non-4.26 builds where runtime flags might still disagree.
-	const bool looksLikeCasePreservingScriptName =
-		hasRaw2 && compIdx > 0xFFFF && raw1 == compIdx && raw2 >= 0 && raw2 < 1000000;
-
-	if (!IsUE426Bytecode() && (Settings::Internal::bUseCasePreservingName || looksLikeCasePreservingScriptName))
-		scriptFNameSize = 0xC;
-
-	if (scriptFNameSize >= 0x8 && hasRaw1)
-	{
-		raw1 = ReadInt32();
-	}
-	if (scriptFNameSize >= 0xC && hasRaw2)
-	{
-		raw2 = ReadInt32();
-	}
-	if (scriptFNameSize >= 0x10 && Position + 4 <= Script.size())
-	{
-		// Keep stream aligned for 16-byte script names; current games here don't need this value.
-		ReadInt32();
-	}
-
-	std::string name;
-	TryResolveNameByCompIdxSafe(compIdx, name);
-	if (name.empty())
-		name = std::format("Name_{}", compIdx);
-
-	int32 number = 0;
-	if (!Settings::Internal::bUseOutlineNumberName)
-	{
-		if (scriptFNameSize >= 0xC && (Settings::Internal::bUseCasePreservingName || looksLikeCasePreservingScriptName || Off::FName::Number == 0x8))
-			number = raw2;
-		else
-			number = raw1;
-	}
-
-	if (number > 0 && number < 1000000)
-		name += "_" + std::to_string(number - 1);
-
-	return name;
-}
-
-EExprToken BlueprintDecompiler::BytecodeReader::PeekToken() const
-{
-	if (Position >= Script.size()) return EExprToken::EX_EndOfScript;
-	return NormalizeToken(Script[Position]);
-}
-
-EExprToken BlueprintDecompiler::BytecodeReader::ReadToken()
-{
-	return NormalizeToken(ReadByte());
-}
-
-void BlueprintDecompiler::BytecodeReader::Skip(size_t Count)
-{
-	Position += Count;
-	if (Position > Script.size())
-		Position = Script.size();
-}
-
-// ============================================================
-// Helper: resolve UObject pointer to name
-// ============================================================
-
-// SEH-safe probe: just test if we can read the first 64 bytes without crashing.
-// Must be a separate function with NO C++ objects (SEH + destructors = C2712).
-#pragma optimize("", off)
-static bool ProbeReadable(const void* Addr, size_t Size)
-{
-	volatile uint8_t sink = 0;
-	__try
-	{
-		const volatile uint8_t* p = reinterpret_cast<const volatile uint8_t*>(Addr);
-		for (size_t i = 0; i < Size; i += 64)
-			sink = p[i];
-		sink = p[Size - 1];
-		return true;
-	}
-	__except (1)
-	{
-		return false;
-	}
-}
-#pragma optimize("", on)
-
-#pragma optimize("", off)
-static bool TryReadInt32Safe(const void* Addr, int32_t& OutValue)
-{
-	__try
-	{
-		OutValue = *reinterpret_cast<const int32_t*>(Addr);
-		return true;
-	}
-	__except (EXCEPTION_EXECUTE_HANDLER)
-	{
-		return false;
-	}
-}
-#pragma optimize("", on)
-
-#pragma optimize("", off)
-static bool TryResolveNameByCompIdxSafe(int32_t compIdx, std::string& outName)
-{
-	if (compIdx < 0 || compIdx > 0x3FFFFFFF)
-		return false;
-
-	// Non-namepool can be strictly range-checked by NameArray element count.
-	if (!Settings::Internal::bUseNamePool)
-	{
-		const int32 num = NameArray::GetNumElements();
-		if (num <= 0 || compIdx >= num)
-			return false;
-	}
-
-	const std::string entryName = NameArray::GetNameEntry(compIdx).GetString();
-	if (!entryName.empty())
-	{
-		outName = entryName;
-		return true;
-	}
-
-	return false;
-}
-#pragma optimize("", on)
-
-std::string BlueprintDecompiler::ResolveObjectName(uint64_t Ptr)
-{
-	// Reject null and obviously invalid pointers
-	if (Ptr == 0)
-		return "None";
-
-	// Reject pointers that look like small offsets or corrupted data
-	// These are NOT valid object addresses - they look like uninitialized data
-	if (Ptr < 0x10000 || Ptr > 0x7FFFFFFFFFFF)
-		return std::format("0x{:X}", Ptr);
-
-	void* Addr = reinterpret_cast<void*>(Ptr);
-
-	// Check if pointer is in a readable memory region
-	if (Platform::IsBadReadPtr(Addr) || !ProbeReadable(Addr, sizeof(void*) + sizeof(int32_t)))
-		return std::format("0x{:X}", Ptr);
-
-	// Strong validation: only treat it as UObject when its UObject::Index points back
-	// to the same address in GObjects. This avoids crashing on random script constants.
-	int32_t objIndex = -1;
-	if (!TryReadInt32Safe(reinterpret_cast<const uint8_t*>(Addr) + Off::UObject::Index, objIndex))
-		return std::format("0x{:X}", Ptr);
-
-	const int32_t objCount = ObjectArray::Num();
-	if (objIndex < 0 || objIndex >= objCount)
-		return std::format("0x{:X}", Ptr);
-
-	try
-	{
-		UEObject Obj = ObjectArray::GetByIndex(objIndex);
-		if (!Obj || reinterpret_cast<uint64_t>(Obj.GetAddress()) != Ptr)
-			return std::format("0x{:X}", Ptr);
-
-		std::string Name = Obj.GetName();
-		if (!Name.empty())
-			return Name;
-	}
-	catch (...) {}
-
-	return std::format("0x{:X}", Ptr);
-}
-
-// ============================================================
-// Parse function call arguments until EX_EndFunctionParms
-// ============================================================
-
-std::string BlueprintDecompiler::ParseCallArgs(BytecodeReader& Reader, int Depth)
-{
-	std::string Args;
-	bool bFirst = true;
-
-	while (Reader.HasMore())
-	{
-		if (Reader.PeekToken() == EExprToken::EX_EndFunctionParms)
-		{
-			Reader.ReadToken(); // consume
-			break;
-		}
-
-		if (!bFirst)
-			Args += ", ";
-		bFirst = false;
-
-		Args += ParseExpression(Reader, Depth + 1);
-	}
-
-	return Args;
-}
-
-// ============================================================
-// Core: recursive expression parser
-// ============================================================
-
-std::string BlueprintDecompiler::ParseExpression(BytecodeReader& Reader, int Depth)
-{
-	if (!Reader.HasMore() || Depth > 64)
-		return "/* truncated */";
-
-	const size_t Offset = Reader.GetPosition();
-	const EExprToken Token = Reader.ReadToken();
-
-	switch (Token)
-	{
-	// --- Constants ---
-	case EExprToken::EX_IntConst:
-		return std::to_string(Reader.ReadInt32());
-
-	case EExprToken::EX_FloatConst:
-		return std::format("{:.4f}f", Reader.ReadFloat());
-
-	case EExprToken::EX_DoubleConst:
-		if (IsUE426Bytecode())
-		{
-			// UE4.26 uses opcode 0x38 as EX_PrimitiveCast.
-			uint8_t CastToken = Reader.ReadByte();
-			std::string Expr = ParseExpression(Reader, Depth + 1);
-			return std::format("PrimitiveCast(0x{:02X}, {})", CastToken, Expr);
-		}
-		return std::format("{:.6f}", Reader.ReadDouble());
-
-	case EExprToken::EX_StringConst:
-		return std::format("\"{}\"", Reader.ReadString());
-
-	case EExprToken::EX_UnicodeStringConst:
-		return std::format("L\"{}\"", Reader.ReadUnicodeString());
-
-	case EExprToken::EX_ByteConst:
-		return std::to_string(Reader.ReadByte());
-
-	case EExprToken::EX_IntConstByte:
-		return std::to_string(Reader.ReadByte());
-
-	case EExprToken::EX_Int64Const:
-		return std::to_string(Reader.ReadInt64()) + "LL";
-
-	case EExprToken::EX_UInt64Const:
-		return std::to_string(Reader.ReadUInt64()) + "ULL";
-
-	case EExprToken::EX_IntZero:  return "0";
-	case EExprToken::EX_IntOne:   return "1";
-	case EExprToken::EX_True:     return "true";
-	case EExprToken::EX_False:    return "false";
-	case EExprToken::EX_NoObject: return "nullptr";
-	case EExprToken::EX_NoInterface: return "nullptr";
-	case EExprToken::EX_Self:     return "this";
-	case EExprToken::EX_Nothing:  return "";
-
-	// --- Variable references ---
-	case EExprToken::EX_LocalVariable:
-	case EExprToken::EX_LocalOutVariable:
-	case EExprToken::EX_InstanceVariable:
-	case EExprToken::EX_DefaultVariable:
-	{
-		uint64_t PropPtr = Reader.ReadPointer();
-		return ResolveObjectName(PropPtr);
-	}
-
-	// --- Object/Name constants ---
-	case EExprToken::EX_ObjectConst:
-	{
-		uint64_t ObjPtr = Reader.ReadPointer();
-		return ResolveObjectName(ObjPtr);
-	}
-
-	case EExprToken::EX_NameConst:
-	{
-		const std::string Name = Reader.ReadName();
-		return std::format("FName(\"{}\")", Name);
-	}
-
-	case EExprToken::EX_SoftObjectConst:
-	{
-		std::string Expr = ParseExpression(Reader, Depth + 1);
-		return std::format("SoftObject({})", Expr);
-	}
-
-	case EExprToken::EX_PropertyConst:
-	{
-		uint64_t PropPtr = Reader.ReadPointer();
-		return ResolveObjectName(PropPtr);
-	}
-
-	case EExprToken::EX_ClassSparseDataVariable:
-	{
-		uint64_t PropPtr = Reader.ReadPointer();
-		return std::format("SparseData.{}", ResolveObjectName(PropPtr));
-	}
-
-	case EExprToken::EX_FieldPathConst:
-	{
-		std::string Expr = ParseExpression(Reader, Depth + 1);
-		return std::format("FieldPath({})", Expr);
-	}
-
-	// --- Function calls ---
-	case EExprToken::EX_FinalFunction:
-	case EExprToken::EX_LocalFinalFunction:
-	{
-		uint64_t FuncPtr = Reader.ReadPointer();
-		std::string FuncName = ResolveObjectName(FuncPtr);
-		std::string Args = ParseCallArgs(Reader, Depth);
-		return std::format("{}({})", FuncName, Args);
-	}
-
-	case EExprToken::EX_VirtualFunction:
-	case EExprToken::EX_LocalVirtualFunction:
-	{
-		std::string FuncName = Reader.ReadName();
-		std::string Args = ParseCallArgs(Reader, Depth);
-		return std::format("{}({})", FuncName, Args);
-	}
-
-	case EExprToken::EX_CallMath:
-	{
-		uint64_t FuncPtr = Reader.ReadPointer();
-		std::string FuncName = ResolveObjectName(FuncPtr);
-		std::string Args = ParseCallArgs(Reader, Depth);
-		return std::format("Math::{}({})", FuncName, Args);
-	}
-
-	case EExprToken::EX_CallMulticastDelegate:
-	{
-		uint64_t FuncPtr = Reader.ReadPointer();
-		std::string FuncName = ResolveObjectName(FuncPtr);
-		std::string Args = ParseCallArgs(Reader, Depth);
-		return std::format("{}.Broadcast({})", FuncName, Args);
-	}
-
-	// --- Assignment ---
-	case EExprToken::EX_Let:
-	{
-		uint64_t PropPtr = Reader.ReadPointer();
-		std::string VarExpr = ParseExpression(Reader, Depth + 1);
-		std::string ValueExpr = ParseExpression(Reader, Depth + 1);
-		return std::format("{} = {}", VarExpr, ValueExpr);
-	}
-
-	case EExprToken::EX_LetBool:
-	case EExprToken::EX_LetObj:
-	case EExprToken::EX_LetWeakObjPtr:
-	case EExprToken::EX_LetDelegate:
-	case EExprToken::EX_LetMulticastDelegate:
-	{
-		std::string VarExpr = ParseExpression(Reader, Depth + 1);
-		std::string ValueExpr = ParseExpression(Reader, Depth + 1);
-		return std::format("{} = {}", VarExpr, ValueExpr);
-	}
-
-	case EExprToken::EX_LetValueOnPersistentFrame:
-	{
-		uint64_t PropPtr = Reader.ReadPointer();
-		std::string ValueExpr = ParseExpression(Reader, Depth + 1);
-		return std::format("PersistentFrame[{}] = {}", ResolveObjectName(PropPtr), ValueExpr);
-	}
-
-	// --- Control flow ---
-	case EExprToken::EX_Jump:
-	{
-		uint32_t TargetOffset = static_cast<uint32_t>(Reader.ReadInt32());
-		return std::format("goto 0x{:04X}", TargetOffset);
-	}
-
-	case EExprToken::EX_JumpIfNot:
-	{
-		uint32_t TargetOffset = static_cast<uint32_t>(Reader.ReadInt32());
-		std::string Condition = ParseExpression(Reader, Depth + 1);
-		return std::format("if (!{}) goto 0x{:04X}", Condition, TargetOffset);
-	}
-
-	case EExprToken::EX_Return:
-	{
-		std::string RetExpr = ParseExpression(Reader, Depth + 1);
-		if (RetExpr.empty())
-			return "return";
-		return std::format("return {}", RetExpr);
-	}
-
-	case EExprToken::EX_PushExecutionFlow:
-	{
-		uint32_t TargetOffset = static_cast<uint32_t>(Reader.ReadInt32());
-		return std::format("/* push flow 0x{:04X} */", TargetOffset);
-	}
-
-	case EExprToken::EX_PopExecutionFlow:
-		return "/* pop flow */";
-
-	case EExprToken::EX_PopExecutionFlowIfNot:
-	{
-		std::string Condition = ParseExpression(Reader, Depth + 1);
-		return std::format("/* pop flow if !{} */", Condition);
-	}
-
-	case EExprToken::EX_ComputedJump:
-	{
-		std::string Expr = ParseExpression(Reader, Depth + 1);
-		return std::format("goto [{}]", Expr);
-	}
-
-	// --- Context (object.member) ---
-	case EExprToken::EX_Context:
-	case EExprToken::EX_Context_FailSilent:
-	{
-		std::string ObjExpr = ParseExpression(Reader, Depth + 1);
-		Reader.Skip(4); // SkipOffset (CodeSkipSizeType in UE4.26/UE5 defaults to 4)
-		uint64_t PropPtr = Reader.ReadPointer();
-		std::string MemberExpr = ParseExpression(Reader, Depth + 1);
-		return std::format("{}.{}", ObjExpr, MemberExpr);
-	}
-
-	case EExprToken::EX_ClassContext:
-	{
-		std::string ObjExpr = ParseExpression(Reader, Depth + 1);
-		Reader.Skip(4);
-		uint64_t PropPtr = Reader.ReadPointer();
-		std::string MemberExpr = ParseExpression(Reader, Depth + 1);
-		return std::format("{}::{}", ObjExpr, MemberExpr);
-	}
-
-	case EExprToken::EX_InterfaceContext:
-	{
-		std::string Expr = ParseExpression(Reader, Depth + 1);
-		return Expr;
-	}
-
-	// --- Casts ---
-	case EExprToken::EX_DynamicCast:
-	case EExprToken::EX_ObjToInterfaceCast:
-	case EExprToken::EX_CrossInterfaceCast:
-	case EExprToken::EX_InterfaceToObjCast:
-	{
-		uint64_t ClassPtr = Reader.ReadPointer();
-		std::string ClassName = ResolveObjectName(ClassPtr);
-		std::string Expr = ParseExpression(Reader, Depth + 1);
-		return std::format("Cast<{}>({})", ClassName, Expr);
-	}
-
-	case EExprToken::EX_MetaCast:
-	{
-		uint64_t ClassPtr = Reader.ReadPointer();
-		std::string ClassName = ResolveObjectName(ClassPtr);
-		std::string Expr = ParseExpression(Reader, Depth + 1);
-		return std::format("MetaCast<{}>({})", ClassName, Expr);
-	}
-
-	// --- Vector/Rotation/Transform constants ---
-	case EExprToken::EX_VectorConst:
-	{
-		float X = Reader.ReadFloat(), Y = Reader.ReadFloat(), Z = Reader.ReadFloat();
-		return std::format("FVector({:.2f}, {:.2f}, {:.2f})", X, Y, Z);
-	}
-
-	case EExprToken::EX_RotationConst:
-	{
-		float P = Reader.ReadFloat(), Y = Reader.ReadFloat(), R = Reader.ReadFloat();
-		return std::format("FRotator({:.2f}, {:.2f}, {:.2f})", P, Y, R);
-	}
-
-	case EExprToken::EX_TransformConst:
-	{
-		// Rotation (quat: 4 floats) + Translation (3 floats) + Scale (3 floats)
-		Reader.Skip(4 * 10);
-		return "FTransform(...)";
-	}
-
-	// --- Struct constant ---
-	case EExprToken::EX_StructConst:
-	{
-		uint64_t StructPtr = Reader.ReadPointer();
-		int32_t StructSize = Reader.ReadInt32();
-		std::string StructName = ResolveObjectName(StructPtr);
-		std::string Fields;
-		bool bFirst = true;
-		while (Reader.HasMore() && Reader.PeekToken() != EExprToken::EX_EndStructConst)
-		{
-			if (!bFirst) Fields += ", ";
-			bFirst = false;
-			Fields += ParseExpression(Reader, Depth + 1);
-		}
-		if (Reader.HasMore()) Reader.ReadToken(); // consume EndStructConst
-		return std::format("{}{{ {} }}", StructName, Fields);
-	}
-
-	// --- Delegate ---
-	case EExprToken::EX_InstanceDelegate:
-	{
-		std::string FuncName = Reader.ReadName();
-		return std::format("Delegate({})", FuncName);
-	}
-
-	case EExprToken::EX_BindDelegate:
-	{
-		std::string FuncName = Reader.ReadName();
-		std::string Delegate = ParseExpression(Reader, Depth + 1);
-		std::string Obj = ParseExpression(Reader, Depth + 1);
-		return std::format("BindDelegate({}, {}, {})", Delegate, FuncName, Obj);
-	}
-
-	case EExprToken::EX_AddMulticastDelegate:
-	{
-		std::string Delegate = ParseExpression(Reader, Depth + 1);
-		std::string Func = ParseExpression(Reader, Depth + 1);
-		return std::format("{}.Add({})", Delegate, Func);
-	}
-
-	case EExprToken::EX_RemoveMulticastDelegate:
-	{
-		std::string Delegate = ParseExpression(Reader, Depth + 1);
-		std::string Func = ParseExpression(Reader, Depth + 1);
-		return std::format("{}.Remove({})", Delegate, Func);
-	}
-
-	case EExprToken::EX_ClearMulticastDelegate:
-	{
-		std::string Delegate = ParseExpression(Reader, Depth + 1);
-		return std::format("{}.Clear()", Delegate);
-	}
-
-	// --- Skip / Assert ---
-	case EExprToken::EX_Skip:
-	{
-		uint32_t SkipSize = static_cast<uint32_t>(Reader.ReadInt32());
-		std::string Expr = ParseExpression(Reader, Depth + 1);
-		return Expr;
-	}
-
-	case EExprToken::EX_SkipOffsetConst:
-	{
-		uint32_t Val = static_cast<uint32_t>(Reader.ReadInt32());
-		return std::format("/* skip offset 0x{:04X} */", Val);
-	}
-
-	case EExprToken::EX_Assert:
-	{
-		uint16_t LineNum = Reader.ReadUInt16();
-		uint8_t InDebug = Reader.ReadByte();
-		std::string Expr = ParseExpression(Reader, Depth + 1);
-		return std::format("assert({})", Expr);
-	}
-
-	case EExprToken::EX_Breakpoint:
-		return "/* breakpoint */";
-
-	case EExprToken::EX_WireTracepoint:
-		return "/* wire tracepoint */";
-
-	case EExprToken::EX_Tracepoint:
-		return "/* tracepoint */";
-
-	case EExprToken::EX_DeprecatedOp4A:
-		return "/* deprecated */";
-
-	case EExprToken::EX_InstrumentationEvent:
-	{
-		uint8_t EventType = Reader.ReadByte();
-		// ScriptSerialization: InlineEvent carries an inlined FScriptName payload.
-		if (EventType == 4)
-			Reader.Skip(12);
-		return std::format("/* instrumentation event {} */", EventType);
-	}
-
-	// --- Array ---
-	case EExprToken::EX_SetArray:
-	{
-		std::string ArrayExpr = ParseExpression(Reader, Depth + 1);
-		std::string Elements;
-		bool bFirst = true;
-		while (Reader.HasMore() && Reader.PeekToken() != EExprToken::EX_EndArray)
-		{
-			if (!bFirst) Elements += ", ";
-			bFirst = false;
-			Elements += ParseExpression(Reader, Depth + 1);
-		}
-		if (Reader.HasMore()) Reader.ReadToken();
-		return std::format("{} = [{}]", ArrayExpr, Elements);
-	}
-
-	case EExprToken::EX_ArrayGetByRef:
-	{
-		std::string ArrayExpr = ParseExpression(Reader, Depth + 1);
-		std::string IndexExpr = ParseExpression(Reader, Depth + 1);
-		return std::format("{}[{}]", ArrayExpr, IndexExpr);
-	}
-
-	case EExprToken::EX_ArrayConst:
-	{
-		uint64_t InnerPropPtr = Reader.ReadPointer();
-		int32_t NumElements = Reader.ReadInt32();
-		std::string Elements;
-		bool bFirst = true;
-		while (Reader.HasMore() && Reader.PeekToken() != EExprToken::EX_EndArrayConst)
-		{
-			if (!bFirst) Elements += ", ";
-			bFirst = false;
-			Elements += ParseExpression(Reader, Depth + 1);
-		}
-		if (Reader.HasMore()) Reader.ReadToken();
-		return std::format("TArray{{ {} }}", Elements);
-	}
-
-	// --- Set ---
-	case EExprToken::EX_SetSet:
-	{
-		std::string SetExpr = ParseExpression(Reader, Depth + 1);
-		int32_t NumElements = Reader.ReadInt32();
-		std::string Elements;
-		bool bFirst = true;
-		while (Reader.HasMore() && Reader.PeekToken() != EExprToken::EX_EndSet)
-		{
-			if (!bFirst) Elements += ", ";
-			bFirst = false;
-			Elements += ParseExpression(Reader, Depth + 1);
-		}
-		if (Reader.HasMore()) Reader.ReadToken();
-		return std::format("{} = TSet/*{}*/{{ {} }}", SetExpr, NumElements, Elements);
-	}
-
-	case EExprToken::EX_SetConst:
-	{
-		uint64_t InnerPropPtr = Reader.ReadPointer();
-		int32_t NumElements = Reader.ReadInt32();
-		std::string Elements;
-		bool bFirst = true;
-		while (Reader.HasMore() && Reader.PeekToken() != EExprToken::EX_EndSetConst)
-		{
-			if (!bFirst) Elements += ", ";
-			bFirst = false;
-			Elements += ParseExpression(Reader, Depth + 1);
-		}
-		if (Reader.HasMore()) Reader.ReadToken();
-		return std::format("TSet{{ {} }}", Elements);
-	}
-
-	// --- Map ---
-	case EExprToken::EX_SetMap:
-	{
-		std::string MapExpr = ParseExpression(Reader, Depth + 1);
-		int32_t NumElements = Reader.ReadInt32();
-		std::string Elements;
-		bool bFirst = true;
-		while (Reader.HasMore() && Reader.PeekToken() != EExprToken::EX_EndMap)
-		{
-			if (!bFirst) Elements += ", ";
-			bFirst = false;
-			std::string Key = ParseExpression(Reader, Depth + 1);
-			std::string Val = ParseExpression(Reader, Depth + 1);
-			Elements += std::format("{}: {}", Key, Val);
-		}
-		if (Reader.HasMore()) Reader.ReadToken();
-		return std::format("{} = TMap/*{}*/{{ {} }}", MapExpr, NumElements, Elements);
-	}
-
-	case EExprToken::EX_MapConst:
-	{
-		uint64_t KeyPropPtr = Reader.ReadPointer();
-		uint64_t ValPropPtr = Reader.ReadPointer();
-		int32_t NumElements = Reader.ReadInt32();
-		std::string Elements;
-		bool bFirst = true;
-		while (Reader.HasMore() && Reader.PeekToken() != EExprToken::EX_EndMapConst)
-		{
-			if (!bFirst) Elements += ", ";
-			bFirst = false;
-			std::string Key = ParseExpression(Reader, Depth + 1);
-			std::string Val = ParseExpression(Reader, Depth + 1);
-			Elements += std::format("{}: {}", Key, Val);
-		}
-		if (Reader.HasMore()) Reader.ReadToken();
-		return std::format("TMap{{ {} }}", Elements);
-	}
-
-	// --- SwitchValue ---
-	case EExprToken::EX_SwitchValue:
-	{
-		uint16_t NumCases = Reader.ReadUInt16();
-		uint32_t EndOffset = static_cast<uint32_t>(Reader.ReadInt32());
-		std::string IndexExpr = ParseExpression(Reader, Depth + 1);
-		std::string Result = std::format("switch ({}) {{ ", IndexExpr);
-		for (int i = 0; i < NumCases; i++)
-		{
-			std::string CaseVal = ParseExpression(Reader, Depth + 1);
-			uint32_t CaseOffset = static_cast<uint32_t>(Reader.ReadInt32());
-			std::string CaseExpr = ParseExpression(Reader, Depth + 1);
-			Result += std::format("case {}: {}; ", CaseVal, CaseExpr);
-		}
-		std::string DefaultExpr = ParseExpression(Reader, Depth + 1);
-		Result += std::format("default: {} }}", DefaultExpr);
-		return Result;
-	}
-
-	// --- TextConst ---
-	case EExprToken::EX_TextConst:
-	{
-		uint8_t TextType = Reader.ReadByte();
-		// Simplified: just read sub-expressions based on type
-		switch (TextType)
-		{
-		case 0: // Empty
-			return "FText::GetEmpty()";
-		case 1: // LocalizedText
-		{
-			std::string Src = ParseExpression(Reader, Depth + 1);
-			std::string Key = ParseExpression(Reader, Depth + 1);
-			std::string Ns = ParseExpression(Reader, Depth + 1);
-			return std::format("NSLOCTEXT({}, {}, {})", Ns, Key, Src);
-		}
-		case 2: // InvariantCultureText
-		{
-			std::string Src = ParseExpression(Reader, Depth + 1);
-			return std::format("FText::AsCultureInvariant({})", Src);
-		}
-		case 3: // LiteralString
-		{
-			std::string Src = ParseExpression(Reader, Depth + 1);
-			return std::format("FText::FromString({})", Src);
-		}
-		case 4: // StringTableEntry
-		{
-			uint64_t TablePtr = Reader.ReadPointer();
-			std::string TableId = ParseExpression(Reader, Depth + 1);
-			std::string Key = ParseExpression(Reader, Depth + 1);
-			return std::format("FText::FromStringTable({}, {}, {})", ResolveObjectName(TablePtr), TableId, Key);
-		}
-		case 255: // None
-			return "FText()";
-		default:
-			return std::format("FText(/* type {} */)", TextType);
-		}
-	}
-
-	case EExprToken::EX_StructMemberContext:
-	{
-		uint64_t PropPtr = Reader.ReadPointer();
-		std::string PropName = ResolveObjectName(PropPtr);
-		std::string StructExpr = ParseExpression(Reader, Depth + 1);
-		return std::format("{}.{}", StructExpr, PropName);
-	}
-
-	case EExprToken::EX_EndOfScript:
-		return "";
-
-	case EExprToken::EX_EndFunctionParms:
-	case EExprToken::EX_EndStructConst:
-	case EExprToken::EX_EndArray:
-	case EExprToken::EX_EndArrayConst:
-	case EExprToken::EX_EndSet:
-	case EExprToken::EX_EndSetConst:
-	case EExprToken::EX_EndMap:
-	case EExprToken::EX_EndMapConst:
-	case EExprToken::EX_EndParmValue:
-		return "";
-
+	switch (Value)
+	{
+	case '\\': Output += "\\\\"; return;
+	case '"': Output += "\\\""; return;
+	case '\n': Output += "\\n"; return;
+	case '\r': Output += "\\r"; return;
+	case '\t': Output += "\\t"; return;
 	default:
-		return std::format("/* unknown opcode 0x{:02X} */", static_cast<uint8_t>(Token));
+		if (Value >= 0x20 && Value <= 0x7E)
+			Output.push_back(static_cast<char>(Value));
+		else
+			Output += std::format("\\x{:02X}", Value);
+		return;
 	}
 }
 
-// ============================================================
-// Top-level: decompile raw bytes to pseudocode
-// ============================================================
+void AppendEscapedUtf16(std::string& Output, const uint16_t Value)
+{
+	if (Value <= 0x7F)
+	{
+		AppendEscapedByte(Output, static_cast<uint8_t>(Value));
+		return;
+	}
+	Output += std::format("\\u{:04X}", Value);
+}
+
+std::string RawPointerToken(const std::string_view Kind, const uint64_t Value)
+{
+	return std::format("{}Token(0x{:X})", Kind, Value);
+}
+
+bool ValidateProfile(const Profile& ProfileValue, std::string& Error)
+{
+	if (ProfileValue.Id.empty())
+	{
+		Error = "profile id is empty";
+		return false;
+	}
+	if (ProfileValue.PointerWidth != 4 && ProfileValue.PointerWidth != 8)
+	{
+		Error = "pointer width must be exactly 4 or 8 bytes";
+		return false;
+	}
+	if (!IsIntegerWidth(ProfileValue.CodeSkipWidth))
+	{
+		Error = "code-skip width must be 1, 2, 4, or 8 bytes";
+		return false;
+	}
+	if ((ProfileValue.VectorComponentWidth != 4 && ProfileValue.VectorComponentWidth != 8) ||
+		(ProfileValue.RotationComponentWidth != 4 && ProfileValue.RotationComponentWidth != 8) ||
+		(ProfileValue.TransformComponentWidth != 4 && ProfileValue.TransformComponentWidth != 8))
+	{
+		Error = "vector, rotation, and transform component widths must each be exactly 4 or 8 bytes";
+		return false;
+	}
+	const auto& Name = ProfileValue.NameLayout;
+	if (Name.ByteWidth == 0 || Name.ByteWidth > 32)
+	{
+		Error = "name operand width must be between 1 and 32 bytes";
+		return false;
+	}
+	if (!IsOptionalIntegerWidth(Name.ComparisonIndexWidth) ||
+		!IsOptionalIntegerWidth(Name.NumberWidth) ||
+		!FitsLayoutField(Name.ComparisonIndexOffset, Name.ComparisonIndexWidth, Name.ByteWidth) ||
+		!FitsLayoutField(Name.NumberOffset, Name.NumberWidth, Name.ByteWidth))
+	{
+		Error = "name operand fields do not fit the declared layout";
+		return false;
+	}
+	const auto& Limits = ProfileValue.Limits;
+	if (Limits.MaxInputBytes == 0 || Limits.MaxBytesConsumed == 0 ||
+		Limits.MaxInstructions == 0 || Limits.MaxStringCodeUnits == 0 ||
+		Limits.MaxRecursionDepth == 0)
+	{
+		Error = "all disassembly limits must be non-zero";
+		return false;
+	}
+
+	bool HasEndOfScript = false;
+	for (const OpcodeMapping& Mapping : ProfileValue.Opcodes)
+	{
+		if (Mapping.Semantic == OpcodeSemantic::ExprToken)
+		{
+			if (Mapping.Token == EExprToken::EX_Max)
+			{
+				Error = "mapped ExprToken cannot use EX_Max";
+				return false;
+			}
+			HasEndOfScript = HasEndOfScript || Mapping.Token == EExprToken::EX_EndOfScript;
+		}
+		else if (Mapping.Semantic == OpcodeSemantic::PrimitiveCast &&
+			Mapping.Token != EExprToken::EX_Max)
+		{
+			Error = "PrimitiveCast mapping must not carry an ExprToken";
+			return false;
+		}
+	}
+	if (!HasEndOfScript)
+	{
+		Error = "profile has no EndOfScript opcode mapping";
+		return false;
+	}
+	return true;
+}
+
+class BytecodeReader
+{
+public:
+	BytecodeReader(const std::span<const uint8_t> ScriptValue, const size_t MaxBytesValue)
+		: Script(ScriptValue),
+		  MaxBytes(MaxBytesValue < ScriptValue.size() ? MaxBytesValue : ScriptValue.size())
+	{
+	}
+
+	[[nodiscard]] size_t Position() const { return Current; }
+	[[nodiscard]] bool AtEnd() const { return Current >= Script.size(); }
+	[[nodiscard]] bool Failed() const { return Error.Present; }
+	[[nodiscard]] const BlueprintDecompiler::DisassemblyError& FirstError() const { return Error; }
+
+	bool Fail(const ErrorCode Code, const size_t Offset, std::string Message)
+	{
+		if (!Error.Present)
+		{
+			Error.Present = true;
+			Error.Offset = Offset;
+			Error.Code = Code;
+			Error.Message = std::move(Message);
+		}
+		return false;
+	}
+
+	bool TryPeekByte(uint8_t& Value)
+	{
+		if (!CanRead(1, "opcode"))
+			return false;
+		Value = Script[Current];
+		return true;
+	}
+
+	bool TryReadByte(uint8_t& Value)
+	{
+		return TryReadScalar(Value, "byte operand");
+	}
+
+	bool TryReadUInt16(uint16_t& Value)
+	{
+		return TryReadScalar(Value, "uint16 operand");
+	}
+
+	bool TryReadInt32(int32_t& Value)
+	{
+		return TryReadScalar(Value, "int32 operand");
+	}
+
+	bool TryReadInt64(int64_t& Value)
+	{
+		return TryReadScalar(Value, "int64 operand");
+	}
+
+	bool TryReadUInt64(uint64_t& Value)
+	{
+		return TryReadScalar(Value, "uint64 operand");
+	}
+
+	bool TryReadFloat(float& Value)
+	{
+		return TryReadScalar(Value, "float operand");
+	}
+
+	bool TryReadDouble(double& Value)
+	{
+		return TryReadScalar(Value, "double operand");
+	}
+
+	bool TryReadUnsigned(const uint8_t Width, uint64_t& Value, const std::string_view Label)
+	{
+		if (!CanRead(Width, Label))
+			return false;
+		Value = DecodeUnsignedLittleEndian(Script, Current, Width);
+		Current += Width;
+		return true;
+	}
+
+	bool TryReadBytes(const size_t Count, std::span<const uint8_t>& Value, const std::string_view Label)
+	{
+		if (!CanRead(Count, Label))
+			return false;
+		Value = Script.subspan(Current, Count);
+		Current += Count;
+		return true;
+	}
+
+	bool TryReadAnsiString(const size_t MaxCodeUnits, std::string& Value)
+	{
+		const size_t Start = Current;
+		Value.clear();
+		for (size_t Count = 0; Count < MaxCodeUnits; ++Count)
+		{
+			if (AtEnd())
+				return Fail(ErrorCode::UnterminatedString, Start, "ANSI string is not null-terminated");
+			uint8_t CodeUnit = 0;
+			if (!TryReadByte(CodeUnit))
+				return false;
+			if (CodeUnit == 0)
+				return true;
+			AppendEscapedByte(Value, CodeUnit);
+		}
+		return Fail(ErrorCode::StringLimitExceeded, Start, "ANSI string exceeds profile limit");
+	}
+
+	bool TryReadUtf16String(const size_t MaxCodeUnits, std::string& Value)
+	{
+		const size_t Start = Current;
+		Value.clear();
+		for (size_t Count = 0; Count < MaxCodeUnits; ++Count)
+		{
+			if (AtEnd())
+				return Fail(ErrorCode::UnterminatedString, Start, "UTF-16 string is not null-terminated");
+			uint16_t CodeUnit = 0;
+			if (!TryReadUInt16(CodeUnit))
+				return false;
+			if (CodeUnit == 0)
+				return true;
+			AppendEscapedUtf16(Value, CodeUnit);
+		}
+		return Fail(ErrorCode::StringLimitExceeded, Start, "UTF-16 string exceeds profile limit");
+	}
+
+private:
+	template <typename T>
+	bool TryReadScalar(T& Value, const std::string_view Label)
+	{
+		if (!CanRead(sizeof(T), Label))
+			return false;
+		std::memcpy(&Value, Script.data() + Current, sizeof(T));
+		Current += sizeof(T);
+		return true;
+	}
+
+	bool CanRead(const size_t Count, const std::string_view Label)
+	{
+		if (Failed())
+			return false;
+		if (Current > MaxBytes || Count > MaxBytes - Current)
+		{
+			if (Current <= Script.size() && Count <= Script.size() - Current)
+				return Fail(ErrorCode::TotalByteLimitExceeded, Current,
+					std::format("{} exceeds total byte limit", Label));
+			return Fail(ErrorCode::TruncatedOperand, Current,
+				std::format("{} is truncated", Label));
+		}
+		if (Current > Script.size() || Count > Script.size() - Current)
+			return Fail(ErrorCode::TruncatedOperand, Current,
+				std::format("{} is truncated", Label));
+		return true;
+	}
+
+	std::span<const uint8_t> Script;
+	size_t MaxBytes = 0;
+	size_t Current = 0;
+	BlueprintDecompiler::DisassemblyError Error;
+};
+
+class BoundedParser
+{
+public:
+	BoundedParser(const std::span<const uint8_t> ScriptValue, const Profile& ProfileValue)
+		: Script(ScriptValue), ProfileData(ProfileValue), Reader(ScriptValue, ProfileValue.Limits.MaxBytesConsumed)
+	{
+		Output.ProfileId = ProfileValue.Id;
+		Output.InputSize = ScriptValue.size();
+	}
+
+	Result Run()
+	{
+		if (Script.empty())
+		{
+			Reader.Fail(ErrorCode::EndOfScriptMissing, 0, "script is empty and has no EndOfScript opcode");
+			return Finish(Status::Incomplete);
+		}
+
+		while (!Reader.Failed())
+		{
+			if (Reader.AtEnd())
+			{
+				Reader.Fail(ErrorCode::EndOfScriptMissing, Reader.Position(),
+					"script ended without EndOfScript opcode");
+				break;
+			}
+
+			uint8_t RawOpcode = 0;
+			if (!Reader.TryPeekByte(RawOpcode))
+				break;
+			const OpcodeMapping Mapping = ProfileData.Opcodes[RawOpcode];
+			if (Mapping.Semantic == OpcodeSemantic::ExprToken &&
+				Mapping.Token == EExprToken::EX_EndOfScript)
+			{
+				std::string Ignored;
+				if (!ParseExpression(0, Ignored))
+					break;
+				Output.SawEndOfScript = true;
+				if (!Reader.AtEnd())
+				{
+					Reader.Fail(ErrorCode::TrailingBytes, Reader.Position(),
+						"bytes remain after EndOfScript opcode");
+					break;
+				}
+				return Finish(Status::Complete);
+			}
+
+			const size_t Offset = Reader.Position();
+			std::string Expression;
+			if (!ParseExpression(0, Expression))
+				break;
+			if (!Expression.empty())
+				Output.Pseudocode += std::format("  {:04X}: {}\n", Offset, Expression);
+		}
+
+		return Finish(Status::Incomplete);
+	}
+
+private:
+	Result Finish(const Status RequestedStatus)
+	{
+		Output.BytesConsumed = Reader.Position();
+		const double RawCoverage = Script.empty()
+			? 0.0
+			: static_cast<double>(Output.BytesConsumed) / static_cast<double>(Script.size());
+		Output.Coverage = RawCoverage < 1.0 ? RawCoverage : 1.0;
+		Output.FirstError = Reader.FirstError();
+		Output.Status = Reader.Failed() && RequestedStatus == Status::Complete
+			? Status::Incomplete
+			: RequestedStatus;
+		return std::move(Output);
+	}
+
+	bool CheckDepth(const uint32_t Depth)
+	{
+		if (Depth <= ProfileData.Limits.MaxRecursionDepth)
+			return true;
+		return Reader.Fail(ErrorCode::RecursionLimitExceeded, Reader.Position(),
+			"expression recursion exceeds profile limit");
+	}
+
+	bool BeginInstruction(
+		const uint32_t Depth,
+		size_t& InstructionIndex,
+		OpcodeMapping& Mapping)
+	{
+		if (!CheckDepth(Depth))
+			return false;
+		if (Output.Instructions.size() >= ProfileData.Limits.MaxInstructions)
+			return Reader.Fail(ErrorCode::InstructionLimitExceeded, Reader.Position(),
+				"instruction count exceeds profile limit");
+
+		const size_t Offset = Reader.Position();
+		uint8_t RawOpcode = 0;
+		if (!Reader.TryReadByte(RawOpcode))
+			return false;
+
+		Mapping = ProfileData.Opcodes[RawOpcode];
+		Instruction Entry;
+		Entry.Offset = Offset;
+		Entry.Size = 1;
+		Entry.Depth = Depth;
+		Entry.RawOpcode = RawOpcode;
+		Entry.Semantic = Mapping.Semantic;
+		Entry.Token = Mapping.Token;
+		InstructionIndex = Output.Instructions.size();
+		Output.Instructions.push_back(std::move(Entry));
+
+		if (Mapping.Semantic == OpcodeSemantic::Unknown)
+		{
+			++Output.UnknownCount;
+			Output.Instructions[InstructionIndex].Text =
+				std::format("unknown_opcode(0x{:02X})", RawOpcode);
+			return Reader.Fail(ErrorCode::UnknownOpcode, Offset,
+				std::format("opcode 0x{:02X} is not mapped by profile {}", RawOpcode, ProfileData.Id));
+		}
+		return true;
+	}
+
+	void CompleteInstruction(const size_t InstructionIndex, std::string Text)
+	{
+		Instruction& Entry = Output.Instructions[InstructionIndex];
+		Entry.Size = Reader.Position() - Entry.Offset;
+		Entry.Text = std::move(Text);
+	}
+
+	void PreservePartialInstruction(const size_t InstructionIndex)
+	{
+		Instruction& Entry = Output.Instructions[InstructionIndex];
+		Entry.Size = Reader.Position() - Entry.Offset;
+		if (Entry.Text.empty())
+			Entry.Text = "incomplete_instruction";
+	}
+
+	bool PeekToken(EExprToken& Token, uint8_t& RawOpcode)
+	{
+		if (!Reader.TryPeekByte(RawOpcode))
+			return false;
+		const OpcodeMapping Mapping = ProfileData.Opcodes[RawOpcode];
+		if (Mapping.Semantic != OpcodeSemantic::ExprToken)
+		{
+			Token = EExprToken::EX_Max;
+			return true;
+		}
+		Token = Mapping.Token;
+		return true;
+	}
+
+	bool ConsumeExpectedToken(const EExprToken Expected, const uint32_t Depth)
+	{
+		EExprToken Actual = EExprToken::EX_Max;
+		uint8_t RawOpcode = 0;
+		if (!PeekToken(Actual, RawOpcode))
+			return false;
+		if (Actual != Expected)
+			return Reader.Fail(ErrorCode::ExpectedTerminator, Reader.Position(),
+				std::format("expected {} terminator, found opcode 0x{:02X}",
+					GetExprTokenName(Expected), RawOpcode));
+
+		size_t InstructionIndex = 0;
+		OpcodeMapping Mapping;
+		if (!BeginInstruction(Depth, InstructionIndex, Mapping))
+			return false;
+		if (Mapping.Semantic != OpcodeSemantic::ExprToken || Mapping.Token != Expected)
+		{
+			PreservePartialInstruction(InstructionIndex);
+			return Reader.Fail(ErrorCode::ExpectedTerminator, Reader.Position() - 1,
+				"opcode mapping changed while consuming a terminator");
+		}
+		CompleteInstruction(InstructionIndex, GetExprTokenName(Expected));
+		return true;
+	}
+
+	bool ReadPointerToken(const std::string_view Kind, std::string& Text)
+	{
+		uint64_t Value = 0;
+		if (!Reader.TryReadUnsigned(ProfileData.PointerWidth, Value, "pointer operand"))
+			return false;
+		Text = RawPointerToken(Kind, Value);
+		return true;
+	}
+
+	bool ReadNameToken(std::string& Text)
+	{
+		std::span<const uint8_t> Bytes;
+		if (!Reader.TryReadBytes(ProfileData.NameLayout.ByteWidth, Bytes, "name operand"))
+			return false;
+
+		Text = std::format("NameToken(raw=0x{}", BytesToHex(Bytes));
+		const auto& Layout = ProfileData.NameLayout;
+		if (Layout.ComparisonIndexWidth != 0)
+		{
+			const uint64_t Value = DecodeUnsignedLittleEndian(
+				Bytes, Layout.ComparisonIndexOffset, Layout.ComparisonIndexWidth);
+			Text += std::format(", comparison_index={}", Value);
+		}
+		if (Layout.NumberWidth != 0)
+		{
+			const uint64_t Value = DecodeUnsignedLittleEndian(
+				Bytes, Layout.NumberOffset, Layout.NumberWidth);
+			Text += std::format(", number={}", Value);
+		}
+		Text += ")";
+		return true;
+	}
+
+	bool ReadCodeOffset(uint64_t& Value)
+	{
+		return Reader.TryReadUnsigned(ProfileData.CodeSkipWidth, Value, "code offset operand");
+	}
+
+	bool ReadReal(const uint8_t Width, double& Value, const std::string_view Label)
+	{
+		if (Width == 4)
+		{
+			float NarrowValue = 0.0F;
+			if (!Reader.TryReadFloat(NarrowValue))
+				return false;
+			Value = static_cast<double>(NarrowValue);
+			return true;
+		}
+		if (Width == 8)
+			return Reader.TryReadDouble(Value);
+		return Reader.Fail(ErrorCode::InvalidProfile, Reader.Position(),
+			std::format("{} has an invalid component width", Label));
+	}
+
+	bool ParseCallArguments(const uint32_t Depth, std::string& Arguments)
+	{
+		Arguments.clear();
+		bool First = true;
+		while (!Reader.Failed())
+		{
+			if (Reader.AtEnd())
+				return Reader.Fail(ErrorCode::ExpectedTerminator, Reader.Position(),
+					"function arguments ended without EndFunctionParms");
+
+			EExprToken Token = EExprToken::EX_Max;
+			uint8_t RawOpcode = 0;
+			if (!PeekToken(Token, RawOpcode))
+				return false;
+			if (Token == EExprToken::EX_EndFunctionParms)
+				return ConsumeExpectedToken(EExprToken::EX_EndFunctionParms, Depth + 1);
+
+			std::string Argument;
+			if (!ParseExpression(Depth + 1, Argument))
+				return false;
+			if (!First)
+				Arguments += ", ";
+			First = false;
+			Arguments += Argument;
+		}
+		return false;
+	}
+
+	bool ParseUntilTerminator(
+		const EExprToken Terminator,
+		const uint32_t Depth,
+		std::string& Elements,
+		const bool ParsePairs)
+	{
+		Elements.clear();
+		bool First = true;
+		while (!Reader.Failed())
+		{
+			if (Reader.AtEnd())
+				return Reader.Fail(ErrorCode::ExpectedTerminator, Reader.Position(),
+					std::format("container ended without {}", GetExprTokenName(Terminator)));
+			EExprToken Token = EExprToken::EX_Max;
+			uint8_t RawOpcode = 0;
+			if (!PeekToken(Token, RawOpcode))
+				return false;
+			if (Token == Terminator)
+				return ConsumeExpectedToken(Terminator, Depth + 1);
+
+			std::string FirstValue;
+			if (!ParseExpression(Depth + 1, FirstValue))
+				return false;
+			std::string Element = FirstValue;
+			if (ParsePairs)
+			{
+				std::string SecondValue;
+				if (!ParseExpression(Depth + 1, SecondValue))
+					return false;
+				Element += ": " + SecondValue;
+			}
+			if (!First)
+				Elements += ", ";
+			First = false;
+			Elements += Element;
+		}
+		return false;
+	}
+
+	bool ParseCountedElements(
+		const int32_t Count,
+		const bool ParsePairs,
+		const EExprToken Terminator,
+		const uint32_t Depth,
+		std::string& Elements)
+	{
+		if (Count < 0 || static_cast<size_t>(Count) > ProfileData.Limits.MaxInstructions)
+			return Reader.Fail(ErrorCode::InvalidOperand, Reader.Position(),
+				"container element count is outside the profile bounds");
+		Elements.clear();
+		for (int32_t Index = 0; Index < Count; ++Index)
+		{
+			std::string FirstValue;
+			if (!ParseExpression(Depth + 1, FirstValue))
+				return false;
+			std::string Element = FirstValue;
+			if (ParsePairs)
+			{
+				std::string SecondValue;
+				if (!ParseExpression(Depth + 1, SecondValue))
+					return false;
+				Element += ": " + SecondValue;
+			}
+			if (Index != 0)
+				Elements += ", ";
+			Elements += Element;
+		}
+		return ConsumeExpectedToken(Terminator, Depth + 1);
+	}
+
+	bool ParseExpression(const uint32_t Depth, std::string& Text)
+	{
+		size_t InstructionIndex = 0;
+		OpcodeMapping Mapping;
+		if (!BeginInstruction(Depth, InstructionIndex, Mapping))
+			return false;
+
+		bool Success = false;
+		if (Mapping.Semantic == OpcodeSemantic::PrimitiveCast)
+		{
+			uint8_t CastKind = 0;
+			std::string Value;
+			Success = Reader.TryReadByte(CastKind) && ParseExpression(Depth + 1, Value);
+			if (Success)
+				Text = std::format("PrimitiveCast(0x{:02X}, {})", CastKind, Value);
+		}
+		else
+		{
+			Success = ParseExprToken(Mapping.Token, Depth, Text);
+		}
+
+		if (Success)
+			CompleteInstruction(InstructionIndex, Text);
+		else
+			PreservePartialInstruction(InstructionIndex);
+		return Success;
+	}
+
+	bool ParseExprToken(const EExprToken Token, const uint32_t Depth, std::string& Text)
+	{
+		switch (Token)
+		{
+		case EExprToken::EX_IntConst:
+		{
+			int32_t Value = 0;
+			if (!Reader.TryReadInt32(Value)) return false;
+			Text = std::to_string(Value);
+			return true;
+		}
+		case EExprToken::EX_FloatConst:
+		{
+			float Value = 0.0F;
+			if (!Reader.TryReadFloat(Value)) return false;
+			Text = std::format("{:.4f}f", Value);
+			return true;
+		}
+		case EExprToken::EX_DoubleConst:
+		{
+			double Value = 0.0;
+			if (!Reader.TryReadDouble(Value)) return false;
+			Text = std::format("{:.6f}", Value);
+			return true;
+		}
+		case EExprToken::EX_StringConst:
+		{
+			std::string Value;
+			if (!Reader.TryReadAnsiString(ProfileData.Limits.MaxStringCodeUnits, Value)) return false;
+			Text = std::format("\"{}\"", Value);
+			return true;
+		}
+		case EExprToken::EX_UnicodeStringConst:
+		{
+			std::string Value;
+			if (!Reader.TryReadUtf16String(ProfileData.Limits.MaxStringCodeUnits, Value)) return false;
+			Text = std::format("L\"{}\"", Value);
+			return true;
+		}
+		case EExprToken::EX_ByteConst:
+		case EExprToken::EX_IntConstByte:
+		{
+			uint8_t Value = 0;
+			if (!Reader.TryReadByte(Value)) return false;
+			Text = std::to_string(Value);
+			return true;
+		}
+		case EExprToken::EX_Int64Const:
+		{
+			int64_t Value = 0;
+			if (!Reader.TryReadInt64(Value)) return false;
+			Text = std::to_string(Value) + "LL";
+			return true;
+		}
+		case EExprToken::EX_UInt64Const:
+		{
+			uint64_t Value = 0;
+			if (!Reader.TryReadUInt64(Value)) return false;
+			Text = std::to_string(Value) + "ULL";
+			return true;
+		}
+		case EExprToken::EX_IntZero: Text = "0"; return true;
+		case EExprToken::EX_IntOne: Text = "1"; return true;
+		case EExprToken::EX_True: Text = "true"; return true;
+		case EExprToken::EX_False: Text = "false"; return true;
+		case EExprToken::EX_NoObject:
+		case EExprToken::EX_NoInterface: Text = "nullptr"; return true;
+		case EExprToken::EX_Self: Text = "this"; return true;
+		case EExprToken::EX_Nothing: Text.clear(); return true;
+
+		case EExprToken::EX_LocalVariable:
+		case EExprToken::EX_LocalOutVariable:
+		case EExprToken::EX_InstanceVariable:
+		case EExprToken::EX_DefaultVariable:
+		case EExprToken::EX_ObjectConst:
+		case EExprToken::EX_PropertyConst:
+		case EExprToken::EX_ClassSparseDataVariable:
+		{
+			std::string Value;
+			const std::string_view Kind = Token == EExprToken::EX_ObjectConst
+				? "Object"
+				: (Token == EExprToken::EX_ClassSparseDataVariable ? "SparseProperty" : "Property");
+			if (!ReadPointerToken(Kind, Value)) return false;
+			Text = Value;
+			return true;
+		}
+		case EExprToken::EX_NameConst:
+		{
+			std::string Value;
+			if (!ReadNameToken(Value)) return false;
+			Text = Value;
+			return true;
+		}
+		case EExprToken::EX_SoftObjectConst:
+		case EExprToken::EX_FieldPathConst:
+		{
+			std::string Value;
+			if (!ParseExpression(Depth + 1, Value)) return false;
+			Text = std::format("{}({})",
+				Token == EExprToken::EX_SoftObjectConst ? "SoftObject" : "FieldPath", Value);
+			return true;
+		}
+
+		case EExprToken::EX_FinalFunction:
+		case EExprToken::EX_LocalFinalFunction:
+		case EExprToken::EX_CallMath:
+		case EExprToken::EX_CallMulticastDelegate:
+		{
+			std::string Function;
+			std::string Arguments;
+			if (!ReadPointerToken("Function", Function) || !ParseCallArguments(Depth, Arguments)) return false;
+			if (Token == EExprToken::EX_CallMath)
+				Text = std::format("Math::{}({})", Function, Arguments);
+			else if (Token == EExprToken::EX_CallMulticastDelegate)
+				Text = std::format("{}.Broadcast({})", Function, Arguments);
+			else
+				Text = std::format("{}({})", Function, Arguments);
+			return true;
+		}
+		case EExprToken::EX_VirtualFunction:
+		case EExprToken::EX_LocalVirtualFunction:
+		{
+			std::string Function;
+			std::string Arguments;
+			if (!ReadNameToken(Function) || !ParseCallArguments(Depth, Arguments)) return false;
+			Text = std::format("{}({})", Function, Arguments);
+			return true;
+		}
+
+		case EExprToken::EX_Let:
+		{
+			std::string Property;
+			std::string Variable;
+			std::string Value;
+			if (!ReadPointerToken("Property", Property) ||
+				!ParseExpression(Depth + 1, Variable) ||
+				!ParseExpression(Depth + 1, Value)) return false;
+			Text = std::format("{} = {} /* {} */", Variable, Value, Property);
+			return true;
+		}
+		case EExprToken::EX_LetBool:
+		case EExprToken::EX_LetObj:
+		case EExprToken::EX_LetWeakObjPtr:
+		case EExprToken::EX_LetDelegate:
+		case EExprToken::EX_LetMulticastDelegate:
+		{
+			std::string Variable;
+			std::string Value;
+			if (!ParseExpression(Depth + 1, Variable) || !ParseExpression(Depth + 1, Value)) return false;
+			Text = std::format("{} = {}", Variable, Value);
+			return true;
+		}
+		case EExprToken::EX_LetValueOnPersistentFrame:
+		{
+			std::string Property;
+			std::string Value;
+			if (!ReadPointerToken("Property", Property) || !ParseExpression(Depth + 1, Value)) return false;
+			Text = std::format("PersistentFrame[{}] = {}", Property, Value);
+			return true;
+		}
+
+		case EExprToken::EX_Jump:
+		case EExprToken::EX_PushExecutionFlow:
+		case EExprToken::EX_SkipOffsetConst:
+		{
+			uint64_t Offset = 0;
+			if (!ReadCodeOffset(Offset)) return false;
+			if (Token == EExprToken::EX_Jump)
+				Text = std::format("goto 0x{:X}", Offset);
+			else if (Token == EExprToken::EX_PushExecutionFlow)
+				Text = std::format("push_flow(0x{:X})", Offset);
+			else
+				Text = std::format("skip_offset(0x{:X})", Offset);
+			return true;
+		}
+		case EExprToken::EX_JumpIfNot:
+		{
+			uint64_t Offset = 0;
+			std::string Condition;
+			if (!ReadCodeOffset(Offset) || !ParseExpression(Depth + 1, Condition)) return false;
+			Text = std::format("if (!{}) goto 0x{:X}", Condition, Offset);
+			return true;
+		}
+		case EExprToken::EX_Return:
+		{
+			std::string Value;
+			if (!ParseExpression(Depth + 1, Value)) return false;
+			Text = Value.empty() ? "return" : "return " + Value;
+			return true;
+		}
+		case EExprToken::EX_PopExecutionFlow: Text = "pop_flow()"; return true;
+		case EExprToken::EX_PopExecutionFlowIfNot:
+		case EExprToken::EX_ComputedJump:
+		{
+			std::string Value;
+			if (!ParseExpression(Depth + 1, Value)) return false;
+			Text = Token == EExprToken::EX_ComputedJump
+				? std::format("goto [{}]", Value)
+				: std::format("pop_flow_if_not({})", Value);
+			return true;
+		}
+
+		case EExprToken::EX_Context:
+		case EExprToken::EX_Context_FailSilent:
+		case EExprToken::EX_ClassContext:
+		{
+			std::string Object;
+			std::string Property;
+			std::string Member;
+			uint64_t SkipOffset = 0;
+			if (!ParseExpression(Depth + 1, Object) || !ReadCodeOffset(SkipOffset) ||
+				!ReadPointerToken("Property", Property) || !ParseExpression(Depth + 1, Member)) return false;
+			const char* Separator = Token == EExprToken::EX_ClassContext ? "::" : ".";
+			Text = std::format("{}{}{} /* skip=0x{:X}, {} */", Object, Separator, Member, SkipOffset, Property);
+			return true;
+		}
+		case EExprToken::EX_InterfaceContext:
+		{
+			return ParseExpression(Depth + 1, Text);
+		}
+
+		case EExprToken::EX_DynamicCast:
+		case EExprToken::EX_ObjToInterfaceCast:
+		case EExprToken::EX_CrossInterfaceCast:
+		case EExprToken::EX_InterfaceToObjCast:
+		case EExprToken::EX_MetaCast:
+		{
+			std::string Class;
+			std::string Value;
+			if (!ReadPointerToken("Class", Class) || !ParseExpression(Depth + 1, Value)) return false;
+			Text = std::format("Cast<{}>({})", Class, Value);
+			return true;
+		}
+
+		case EExprToken::EX_VectorConst:
+		case EExprToken::EX_RotationConst:
+		{
+			double A = 0.0;
+			double B = 0.0;
+			double C = 0.0;
+			const uint8_t ComponentWidth = Token == EExprToken::EX_VectorConst
+				? ProfileData.VectorComponentWidth : ProfileData.RotationComponentWidth;
+			if (!ReadReal(ComponentWidth, A, "vector/rotation constant") ||
+				!ReadReal(ComponentWidth, B, "vector/rotation constant") ||
+				!ReadReal(ComponentWidth, C, "vector/rotation constant")) return false;
+			Text = std::format("{}({:.2f}, {:.2f}, {:.2f})",
+				Token == EExprToken::EX_VectorConst ? "FVector" : "FRotator", A, B, C);
+			return true;
+		}
+		case EExprToken::EX_TransformConst:
+		{
+			std::span<const uint8_t> RawTransform;
+			const size_t ByteWidth = static_cast<size_t>(ProfileData.TransformComponentWidth) * 10;
+			if (!Reader.TryReadBytes(ByteWidth, RawTransform, "transform constant")) return false;
+			Text = std::format("TransformToken(raw=0x{})", BytesToHex(RawTransform));
+			return true;
+		}
+		case EExprToken::EX_StructConst:
+		{
+			std::string Struct;
+			int32_t StructSize = 0;
+			std::string Fields;
+			if (!ReadPointerToken("Struct", Struct) || !Reader.TryReadInt32(StructSize) ||
+				!ParseUntilTerminator(EExprToken::EX_EndStructConst, Depth, Fields, false)) return false;
+			Text = std::format("{}{{ {} }} /* declared_size={} */", Struct, Fields, StructSize);
+			return true;
+		}
+
+		case EExprToken::EX_InstanceDelegate:
+		{
+			std::string Function;
+			if (!ReadNameToken(Function)) return false;
+			Text = std::format("Delegate({})", Function);
+			return true;
+		}
+		case EExprToken::EX_BindDelegate:
+		{
+			std::string Function;
+			std::string Delegate;
+			std::string Object;
+			if (!ReadNameToken(Function) || !ParseExpression(Depth + 1, Delegate) ||
+				!ParseExpression(Depth + 1, Object)) return false;
+			Text = std::format("BindDelegate({}, {}, {})", Delegate, Function, Object);
+			return true;
+		}
+		case EExprToken::EX_AddMulticastDelegate:
+		case EExprToken::EX_RemoveMulticastDelegate:
+		{
+			std::string Delegate;
+			std::string Function;
+			if (!ParseExpression(Depth + 1, Delegate) || !ParseExpression(Depth + 1, Function)) return false;
+			Text = std::format("{}.{}({})", Delegate,
+				Token == EExprToken::EX_AddMulticastDelegate ? "Add" : "Remove", Function);
+			return true;
+		}
+		case EExprToken::EX_ClearMulticastDelegate:
+		{
+			std::string Delegate;
+			if (!ParseExpression(Depth + 1, Delegate)) return false;
+			Text = std::format("{}.Clear()", Delegate);
+			return true;
+		}
+
+		case EExprToken::EX_Skip:
+		{
+			uint64_t Skip = 0;
+			if (!ReadCodeOffset(Skip) || !ParseExpression(Depth + 1, Text)) return false;
+			Text += std::format(" /* skip=0x{:X} */", Skip);
+			return true;
+		}
+		case EExprToken::EX_Assert:
+		{
+			uint16_t Line = 0;
+			uint8_t DebugMode = 0;
+			std::string Value;
+			if (!Reader.TryReadUInt16(Line) || !Reader.TryReadByte(DebugMode) ||
+				!ParseExpression(Depth + 1, Value)) return false;
+			Text = std::format("assert({}) /* line={}, debug={} */", Value, Line, DebugMode);
+			return true;
+		}
+		case EExprToken::EX_Breakpoint: Text = "breakpoint()"; return true;
+		case EExprToken::EX_WireTracepoint: Text = "wire_tracepoint()"; return true;
+		case EExprToken::EX_Tracepoint: Text = "tracepoint()"; return true;
+		case EExprToken::EX_DeprecatedOp4A: Text = "deprecated_opcode()"; return true;
+		case EExprToken::EX_InstrumentationEvent:
+		{
+			uint8_t EventType = 0;
+			if (!Reader.TryReadByte(EventType)) return false;
+			if (EventType == 4)
+			{
+				std::string InlineName;
+				if (!ReadNameToken(InlineName)) return false;
+				Text = std::format("instrumentation_event({}, {})", EventType, InlineName);
+			}
+			else
+			{
+				Text = std::format("instrumentation_event({})", EventType);
+			}
+			return true;
+		}
+
+		case EExprToken::EX_SetArray:
+		{
+			std::string Array;
+			std::string Elements;
+			if (!ParseExpression(Depth + 1, Array) ||
+				!ParseUntilTerminator(EExprToken::EX_EndArray, Depth, Elements, false)) return false;
+			Text = std::format("{} = [{}]", Array, Elements);
+			return true;
+		}
+		case EExprToken::EX_ArrayGetByRef:
+		{
+			std::string Array;
+			std::string Index;
+			if (!ParseExpression(Depth + 1, Array) || !ParseExpression(Depth + 1, Index)) return false;
+			Text = std::format("{}[{}]", Array, Index);
+			return true;
+		}
+		case EExprToken::EX_ArrayConst:
+		case EExprToken::EX_SetConst:
+		{
+			std::string InnerProperty;
+			int32_t Count = 0;
+			std::string Elements;
+			if (!ReadPointerToken("Property", InnerProperty) || !Reader.TryReadInt32(Count)) return false;
+			const EExprToken Terminator = Token == EExprToken::EX_ArrayConst
+				? EExprToken::EX_EndArrayConst : EExprToken::EX_EndSetConst;
+			if (!ParseCountedElements(Count, false, Terminator, Depth, Elements)) return false;
+			Text = std::format("{}{{ {} }} /* {} */",
+				Token == EExprToken::EX_ArrayConst ? "TArray" : "TSet", Elements, InnerProperty);
+			return true;
+		}
+		case EExprToken::EX_SetSet:
+		case EExprToken::EX_SetMap:
+		{
+			std::string Container;
+			int32_t Count = 0;
+			std::string Elements;
+			if (!ParseExpression(Depth + 1, Container) || !Reader.TryReadInt32(Count)) return false;
+			const bool Pairs = Token == EExprToken::EX_SetMap;
+			const EExprToken Terminator = Pairs ? EExprToken::EX_EndMap : EExprToken::EX_EndSet;
+			if (!ParseCountedElements(Count, Pairs, Terminator, Depth, Elements)) return false;
+			Text = std::format("{} = {}{{ {} }}", Container, Pairs ? "TMap" : "TSet", Elements);
+			return true;
+		}
+		case EExprToken::EX_MapConst:
+		{
+			std::string KeyProperty;
+			std::string ValueProperty;
+			int32_t Count = 0;
+			std::string Elements;
+			if (!ReadPointerToken("Property", KeyProperty) || !ReadPointerToken("Property", ValueProperty) ||
+				!Reader.TryReadInt32(Count) ||
+				!ParseCountedElements(Count, true, EExprToken::EX_EndMapConst, Depth, Elements)) return false;
+			Text = std::format("TMap{{ {} }} /* key={}, value={} */", Elements, KeyProperty, ValueProperty);
+			return true;
+		}
+
+		case EExprToken::EX_SwitchValue:
+		{
+			uint16_t Count = 0;
+			uint64_t EndOffset = 0;
+			std::string Index;
+			if (!Reader.TryReadUInt16(Count) || !ReadCodeOffset(EndOffset) ||
+				!ParseExpression(Depth + 1, Index)) return false;
+			if (static_cast<size_t>(Count) > ProfileData.Limits.MaxInstructions)
+				return Reader.Fail(ErrorCode::InvalidOperand, Reader.Position(),
+					"switch case count is outside the profile bounds");
+			Text = std::format("switch ({}) {{ ", Index);
+			for (uint16_t CaseIndex = 0; CaseIndex < Count; ++CaseIndex)
+			{
+				std::string CaseValue;
+				std::string CaseResult;
+				uint64_t CaseOffset = 0;
+				if (!ParseExpression(Depth + 1, CaseValue) || !ReadCodeOffset(CaseOffset) ||
+					!ParseExpression(Depth + 1, CaseResult)) return false;
+				Text += std::format("case {}: {} /* next=0x{:X} */; ", CaseValue, CaseResult, CaseOffset);
+			}
+			std::string DefaultValue;
+			if (!ParseExpression(Depth + 1, DefaultValue)) return false;
+			Text += std::format("default: {} }} /* end=0x{:X} */", DefaultValue, EndOffset);
+			return true;
+		}
+
+		case EExprToken::EX_TextConst:
+		{
+			uint8_t TextType = 0;
+			if (!Reader.TryReadByte(TextType)) return false;
+			switch (TextType)
+			{
+			case 0: Text = "FText::GetEmpty()"; return true;
+			case 1:
+			{
+				std::string Source;
+				std::string Key;
+				std::string Namespace;
+				if (!ParseExpression(Depth + 1, Source) || !ParseExpression(Depth + 1, Key) ||
+					!ParseExpression(Depth + 1, Namespace)) return false;
+				Text = std::format("NSLOCTEXT({}, {}, {})", Namespace, Key, Source);
+				return true;
+			}
+			case 2:
+			case 3:
+			{
+				std::string Source;
+				if (!ParseExpression(Depth + 1, Source)) return false;
+				Text = std::format("{}({})", TextType == 2
+					? "FText::AsCultureInvariant" : "FText::FromString", Source);
+				return true;
+			}
+			case 4:
+			{
+				std::string Table;
+				std::string TableId;
+				std::string Key;
+				if (!ReadPointerToken("Object", Table) || !ParseExpression(Depth + 1, TableId) ||
+					!ParseExpression(Depth + 1, Key)) return false;
+				Text = std::format("FText::FromStringTable({}, {}, {})", Table, TableId, Key);
+				return true;
+			}
+			case 255: Text = "FText()"; return true;
+			default:
+				return Reader.Fail(ErrorCode::InvalidOperand, Reader.Position() - 1,
+					std::format("unsupported TextConst type {}", TextType));
+			}
+		}
+
+		case EExprToken::EX_StructMemberContext:
+		{
+			std::string Property;
+			std::string Structure;
+			if (!ReadPointerToken("Property", Property) || !ParseExpression(Depth + 1, Structure)) return false;
+			Text = std::format("{}.{}", Structure, Property);
+			return true;
+		}
+
+		case EExprToken::EX_EndOfScript:
+			Text = "EndOfScript";
+			return true;
+
+		case EExprToken::EX_EndFunctionParms:
+		case EExprToken::EX_EndStructConst:
+		case EExprToken::EX_EndArray:
+		case EExprToken::EX_EndArrayConst:
+		case EExprToken::EX_EndSet:
+		case EExprToken::EX_EndSetConst:
+		case EExprToken::EX_EndMap:
+		case EExprToken::EX_EndMapConst:
+		case EExprToken::EX_EndParmValue:
+			return Reader.Fail(ErrorCode::UnexpectedTerminator, Reader.Position() - 1,
+				std::format("unexpected {} terminator", GetExprTokenName(Token)));
+
+		default:
+			return Reader.Fail(ErrorCode::UnsupportedOpcode, Reader.Position() - 1,
+				std::format("mapped token {} has no bounded decoder", GetExprTokenName(Token)));
+		}
+	}
+
+	std::span<const uint8_t> Script;
+	const Profile& ProfileData;
+	BytecodeReader Reader;
+	Result Output;
+};
+}
+
+BlueprintDecompiler::BytecodeProfile& BlueprintDecompiler::BytecodeProfile::MapOpcode(
+	const uint8_t RawOpcode,
+	const EExprToken Token)
+{
+	Opcodes[RawOpcode] = { OpcodeSemantic::ExprToken, Token };
+	return *this;
+}
+
+BlueprintDecompiler::BytecodeProfile& BlueprintDecompiler::BytecodeProfile::MapPrimitiveCast(
+	const uint8_t RawOpcode)
+{
+	Opcodes[RawOpcode] = { OpcodeSemantic::PrimitiveCast, EExprToken::EX_Max };
+	return *this;
+}
+
+BlueprintDecompiler::DisassemblyResult BlueprintDecompiler::Disassemble(
+	const std::span<const uint8_t> Script,
+	const BytecodeProfile& Profile)
+{
+	DisassemblyResult ResultValue;
+	ResultValue.ProfileId = Profile.Id;
+	ResultValue.InputSize = Script.size();
+
+	std::string ProfileError;
+	if (!ValidateProfile(Profile, ProfileError))
+	{
+		ResultValue.Status = DisassemblyStatus::Error;
+		ResultValue.FirstError = {
+			true,
+			0,
+			Profile.Id.empty() ? DisassemblyErrorCode::ProfileRequired : DisassemblyErrorCode::InvalidProfile,
+			std::move(ProfileError),
+		};
+		return ResultValue;
+	}
+	if (Script.size() > Profile.Limits.MaxInputBytes)
+	{
+		ResultValue.Status = DisassemblyStatus::Error;
+		ResultValue.FirstError = {
+			true,
+			0,
+			DisassemblyErrorCode::InputLimitExceeded,
+			"script exceeds profile input-size limit",
+		};
+		return ResultValue;
+	}
+
+	return BoundedParser(Script, Profile).Run();
+}
 
 std::string BlueprintDecompiler::DecompileBytes(const std::vector<uint8_t>& Script)
 {
-	if (Script.empty())
-		return "// Empty script\n";
-
-	BytecodeReader Reader(Script);
-	std::string Output;
-	int LineNum = 0;
-
-	while (Reader.HasMore())
-	{
-		if (Reader.PeekToken() == EExprToken::EX_EndOfScript)
-			break;
-
-		if (Reader.PeekToken() == EExprToken::EX_Nothing)
-		{
-			Reader.ReadToken();
-			continue;
-		}
-
-		const size_t Offset = Reader.GetPosition();
-		std::string Expr = ParseExpression(Reader, 0);
-
-		if (!Expr.empty())
-		{
-			Output += std::format("  {:04X}: {}\n", Offset, Expr);
-			LineNum++;
-		}
-
-		// Safety: prevent infinite loops
-		if (LineNum > 2000)
-		{
-			Output += "  // ... truncated (>2000 statements)\n";
-			break;
-		}
-	}
-
-	return Output;
+	(void)Script;
+	return std::string(ProfileRequiredText);
 }
-
-// ============================================================
-// Top-level: decompile a UEFunction
-// ============================================================
 
 BlueprintDecompiler::DecompileResult BlueprintDecompiler::Decompile(const UEFunction& Func)
 {
-	DecompileResult Result;
-	Result.FunctionName = Func.GetName();
-	Result.ClassName = Func.GetOuter().GetName();
-	Result.FlagsString = Func.StringifyFlags();
-	Result.ScriptSize = Func.GetScriptSize();
-
-	std::vector<uint8_t> Script = Func.GetScript();
-	Result.Pseudocode = DecompileBytes(Script);
-
-	return Result;
+	(void)Func;
+	DecompileResult ResultValue;
+	ResultValue.Pseudocode = std::string(ProfileRequiredText);
+	return ResultValue;
 }

@@ -191,13 +191,21 @@ The v1 command registry is explicit. Unknown operations return
 | `functions.handle.issue` | `{"index": int32}` | PostRender game-thread function/owner/path re-read |
 | `objects.property.read` | `{"object": object_handle, "type_snapshot_generation": uint53, "declaring_type_path": full_path, "property_name": exact_name, "array_index": 0..1023}` | Game-thread read from the exact object/type/reflection generation |
 | `call.invoke` | `{"target": object_handle, "function": function_handle, "type_snapshot_generation": uint53, "function_path": full_path, "arguments": {name: {kind, value}}}` | Single ProcessEvent call after exact game-thread identity/dependency revalidation |
+| `memory.raw.read` / `memory.raw.write` | canonical non-null hex address plus 1..4096 bytes | Checked worker memory access; data writes reject executable pages and verify/rollback from a preimage |
+| `memory.typed.read` / `memory.typed.write` | canonical address, strict scalar type, canonical string value for writes | Width/range checked scalar access without JavaScript-number narrowing |
+| `memory.pointer_chain.resolve` | canonical base plus at most 64 signed decimal offsets | Checked pointer dereference/addition with explicit failed step |
+| `watch.add/list/enable/remove/snapshot` | exact object handle/generations/property identity or bounded watch ID query | Generation-bound scheduler state; sampling runs under the shared frame budget |
+| `watch.events.drain` | `{"limit": 1..32}` | Explicit bounded pull; this is not a Pipe Event/Tauri Channel push contract |
+| `blueprint.bytecode` | exact FunctionHandle/path and context/Object/Type generations | Bounded Script capture; capability remains unavailable without a published capture witness |
+| `blueprint.decompile` | bytecode identity plus explicit `profile_id` | Fail-closed bounded disassembly; capability remains unavailable without a matching immutable profile |
 | `world.inspect` | `{}` | Worker-safe immutable current-world identity and exact Level/Actor counts |
 | `world.levels` | `{"cursor": null \| world_cursor, "limit": 1..128}` | Worker-safe immutable Level page |
 | `world.actors.list` | `{"cursor": null \| world_cursor, "limit": 1..128, "search": string \| null, "class_search": string \| null, "level_path": exact_path \| null}` | Worker-safe immutable Actor page with exact total matching |
 | `world.shortcuts` | `{}` | Current-World GameMode/GameState references plus explicit unavailable LocalPlayer/Pawn states |
 | `world.actor.get` | `{"actor": object_handle, "world_snapshot_generation": uint53}` | Exact immutable Actor/Level/root-component detail; transform state remains explicit |
 | `world.actor.components` | `{"actor": object_handle, "world_snapshot_generation": uint53, "cursor": null \| world_cursor, "limit": 1..128}` | Cursor-paged immutable components owned by the exact Actor |
-| `world.actor.transform.get` | `{"actor": object_handle, "world_snapshot_generation": uint53}` | One game-thread work reads exact RootComponent `Relative*` plus `bAbsolute*` fields from one stable byte witness; it does not claim computed `ComponentToWorld` |
+| `world.actor.transform.get` | `{"actor": object_handle, "world_snapshot_generation": uint53}` | One game-thread work separates stored RootComponent `Relative*`/`bAbsolute*` from optional computed Actor values obtained through exact reflected getters |
+| `world.actor.transform.update` | exact session/context/Object/Type/World generations + Actor handle + one strict update union | One game-thread ProcessEvent mutation; world/relative scale and world rotation only, while FHitResult-backed variants fail closed |
 | `types.classes.get` | `{"path": full_path}` | Worker-safe immutable class summary |
 | `types.classes.fields` | `{"path": full_path, "scope": "direct" \| "include_inherited", "cursor": null \| type_cursor, "limit": 1..128}` | Worker-safe immutable field page |
 | `types.classes.functions` | same member-page shape | Worker-safe immutable function page |
@@ -236,12 +244,27 @@ snapshot/codec dependencies on the witnessed game thread before decoding.
 `call.invoke` never accepts a target index, function short name, caller address, or
 `use_game_thread` option. Input and inout parameters are mandatory; output and return
 parameters cannot be supplied. Each argument envelope repeats the exact reflected kind.
-The initial R5.2 codec accepts bool, signed/unsigned integers as canonical decimal
-strings, finite float/double strings, and null or stable UObject handles. Core owns and
-zero-initializes the exact reflected parameter frame, revalidates target/function/object
-argument handles at execution, and serializes out/inout/return values. Static calls use
-the same command with an explicit CDO handle. Non-trivial UE value lifetimes and batch
-jobs are not silently approximated and remain unavailable.
+The codec accepts bool, signed/unsigned integers as canonical decimal strings, finite
+float/double strings, null or stable UObject handles, exact canonical FVector/FRotator,
+and descriptor-proven enum name/raw selections. Core owns the exact reflected parameter
+frame and a reverse-order destructor journal. Production UEnum entry-table evidence is
+not yet available, and non-trivial UE value lifetimes and batch commands are not silently
+approximated.
+
+Memory writes retain a bounded preimage, verify the committed bytes, and report rollback
+and protection-race outcomes. There is no executable/code-write fallback. Watch events
+are currently consumed only through `watch.events.drain`; the existing transport Event
+frame does not imply a Watch producer. Blueprint request schemas are registered, but Main
+publishes neither a Script layout witness nor a bytecode profile, so capability gating
+fails before capture/decompile.
+
+Hook and Dump command layers exist only behind unavailable capabilities at this
+checkpoint. A transport-neutral batch command/worker boundary exists, but no configured
+Core exact-call adapter or cross-layer route does; `call.batch` therefore advertises the
+independent `CALL_BATCH_ADAPTER_NOT_READY` capability reason. Legacy `call.static` is retired;
+static invocation uses `call.invoke` with an explicit CDO handle. Core contains bounded
+collector/coordinator primitives, but no ProcessEvent producer, generator worker, or
+batch worker bridge, so none may select a legacy implementation.
 
 World commands read only a `WorldSnapshot` whose session, context, ObjectSnapshot, and
 TypeSnapshot generations still match the active immutable dependencies. A world cursor
@@ -254,11 +277,13 @@ capped at 128 records and 4 MiB. Actor details and component pages require both 
 Actor handle and WorldSnapshot generation. Components are associated only through the
 witnessed Actor typed-outer relation, and `RootComponent` is read through its reflected
 object field. GameMode and GameState shortcuts are read from the exact current UWorld and
-must resolve back to an Actor in that World. LocalPlayer order still requires a validated
-`UGameInstance.LocalPlayers` array codec, so PlayerController and Pawn return explicit
-`unavailable` states rather than selecting the first global class match. Transform data and
-mutation remain behind the unavailable `world.mutate` capability until FVector/FRotator/LWC
-struct identity and a game-thread UE setter are implemented.
+must resolve back to an Actor in that World. PlayerController/Pawn are admitted only
+through the witnessed `UGameInstance.LocalPlayers[0]` chain and otherwise stay explicitly
+unavailable. Transform reads use exact canonical math descriptors and keep stored values
+separate from reflected-getter computed Actor values. `world.mutate` admits only the
+strict single-field reflected setter service. Location and relative rotation return
+stable lifetime-unavailable errors until an exact `FHitResult` construction/destruction
+profile exists; there is no raw memory or alternate setter fallback.
 
 The shared Rust types live in `protocol/rust`; the Host must deserialize pages with
 unknown-field rejection. `frontend/src-tauri/src/session/snapshot_cache.rs` validates

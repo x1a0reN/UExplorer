@@ -540,6 +540,98 @@ bool IsIntegerKind(const PropertyKind kind) noexcept
 	}
 }
 
+std::uint32_t ExactIntegerSize(const PropertyKind kind) noexcept
+{
+	switch (kind)
+	{
+	case PropertyKind::Int8:
+	case PropertyKind::UInt8: return 1;
+	case PropertyKind::Int16:
+	case PropertyKind::UInt16: return 2;
+	case PropertyKind::Int32:
+	case PropertyKind::UInt32: return 4;
+	case PropertyKind::Int64:
+	case PropertyKind::UInt64: return 8;
+	default: return 0;
+	}
+}
+
+bool IsSignedIntegerKind(const PropertyKind kind) noexcept
+{
+	return kind == PropertyKind::Int8
+		|| kind == PropertyKind::Int16
+		|| kind == PropertyKind::Int32
+		|| kind == PropertyKind::Int64;
+}
+
+bool IsEnumRawValueInRange(
+	const PropertyKind kind,
+	const std::uint64_t rawValue) noexcept
+{
+	switch (kind)
+	{
+	case PropertyKind::Int8:
+		return rawValue <= static_cast<std::uint64_t>((std::numeric_limits<std::int8_t>::max)())
+			|| rawValue >= static_cast<std::uint64_t>((std::numeric_limits<std::int8_t>::min)());
+	case PropertyKind::Int16:
+		return rawValue <= static_cast<std::uint64_t>((std::numeric_limits<std::int16_t>::max)())
+			|| rawValue >= static_cast<std::uint64_t>((std::numeric_limits<std::int16_t>::min)());
+	case PropertyKind::Int32:
+		return rawValue <= static_cast<std::uint64_t>((std::numeric_limits<std::int32_t>::max)())
+			|| rawValue >= static_cast<std::uint64_t>((std::numeric_limits<std::int32_t>::min)());
+	case PropertyKind::Int64: return true;
+	case PropertyKind::UInt8:
+		return rawValue <= (std::numeric_limits<std::uint8_t>::max)();
+	case PropertyKind::UInt16:
+		return rawValue <= (std::numeric_limits<std::uint16_t>::max)();
+	case PropertyKind::UInt32:
+		return rawValue <= (std::numeric_limits<std::uint32_t>::max)();
+	case PropertyKind::UInt64: return true;
+	default: return false;
+	}
+}
+
+bool IsDescriptorProvenEnumImpl(const PropertyDescriptor& descriptor)
+{
+	if (descriptor.Kind != PropertyKind::Enum
+		|| descriptor.TypeName.empty()
+		|| descriptor.TypeName.size() > kMaximumDescriptorTextBytes
+		|| !descriptor.Element
+		|| !IsIntegerKind(descriptor.Element->Kind)
+		|| descriptor.Size == 0
+		|| descriptor.Element->Size != descriptor.Size
+		|| ExactIntegerSize(descriptor.Element->Kind) != descriptor.Size
+		|| !HasNoNestedDescriptorMetadata(*descriptor.Element)
+		|| descriptor.Key
+		|| descriptor.Mapped
+		|| !descriptor.Fields.empty()
+		|| descriptor.EnumEntries.empty()
+		|| descriptor.EnumEntries.size() > kMaximumEnumEntries
+		|| descriptor.BoolByteOffset != 0
+		|| descriptor.BoolMask != 0
+		|| descriptor.ElementStride != 0
+		|| descriptor.ElementValueOffset != 0
+		|| descriptor.MapKeyOffset != 0
+		|| descriptor.MapValueOffset != 0)
+	{
+		return false;
+	}
+	std::set<std::string_view> names;
+	std::set<std::uint64_t> values;
+	for (const PropertyEnumEntry& entry : descriptor.EnumEntries)
+	{
+		if (entry.Name.empty()
+			|| entry.Name.size() > kMaximumDescriptorTextBytes
+			|| !names.emplace(entry.Name).second
+			|| !values.emplace(entry.RawValue).second
+			|| !IsEnumRawValueInRange(descriptor.Element->Kind, entry.RawValue))
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
 bool IsRecursiveKind(const PropertyKind kind) noexcept
 {
 	switch (kind)
@@ -1754,6 +1846,18 @@ CanonicalMathStructKind ClassifyCanonicalMathStruct(
 	return ClassifyCanonicalMathStructImpl(descriptor);
 }
 
+bool IsDescriptorProvenEnum(const PropertyDescriptor& descriptor) noexcept
+{
+	try
+	{
+		return IsDescriptorProvenEnumImpl(descriptor);
+	}
+	catch (...)
+	{
+		return false;
+	}
+}
+
 const char* ToString(const PropertyValueState state) noexcept
 {
 	switch (state)
@@ -1926,9 +2030,11 @@ bool PropertyCodec::SupportsInput(const PropertyKind kind) const noexcept
 
 bool PropertyCodec::SupportsInput(const PropertyDescriptor& descriptor) const noexcept
 {
-	return SupportsInput(descriptor.Kind)
-		|| (m_Configured
-			&& ClassifyCanonicalMathStruct(descriptor) != CanonicalMathStructKind::None);
+	return m_Configured
+		&& ((descriptor.Kind == PropertyKind::Enum
+			&& IsDescriptorProvenEnum(descriptor))
+		|| (descriptor.Kind != PropertyKind::Enum && SupportsInput(descriptor.Kind))
+		|| ClassifyCanonicalMathStruct(descriptor) != CanonicalMathStructKind::None);
 }
 
 PropertyEncodeResult PropertyCodec::EncodeOwned(
@@ -1946,6 +2052,13 @@ PropertyEncodeResult PropertyCodec::EncodeOwned(
 			return failure(
 				PropertyEncodeError::CodecNotConfigured,
 				"No immutable property codec profile has passed validation");
+		}
+		if (descriptor.Kind == PropertyKind::Enum
+			&& !IsDescriptorProvenEnum(descriptor))
+		{
+			return failure(
+				PropertyEncodeError::DescriptorInvalid,
+				"The enum descriptor does not prove an exact table and width-correct integer backing property");
 		}
 		if (!SupportsInput(descriptor))
 		{
@@ -2118,6 +2231,84 @@ PropertyEncodeResult PropertyCodec::EncodeOwned(
 			}
 			copyValue(encoded);
 			return {};
+		}
+		case PropertyKind::Enum:
+		{
+			const auto* input = std::get_if<PropertyEnumInput>(&value);
+			if (!input || input->TypeName != descriptor.TypeName)
+			{
+				return failure(
+					PropertyEncodeError::ValueTypeMismatch,
+					"The enum input type must match the exact reflected enum type");
+			}
+			std::uint64_t rawValue = 0;
+			if (const auto* name = std::get_if<std::string>(&input->Selection))
+			{
+				const auto entry = std::ranges::find_if(
+					descriptor.EnumEntries,
+					[&name](const PropertyEnumEntry& candidate) {
+						return candidate.Name == *name;
+					});
+				if (entry == descriptor.EnumEntries.end())
+				{
+					return failure(
+						PropertyEncodeError::ValueOutOfRange,
+						"The enum name is absent from the exact reflected enum table");
+				}
+				rawValue = entry->RawValue;
+			}
+			else if (const auto* signedValue = std::get_if<std::int64_t>(&input->Selection))
+			{
+				if (!IsSignedIntegerKind(descriptor.Element->Kind))
+				{
+					return failure(
+						PropertyEncodeError::ValueTypeMismatch,
+						"The enum raw value must match its unsigned reflected backing kind");
+				}
+				rawValue = static_cast<std::uint64_t>(*signedValue);
+				if (!IsEnumRawValueInRange(descriptor.Element->Kind, rawValue))
+				{
+					return failure(
+						PropertyEncodeError::ValueOutOfRange,
+						"The enum raw value is outside its reflected signed width");
+				}
+			}
+			else if (const auto* unsignedValue = std::get_if<std::uint64_t>(&input->Selection))
+			{
+				if (IsSignedIntegerKind(descriptor.Element->Kind))
+				{
+					return failure(
+						PropertyEncodeError::ValueTypeMismatch,
+						"The enum raw value must match its signed reflected backing kind");
+				}
+				rawValue = *unsignedValue;
+				if (!IsEnumRawValueInRange(descriptor.Element->Kind, rawValue))
+				{
+					return failure(
+						PropertyEncodeError::ValueOutOfRange,
+						"The enum raw value is outside its reflected unsigned width");
+				}
+			}
+			else
+			{
+				return failure(
+					PropertyEncodeError::ValueTypeMismatch,
+					"The enum input must select an exact reflected name or raw value");
+			}
+			if (std::ranges::none_of(
+				descriptor.EnumEntries,
+				[rawValue](const PropertyEnumEntry& candidate) {
+					return candidate.RawValue == rawValue;
+				}))
+			{
+				return failure(
+					PropertyEncodeError::ValueOutOfRange,
+					"The enum raw value is absent from the exact reflected enum table");
+			}
+			const PropertyInputValue underlying = IsSignedIntegerKind(descriptor.Element->Kind)
+				? PropertyInputValue{std::bit_cast<std::int64_t>(rawValue)}
+				: PropertyInputValue{rawValue};
+			return EncodeOwned(destination, *descriptor.Element, underlying);
 		}
 		case PropertyKind::Struct:
 		{

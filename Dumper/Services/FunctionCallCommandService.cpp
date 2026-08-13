@@ -346,7 +346,9 @@ bool ParseInputValue(
 	const Runtime::CanonicalMathStructKind mathKind = property.Descriptor
 		? Runtime::ClassifyCanonicalMathStruct(*property.Descriptor)
 		: Runtime::CanonicalMathStructKind::None;
-	if (mathKind == Runtime::CanonicalMathStructKind::None)
+	const bool enumInput = property.Descriptor
+		&& Runtime::IsDescriptorProvenEnum(*property.Descriptor);
+	if (mathKind == Runtime::CanonicalMathStructKind::None && !enumInput)
 	{
 		if (encoded.size() != 2)
 		{
@@ -364,8 +366,12 @@ bool ParseInputValue(
 		|| property.Descriptor->TypeName != property.TypeName)
 	{
 		error = Error(
-			"CALL_ARGUMENT_STRUCT_TYPE_MISMATCH",
-			"Canonical struct arguments must contain the exact reflected type_name",
+			enumInput
+				? "CALL_ARGUMENT_ENUM_TYPE_MISMATCH"
+				: "CALL_ARGUMENT_STRUCT_TYPE_MISMATCH",
+			enumInput
+				? "Enum arguments must contain the exact reflected type_name"
+				: "Canonical struct arguments must contain the exact reflected type_name",
 			{{"parameter", property.Name}, {"expected_type_name", property.TypeName}});
 		return false;
 	}
@@ -428,6 +434,101 @@ bool ParseInputValue(
 			return false;
 		}
 		value = Runtime::PropertyObjectReference{.Handle = std::move(handle)};
+		return true;
+	}
+	if (enumInput)
+	{
+		if (!raw.is_object() || raw.size() != 1
+			|| (!raw.contains("name") && !raw.contains("raw")))
+		{
+			error = Error(
+				"CALL_ARGUMENT_ENUM_VALUE_INVALID",
+				"Enum values must contain exactly one name or raw selector",
+				{{"parameter", property.Name}, {"type_name", property.TypeName}});
+			return false;
+		}
+		Runtime::PropertyEnumInput input{.TypeName = property.TypeName};
+		if (raw.contains("name"))
+		{
+			if (!raw.at("name").is_string()
+				|| !IsBoundedText(raw.at("name").get_ref<const std::string&>(), kMaxPathBytes))
+			{
+				error = Error(
+					"CALL_ARGUMENT_ENUM_NAME_INVALID",
+					"The enum name must be a bounded non-empty string",
+					{{"parameter", property.Name}});
+				return false;
+			}
+			const std::string name = raw.at("name").get<std::string>();
+			if (std::none_of(
+				property.Descriptor->EnumEntries.begin(),
+				property.Descriptor->EnumEntries.end(),
+				[&name](const Runtime::PropertyEnumEntry& entry) {
+					return entry.Name == name;
+				}))
+			{
+				error = Error(
+					"CALL_ARGUMENT_ENUM_NAME_UNKNOWN",
+					"The enum name is absent from the exact reflected enum table",
+					{{"parameter", property.Name}, {"name", name}});
+				return false;
+			}
+			input.Selection = name;
+		}
+		else if (IsSignedKind(property.Descriptor->Element->Kind))
+		{
+			std::int64_t parsed = 0;
+			if (!TrySignedDecimal(raw.at("raw"), parsed))
+			{
+				error = Error(
+					"CALL_ARGUMENT_ENUM_RAW_INVALID",
+					"The enum raw value must be a canonical signed decimal string",
+					{{"parameter", property.Name}});
+				return false;
+			}
+			const std::uint64_t canonical = static_cast<std::uint64_t>(parsed);
+			if (std::none_of(
+				property.Descriptor->EnumEntries.begin(),
+				property.Descriptor->EnumEntries.end(),
+				[canonical](const Runtime::PropertyEnumEntry& entry) {
+					return entry.RawValue == canonical;
+				}))
+			{
+				error = Error(
+					"CALL_ARGUMENT_ENUM_RAW_UNKNOWN",
+					"The enum raw value is absent from the exact reflected enum table",
+					{{"parameter", property.Name}, {"raw", raw.at("raw")}});
+				return false;
+			}
+			input.Selection = parsed;
+		}
+		else
+		{
+			std::uint64_t parsed = 0;
+			if (!TryUnsignedDecimal(raw.at("raw"), parsed))
+			{
+				error = Error(
+					"CALL_ARGUMENT_ENUM_RAW_INVALID",
+					"The enum raw value must be a canonical unsigned decimal string",
+					{{"parameter", property.Name}});
+				return false;
+			}
+			if (std::none_of(
+				property.Descriptor->EnumEntries.begin(),
+				property.Descriptor->EnumEntries.end(),
+				[parsed](const Runtime::PropertyEnumEntry& entry) {
+					return entry.RawValue == parsed;
+				}))
+			{
+				error = Error(
+					"CALL_ARGUMENT_ENUM_RAW_UNKNOWN",
+					"The enum raw value is absent from the exact reflected enum table",
+					{{"parameter", property.Name}, {"raw", raw.at("raw")}});
+				return false;
+			}
+			input.Selection = parsed;
+		}
+		value = std::move(input);
 		return true;
 	}
 	if (mathKind != Runtime::CanonicalMathStructKind::None)

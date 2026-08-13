@@ -44,10 +44,10 @@ injection matrix are implemented. React domain calls now use one Tauri
 `domain_request` command and event consumers use caller-owned Tauri channels. The Host
 operation registry serves status, immutable-snapshot object/type queries, exact type
 details, stable-handle property reads, the bounded single-target `call.invoke`,
-immutable current-world/level/actor queries, and exact-handle stored/computed Actor
-transform reads;
-domains not yet implemented return a stable capability error instead of reaching
-legacy code.
+immutable current-world/level/actor queries, exact-handle stored/computed Actor
+transform reads, strict Memory commands, bounded Watch commands, and capability-gated
+Blueprint commands. Domains without a published runtime producer, worker, or witness
+return a stable capability error instead of reaching legacy code.
 Baseline Core initialization is also separated from optional reflection/generator
 activation: unknown property, FText, GWorld, or generator layouts cannot make the pipe
 runtime pretend to be unsupported or execute ProcessEvent from the startup worker.
@@ -93,8 +93,9 @@ fixed-capacity worker reclamation with explicit backpressure. The production
 captures complete structural type/function coverage through stable handles and
 SafeMemory, incrementally revalidates every live evidence record, and is attached by
 Main to the same scheduler. It publishes witnessed super/CDO, direct property/parameter,
-flat property descriptors, and native-exec structure while explicitly marking nested
-descriptor graphs, enum layouts, and bytecode unavailable. A worker-only `TypeCommandService` now exposes exact-path
+flat property descriptors, enum identity/backing candidates, and native-exec structure
+while keeping enum entry tables and bytecode unavailable until their own immutable
+witnesses exist. A worker-only `TypeCommandService` now exposes exact-path
 Class/Struct/Enum/Function detail, explicitly scoped direct/inherited member pages,
 direct-child hierarchy pages, and CDO identity through Named Pipe. It reads only the
 current immutable type snapshot: pages are capped at 128 records, cursors bind the
@@ -117,8 +118,11 @@ values with exact semantic fields and float/double width. The witnessed game-thr
 target, function owner/path/signature, and every object argument immediately before
 ProcessEvent, then decodes out/inout/return fields from the same owned frame. Static
 calls use an explicit CDO handle; the protocol has no caller-controlled thread switch.
-Arbitrary/non-trivial FString/container/struct lifetimes, enum input, batch jobs, and real UE
-round-trip evidence remain unavailable.
+Descriptor-proven enum name/raw input and output decode plus an owned reverse-order
+destructor journal are implemented. Production UEnum entry-table evidence is still
+missing, so real enum descriptors remain unavailable; non-trivial FString/container/
+arbitrary-struct lifetimes, batch commands, and real UE round-trip evidence also remain
+unavailable.
 `WorldSnapshotCapture` uses the exact immutable Object/Type generations to pre-index
 Actor, Level, and ActorComponent candidates off-thread. Under the shared PostRender budget it resolves
 the witnessed `GWorld` slot, follows the same typed-outer semantics used by
@@ -153,8 +157,14 @@ separates float/double stored relative/absolute-world semantics from the reflect
 computed Actor world transform. The same UE 4.21-5.7 sources expose
 `SetActorScale3D(FVector)` and `SetRelativeScale3D(FVector)` without complex outputs, so
 those exact reflected functions now fit the canonical-struct `call.invoke` contract.
-Full transform mutation remains unavailable: location/rotation setters include an
-`FHitResult&` output whose lifetime is still closed. This is implemented code, not a
+`world.actor.transform.update` accepts exactly one field per request and never presents
+multiple ProcessEvent calls as atomic. Exact `SetActorScale3D`, `SetRelativeScale3D`, and
+world `K2_SetActorRotation` signatures are admitted only after the same
+session/context/Object/Type/World generations and Actor/RootComponent/function handles
+are fixed and revalidated around ProcessEvent. Location and relative rotation remain
+fail-closed because their reflected setters contain an `FHitResult&` output whose
+lifetime is not witnessed. There is no direct memory-write or setter fallback, and a
+post-invoke identity failure reports an unknown mutation state. This is implemented code, not a
 target-runtime validation: `D:\Steam\steamapps\common\Wandering Sword` still has no
 launchable game `.exe`, no real UE getter/ProcessEvent round-trip has run, and every engine
 profile therefore remains `Not supported`.
@@ -184,6 +194,25 @@ profile uses the source-backed 16-byte ScriptArray header for FString and bounde
 decoding. No Unreal Engine version
 is currently claimed as verified because the required target fixtures have not yet been
 added. A successful build or synthetic fixture does not establish target runtime safety.
+
+### R5 code checkpoint (2026-08-13)
+
+- Memory now has strict bounded commands, preimage-backed verified writes, bounded
+  rollback, protection-race detection, and no executable-page fallback.
+- Watch is generation-bound and budgeted, with per-subscription pinned immutable
+  bindings, bounded history/events, a visible snapshot/history UI, and explicit
+  `watch.events.drain`; Named Pipe/Tauri push is not implemented.
+- Blueprint has explicit-profile bounded capture/disassembly code, but no published
+  Script-layout/profile witness, so both capabilities remain unavailable.
+- Hook collector/commands, Dump coordinator/commands, and the call-batch coordinator plus
+  strict command/adapter boundary are ownership primitives only. No ProcessEvent producer,
+  generator worker, or configured exact-call batch adapter/route exists, so these domains
+  remain unavailable.
+- World mutation is a strict single-field reflected command for world/relative scale and
+  world rotation. Location/relative rotation remain unavailable until `FHitResult` has a
+  witnessed construction/destruction profile.
+- No new target UE or Wandering Sword fixture was run. Every profile remains
+  `Not supported`.
 
 ## Repository layout
 

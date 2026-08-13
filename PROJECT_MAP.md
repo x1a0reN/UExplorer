@@ -25,7 +25,7 @@ UExplorer 是一个面向 Unreal Engine 的 **SDK Dump + 实时游戏内省工�
 └──────────────────────────────────────────────┘
 ```
 
-当前分支已完成 R4 原子通信切换并进入 R5.3。React -> Tauri `domain_request` -> Rust `DomainService` -> PID-scoped Named Pipe -> `CoreCommandService` 是唯一桌面主链路；release Core 不编译旧 HTTP/API，也不链接 WinSock。Object/Type 集合由 Host immutable SnapshotIndex 查询，详情由 `TypeCommandService` 读取 exact TypeSnapshot；`ObjectPropertyCommandService` 和 `FunctionCallCommandService` 分别执行稳定句柄属性读取与单目标函数调用。生产类型源现可冻结 flat descriptor、一层 `Array<flat>` descriptor，以及 exact `/Script/CoreUObject.Vector`/`Rotator` 的 float/double 三字段 descriptor；PropertyCodec 对 struct 先复制稳定整值再递归解码，并只把这两个 descriptor-proven math struct 纳入 owned ParamFrame 输入/输出生命周期。只读 World 链路由 `WorldSnapshotCapture` 构建并复核 immutable snapshot，`WorldCommandService` 提供 worker-only query；`WorldTransformCommandService` 以一个 owned game-thread work 从同一稳定 byte witness 读取 RootComponent 三个 `Relative*` 和三个 `bAbsolute*`，并在 witness 内通过 exact reflected Actor getter 与 owned return frame取得 computed world location/rotation/scale。WorldBrowser 通过单个 `world.actor.transform.get` 显式分开展示 stored storage-space 语义与 computed Actor world transform；getter capability/metadata 缺失时 computed 部分明确 unavailable。无复杂 output 的 scale setter 可经 exact `call.invoke` 执行；完整 transform setter、任意 Struct/复杂生命周期参数、batch job、Memory、Watch/Hook/Blueprint/Dump 仍未完成。`D:\Steam\steamapps\common\Wandering Sword` 仍没有可启动游戏 `.exe`，因此上述 computed 路径只有代码证据，没有真实 UE round-trip；真实 profile、streaming、GC、Hook、目标规模和卸载证据仍以 `docs/SUPPORT_MATRIX.md` 为准，所有 profile 保持 `Not supported`。
+当前分支已完成 R4 原子通信切换并继续 R5 领域实现。唯一桌面主链路仍是 React -> Tauri `domain_request` -> Rust `DomainService` -> PID-scoped Named Pipe -> `CoreCommandService`。除既有 Object/Type/property/call/World 与 stored/computed transform 外，当前代码检查点已加入 strict Memory、owned-binding Watch pull、descriptor-proven enum/destructor journal、explicit-profile Blueprint capture/disassembly、单字段 reflected World transform mutation，以及 Hook collector/command、Dump coordinator/command、call.batch coordinator + strict command/adapter boundary。World mutation 只开放 world/relative scale 和 world rotation；其余字段稳定拒绝。后三类尚缺 ProcessEvent producer、generator worker 或已装配的 exact-call adapter/route；Blueprint 尚缺生产 Script/profile witness；生产 UEnum entry table 也未见证，因此对应 capability 必须保持 false/unavailable。`D:\Steam\steamapps\common\Wandering Sword` 仍没有可启动游戏 `.exe`，所有新增路径都只有代码/合成边界证据，所有 profile 保持 `Not supported`。
 
 ---
 
@@ -60,7 +60,13 @@ UExplorer/
 │   │   ├── EngineFacade.h/.cpp       #   session/context/identity 的单一领域入口
 │   │   ├── EngineNameCodec.h/.cpp    #   immutable layout + SafeMemory 的严格 FName 解码
 │   │   ├── PropertyCodec.h/.cpp      #   显式状态、ScriptArray、struct 稳定快照与 canonical math owned encoder
-│   │   ├── ParamFrame.h/.cpp         #   ProcessEvent owned frame、scalar/canonical-math lifetime 与精确字段边界
+│   │   ├── ParamFrame.h/.cpp         #   ProcessEvent owned frame、enum/math codec 与逆序 destructor journal
+│   │   ├── WatchScheduler.*          #   generation-bound 有界逐帧采样、history/event/drop 状态
+│   │   ├── HookEventCollector.*      #   预分配有界热路径 collector；尚无 ProcessEvent producer
+│   │   ├── DumpJobCoordinator.*      #   single-active owned job/deadline/cancel；尚无 generator worker
+│   │   ├── FunctionCallBatchCoordinator.* # bounded batch/deadline/cancel；尚无 command adapter
+│   │   ├── BlueprintBytecodeCapture.* # exact generation + explicit Script layout bounded capture
+│   │   ├── BlueprintBytecodeEvidence.* # immutable bytecode/profile publication boundaries
 │   │   ├── ReflectionLayout.h/.cpp   #   U/FProperty 字段 witness、尺寸边界与分阶段原子 snapshot
 │   │   ├── ReflectionLayoutCapture.* #   单条 evidence/预检预算、依赖复核、同线程发布与 drain owner
 │   │   ├── ObjectSnapshotReflectionCandidateSource.* # snapshot + SafeMemory 的生产反射候选源
@@ -87,8 +93,14 @@ UExplorer/
 │   │   ├── TypeCommandService.h/.cpp #   worker-only exact-path immutable TypeSnapshot 详情/分页
 │   │   ├── ObjectPropertyCommandService.* # exact Handle/generation 的游戏线程属性读取
 │   │   ├── FunctionCallCommandService.* # exact Object/Function Handle 的单目标 ProcessEvent 调用
+│   │   ├── MemoryCommandService.*    #   strict bounded raw/typed/pointer-chain command
+│   │   ├── WatchCommandService.*     #   watch CRUD/snapshot/显式 pull drain
+│   │   ├── BlueprintCommandService.* #   exact function/generation bytecode/decompile gate
+│   │   ├── HookCommandService.*      #   immutable enabled state/log command；runtime capability false
+│   │   ├── DumpCommandService.*      #   strict job command；无 worker 时 start fail closed
 │   │   ├── WorldCommandService.*     #   worker-only World inspect/detail/shortcut 与 Actor-bound cursor query
 │   │   ├── WorldTransformCommandService.* # game-thread same-witness stored + reflected-getter computed transform read
+│   │   ├── WorldMutationCommandService.* # 单字段 exact reflected setter 与调用前后 identity revalidation
 │   │   └── CoreStatusDiagnostics.*   #   只读诊断源
 │   ├── IPC/                           ★ Core Named Pipe RPC transport
 │   │   ├── Protocol.h                #   24-byte framing/有界协商 decoder/limits
@@ -571,8 +583,8 @@ Functions.tsx (四合一)
   ├─ types.functions.get            exact full path + immutable FunctionHandle
   ├─ call.invoke                    exact target/function handle + owned ParamFrame
   ├─ static call target             types.classes.cdo -> explicit CDO handle
-  ├─ hook events                    filtered Tauri Channel
-  └─ batch/Hook/Blueprint operation -> R5 capability gate
+  ├─ blueprint.bytecode/decompile   exact FunctionHandle/generations；缺 profile 时 unavailable
+  └─ batch/Hook                     capability gate（只有 coordinator/collector/command 原语）
 
 WorldBrowser.tsx
   ├─ world.inspect / world.levels / world.actors.list  immutable WorldSnapshot + cursor
@@ -581,14 +593,14 @@ WorldBrowser.tsx
   ├─ world.actor.components           Actor-bound cursor page + explicit load-more
   ├─ world.shortcuts                  exact UWorld relations + witnessed LocalPlayers[0] 链；缺 metadata 显式 unavailable
   ├─ world.actor.transform.get         一个 owned game-thread work 读取 Relative* + bAbsolute*
-  └─ transform update -> world.mutate capability gate
+  └─ world.actor.transform.update       单字段 exact reflected setter；无 raw fallback
 
 Memory.tsx
-  ├─ watch events -> filtered Tauri Channel
-  └─ Memory/Watch operation -> R5 capability gate
+  ├─ memory.raw/typed/pointer_chain strict bounded Core command
+  └─ Watch CRUD/snapshot/events.drain -> bounded scheduler + explicit pull
 
 SDKDump.tsx
-  └─ Dump operation -> R5 capability gate
+  └─ Dump operation -> capability gate（command/coordinator 存在，无 generator worker）
 
 Settings.tsx
   ├─ updateSettings()         本地 UI preference
@@ -606,7 +618,8 @@ Core bounded Event writer
   -> React page-local reconciliation
 ```
 
-Watch/Hook producer 尚未在 R5 开放，因此“通道存在”不等于这些领域功能可用。
+Watch 当前只实现显式 pull drain；Hook 尚无 ProcessEvent producer。因此“通道存在”
+不等于 Watch/Hook push 功能可用。
 
 ---
 
@@ -855,7 +868,7 @@ Rust `DomainService` 的显式 operation registry 为准。
 | R2 CoreRuntime/能力模型 | **实现阶段完成** | Runtime、Context、Capability、Handle、Snapshot、SafeMemory |
 | R3 Named Pipe/Rust Host | **实现阶段完成** | 严格 IPC、SessionManager、EventHub、注入与跨语言 fixture |
 | R4 通信原子切换 | **已完成** | React 只走 Tauri；Core release 只走 Named Pipe，无网络栈 |
-| R5 领域正确性 | **当前阶段（R5.3）** | Property read、单目标 Call、单层 Array、exact FVector/FRotator descriptor + owned input/output、World 查询与 same-work stored/reflected-getter computed Actor transform 已接入；真实 UE fixture、完整 transform setter、Memory/Watch/Hook/Blueprint/Dump 待办 |
+| R5 领域正确性 | **当前阶段** | Object/Type/property/call/World；strict Memory；bounded Watch pull；enum/destructor journal；explicit-profile Blueprint；单字段 reflected transform setter；Hook/Dump/batch ownership 原语已写。生产 witness/producer/worker/adapter、FHitResult-backed setter和真实 UE fixture待办 |
 | R6 前端状态重构 | **未开始** | session store、query lifecycle、BigInt 地址、能力驱动 UI |
 | R7 发布硬化 | **未开始** | UE fixture、性能/压力、卸载、发布与文档门禁 |
 

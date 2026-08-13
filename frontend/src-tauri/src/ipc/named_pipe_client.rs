@@ -787,6 +787,12 @@ impl WorkerState {
                     let _ = started.send(Err(reported));
                     return Err(error);
                 }
+                let sent_at_us = self.now_us();
+                if let Err(error) = self.session.mark_request_sent(frame.request_id, sent_at_us) {
+                    let error: CoreRpcClientError = error.into();
+                    let _ = started.send(Err(error.clone()));
+                    return Err(error);
+                }
                 self.requests.insert(frame.request_id, response);
                 let _ = started.send(Ok(frame.request_id));
             }

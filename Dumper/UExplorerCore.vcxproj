@@ -120,7 +120,11 @@
     <ClCompile Include="Settings.cpp" />
     <!-- Runtime -->
 	<ClCompile Include="IPC\NamedPipeRpcServer.cpp" />
+	<ClCompile Include="Runtime\BlueprintBytecodeCapture.cpp" />
+	<ClCompile Include="Runtime\BlueprintBytecodeEvidence.cpp" />
 	<ClCompile Include="Runtime\CoreSession.cpp" />
+	<ClCompile Include="Runtime\DumpJobCoordinator.cpp" />
+	<ClCompile Include="Runtime\FunctionCallBatchCoordinator.cpp" />
 	<ClCompile Include="Runtime\EngineFacade.cpp" />
 	<ClCompile Include="Runtime\EngineNameCodec.cpp" />
 	<ClCompile Include="Runtime\EngineVersionProbe.cpp" />
@@ -130,6 +134,7 @@
 	<ClCompile Include="Runtime\FUObjectItemLayout.cpp" />
 	<ClCompile Include="Runtime\GameThreadFrameScheduler.cpp" />
 	<ClCompile Include="Runtime\GameThreadExecutor.cpp" />
+	<ClCompile Include="Runtime\HookEventCollector.cpp" />
 	<ClCompile Include="Runtime\ObjectArrayIdentitySource.cpp" />
 	<ClCompile Include="Runtime\ObjectArraySnapshotSource.cpp" />
 	<ClCompile Include="Runtime\ObjectSnapshotReflectionCandidateSource.cpp" />
@@ -142,17 +147,25 @@
 	<ClCompile Include="Runtime\ReflectionLayoutCapture.cpp" />
 	<ClCompile Include="Runtime\TypeSnapshot.cpp" />
 	<ClCompile Include="Runtime\TypeSnapshotCapture.cpp" />
+	<ClCompile Include="Runtime\WatchScheduler.cpp" />
 	<ClCompile Include="Runtime\WorldSnapshot.cpp" />
 	<ClCompile Include="Runtime\WorldSnapshotCapture.cpp" />
     <ClCompile Include="Runtime\SafeMemory.cpp" />
     <ClCompile Include="Runtime\VTableHook.cpp" />
 	<!-- Domain services -->
+	<ClCompile Include="Services\BlueprintCommandService.cpp" />
 	<ClCompile Include="Services\CoreCommandService.cpp" />
 	<ClCompile Include="Services\CoreStatusDiagnostics.cpp" />
+	<ClCompile Include="Services\DumpCommandService.cpp" />
+	<ClCompile Include="Services\FunctionCallBatchCommandService.cpp" />
 	<ClCompile Include="Services\FunctionCallCommandService.cpp" />
+	<ClCompile Include="Services\HookCommandService.cpp" />
+	<ClCompile Include="Services\MemoryCommandService.cpp" />
 	<ClCompile Include="Services\ObjectPropertyCommandService.cpp" />
 	<ClCompile Include="Services\TypeCommandService.cpp" />
+	<ClCompile Include="Services\WatchCommandService.cpp" />
 	<ClCompile Include="Services\WorldCommandService.cpp" />
+	<ClCompile Include="Services\WorldMutationCommandService.cpp" />
 	<ClCompile Include="Services\WorldTransformCommandService.cpp" />
     <!-- Temporarily exclude zstd.c due to VS2026 STL compatibility issue -->
     <!-- <ClCompile Include="Utils\Compression\zstd.c" /> -->
@@ -163,7 +176,7 @@
   <!-- Header Files -->
   <ItemGroup>
     <!-- Engine Headers -->
-    <ClInclude Include="Engine\Public\Blueprint\BlueprintDecompiler.h" />
+	<ClInclude Include="Engine\Public\Blueprint\BlueprintDecompiler.h" />
     <ClInclude Include="Engine\Public\Blueprint\EExprToken.h" />
 	<ClInclude Include="Engine\Public\OffsetFinder\OffsetDiscovery.h" />
     <ClInclude Include="Engine\Public\OffsetFinder\OffsetFinder.h" />
@@ -209,14 +222,18 @@
     <ClInclude Include="Utils\Encoding\UtfN.hpp" />
     <ClInclude Include="Utils\Json\json.hpp" />
     <ClInclude Include="Utils\Utils.h" />
-    <ClInclude Include="IPC\NamedPipeRpcServer.h" />
-    <ClInclude Include="IPC\Protocol.h" />
-    <ClInclude Include="Runtime\BoundedQueue.h" />
+	<ClInclude Include="IPC\NamedPipeRpcServer.h" />
+	<ClInclude Include="IPC\Protocol.h" />
+	<ClInclude Include="Runtime\BlueprintBytecodeCapture.h" />
+	<ClInclude Include="Runtime\BlueprintBytecodeEvidence.h" />
+	<ClInclude Include="Runtime\BoundedQueue.h" />
     <ClInclude Include="Runtime\CapabilityRegistry.h" />
     <ClInclude Include="Runtime\CoreCapabilities.h" />
     <ClInclude Include="Runtime\CoreRuntime.h" />
-    <ClInclude Include="Runtime\CoreRuntimeAccess.h" />
+	<ClInclude Include="Runtime\CoreRuntimeAccess.h" />
 	<ClInclude Include="Runtime\CoreSession.h" />
+	<ClInclude Include="Runtime\DumpJobCoordinator.h" />
+	<ClInclude Include="Runtime\FunctionCallBatchCoordinator.h" />
     <ClInclude Include="Runtime\CallbackBarrier.h" />
     <ClInclude Include="Runtime\EngineContext.h" />
     <ClInclude Include="Runtime\EngineContextCapture.h" />
@@ -228,6 +245,7 @@
 	<ClInclude Include="Runtime\FUObjectItemLayout.h" />
 	<ClInclude Include="Runtime\GameThreadFrameScheduler.h" />
 	<ClInclude Include="Runtime\GameThreadExecutor.h" />
+	<ClInclude Include="Runtime\HookEventCollector.h" />
 	<ClInclude Include="Runtime\ObjectArrayIdentitySource.h" />
 	<ClInclude Include="Runtime\ObjectArraySnapshotSource.h" />
 	<ClInclude Include="Runtime\ObjectSnapshotReflectionCandidateSource.h" />
@@ -243,18 +261,26 @@
 	<ClInclude Include="Runtime\TypeSnapshot.h" />
 	<ClInclude Include="Runtime\TypeSnapshotCapture.h" />
 	<ClInclude Include="Runtime\TypeMetadataContext.h" />
+	<ClInclude Include="Runtime\WatchScheduler.h" />
 	<ClInclude Include="Runtime\WorldSnapshot.h" />
 	<ClInclude Include="Runtime\WorldSnapshotCapture.h" />
     <ClInclude Include="Runtime\SafeMemory.h" />
     <ClInclude Include="Runtime\ShutdownCoordinator.h" />
     <ClInclude Include="Runtime\VTableHook.h" />
+	<ClInclude Include="Services\BlueprintCommandService.h" />
 	<ClInclude Include="Services\CoreCommandService.h" />
 	<ClInclude Include="Services\CoreCommandServiceAccess.h" />
 	<ClInclude Include="Services\CoreStatusDiagnostics.h" />
+	<ClInclude Include="Services\DumpCommandService.h" />
+	<ClInclude Include="Services\FunctionCallBatchCommandService.h" />
 	<ClInclude Include="Services\FunctionCallCommandService.h" />
+	<ClInclude Include="Services\HookCommandService.h" />
+	<ClInclude Include="Services\MemoryCommandService.h" />
 	<ClInclude Include="Services\ObjectPropertyCommandService.h" />
 	<ClInclude Include="Services\TypeCommandService.h" />
+	<ClInclude Include="Services\WatchCommandService.h" />
 	<ClInclude Include="Services\WorldCommandService.h" />
+	<ClInclude Include="Services\WorldMutationCommandService.h" />
 	<ClInclude Include="Services\WorldTransformCommandService.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

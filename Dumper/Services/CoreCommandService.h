@@ -15,12 +15,18 @@ namespace UExplorer::Runtime
 {
 class ObjectSnapshotReflectionCandidateSource;
 class ObjectSnapshotTypeCandidateSource;
+class WatchScheduler;
+class IBlueprintBytecodeCaptureSource;
+class IBlueprintBytecodeProfileSource;
 }
 
 namespace UExplorer::Services
 {
 
 using json = nlohmann::json;
+
+class DumpCommandService;
+class HookCommandService;
 
 struct CoreCommandRequest
 {
@@ -65,7 +71,12 @@ public:
 		Runtime::EngineFacade& engine,
 		ICoreStatusDiagnosticsSource& statusDiagnostics,
 		const Runtime::ObjectSnapshotReflectionCandidateSource* reflectionSource = nullptr,
-		const Runtime::ObjectSnapshotTypeCandidateSource* typeSource = nullptr);
+		const Runtime::ObjectSnapshotTypeCandidateSource* typeSource = nullptr,
+		Runtime::WatchScheduler* watchScheduler = nullptr,
+		Runtime::IBlueprintBytecodeCaptureSource* blueprintCaptureSource = nullptr,
+		const Runtime::IBlueprintBytecodeProfileSource* blueprintProfileSource = nullptr,
+		HookCommandService* hookCommandService = nullptr,
+		DumpCommandService* dumpCommandService = nullptr);
 
 	CoreCommandService(const CoreCommandService&) = delete;
 	CoreCommandService& operator=(const CoreCommandService&) = delete;
@@ -89,6 +100,14 @@ private:
 	CoreCommandResponse ExecuteWorldTransformRead(
 		const CoreCommandRequest& request,
 		const GameThreadQueuedCallback& onGameThreadQueued);
+	CoreCommandResponse ExecuteWorldTransformUpdate(
+		const CoreCommandRequest& request,
+		const GameThreadQueuedCallback& onGameThreadQueued);
+	CoreCommandResponse ExecuteMemoryCommand(const CoreCommandRequest& request);
+	CoreCommandResponse ExecuteWatchCommand(const CoreCommandRequest& request);
+	CoreCommandResponse ExecuteBlueprintCommand(const CoreCommandRequest& request);
+	CoreCommandResponse ExecuteHookCommand(const CoreCommandRequest& request);
+	CoreCommandResponse ExecuteDumpCommand(const CoreCommandRequest& request);
 	CoreCommandResponse ExecuteWorldCommand(const CoreCommandRequest& request);
 	CoreCommandResponse ExecuteHandleIssue(
 		const CoreCommandRequest& request,
@@ -111,6 +130,11 @@ private:
 	ICoreStatusDiagnosticsSource& m_StatusDiagnostics;
 	const Runtime::ObjectSnapshotReflectionCandidateSource* m_ReflectionSource = nullptr;
 	const Runtime::ObjectSnapshotTypeCandidateSource* m_TypeSource = nullptr;
+	Runtime::WatchScheduler* m_WatchScheduler = nullptr;
+	Runtime::IBlueprintBytecodeCaptureSource* m_BlueprintCaptureSource = nullptr;
+	const Runtime::IBlueprintBytecodeProfileSource* m_BlueprintProfileSource = nullptr;
+	HookCommandService* m_HookCommandService = nullptr;
+	DumpCommandService* m_DumpCommandService = nullptr;
 	std::string m_SessionId;
 	std::uint64_t m_ContextGeneration = 0;
 };

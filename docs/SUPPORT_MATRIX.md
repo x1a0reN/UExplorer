@@ -16,6 +16,15 @@ fails at compile time; there is no 32-bit runtime capability or fallback path.
 
 These assets are available for development, but none changes the support rows above:
 
+- The current R5 code checkpoint adds strict Memory commands, a bounded Watch scheduler
+  with pinned immutable subscription bindings and explicit pull drain, descriptor-proven
+  enum codecs and an owned destructor journal, explicit-profile bounded Blueprint
+  capture/disassembly, plus Hook/Dump/call-batch ownership and command-boundary primitives.
+  It has no target-process evidence for any of them. Production
+  UEnum and Blueprint layout/profile witnesses, the ProcessEvent Hook producer, generator
+  worker, and batch adapter are still missing, so no capability or profile support claim
+  follows from these source changes.
+
 - `D:\Projects\UnrealEngine` contains source trees for UE 4.21.2, 4.24.3,
   4.25.4, 4.26.2, 4.27.2, 5.0.3, 5.1.1, 5.2.1, 5.3.2, 5.4.4,
   5.6.1, and 5.7.4. Source is used to derive candidate layouts, version transitions,
@@ -144,7 +153,9 @@ validates and invokes the location/rotation/scale getters with three owned canon
 return frames before the final RootComponent and byte-range comparison. The response
 keeps stored relative fields/`bAbsolute*` semantics separate from the reflected-getter
 computed Actor world transform; unavailable getter metadata is reported explicitly.
-Canonical setter mutation and a real UE target round-trip remain pending.
+The code path now admits one exact reflected mutation at a time for world/relative scale
+or world rotation, with identity revalidation around ProcessEvent. FHitResult-backed
+location/relative-rotation setters and every real UE target round-trip remain pending.
 Rust/schema fixtures and React builds cover their side of this contract. The real
 cross-language process fixture does not yet publish a production TypeSnapshot, and no
 target-process reflection/type run exists, so this does not change any support row.

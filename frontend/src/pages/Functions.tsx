@@ -11,7 +11,7 @@ import api, {
   type StableObjectHandle,
 } from '../api';
 
-type FunctionTab = 'Info' | 'Parameters' | 'Call' | 'Hook' | 'Decompile';
+type FunctionTab = 'Info' | 'Parameters' | 'Call' | 'Hook' | 'Disassembly';
 type FlagTab = 'All' | 'Native' | 'Blueprint';
 type FunctionsViewMode = 'function' | 'hookManager';
 type CallMode = 'instance' | 'static';
@@ -90,6 +90,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
   const [bytecode, setBytecode] = useState('');
   const [decompiled, setDecompiled] = useState('');
   const [blueprintPath, setBlueprintPath] = useState('');
+  const [blueprintProfileId, setBlueprintProfileId] = useState('');
   const [decompileLoading, setDecompileLoading] = useState(false);
 
   const functionTabs = useMemo(
@@ -97,7 +98,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
       { id: 'Info' as FunctionTab, icon: Info },
       { id: 'Parameters' as FunctionTab, icon: List },
       { id: 'Call' as FunctionTab, icon: Play },
-      { id: 'Decompile' as FunctionTab, icon: TerminalSquare },
+      { id: 'Disassembly' as FunctionTab, icon: TerminalSquare },
     ],
     []
   );
@@ -352,6 +353,26 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
             argumentsByName[parameter.name] = { kind: 'object', value: objectRes.data.handle };
             break;
           }
+          case 'enum': {
+            if (raw.startsWith('name:') && raw.length > 5) {
+              argumentsByName[parameter.name] = {
+                kind: 'enum',
+                type_name: parameter.type_name,
+                value: { name: raw.slice(5) },
+              };
+              break;
+            }
+            const enumRaw = raw.startsWith('raw:') ? raw.slice(4) : '';
+            if (!/^(0|-?[1-9][0-9]*)$/.test(enumRaw)) {
+              throw new Error(`${parameter.name} must use name:ExactEnumName or raw:CanonicalInteger`);
+            }
+            argumentsByName[parameter.name] = {
+              kind: 'enum',
+              type_name: parameter.type_name,
+              value: { raw: enumRaw },
+            };
+            break;
+          }
           case 'struct': {
             const components = raw.split(',').map((component) => component.trim());
             if (components.length !== 3 || components.some((component) => component === '' || !Number.isFinite(Number(component)))) {
@@ -413,9 +434,9 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
   };
 
   const addHook = async () => {
-    if (!currentParts.functionPath) return;
+    if (!functionMeta) return;
     setHookBusy(true);
-    const res = await api.addHook(currentParts.functionPath);
+    const res = await api.addHook(functionMeta, { mode: 'fixed_metadata' }, false);
     setHookBusy(false);
     if (!res.success) {
       setDetailError(res.error || 'Failed to add hook');
@@ -465,28 +486,32 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
   };
 
   const loadDecompile = async () => {
-    if (!selected) return;
+    if (!selected || !functionMeta) return;
     setDecompileLoading(true);
     const path = blueprintPath.trim();
-    if (!path) {
-      const message = 'Blueprint metadata requires an exact function path';
+    if (!path || path !== functionMeta.full_path) {
+      const message = 'Blueprint metadata must use the selected exact FunctionHandle path';
       setBytecode(message);
       setDecompiled(message);
       setDecompileLoading(false);
       return;
     }
-    const [byteRes, decompileRes] = await Promise.all([
-      api.getBlueprintBytecodeByPath(path),
-      api.decompileBlueprintByPath(path),
-    ]);
+    const profileId = blueprintProfileId.trim();
+    const bytePromise = api.getBlueprintBytecode(functionMeta);
+    const decompilePromise = profileId
+      ? api.decompileBlueprint(functionMeta, profileId)
+      : Promise.resolve(null);
+    const [byteRes, decompileRes] = await Promise.all([bytePromise, decompilePromise]);
 
     if (byteRes.success && byteRes.data) {
-      setBytecode(byteRes.data.hex);
+      setBytecode(byteRes.data.bytecode);
     } else {
       setBytecode(byteRes.error || 'No bytecode');
     }
-    if (decompileRes.success && decompileRes.data) {
-      setDecompiled(decompileRes.data.pseudocode);
+    if (!decompileRes) {
+      setDecompiled('BYTECODE_PROFILE_REQUIRED: enter an exact witnessed profile ID');
+    } else if (decompileRes.success && decompileRes.data) {
+      setDecompiled(decompileRes.data.disassembly.pseudocode);
     } else {
       setDecompiled(decompileRes.error || 'No pseudocode');
     }
@@ -723,10 +748,10 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
                 </div>
 
                 <div className="max-h-[320px] overflow-auto border border-border-subtle rounded-xl p-3 bg-background-base space-y-1.5">
-                  {pagedHookLogs.map((entry, idx) => (
-                    <div key={`${entry.timestamp}-${idx}`} className="text-xs font-mono text-text-high border-b border-border-subtle pb-1.5 pt-1">
-                      <div className="text-text-low/60">{new Date(entry.timestamp).toLocaleTimeString()}</div>
-                      <div className="text-primary mt-0.5">{entry.function_name}</div>
+                  {pagedHookLogs.map((entry) => (
+                    <div key={entry.sequence} className="text-xs font-mono text-text-high border-b border-border-subtle pb-1.5 pt-1">
+                      <div className="text-text-low/60">#{entry.sequence} · {entry.drained_at_monotonic_us} us</div>
+                      <div className="text-primary mt-0.5">{entry.function_path}</div>
                     </div>
                   ))}
                   {pagedHookLogs.length === 0 && <div className="text-text-low text-xs font-display text-center py-4">{t('No hook logs')}</div>}
@@ -889,7 +914,9 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
                                         ? 'X, Y, Z'
                                         : p.type_name === '/Script/CoreUObject.Rotator'
                                           ? 'Pitch, Yaw, Roll'
-                                          : undefined
+                                          : p.kind === 'enum'
+                                            ? 'name:ExactEnumName or raw:0'
+                                            : undefined
                                     }
                                     onChange={(e) =>
                                       setParamInputs((prev) => ({
@@ -903,7 +930,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
                               ))}
 
                             <div className="text-[11px] text-text-low font-display">
-                              Scalar values use exact reflected kinds. Object inputs accept null or an object index.
+                              Scalar and enum values use exact reflected kinds. Enum inputs require name: or raw:; object inputs accept null or an object index.
                             </div>
 
                             <button
@@ -969,10 +996,10 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
                       </div>
 
                       <div className="max-h-[300px] overflow-auto border border-border-subtle rounded-xl p-3 bg-background-base space-y-1.5 custom-scrollbar">
-                        {hookLog.map((entry, idx) => (
-                          <div key={`${entry.timestamp}-${idx}`} className="text-xs font-mono text-text-high border-b border-border-subtle pb-1.5 pt-1">
-                            <div className="text-text-low/60">{new Date(entry.timestamp).toLocaleTimeString()}</div>
-                            <div className="text-primary mt-0.5">{entry.function_name}</div>
+                        {hookLog.map((entry) => (
+                          <div key={entry.sequence} className="text-xs font-mono text-text-high border-b border-border-subtle pb-1.5 pt-1">
+                            <div className="text-text-low/60">#{entry.sequence} · {entry.drained_at_monotonic_us} us</div>
+                            <div className="text-primary mt-0.5">{entry.function_path}</div>
                           </div>
                         ))}
                         {hookLog.length === 0 && <div className="text-text-low text-xs font-display text-center py-4">{t('No hook logs')}</div>}
@@ -980,7 +1007,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
                     </div>
                   )}
 
-                  {activeTab === 'Decompile' && (
+                  {activeTab === 'Disassembly' && (
                     <div className="bg-surface-dark border border-border-subtle rounded-xl p-6 space-y-4 shadow-sm">
                       <div className="space-y-1.5">
                         <div className="text-text-low text-[11px] font-bold uppercase tracking-widest font-display">{t('Function Path (e.g. Class.Function)')}</div>
@@ -992,13 +1019,23 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
                           className="w-full bg-background-base border border-border-subtle text-text-high text-[13px] font-mono rounded-lg px-3 py-2 outline-none focus:border-primary transition-colors placeholder:text-text-low/50"
                         />
                       </div>
+                      <div className="space-y-1.5">
+                        <div className="text-text-low text-[11px] font-bold uppercase tracking-widest font-display">{t('Witnessed Bytecode Profile ID')}</div>
+                        <input
+                          type="text"
+                          value={blueprintProfileId}
+                          onChange={(e) => setBlueprintProfileId(e.target.value)}
+                          placeholder={t('Required only for strict disassembly')}
+                          className="w-full bg-background-base border border-border-subtle text-text-high text-[13px] font-mono rounded-lg px-3 py-2 outline-none focus:border-primary transition-colors placeholder:text-text-low/50"
+                        />
+                      </div>
                       <button
                         onClick={() => void loadDecompile()}
                         disabled={decompileLoading}
                         className="px-4 py-2.5 rounded-lg bg-primary hover:bg-primary/90 text-white text-xs font-display font-medium shadow-sm active:scale-[0.98] transition-all disabled:opacity-50 flex items-center justify-center gap-2"
                       >
                         <Cpu className="w-4 h-4" />
-                        {decompileLoading ? 'Loading...' : 'Load Bytecode + Decompile'}
+                        {decompileLoading ? 'Loading...' : 'Load Bytecode + Disassemble'}
                       </button>
 
                       <div className="grid grid-cols-2 gap-4 pt-2">
@@ -1011,7 +1048,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
                           />
                         </div>
                         <div>
-                          <div className="text-text-low text-[10px] uppercase font-bold tracking-widest font-display mb-1.5">{t('Pseudocode')}</div>
+                          <div className="text-text-low text-[10px] uppercase font-bold tracking-widest font-display mb-1.5">{t('Bounded Disassembly')}</div>
                           <textarea
                             readOnly
                             value={decompiled}

@@ -30,6 +30,14 @@ struct ChangedProtection
 {
 	RegionSegment Segment;
 	DWORD OriginalProtection = 0;
+	DWORD AppliedProtection = 0;
+};
+
+struct ProtectionRestoreResult
+{
+	bool Restored = true;
+	bool RaceDetected = false;
+	DWORD NativeError = 0;
 };
 
 MemoryResult Failure(const MemoryError error, const DWORD nativeError = 0) noexcept
@@ -131,41 +139,137 @@ MemoryResult QuerySegments(
 	return {.BytesProcessed = size};
 }
 
-bool RestoreProtections(
-	const std::vector<ChangedProtection>& changes,
+bool TryQueryCurrentProtection(
+	const RegionSegment& segment,
+	DWORD& protection,
 	DWORD& nativeError) noexcept
 {
-	bool restored = true;
+	MEMORY_BASIC_INFORMATION information{};
+	if (VirtualQuery(
+		reinterpret_cast<const void*>(segment.Address),
+		&information,
+		sizeof(information)) == 0)
+	{
+		nativeError = GetLastError();
+		return false;
+	}
+	if (information.State != MEM_COMMIT || information.RegionSize == 0)
+		return false;
+
+	const std::uintptr_t regionBase =
+		reinterpret_cast<std::uintptr_t>(information.BaseAddress);
+	if (regionBase > (std::numeric_limits<std::uintptr_t>::max)()
+		- information.RegionSize)
+	{
+		return false;
+	}
+	const std::uintptr_t regionEnd = regionBase + information.RegionSize;
+	std::uintptr_t segmentEnd = 0;
+	if (!CheckedAddressRange(segment.Address, segment.Size, segmentEnd)
+		|| segment.Address < regionBase
+		|| segmentEnd > regionEnd)
+	{
+		return false;
+	}
+	protection = information.Protect;
+	return true;
+}
+
+ProtectionRestoreResult RestoreProtections(
+	const std::vector<ChangedProtection>& changes) noexcept
+{
+	ProtectionRestoreResult result;
 	for (auto it = changes.rbegin(); it != changes.rend(); ++it)
 	{
-		DWORD ignored = 0;
+		DWORD replacedProtection = 0;
 		if (!VirtualProtect(
 			reinterpret_cast<void*>(it->Segment.Address),
 			it->Segment.Size,
 			it->OriginalProtection,
-			&ignored))
+			&replacedProtection))
 		{
-			restored = false;
-			if (nativeError == 0)
-				nativeError = GetLastError();
+			result.Restored = false;
+			if (result.NativeError == 0)
+				result.NativeError = GetLastError();
+			continue;
+		}
+		if (replacedProtection != it->AppliedProtection)
+			result.RaceDetected = true;
+
+		DWORD observedProtection = 0;
+		DWORD queryError = 0;
+		if (!TryQueryCurrentProtection(it->Segment, observedProtection, queryError))
+		{
+			result.Restored = false;
+			if (result.NativeError == 0)
+				result.NativeError = queryError;
+		}
+		else if (observedProtection != it->OriginalProtection)
+		{
+			result.RaceDetected = true;
 		}
 	}
-	return restored;
+	return result;
+}
+
+MemoryResult FailureAfterRestore(
+	const MemoryError error,
+	const DWORD nativeError,
+	const std::vector<ChangedProtection>& changes) noexcept
+{
+	const ProtectionRestoreResult restore = RestoreProtections(changes);
+	if (!restore.Restored)
+		return Failure(MemoryError::ProtectionRestoreFailed, restore.NativeError);
+	if (restore.RaceDetected)
+		return Failure(MemoryError::ProtectionRaceDetected);
+	return Failure(error, nativeError);
 }
 
 MemoryResult MakeWritable(
 	const std::vector<RegionSegment>& segments,
-	const bool allowProtectionChange,
+	const MemoryWriteOptions options,
 	std::vector<ChangedProtection>& changes)
 {
 	for (const RegionSegment& segment : segments)
 	{
-		if (IsWritableProtection(segment.Protection))
-			continue;
-		if (!allowProtectionChange)
+		DWORD currentProtection = 0;
+		DWORD queryError = 0;
+		if (!TryQueryCurrentProtection(segment, currentProtection, queryError))
+		{
+			return FailureAfterRestore(
+				MemoryError::ProtectionRaceDetected,
+				queryError,
+				changes);
+		}
+		if (currentProtection != segment.Protection)
+		{
+			return FailureAfterRestore(
+				MemoryError::ProtectionRaceDetected,
+				0,
+				changes);
+		}
+		if (IsExecutableProtection(currentProtection) && !options.AllowExecutableWrite)
+		{
+			return FailureAfterRestore(
+				MemoryError::ExecutableWriteDenied,
+				0,
+				changes);
+		}
+		if (IsExecutableProtection(currentProtection) && !options.FlushInstructionCache)
+		{
+			return FailureAfterRestore(
+				MemoryError::InstructionCacheFlushRequired,
+				0,
+				changes);
+		}
+		if (!options.AllowProtectionChange)
+		{
+			if (IsWritableProtection(currentProtection))
+				continue;
 			return Failure(MemoryError::AccessDenied);
+		}
 
-		const DWORD writableProtection = IsExecutableProtection(segment.Protection)
+		const DWORD writableProtection = IsExecutableProtection(currentProtection)
 			? PAGE_EXECUTE_READWRITE
 			: PAGE_READWRITE;
 		DWORD originalProtection = 0;
@@ -176,12 +280,55 @@ MemoryResult MakeWritable(
 			&originalProtection))
 		{
 			const DWORD protectionError = GetLastError();
-			DWORD restoreError = 0;
-			if (!RestoreProtections(changes, restoreError))
-				return Failure(MemoryError::ProtectionRestoreFailed, restoreError);
-			return Failure(MemoryError::ProtectionChangeFailed, protectionError);
+			return FailureAfterRestore(
+				MemoryError::ProtectionChangeFailed,
+				protectionError,
+				changes);
 		}
-		changes.push_back({.Segment = segment, .OriginalProtection = originalProtection});
+		changes.push_back({
+			.Segment = segment,
+			.OriginalProtection = originalProtection,
+			.AppliedProtection = writableProtection
+		});
+		if (originalProtection != currentProtection)
+		{
+			return FailureAfterRestore(
+				MemoryError::ProtectionRaceDetected,
+				0,
+				changes);
+		}
+		if (IsExecutableProtection(originalProtection) && !options.AllowExecutableWrite)
+		{
+			return FailureAfterRestore(
+				MemoryError::ExecutableWriteDenied,
+				0,
+				changes);
+		}
+	}
+	return {};
+}
+
+MemoryResult ValidateAppliedProtections(
+	const std::vector<ChangedProtection>& changes,
+	const MemoryWriteOptions options) noexcept
+{
+	for (const ChangedProtection& change : changes)
+	{
+		DWORD observedProtection = 0;
+		DWORD nativeError = 0;
+		if (!TryQueryCurrentProtection(
+			change.Segment,
+			observedProtection,
+			nativeError))
+		{
+			return Failure(MemoryError::ProtectionRaceDetected, nativeError);
+		}
+		if (observedProtection != change.AppliedProtection)
+			return Failure(MemoryError::ProtectionRaceDetected);
+		if (!IsWritableProtection(observedProtection))
+			return Failure(MemoryError::ProtectionRaceDetected);
+		if (IsExecutableProtection(observedProtection) && !options.AllowExecutableWrite)
+			return Failure(MemoryError::ExecutableWriteDenied);
 	}
 	return {};
 }
@@ -241,6 +388,7 @@ const char* ToString(const MemoryError error) noexcept
 	case MemoryError::RegionNotCommitted: return "REGION_NOT_COMMITTED";
 	case MemoryError::AccessDenied: return "ACCESS_DENIED";
 	case MemoryError::ProtectionChangeFailed: return "PROTECTION_CHANGE_FAILED";
+	case MemoryError::ProtectionRaceDetected: return "PROTECTION_RACE_DETECTED";
 	case MemoryError::AccessViolation: return "ACCESS_VIOLATION";
 	case MemoryError::ProtectionRestoreFailed: return "PROTECTION_RESTORE_FAILED";
 	case MemoryError::ExecutableWriteDenied: return "EXECUTABLE_WRITE_DENIED";
@@ -328,18 +476,27 @@ MemoryResult WriteMemory(
 
 		std::vector<ChangedProtection> changes;
 		changes.reserve(segments.size());
-		MemoryResult writable = MakeWritable(segments, options.AllowProtectionChange, changes);
+		MemoryResult writable = MakeWritable(segments, options, changes);
 		if (!writable.Ok())
 			return writable;
+		MemoryResult boundary = ValidateAppliedProtections(changes, options);
+		if (!boundary.Ok())
+			return FailureAfterRestore(boundary.Error, boundary.NativeError, changes);
 
 		MemoryResult result{.BytesProcessed = input.size()};
 		DWORD exceptionCode = 0;
 		if (!CopyWithSeh(reinterpret_cast<void*>(address), input.data(), input.size(), exceptionCode))
 			result = Failure(MemoryError::AccessViolation, exceptionCode);
 
-		DWORD restoreError = 0;
-		if (!RestoreProtections(changes, restoreError))
-			return Failure(MemoryError::ProtectionRestoreFailed, restoreError);
+		boundary = ValidateAppliedProtections(changes, options);
+		if (!boundary.Ok() && result.Ok())
+			result = boundary;
+
+		const ProtectionRestoreResult restore = RestoreProtections(changes);
+		if (!restore.Restored)
+			return Failure(MemoryError::ProtectionRestoreFailed, restore.NativeError);
+		if (restore.RaceDetected)
+			return Failure(MemoryError::ProtectionRaceDetected);
 		if (!result.Ok())
 			return result;
 		if (options.FlushInstructionCache
@@ -380,9 +537,17 @@ MemoryResult CompareExchangePointer(
 
 		std::vector<ChangedProtection> changes;
 		changes.reserve(segments.size());
-		MemoryResult writable = MakeWritable(segments, true, changes);
+		const MemoryWriteOptions options{
+			.AllowProtectionChange = true,
+			.AllowExecutableWrite = false,
+			.FlushInstructionCache = false
+		};
+		MemoryResult writable = MakeWritable(segments, options, changes);
 		if (!writable.Ok())
 			return writable;
+		MemoryResult boundary = ValidateAppliedProtections(changes, options);
+		if (!boundary.Ok())
+			return FailureAfterRestore(boundary.Error, boundary.NativeError, changes);
 
 		void* actual = nullptr;
 		DWORD exceptionCode = 0;
@@ -395,9 +560,12 @@ MemoryResult CompareExchangePointer(
 		if (observed)
 			*observed = actual;
 
-		DWORD restoreError = 0;
-		if (!RestoreProtections(changes, restoreError))
-			return Failure(MemoryError::ProtectionRestoreFailed, restoreError);
+		boundary = ValidateAppliedProtections(changes, options);
+		const ProtectionRestoreResult restore = RestoreProtections(changes);
+		if (!restore.Restored)
+			return Failure(MemoryError::ProtectionRestoreFailed, restore.NativeError);
+		if (restore.RaceDetected || !boundary.Ok())
+			return Failure(MemoryError::ProtectionRaceDetected, boundary.NativeError);
 		if (!exchanged)
 			return Failure(MemoryError::AccessViolation, exceptionCode);
 		if (actual != expected)

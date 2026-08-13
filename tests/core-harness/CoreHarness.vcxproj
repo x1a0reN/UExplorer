@@ -44,7 +44,7 @@
       <SDLCheck>true</SDLCheck>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(ProjectDir)..\..\Dumper;$(ProjectDir)..\..\Dumper\Engine\Public;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\..\Dumper;$(ProjectDir)..\..\Dumper\Engine\Public;$(ProjectDir)..\..\Dumper\Generator\Public;$(ProjectDir)..\..\Dumper\Utils;$(ProjectDir)..\..\Dumper\Platform\Public;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <AdditionalDependencies>bcrypt.lib;advapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
@@ -53,9 +53,14 @@
   <ItemGroup>
     <ClCompile Include="main.cpp" />
 	<ClCompile Include="..\..\Dumper\IPC\NamedPipeRpcServer.cpp" />
+	<ClCompile Include="..\..\Dumper\Engine\Private\Blueprint\BlueprintDecompiler.cpp" />
 	<ClCompile Include="..\..\Dumper\Engine\Private\OffsetFinder\OffsetDiscovery.cpp" />
 	<ClCompile Include="..\..\Dumper\Platform\Private\PeImage.cpp" />
+	<ClCompile Include="..\..\Dumper\Runtime\BlueprintBytecodeCapture.cpp" />
+	<ClCompile Include="..\..\Dumper\Runtime\BlueprintBytecodeEvidence.cpp" />
 	<ClCompile Include="..\..\Dumper\Runtime\CoreSession.cpp" />
+	<ClCompile Include="..\..\Dumper\Runtime\DumpJobCoordinator.cpp" />
+	<ClCompile Include="..\..\Dumper\Runtime\FunctionCallBatchCoordinator.cpp" />
 	<ClCompile Include="..\..\Dumper\Runtime\EngineFacade.cpp" />
 	<ClCompile Include="..\..\Dumper\Runtime\EngineNameCodec.cpp" />
 	<ClCompile Include="..\..\Dumper\Runtime\EngineVersionProbe.cpp" />
@@ -64,6 +69,7 @@
 	<ClCompile Include="..\..\Dumper\Runtime\FUObjectItemLayout.cpp" />
 	<ClCompile Include="..\..\Dumper\Runtime\GameThreadFrameScheduler.cpp" />
 	<ClCompile Include="..\..\Dumper\Runtime\GameThreadExecutor.cpp" />
+	<ClCompile Include="..\..\Dumper\Runtime\HookEventCollector.cpp" />
 	<ClCompile Include="..\..\Dumper\Runtime\ObjectArraySnapshotSource.cpp" />
 	<ClCompile Include="..\..\Dumper\Runtime\ObjectSnapshotReflectionCandidateSource.cpp" />
 	<ClCompile Include="..\..\Dumper\Runtime\ObjectSnapshotTypeCandidateSource.cpp" />
@@ -74,29 +80,43 @@
 	<ClCompile Include="..\..\Dumper\Runtime\ReflectionLayoutCapture.cpp" />
 	<ClCompile Include="..\..\Dumper\Runtime\TypeSnapshot.cpp" />
 	<ClCompile Include="..\..\Dumper\Runtime\TypeSnapshotCapture.cpp" />
+	<ClCompile Include="..\..\Dumper\Runtime\WatchScheduler.cpp" />
 	<ClCompile Include="..\..\Dumper\Runtime\WorldSnapshot.cpp" />
 	<ClCompile Include="..\..\Dumper\Runtime\WorldSnapshotCapture.cpp" />
     <ClCompile Include="..\..\Dumper\Runtime\SafeMemory.cpp" />
     <ClCompile Include="..\..\Dumper\Runtime\VTableHook.cpp" />
+	<ClCompile Include="..\..\Dumper\Services\BlueprintCommandService.cpp" />
 	<ClCompile Include="..\..\Dumper\Services\CoreCommandService.cpp" />
+	<ClCompile Include="..\..\Dumper\Services\DumpCommandService.cpp" />
+	<ClCompile Include="..\..\Dumper\Services\FunctionCallBatchCommandService.cpp" />
 	<ClCompile Include="..\..\Dumper\Services\FunctionCallCommandService.cpp" />
+	<ClCompile Include="..\..\Dumper\Services\HookCommandService.cpp" />
+	<ClCompile Include="..\..\Dumper\Services\MemoryCommandService.cpp" />
 	<ClCompile Include="..\..\Dumper\Services\ObjectPropertyCommandService.cpp" />
 	<ClCompile Include="..\..\Dumper\Services\TypeCommandService.cpp" />
+	<ClCompile Include="..\..\Dumper\Services\WatchCommandService.cpp" />
 	<ClCompile Include="..\..\Dumper\Services\WorldCommandService.cpp" />
+	<ClCompile Include="..\..\Dumper\Services\WorldMutationCommandService.cpp" />
 	<ClCompile Include="..\..\Dumper\Services\WorldTransformCommandService.cpp" />
     <ClCompile Include="..\..\Dumper\Server\HttpServer.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\..\Dumper\IPC\NamedPipeRpcServer.h" />
-    <ClInclude Include="..\..\Dumper\IPC\Protocol.h" />
+	<ClInclude Include="..\..\Dumper\IPC\NamedPipeRpcServer.h" />
+	<ClInclude Include="..\..\Dumper\IPC\Protocol.h" />
+	<ClInclude Include="..\..\Dumper\Engine\Public\Blueprint\BlueprintDecompiler.h" />
+	<ClInclude Include="..\..\Dumper\Engine\Public\Blueprint\EExprToken.h" />
 	<ClInclude Include="..\..\Dumper\Engine\Public\OffsetFinder\OffsetDiscovery.h" />
 	<ClInclude Include="..\..\Dumper\Platform\Public\BytePattern.h" />
 	<ClInclude Include="..\..\Dumper\Platform\Public\PeImage.h" />
-    <ClInclude Include="..\..\Dumper\Runtime\BoundedQueue.h" />
+	<ClInclude Include="..\..\Dumper\Runtime\BlueprintBytecodeCapture.h" />
+	<ClInclude Include="..\..\Dumper\Runtime\BlueprintBytecodeEvidence.h" />
+	<ClInclude Include="..\..\Dumper\Runtime\BoundedQueue.h" />
     <ClInclude Include="..\..\Dumper\Runtime\CapabilityRegistry.h" />
     <ClInclude Include="..\..\Dumper\Runtime\CoreCapabilities.h" />
     <ClInclude Include="..\..\Dumper\Runtime\CoreRuntime.h" />
 	<ClInclude Include="..\..\Dumper\Runtime\CoreSession.h" />
+	<ClInclude Include="..\..\Dumper\Runtime\DumpJobCoordinator.h" />
+	<ClInclude Include="..\..\Dumper\Runtime\FunctionCallBatchCoordinator.h" />
     <ClInclude Include="..\..\Dumper\Runtime\CallbackBarrier.h" />
     <ClInclude Include="..\..\Dumper\Runtime\EngineContext.h" />
 	<ClInclude Include="..\..\Dumper\Runtime\EngineFacade.h" />
@@ -107,6 +127,7 @@
 	<ClInclude Include="..\..\Dumper\Runtime\FUObjectItemLayout.h" />
 	<ClInclude Include="..\..\Dumper\Runtime\GameThreadFrameScheduler.h" />
 	<ClInclude Include="..\..\Dumper\Runtime\GameThreadExecutor.h" />
+	<ClInclude Include="..\..\Dumper\Runtime\HookEventCollector.h" />
 	<ClInclude Include="..\..\Dumper\Runtime\ObjectArraySnapshotSource.h" />
 	<ClInclude Include="..\..\Dumper\Runtime\ObjectSnapshotReflectionCandidateSource.h" />
 	<ClInclude Include="..\..\Dumper\Runtime\ObjectSnapshotTypeCandidateSource.h" />
@@ -120,17 +141,25 @@
 	<ClInclude Include="..\..\Dumper\Runtime\TypeSnapshot.h" />
 	<ClInclude Include="..\..\Dumper\Runtime\TypeSnapshotCapture.h" />
 	<ClInclude Include="..\..\Dumper\Runtime\TypeMetadataContext.h" />
+	<ClInclude Include="..\..\Dumper\Runtime\WatchScheduler.h" />
 	<ClInclude Include="..\..\Dumper\Runtime\WorldSnapshot.h" />
 	<ClInclude Include="..\..\Dumper\Runtime\WorldSnapshotCapture.h" />
     <ClInclude Include="..\..\Dumper\Runtime\SafeMemory.h" />
     <ClInclude Include="..\..\Dumper\Runtime\ShutdownCoordinator.h" />
     <ClInclude Include="..\..\Dumper\Runtime\VTableHook.h" />
+	<ClInclude Include="..\..\Dumper\Services\BlueprintCommandService.h" />
 	<ClInclude Include="..\..\Dumper\Services\CoreCommandService.h" />
+	<ClInclude Include="..\..\Dumper\Services\DumpCommandService.h" />
+	<ClInclude Include="..\..\Dumper\Services\FunctionCallBatchCommandService.h" />
 	<ClInclude Include="..\..\Dumper\Services\FunctionCallCommandService.h" />
+	<ClInclude Include="..\..\Dumper\Services\HookCommandService.h" />
+	<ClInclude Include="..\..\Dumper\Services\MemoryCommandService.h" />
 	<ClInclude Include="..\..\Dumper\Services\ObjectPropertyCommandService.h" />
 	<ClInclude Include="..\..\Dumper\Services\CoreStatusDiagnostics.h" />
 	<ClInclude Include="..\..\Dumper\Services\TypeCommandService.h" />
+	<ClInclude Include="..\..\Dumper\Services\WatchCommandService.h" />
 	<ClInclude Include="..\..\Dumper\Services\WorldCommandService.h" />
+	<ClInclude Include="..\..\Dumper\Services\WorldMutationCommandService.h" />
 	<ClInclude Include="..\..\Dumper\Services\WorldTransformCommandService.h" />
     <ClInclude Include="..\..\Dumper\API\GameThreadQueue.h" />
     <ClInclude Include="..\..\Dumper\Generator\Public\Generators\UsmapContainer.h" />

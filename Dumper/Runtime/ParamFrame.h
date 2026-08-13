@@ -19,7 +19,9 @@ enum class ParamFrameError : std::uint8_t
 	ParameterInvalid,
 	ParameterOutOfBounds,
 	InputEncodeFailed,
-	AllocationFailed
+	AllocationFailed,
+	DestructorSlotInvalid,
+	DestructorSlotDuplicate
 };
 
 const char* ToString(ParamFrameError error) noexcept;
@@ -38,6 +40,8 @@ struct ParamFrameResult
 class ParamFrame final
 {
 public:
+	using Destructor = void (*)(void* value, const void* context) noexcept;
+
 	static constexpr std::uint32_t kMaxSize = 16 * 1024 * 1024;
 
 	static bool SupportsLifetime(PropertyKind kind) noexcept;
@@ -45,22 +49,39 @@ public:
 	static ParamFrameResult Create(std::uint32_t size, ParamFrame& frame) noexcept;
 
 	ParamFrame() = default;
+	~ParamFrame() noexcept;
 	ParamFrame(const ParamFrame&) = delete;
 	ParamFrame& operator=(const ParamFrame&) = delete;
-	ParamFrame(ParamFrame&&) noexcept = default;
-	ParamFrame& operator=(ParamFrame&&) noexcept = default;
+	ParamFrame(ParamFrame&& other) noexcept;
+	ParamFrame& operator=(ParamFrame&& other) noexcept;
 
 	ParamFrameResult SetInput(
 		const ReflectedProperty& property,
 		const PropertyInputValue& value,
 		const PropertyCodec& codec) noexcept;
+	ParamFrameResult RegisterDestructor(
+		const ReflectedProperty& property,
+		Destructor destructor,
+		const void* context = nullptr) noexcept;
 	std::uintptr_t ValueAddress(const ReflectedProperty& property) const noexcept;
 	void* Data() noexcept { return m_Bytes.empty() ? nullptr : m_Bytes.data(); }
 	const void* Data() const noexcept { return m_Bytes.empty() ? nullptr : m_Bytes.data(); }
 	std::size_t Size() const noexcept { return m_Bytes.size(); }
 
 private:
+	struct DestructorSlot
+	{
+		std::uint32_t Offset = 0;
+		std::uint32_t Size = 0;
+		Destructor Callback = nullptr;
+		const void* Context = nullptr;
+		bool Armed = false;
+	};
+
+	void Reset() noexcept;
+
 	std::vector<std::byte> m_Bytes;
+	std::vector<DestructorSlot> m_DestructorJournal;
 };
 
 } // namespace UExplorer::Runtime

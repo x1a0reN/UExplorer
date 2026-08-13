@@ -31,8 +31,22 @@ struct RuntimeProbes
 	std::shared_ptr<const TypeSnapshot> Types;
 	bool ObjectPropertyServiceEnabled = false;
 	bool FunctionCallServiceEnabled = false;
+	bool MemoryReadCommandServiceEnabled = false;
+	bool MemoryWriteCommandServiceEnabled = false;
+	bool WatchCommandServiceEnabled = false;
+	bool BlueprintBytecodeCaptureEnabled = false;
+	bool BlueprintBytecodeProfileEnabled = false;
+	bool HookCommandServiceEnabled = false;
+	bool HookProducerInstalled = false;
+	bool DumpCommandServiceEnabled = false;
+	bool DumpWorkerEnabled = false;
+	bool DumpCppTargetValidated = false;
+	bool DumpUsmapTargetValidated = false;
+	bool DumpDumpspaceTargetValidated = false;
+	bool DumpIdaTargetValidated = false;
 	std::shared_ptr<const WorldSnapshot> World;
 	bool WorldInspectServiceEnabled = false;
+	bool WorldMutationServiceEnabled = false;
 	bool NamedPipeListening = false;
 };
 
@@ -184,28 +198,40 @@ inline std::shared_ptr<const CapabilitySnapshot> BuildCoreCapabilities(
 		{"engine.type_snapshot"});
 	builder.Define(
 		"memory.raw_read",
-		false,
-		"MEMORY_READ_COMMAND_NOT_IMPLEMENTED",
-		"The bounded raw-memory read command is not registered",
+		probes.MemoryReadCommandServiceEnabled,
+		"MEMORY_COMMAND_SERVICE_NOT_READY",
+		"The bounded raw-memory command service is not registered",
 		{"memory.safe"});
 	builder.Define(
 		"memory.raw_write",
-		false,
-		"MEMORY_WRITE_COMMAND_NOT_IMPLEMENTED",
-		"The bounded raw-memory write command is not registered",
+		probes.MemoryWriteCommandServiceEnabled,
+		"MEMORY_COMMAND_SERVICE_NOT_READY",
+		"The bounded raw-memory command service is not registered",
 		{"memory.safe"});
 	builder.Define(
-		"memory.typed",
-		false,
-		"MEMORY_TYPED_COMMAND_NOT_IMPLEMENTED",
-		"Validated typed-memory commands are not registered",
+		"memory.typed_read",
+		probes.MemoryReadCommandServiceEnabled,
+		"MEMORY_COMMAND_SERVICE_NOT_READY",
+		"The validated scalar typed-memory read command is not registered",
+		{"memory.safe"});
+	builder.Define(
+		"memory.typed_write",
+		probes.MemoryWriteCommandServiceEnabled,
+		"MEMORY_COMMAND_SERVICE_NOT_READY",
+		"The validated scalar typed-memory write command is not registered",
 		{"memory.safe"});
 	builder.Define(
 		"memory.pointer_chain",
-		false,
-		"POINTER_CHAIN_COMMAND_NOT_IMPLEMENTED",
+		probes.MemoryReadCommandServiceEnabled,
+		"MEMORY_COMMAND_SERVICE_NOT_READY",
 		"The bounded pointer-chain command is not registered",
 		{"memory.safe"});
+	builder.Define(
+		"watch.properties",
+		probes.WatchCommandServiceEnabled,
+		"WATCH_COMMAND_SERVICE_NOT_READY",
+		"The bounded property-watch scheduler is not registered",
+		{"objects.properties", "objects.snapshot", "engine.type_snapshot", "game_thread.executor"});
 	builder.Define(
 		"call.invoke",
 		probes.FunctionCallServiceEnabled,
@@ -213,6 +239,18 @@ inline std::shared_ptr<const CapabilitySnapshot> BuildCoreCapabilities(
 		"No validated function-call domain command is registered",
 		{"engine.property_codec", "engine.type_snapshot", "objects.snapshot",
 			"game_thread.executor", "functions.handles"});
+	builder.Define(
+		"call.batch",
+		false,
+		"CALL_BATCH_ADAPTER_NOT_READY",
+		"The bounded batch coordinator has no adapter to the exact single-call path",
+		{"call.invoke"});
+	builder.Define(
+		"call.static",
+		false,
+		"CALL_STATIC_OPERATION_RETIRED",
+		"Static calls use call.invoke with an explicit CDO target; the legacy operation is not registered",
+		{"call.invoke"});
 	const bool worldSnapshotReady = probes.World
 		&& probes.World->SessionId.size() > 0
 		&& probes.World->ContextGeneration == context.Generation()
@@ -244,52 +282,98 @@ inline std::shared_ptr<const CapabilitySnapshot> BuildCoreCapabilities(
 		{"world.inspect"});
 	builder.Define(
 		"world.mutate",
-		false,
-		"WORLD_MUTATION_DISABLED",
-		"Validated reflected world mutation is not implemented",
-		{"game_thread.executor", "objects.handles"});
-	builder.Define(
-		"watch.properties",
-		false,
-		"WATCH_SCHEDULER_NOT_IMPLEMENTED",
-		"The bounded game-thread watch scheduler is not implemented",
-		{"objects.handles"});
+		probes.WorldMutationServiceEnabled,
+		"WORLD_MUTATION_SERVICE_NOT_READY",
+		"The strict single-field reflected world mutation service is not registered",
+		{"world.details", "engine.process_event", "engine.property_codec",
+			"functions.handles", "game_thread.executor"});
 	builder.Define(
 		"hook.monitor",
-		false,
-		"HOOK_COLLECTOR_NOT_IMPLEMENTED",
-		"The allocation-free bounded hook collector is not implemented",
-		{"game_thread.executor"});
+		probes.HookCommandServiceEnabled && probes.HookProducerInstalled,
+		!probes.HookCommandServiceEnabled
+			? "HOOK_COMMAND_SERVICE_NOT_READY"
+			: "HOOK_PRODUCER_NOT_INSTALLED",
+		!probes.HookCommandServiceEnabled
+			? "The bounded hook registry and collector are not registered"
+			: "No validated ProcessEvent producer publishes into the bounded collector",
+		{"engine.process_event", "engine.type_snapshot", "functions.handles"});
+	builder.Define(
+		"blueprint.bytecode",
+		probes.BlueprintBytecodeCaptureEnabled,
+		"BYTECODE_CAPTURE_UNAVAILABLE",
+		"No exact generation-bound bounded Script capture source is published",
+		{"engine.type_snapshot", "functions.handles", "game_thread.executor"});
 	builder.Define(
 		"blueprint.decompile",
-		false,
-		"BLUEPRINT_READER_NOT_VERIFIED",
-		"Bytecode bounds and version codecs are not verified",
-		{"engine.core"});
+		probes.BlueprintBytecodeCaptureEnabled
+			&& probes.BlueprintBytecodeProfileEnabled,
+		probes.BlueprintBytecodeCaptureEnabled
+			? "BYTECODE_PROFILE_REQUIRED"
+			: "BYTECODE_CAPTURE_UNAVAILABLE",
+		probes.BlueprintBytecodeCaptureEnabled
+			? "No immutable witnessed bytecode profile is published"
+			: "No exact generation-bound bounded Script capture source is published",
+		{"blueprint.bytecode"});
+	builder.Define(
+		"dump.jobs",
+		probes.DumpCommandServiceEnabled && probes.DumpWorkerEnabled,
+		probes.DumpCommandServiceEnabled
+			? "DUMP_WORKER_NOT_INJECTED"
+			: "DUMP_COMMAND_SERVICE_NOT_READY",
+		probes.DumpCommandServiceEnabled
+			? "No owned dump coordinator/worker is injected; an empty job store is not fabricated"
+			: "The generation-bound dump job query boundary is not registered",
+		{"objects.snapshot", "engine.type_snapshot"});
+	const auto dumpReasonCode = [&probes](const bool targetValidated) {
+		if (!probes.DumpCommandServiceEnabled)
+			return std::string("DUMP_COMMAND_SERVICE_NOT_READY");
+		if (!probes.DumpWorkerEnabled)
+			return std::string("DUMP_WORKER_NOT_INJECTED");
+		return targetValidated
+			? std::string()
+			: std::string("TARGET_FIXTURE_REQUIRED");
+	};
+	const auto dumpReason = [&probes](const bool targetValidated, const char* artifact) {
+		if (!probes.DumpCommandServiceEnabled)
+			return std::string("The owned dump command boundary is not registered");
+		if (!probes.DumpWorkerEnabled)
+			return std::string("No owned generator worker is injected; legacy generators are not a fallback");
+		return targetValidated
+			? std::string()
+			: std::string(artifact) + " has not passed a target fixture";
+	};
 	builder.Define(
 		"dump.cpp",
-		false,
-		"TARGET_FIXTURE_REQUIRED",
-		"Generated SDK artifacts have not passed target fixtures",
-		{"engine.core"});
+		probes.DumpCommandServiceEnabled
+			&& probes.DumpWorkerEnabled
+			&& probes.DumpCppTargetValidated,
+		dumpReasonCode(probes.DumpCppTargetValidated),
+		dumpReason(probes.DumpCppTargetValidated, "Generated SDK output"),
+		{"dump.jobs"});
 	builder.Define(
 		"dump.usmap",
-		false,
-		"TARGET_FIXTURE_REQUIRED",
-		"A complete target-generated mapping has not passed semantic validation",
-		{"engine.core"});
+		probes.DumpCommandServiceEnabled
+			&& probes.DumpWorkerEnabled
+			&& probes.DumpUsmapTargetValidated,
+		dumpReasonCode(probes.DumpUsmapTargetValidated),
+		dumpReason(probes.DumpUsmapTargetValidated, "Generated usmap output"),
+		{"dump.jobs"});
 	builder.Define(
 		"dump.dumpspace",
-		false,
-		"TARGET_FIXTURE_REQUIRED",
-		"A target-generated Dumpspace artifact has not passed semantic validation",
-		{"engine.core"});
+		probes.DumpCommandServiceEnabled
+			&& probes.DumpWorkerEnabled
+			&& probes.DumpDumpspaceTargetValidated,
+		dumpReasonCode(probes.DumpDumpspaceTargetValidated),
+		dumpReason(probes.DumpDumpspaceTargetValidated, "Generated Dumpspace output"),
+		{"dump.jobs"});
 	builder.Define(
 		"dump.ida",
-		false,
-		"TARGET_FIXTURE_REQUIRED",
-		"A target-generated IDA mapping has not passed semantic validation",
-		{"engine.core"});
+		probes.DumpCommandServiceEnabled
+			&& probes.DumpWorkerEnabled
+			&& probes.DumpIdaTargetValidated,
+		dumpReasonCode(probes.DumpIdaTargetValidated),
+		dumpReason(probes.DumpIdaTargetValidated, "Generated IDA output"),
+		{"dump.jobs"});
 
 	return builder.Build(context.Generation());
 }

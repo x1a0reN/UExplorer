@@ -44,6 +44,8 @@ const char* ToString(const ParamFrameError error) noexcept
 	case ParamFrameError::ParameterOutOfBounds: return "PARAM_FRAME_PARAMETER_OUT_OF_BOUNDS";
 	case ParamFrameError::InputEncodeFailed: return "PARAM_FRAME_INPUT_ENCODE_FAILED";
 	case ParamFrameError::AllocationFailed: return "PARAM_FRAME_ALLOCATION_FAILED";
+	case ParamFrameError::DestructorSlotInvalid: return "PARAM_FRAME_DESTRUCTOR_SLOT_INVALID";
+	case ParamFrameError::DestructorSlotDuplicate: return "PARAM_FRAME_DESTRUCTOR_SLOT_DUPLICATE";
 	}
 	return "PARAM_FRAME_UNKNOWN_ERROR";
 }
@@ -74,14 +76,59 @@ bool ParamFrame::SupportsLifetime(const PropertyKind kind) noexcept
 bool ParamFrame::SupportsLifetime(const PropertyDescriptor& descriptor) noexcept
 {
 	return SupportsLifetime(descriptor.Kind)
+		|| IsDescriptorProvenEnum(descriptor)
 		|| ClassifyCanonicalMathStruct(descriptor) != CanonicalMathStructKind::None;
+}
+
+ParamFrame::~ParamFrame() noexcept
+{
+	Reset();
+}
+
+ParamFrame::ParamFrame(ParamFrame&& other) noexcept
+	: m_Bytes(std::move(other.m_Bytes)),
+	  m_DestructorJournal(std::move(other.m_DestructorJournal))
+{
+	other.m_DestructorJournal.clear();
+	other.m_Bytes.clear();
+}
+
+ParamFrame& ParamFrame::operator=(ParamFrame&& other) noexcept
+{
+	if (this == &other)
+		return *this;
+	Reset();
+	m_Bytes = std::move(other.m_Bytes);
+	m_DestructorJournal = std::move(other.m_DestructorJournal);
+	other.m_DestructorJournal.clear();
+	other.m_Bytes.clear();
+	return *this;
+}
+
+void ParamFrame::Reset() noexcept
+{
+	for (auto slot = m_DestructorJournal.rbegin();
+		slot != m_DestructorJournal.rend();
+		++slot)
+	{
+		if (!slot->Armed || !slot->Callback)
+			continue;
+		slot->Armed = false;
+		void* const value = m_Bytes.empty()
+			? nullptr
+			: m_Bytes.data() + slot->Offset;
+		if (value)
+			slot->Callback(value, slot->Context);
+	}
+	m_DestructorJournal.clear();
+	m_Bytes.clear();
 }
 
 ParamFrameResult ParamFrame::Create(
 	const std::uint32_t size,
 	ParamFrame& frame) noexcept
 {
-	frame.m_Bytes.clear();
+	frame.Reset();
 	if (size > kMaxSize)
 	{
 		return Failure(
@@ -139,6 +186,54 @@ ParamFrameResult ParamFrame::SetInput(
 			encoded.Error);
 	}
 	return {};
+}
+
+ParamFrameResult ParamFrame::RegisterDestructor(
+	const ReflectedProperty& property,
+	const Destructor destructor,
+	const void* const context) noexcept
+{
+	if (!destructor
+		|| !property.Descriptor
+		|| property.State != ReflectedMemberState::Supported
+		|| property.ArrayDim != 1
+		|| !IsParameterRangeValid(property, m_Bytes.size()))
+	{
+		return Failure(
+			ParamFrameError::DestructorSlotInvalid,
+			"The owned parameter destructor slot is incomplete or outside the frame");
+	}
+	for (const DestructorSlot& existing : m_DestructorJournal)
+	{
+		const std::uint64_t existingEnd =
+			static_cast<std::uint64_t>(existing.Offset) + existing.Size;
+		const std::uint64_t requestedEnd =
+			static_cast<std::uint64_t>(property.Offset) + property.Size;
+		if (static_cast<std::uint64_t>(property.Offset) < existingEnd
+			&& static_cast<std::uint64_t>(existing.Offset) < requestedEnd)
+		{
+			return Failure(
+				ParamFrameError::DestructorSlotDuplicate,
+				"The owned parameter destructor slot overlaps an already armed slot");
+		}
+	}
+	try
+	{
+		m_DestructorJournal.push_back({
+			.Offset = property.Offset,
+			.Size = property.Size,
+			.Callback = destructor,
+			.Context = context,
+			.Armed = true
+		});
+		return {};
+	}
+	catch (...)
+	{
+		return Failure(
+			ParamFrameError::AllocationFailed,
+			"The owned parameter destructor journal could not be extended");
+	}
 }
 
 std::uintptr_t ParamFrame::ValueAddress(

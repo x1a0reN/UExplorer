@@ -100,6 +100,18 @@ bool IsFlatDescriptorKind(const PropertyKind kind) noexcept
 		|| kind == PropertyKind::SoftObject;
 }
 
+bool IsExactIntegerKind(const PropertyKind kind) noexcept
+{
+	return kind == PropertyKind::Int8
+		|| kind == PropertyKind::Int16
+		|| kind == PropertyKind::Int32
+		|| kind == PropertyKind::Int64
+		|| kind == PropertyKind::UInt8
+		|| kind == PropertyKind::UInt16
+		|| kind == PropertyKind::UInt32
+		|| kind == PropertyKind::UInt64;
+}
+
 bool HasFlag(const std::uint64_t value, const std::uint64_t flag) noexcept
 {
 	return (value & flag) != 0;
@@ -326,6 +338,22 @@ public:
 		std::string Name;
 	};
 
+	struct EnumUnderlyingEvidence final
+	{
+		const EngineSnapshotObject* Object = nullptr;
+		std::uintptr_t Address = 0;
+		std::uintptr_t ClassAddress = 0;
+		std::uint64_t CastFlags = 0;
+		std::int32_t ArrayDim = 0;
+		std::int32_t ElementSize = 0;
+		std::int32_t Offset = 0;
+		std::uint64_t Flags = 0;
+		std::uintptr_t ReferencedType = 0;
+		std::uint32_t BoolByteOffset = 0;
+		std::uint8_t BoolMask = 0;
+		std::string Name;
+	};
+
 	struct FieldEvidence final
 	{
 		const EngineSnapshotObject* Owner = nullptr;
@@ -342,6 +370,7 @@ public:
 		std::uint32_t BoolByteOffset = 0;
 		std::uint8_t BoolMask = 0;
 		std::optional<NestedPropertyEvidence> Element;
+		std::optional<EnumUnderlyingEvidence> EnumUnderlying;
 		std::uint32_t OwnerSize = 0;
 		std::string Name;
 		bool IsProperty = false;
@@ -510,6 +539,9 @@ public:
 		bool requireExactType,
 		std::shared_ptr<const PropertyDescriptor>& descriptor) const;
 	TypeSnapshotSourceError BuildArrayDescriptor(
+		const FieldEvidence& evidence,
+		std::shared_ptr<const PropertyDescriptor>& descriptor) const;
+	TypeSnapshotSourceError BuildEnumDescriptor(
 		const FieldEvidence& evidence,
 		std::shared_ptr<const PropertyDescriptor>& descriptor) const;
 	TypeSnapshotSourceError CaptureType(TypeSnapshotSourceStepResult& result);
@@ -885,11 +917,37 @@ ObjectSnapshotTypeCandidateSource::Impl::ReadFieldEvidence(
 	else if (HasFlag(evidence.CastFlags, kCastEnumProperty))
 	{
 		const ReflectionFieldReport* enumField = Field(ReflectionField::EnumPropertyEnum);
-		if (!enumField
+		const ReflectionFieldReport* underlyingField =
+			Field(ReflectionField::EnumPropertyUnderlying);
+		std::uintptr_t underlyingAddress = 0;
+		if (!enumField || !underlyingField
 			|| !ReadStable(address, enumField->Offset, evidence.ReferencedType)
-			|| evidence.ReferencedType == 0)
+			|| evidence.ReferencedType == 0
+			|| !ReadStable(address, underlyingField->Offset, underlyingAddress))
 		{
 			return TypeSnapshotSourceError::MemoryUnavailable;
+		}
+		if (underlyingAddress != 0)
+		{
+			NestedPropertyEvidence underlying;
+			const TypeSnapshotSourceError underlyingResult =
+				ReadNestedPropertyEvidence(underlyingAddress, underlying);
+			if (underlyingResult != TypeSnapshotSourceError::None)
+				return underlyingResult;
+			evidence.EnumUnderlying.emplace(EnumUnderlyingEvidence{
+				.Object = underlying.Object,
+				.Address = underlying.Address,
+				.ClassAddress = underlying.ClassAddress,
+				.CastFlags = underlying.CastFlags,
+				.ArrayDim = underlying.ArrayDim,
+				.ElementSize = underlying.ElementSize,
+				.Offset = underlying.Offset,
+				.Flags = underlying.Flags,
+				.ReferencedType = underlying.ReferencedType,
+				.BoolByteOffset = underlying.BoolByteOffset,
+				.BoolMask = underlying.BoolMask,
+				.Name = std::move(underlying.Name)
+			});
 		}
 	}
 	else if (HasFlag(evidence.CastFlags, kCastObjectProperty)
@@ -1009,6 +1067,66 @@ ObjectSnapshotTypeCandidateSource::Impl::BuildFlatDescriptor(
 		mutableDescriptor->BoolByteOffset = boolByteOffset;
 		mutableDescriptor->BoolMask = boolMask;
 	}
+	descriptor = std::shared_ptr<const PropertyDescriptor>(std::move(mutableDescriptor));
+	return TypeSnapshotSourceError::None;
+}
+
+TypeSnapshotSourceError
+ObjectSnapshotTypeCandidateSource::Impl::BuildEnumDescriptor(
+	const FieldEvidence& evidence,
+	std::shared_ptr<const PropertyDescriptor>& descriptor) const
+{
+	descriptor.reset();
+	if (evidence.ElementSize <= 0 || evidence.ReferencedType == 0)
+		return TypeSnapshotSourceError::None;
+	const auto referenced = Active->Plan->ByAddress.find(evidence.ReferencedType);
+	if (referenced == Active->Plan->ByAddress.end()
+		|| !referenced->second
+		|| referenced->second->Kind != EngineObjectKind::Enum
+		|| !Engine.ValidateObjectHandle(referenced->second->Handle).Ok())
+	{
+		return TypeSnapshotSourceError::None;
+	}
+
+	PropertyKind underlyingKind = PropertyKind::Unknown;
+	std::int32_t underlyingSize = 0;
+	if (HasFlag(evidence.CastFlags, kCastEnumProperty))
+	{
+		if (!evidence.EnumUnderlying)
+			return TypeSnapshotSourceError::None;
+		underlyingKind = ClassifyProperty(
+			evidence.EnumUnderlying->CastFlags,
+			evidence.EnumUnderlying->ReferencedType);
+		underlyingSize = evidence.EnumUnderlying->ElementSize;
+	}
+	else if (HasFlag(evidence.CastFlags, kCastByteProperty))
+	{
+		underlyingKind = PropertyKind::UInt8;
+		underlyingSize = 1;
+	}
+	if (!IsExactIntegerKind(underlyingKind)
+		|| underlyingSize != evidence.ElementSize)
+	{
+		return TypeSnapshotSourceError::None;
+	}
+
+	std::shared_ptr<const PropertyDescriptor> underlying;
+	const TypeSnapshotSourceError underlyingResult = BuildFlatDescriptor(
+		underlyingSize,
+		0,
+		0,
+		0,
+		underlyingKind,
+		false,
+		underlying);
+	if (underlyingResult != TypeSnapshotSourceError::None || !underlying)
+		return underlyingResult;
+
+	auto mutableDescriptor = std::make_shared<PropertyDescriptor>();
+	mutableDescriptor->Kind = PropertyKind::Enum;
+	mutableDescriptor->TypeName = referenced->second->FullPath;
+	mutableDescriptor->Size = static_cast<std::uint32_t>(evidence.ElementSize);
+	mutableDescriptor->Element = std::move(underlying);
 	descriptor = std::shared_ptr<const PropertyDescriptor>(std::move(mutableDescriptor));
 	return TypeSnapshotSourceError::None;
 }
@@ -1229,12 +1347,43 @@ TypeSnapshotSourceError ObjectSnapshotTypeCandidateSource::Impl::CaptureField(
 			property.TypeName = referenced->second->FullPath;
 		}
 	}
+	else if (kind == PropertyKind::Enum && evidence.ReferencedType != 0)
+	{
+		const auto referenced = Active->Plan->ByAddress.find(evidence.ReferencedType);
+		if (referenced != Active->Plan->ByAddress.end()
+			&& referenced->second
+			&& referenced->second->Kind == EngineObjectKind::Enum)
+		{
+			property.TypeName = referenced->second->FullPath;
+		}
+	}
 	if (kind == PropertyKind::Unknown || kind == PropertyKind::Delegate)
 	{
 		property.State = ReflectedMemberState::Unsupported;
 		property.ReasonCode = "PROPERTY_KIND_UNSUPPORTED";
 		property.Reason =
 			"The witnessed property class has no supported immutable descriptor kind";
+	}
+	else if (kind == PropertyKind::Enum)
+	{
+		const TypeSnapshotSourceError descriptorResult =
+			BuildEnumDescriptor(evidence, property.Descriptor);
+		if (descriptorResult != TypeSnapshotSourceError::None)
+			return descriptorResult;
+		property.State = ReflectedMemberState::Unavailable;
+		if (property.Descriptor)
+		{
+			property.TypeName = property.Descriptor->TypeName;
+			property.ReasonCode = "ENUM_TYPE_METADATA_UNAVAILABLE";
+			property.Reason =
+				"The exact enum and integer backing property are witnessed, but its immutable entry table is unavailable";
+		}
+		else
+		{
+			property.ReasonCode = "ENUM_DESCRIPTOR_NOT_PROVEN";
+			property.Reason =
+				"The property does not prove an exact UEnum identity and width-correct integer backing property";
+		}
 	}
 	else if ((IsFlatDescriptorKind(kind)
 			&& !HasFlag(evidence.CastFlags, kCastInterfaceProperty))
@@ -1397,6 +1546,26 @@ TypeSnapshotSourceError ObjectSnapshotTypeCandidateSource::Impl::ValidateEvidenc
 				&& left->BoolMask == right->BoolMask
 				&& left->Name == right->Name;
 		};
+		const auto sameEnumUnderlying = [](
+			const std::optional<EnumUnderlyingEvidence>& left,
+			const std::optional<EnumUnderlyingEvidence>& right) {
+			if (left.has_value() != right.has_value())
+				return false;
+			if (!left)
+				return true;
+			return left->Object == right->Object
+				&& left->Address == right->Address
+				&& left->ClassAddress == right->ClassAddress
+				&& left->CastFlags == right->CastFlags
+				&& left->ArrayDim == right->ArrayDim
+				&& left->ElementSize == right->ElementSize
+				&& left->Offset == right->Offset
+				&& left->Flags == right->Flags
+				&& left->ReferencedType == right->ReferencedType
+				&& left->BoolByteOffset == right->BoolByteOffset
+				&& left->BoolMask == right->BoolMask
+				&& left->Name == right->Name;
+		};
 		return current.Owner == expected->Owner
 			&& current.Object == expected->Object
 			&& current.Address == expected->Address
@@ -1411,6 +1580,9 @@ TypeSnapshotSourceError ObjectSnapshotTypeCandidateSource::Impl::ValidateEvidenc
 			&& current.BoolByteOffset == expected->BoolByteOffset
 			&& current.BoolMask == expected->BoolMask
 			&& sameElement(current.Element, expected->Element)
+			&& sameEnumUnderlying(
+				current.EnumUnderlying,
+				expected->EnumUnderlying)
 			&& current.OwnerSize == expected->OwnerSize
 			&& current.Name == expected->Name
 			&& current.IsProperty == expected->IsProperty

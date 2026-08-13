@@ -154,7 +154,8 @@ struct TypeSnapshotCandidate
 	std::vector<ReflectedType> Types;
 };
 
-std::size_t ResolveCanonicalMathStructDescriptors(
+// Seals descriptor shapes that require a complete same-generation type graph.
+std::size_t ResolveDeferredPropertyDescriptors(
 	TypeSnapshotCandidate& candidate) noexcept;
 
 enum class TypeSnapshotPublishError : std::uint8_t

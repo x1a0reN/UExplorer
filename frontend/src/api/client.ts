@@ -10,7 +10,10 @@ import type {
   ClassInstancesResponse,
   ClassItem,
   ClassProperty,
-  DumpJob,
+  DumpJobListResponse,
+  DumpJobSnapshotResponse,
+  DumpScope,
+  DumpStartRequest,
   DumpType,
   EngineStatusData,
   EnumDetail,
@@ -22,6 +25,8 @@ import type {
   FunctionDetail,
   HookListResponse,
   HookLogResponse,
+  HookMutationResponse,
+  HookCapturePolicy,
   HostProcessInfo,
   HostSessionEvent,
   InjectionCommandResult,
@@ -50,13 +55,14 @@ import type {
   TypeMemberPageResponse,
   TypeMemberScope,
   TypeQueryCursor,
-  Vec3Data,
   WatchHistoryData,
+  WatchDrainData,
   WatchListResponse,
   WorldActorComponentsResponse,
   WorldActorDetail,
   WorldActorResponse,
   WorldActorTransformResponse,
+  WorldActorTransformUpdate,
   WorldActorTransformUpdateResponse,
   WorldData,
   WorldLevelsResponse,
@@ -271,6 +277,7 @@ class UExplorerApi {
             array_index: arrayIndex,
             array_dim: field.array_dim,
             object,
+            object_snapshot_generation: page.object_snapshot_generation,
             type_snapshot_generation: page.type_snapshot_generation,
             declaring_type_path: field.declaring_type.full_path,
             descriptor_available: field.descriptor_available,
@@ -538,14 +545,18 @@ class UExplorerApi {
   }
 
   async updateWorldActorTransform(
-    index: number,
-    transform: {
-      location?: Vec3Data | [number, number, number];
-      rotation?: Vec3Data | [number, number, number];
-      scale?: Vec3Data | [number, number, number];
-    },
+    scope: WorldActorTransformResponse,
+    update: WorldActorTransformUpdate,
   ): Promise<ApiResponse<WorldActorTransformUpdateResponse>> {
-    return this.command('world.actor.transform.update', { index, ...transform });
+    return this.command('world.actor.transform.update', {
+      session_id: scope.actor.handle.session_id,
+      context_generation: scope.context_generation,
+      object_snapshot_generation: scope.object_snapshot_generation,
+      type_snapshot_generation: scope.type_snapshot_generation,
+      world_snapshot_generation: scope.generation,
+      actor: scope.actor.handle,
+      update,
+    });
   }
 
   async readMemory(address: string, size: number): Promise<ApiResponse<MemoryReadData>> {
@@ -566,14 +577,14 @@ class UExplorerApi {
   async writeTypedMemory(
     address: string,
     type: string,
-    value: unknown,
+    value: string,
   ): Promise<ApiResponse<{ address: string; type: string; written: boolean }>> {
     return this.command('memory.typed.write', { address, type, value });
   }
 
   async resolvePointerChain(
     base: string,
-    offsets: number[],
+    offsets: string[],
   ): Promise<ApiResponse<PointerChainData>> {
     return this.command('memory.pointer_chain.resolve', { base, offsets });
   }
@@ -593,9 +604,18 @@ class UExplorerApi {
   }
 
   async addHook(
-    functionPath: string,
-  ): Promise<ApiResponse<{ id: number; function_path: string; enabled: boolean }>> {
-    return this.command('hook.add', { function_path: functionPath });
+    fn: FunctionDetail,
+    capture: HookCapturePolicy = { mode: 'fixed_metadata' },
+    enabled = false,
+  ): Promise<ApiResponse<HookMutationResponse>> {
+    return this.command('hook.add', {
+      object_snapshot_generation: fn.object_snapshot_generation,
+      type_snapshot_generation: fn.type_snapshot_generation,
+      function: fn.handle,
+      function_path: fn.full_path,
+      capture,
+      enabled,
+    });
   }
 
   async listHooks(): Promise<ApiResponse<HookListResponse>> {
@@ -605,78 +625,130 @@ class UExplorerApi {
   async setHookEnabled(
     id: number,
     enabled: boolean,
-  ): Promise<ApiResponse<{ id: number; enabled: boolean }>> {
+  ): Promise<ApiResponse<HookMutationResponse>> {
     return this.command('hook.enable', { id, enabled });
   }
 
-  async removeHook(id: number): Promise<ApiResponse<{ removed: boolean }>> {
+  async removeHook(id: number): Promise<ApiResponse<{
+    id: number;
+    removed: true;
+    enabled_snapshot_generation: number;
+  }>> {
     return this.command('hook.remove', { id });
   }
 
-  async getHookLog(id: number): Promise<ApiResponse<HookLogResponse>> {
-    return this.command('hook.log', { id });
+  async getHookLog(id: number, limit = 128): Promise<ApiResponse<HookLogResponse>> {
+    return this.command('hook.log', { id, limit });
   }
 
-  async decompileBlueprint(index: number): Promise<ApiResponse<BlueprintDecompileData>> {
-    return this.command('blueprint.decompile', { index });
-  }
-
-  async getBlueprintBytecode(index: number): Promise<ApiResponse<BlueprintBytecodeData>> {
-    return this.command('blueprint.bytecode', { index });
-  }
-
-  async decompileBlueprintByPath(
-    functionPath: string,
+  async decompileBlueprint(
+    fn: FunctionDetail,
+    profileId: string,
   ): Promise<ApiResponse<BlueprintDecompileData>> {
-    return this.command('blueprint.decompile', { function_path: functionPath });
+    return this.command('blueprint.decompile', {
+      function: fn.handle,
+      function_path: fn.full_path,
+      context_generation: fn.context_generation,
+      object_snapshot_generation: fn.object_snapshot_generation,
+      type_snapshot_generation: fn.type_snapshot_generation,
+      profile_id: profileId,
+    });
   }
 
-  async getBlueprintBytecodeByPath(
-    functionPath: string,
-  ): Promise<ApiResponse<BlueprintBytecodeData>> {
-    return this.command('blueprint.bytecode', { function_path: functionPath });
+  async getBlueprintBytecode(fn: FunctionDetail): Promise<ApiResponse<BlueprintBytecodeData>> {
+    return this.command('blueprint.bytecode', {
+      function: fn.handle,
+      function_path: fn.full_path,
+      context_generation: fn.context_generation,
+      object_snapshot_generation: fn.object_snapshot_generation,
+      type_snapshot_generation: fn.type_snapshot_generation,
+    });
   }
 
   async addWatch(
-    objectIndex: number,
-    property: string,
+    property: ObjectProperty,
+    intervalMs = 250,
+    enabled = true,
   ): Promise<ApiResponse<{
     id: number;
-    object_index: number;
-    property: string;
-    current_value: unknown;
+    state: 'enabled' | 'disabled';
+    spec: unknown;
   }>> {
-    return this.command('watch.add', { object_index: objectIndex, property });
+    return this.command('watch.add', {
+      object: property.object,
+      object_snapshot_generation: property.object_snapshot_generation,
+      type_snapshot_generation: property.type_snapshot_generation,
+      declaring_type_path: property.declaring_type_path,
+      property_name: property.property_name,
+      array_index: property.array_index,
+      interval_ms: intervalMs,
+      enabled,
+    });
   }
 
   async listWatches(): Promise<ApiResponse<WatchListResponse>> {
     return this.command('watch.list');
   }
 
-  async removeWatch(id: number): Promise<ApiResponse<{ removed: number }>> {
+  async setWatchEnabled(id: number, enabled: boolean): Promise<ApiResponse<{ id: number; enabled: boolean }>> {
+    return this.command('watch.enable', { id, enabled });
+  }
+
+  async removeWatch(id: number): Promise<ApiResponse<{ id: number; removed: true }>> {
     return this.command('watch.remove', { id });
   }
 
-  async getWatchHistory(id: number, limit = 200): Promise<ApiResponse<WatchHistoryData>> {
-    return this.command('watch.history', { id, limit });
+  async getWatchHistory(id: number, limit = 32): Promise<ApiResponse<WatchHistoryData>> {
+    return this.command('watch.snapshot', { id, history_limit: limit });
   }
 
-  async startDump(type: DumpType): Promise<ApiResponse<{ job_id: string; message: string }>> {
+  async drainWatchEvents(limit = 32): Promise<ApiResponse<WatchDrainData>> {
+    return this.command('watch.events.drain', { limit });
+  }
+
+  async startScopedDump(request: DumpStartRequest): Promise<ApiResponse<{
+    job_id: string;
+    format: DumpType;
+    admission: 'accepted';
+  }>> {
     const operations: Record<DumpType, string> = {
       sdk: 'dump.sdk.start',
       usmap: 'dump.usmap.start',
       dumpspace: 'dump.dumpspace.start',
       'ida-script': 'dump.ida.start',
     };
-    return this.command(operations[type], { type });
+    return this.command(operations[request.format], { ...request });
   }
 
-  async getDumpJobs(): Promise<ApiResponse<DumpJob[]>> {
-    return this.command('dump.jobs.list');
+  async listScopedDumpJobs(
+    scope: DumpScope,
+    maxJobs = 64,
+  ): Promise<ApiResponse<DumpJobListResponse>> {
+    return this.command('dump.jobs.list', { ...scope, max_jobs: maxJobs });
   }
 
-  async getDumpJob(id: string): Promise<ApiResponse<DumpJob>> {
-    return this.command('dump.jobs.get', { id });
+  async getScopedDumpJob(
+    scope: DumpScope,
+    jobId: string,
+    afterEventSequence = 0,
+    maxEvents = 128,
+  ): Promise<ApiResponse<DumpJobSnapshotResponse>> {
+    return this.command('dump.jobs.get', {
+      ...scope,
+      job_id: jobId,
+      after_event_sequence: afterEventSequence,
+      max_events: maxEvents,
+    });
+  }
+
+  async cancelScopedDumpJob(
+    scope: DumpScope,
+    jobId: string,
+  ): Promise<ApiResponse<{
+    job_id: string;
+    disposition: 'cancelled_before_start' | 'cancellation_requested';
+  }>> {
+    return this.command('dump.jobs.cancel', { ...scope, job_id: jobId });
   }
 
   async scanUEProcesses(): Promise<HostProcessInfo[]> {

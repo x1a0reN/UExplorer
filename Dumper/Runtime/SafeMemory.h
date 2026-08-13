@@ -16,6 +16,7 @@ enum class MemoryError : std::uint8_t
 	RegionNotCommitted,
 	AccessDenied,
 	ProtectionChangeFailed,
+	ProtectionRaceDetected,
 	AccessViolation,
 	ProtectionRestoreFailed,
 	ExecutableWriteDenied,
