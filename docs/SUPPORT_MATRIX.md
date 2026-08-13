@@ -19,11 +19,13 @@ These assets are available for development, but none changes the support rows ab
 - The current R5 code checkpoint adds strict Memory commands, a bounded Watch scheduler
   with pinned immutable subscription bindings and explicit pull drain, descriptor-proven
   enum codecs and an owned destructor journal, generation-bound raw Blueprint Script
-  capture plus explicit-profile bounded disassembly, Hook/Dump ownership primitives, and
+  capture plus explicit-profile bounded disassembly, generation-covered ProcessEvent Hook
+  production ownership, Dump ownership primitives, and
   an end-to-end bounded call-batch command path that reuses the exact single-call adapter.
   It has no target-process evidence for any of them. Production
-  UEnum entry-table and Blueprint opcode/operand profile witnesses, the ProcessEvent Hook
-  producer, generator worker, and real batch ProcessEvent fixture are still missing, so no
+  UEnum entry-table and Blueprint opcode/operand profile witnesses, Hook parameter/push and
+  target restore/rate fixtures, generator worker, and real batch ProcessEvent fixture are
+  still missing, so no
   profile support claim follows from these source changes.
 
 - `D:\Projects\UnrealEngine` contains source trees for UE 4.21.2, 4.24.3,
@@ -181,5 +183,5 @@ The R4 desktop transport boundary is verified independently of an Unreal profile
   load, rejection, Pipe handshake, and Core Ready stages.
 
 These fixtures prove the process and transport boundary only. They do not validate UE
-object layouts, GC behavior, ProcessEvent, Watch/Hook producers, generator semantics,
+object layouts, GC behavior, ProcessEvent, Watch push/Hook target behavior, generator semantics,
 or clean unload in a supported engine, so every engine row above remains `Not supported`.

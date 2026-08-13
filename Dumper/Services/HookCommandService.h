@@ -19,6 +19,7 @@ namespace UExplorer::Runtime
 {
 class CoreRuntime;
 class EngineFacade;
+class GameThreadExecutor;
 }
 
 namespace UExplorer::Services
@@ -83,7 +84,8 @@ enum class HookSubscriptionError : std::uint8_t
 	Terminal,
 	InvalidLimit,
 	AllocationFailed,
-	CollectorDrainFailed
+	CollectorDrainFailed,
+	CaptureModeUnavailable
 };
 
 const char* ToString(HookSubscriptionError error) noexcept;
@@ -129,6 +131,8 @@ public:
 		const Runtime::FunctionHandle& function,
 		std::uint64_t objectSnapshotGeneration,
 		std::uint64_t typeSnapshotGeneration) const noexcept;
+	const HookProducerSubscription* FindByFunctionAddress(
+		std::uintptr_t functionAddress) const noexcept;
 
 private:
 	friend class HookCommandService;
@@ -136,6 +140,7 @@ private:
 	std::vector<HookProducerSubscription> m_Entries;
 	// Zero is empty; populated values are one-based indexes into m_Entries.
 	std::vector<std::uint32_t> m_Buckets;
+	std::vector<std::uint32_t> m_AddressBuckets;
 };
 
 struct HookCommandError
@@ -167,6 +172,7 @@ struct HookCommandLimits
 	std::size_t MaxLogEntriesPerSubscription = 128;
 	std::size_t MaxLogBytesPerSubscription = 256 * 1024;
 	std::size_t MaxDrainBatch = 256;
+	bool AllowPreEncodedPayload = true;
 };
 
 // Transport-neutral subscription registry and worker-side collector drain.
@@ -189,7 +195,8 @@ public:
 		Runtime::HookEventCollector& collector,
 		HookCommandLimits limits = {},
 		Runtime::CoreRuntime* runtime = nullptr,
-		Runtime::EngineFacade* engine = nullptr);
+		Runtime::EngineFacade* engine = nullptr,
+		Runtime::GameThreadExecutor* gameThread = nullptr);
 	~HookCommandService();
 
 	HookCommandService(const HookCommandService&) = delete;
@@ -235,6 +242,7 @@ private:
 	HookCommandLimits m_Limits;
 	Runtime::CoreRuntime* m_Runtime = nullptr;
 	Runtime::EngineFacade* m_Engine = nullptr;
+	Runtime::GameThreadExecutor* m_GameThread = nullptr;
 	bool m_Configured = false;
 	std::shared_ptr<const HookEnabledSnapshot> m_EmptyEnabledSnapshot;
 	std::atomic<std::shared_ptr<const HookEnabledSnapshot>> m_EnabledSnapshot;

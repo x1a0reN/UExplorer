@@ -25,7 +25,7 @@ UExplorer 是一个面向 Unreal Engine 的 **SDK Dump + 实时游戏内省工�
 └──────────────────────────────────────────────┘
 ```
 
-当前分支已完成 R4 原子通信切换并继续 R5 领域实现。唯一桌面主链路仍是 React -> Tauri `domain_request` -> Rust `DomainService` -> PID-scoped Named Pipe -> `CoreCommandService`。除既有 Object/Type/property/call/World 与 stored/computed transform 外，当前代码检查点已加入 strict Memory、owned-binding Watch pull、descriptor-proven enum/destructor journal、generation-bound Blueprint raw Script capture、explicit-profile bounded disassembly、单字段 reflected World transform mutation，以及 Hook collector/command、Dump coordinator/command和端到端 call.batch。World mutation 只开放 world/relative scale 和 world rotation；其余字段稳定拒绝。call.batch 由单 active coordinator 串行复用 exact single-call adapter；Hook/Dump 仍缺 ProcessEvent producer/generator worker，Blueprint decompile 仍缺 exact opcode/operand profile，生产 UEnum entry table 也未见证。`D:\Steam\steamapps\common\Wandering Sword` 仍没有可启动游戏 `.exe`，所有新增路径都只有代码/合成边界证据，所有 profile 保持 `Not supported`。
+当前分支已完成 R4 原子通信切换并继续 R5 领域实现。唯一桌面主链路仍是 React -> Tauri `domain_request` -> Rust `DomainService` -> PID-scoped Named Pipe -> `CoreCommandService`。除既有 Object/Type/property/call/World 与 stored/computed transform 外，当前代码检查点已加入 strict Memory、owned-binding Watch pull、descriptor-proven enum/destructor journal、generation-bound Blueprint raw Script capture、explicit-profile bounded disassembly、单字段 reflected World transform mutation、generation-covered ProcessEvent Hook producer、Dump coordinator/command和端到端 call.batch。World mutation 只开放 world/relative scale 和 world rotation；其余字段稳定拒绝。call.batch 由单 active coordinator 串行复用 exact single-call adapter；Hook 目前只发布 fixed metadata，仍缺参数编码与 Pipe/Tauri push，Dump 缺 generator worker，Blueprint decompile 缺 exact opcode/operand profile，生产 UEnum entry table 也未见证。`D:\Steam\steamapps\common\Wandering Sword` 仍没有可启动游戏 `.exe`，所有新增路径都只有代码/合成边界证据，所有 profile 保持 `Not supported`。
 
 ---
 
@@ -62,7 +62,7 @@ UExplorer/
 │   │   ├── PropertyCodec.h/.cpp      #   显式状态、ScriptArray、struct 稳定快照与 canonical math owned encoder
 │   │   ├── ParamFrame.h/.cpp         #   ProcessEvent owned frame、enum/math codec 与逆序 destructor journal
 │   │   ├── WatchScheduler.*          #   generation-bound 有界逐帧采样、history/event/drop 状态
-│   │   ├── HookEventCollector.*      #   预分配有界热路径 collector；尚无 ProcessEvent producer
+│   │   ├── HookEventCollector.*      #   预分配有界 ProcessEvent event collector
 │   │   ├── DumpJobCoordinator.*      #   single-active owned job/deadline/cancel；尚无 generator worker
 │   │   ├── FunctionCallBatchCoordinator.* # single-active bounded batch/deadline/cancel/retained result owner
 │   │   ├── BlueprintBytecodeCapture.* # exact generation + explicit Script layout bounded capture
@@ -98,7 +98,8 @@ UExplorer/
 │   │   ├── MemoryCommandService.*    #   strict bounded raw/typed/pointer-chain command
 │   │   ├── WatchCommandService.*     #   watch CRUD/snapshot/显式 pull drain
 │   │   ├── BlueprintCommandService.* #   exact function/generation bytecode/decompile gate
-│   │   ├── HookCommandService.*      #   immutable enabled state/log command；runtime capability false
+│   │   ├── HookCommandService.*      #   exact subscription/live admission/immutable enabled state/log
+│   │   ├── ProcessEventHookOwner.*   #   generation-covered CDO vtable patch、bounded callback、restore/drain
 │   │   ├── DumpCommandService.*      #   strict job command；无 worker 时 start fail closed
 │   │   ├── WorldCommandService.*     #   worker-only World inspect/detail/shortcut 与 Actor-bound cursor query
 │   │   ├── WorldTransformCommandService.* # game-thread same-witness stored + reflected-getter computed transform read
@@ -304,9 +305,12 @@ DllMain(DLL_PROCESS_ATTACH)
        ├─ OpenAdmissions()                 仅在事实 Ready 后接收 Host
        └─ [稳定 Object Snapshot generation]
            └─ Prepare/attach witnessed reflection capture；终态 detach/release
+	       └─ [稳定 TypeSnapshot generation]
+	           └─ ProcessEventHookOwner::Reconcile() 发布当前 Class CDO vtable coverage
        │
        └─ [Host Shutdown RPC 或当前 legacy F6 触发退出]
             ├─ Stop Named Pipe / settle requests
+	        ├─ Restore ProcessEvent slots / drain callbacks / stop collector
             ├─ Restore PostRender Hook
             ├─ Detach reflection/snapshot clients / FrameScheduler / stop facade
             ├─ Drain CoreRuntime request leases
@@ -587,7 +591,7 @@ Functions.tsx (四合一)
   ├─ static call target             types.classes.cdo -> explicit CDO handle
   ├─ blueprint.bytecode/decompile   exact FunctionHandle/generations；缺 profile 时 unavailable
   ├─ call.batch                     owned coordinator -> exact single-call adapter -> game-thread queue
-  └─ Hook                           capability gate（只有 collector/command 原语，无 producer）
+    └─ Hook                           当前 generation coverage gate -> fixed-metadata ProcessEvent producer
 
 WorldBrowser.tsx
   ├─ world.inspect / world.levels / world.actors.list  immutable WorldSnapshot + cursor
@@ -621,8 +625,8 @@ Core bounded Event writer
   -> React page-local reconciliation
 ```
 
-Watch 当前只实现显式 pull drain；Hook 尚无 ProcessEvent producer。因此“通道存在”
-不等于 Watch/Hook push 功能可用。
+Watch 当前只实现显式 pull drain；Hook producer 也只进入 Core collector/log，尚无
+Named Pipe/Tauri Channel push。因此“collector/通道存在”不等于 push 功能可用。
 
 ---
 

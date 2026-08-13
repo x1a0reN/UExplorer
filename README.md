@@ -210,9 +210,12 @@ added. A successful build or synthetic fixture does not establish target runtime
   one bounded serial job, total deadline, cancellation and retained per-item results; every
   item reuses the exact single-call preparation/game-thread/completion path. Snapshot drift
   fails closed, and no real UE batch round-trip has been run.
-- Hook collector/commands and Dump coordinator/commands remain ownership primitives only.
-  No ProcessEvent producer or generator worker exists, so both capabilities remain
-  unavailable.
+- Hook now has a production `ProcessEventHookOwner`: current TypeSnapshot Class/CDO
+  evidence is live-validated on the game thread, unique vtable slots retain their own
+  originals, and bounded fixed-metadata enter/exit events reach `HookEventCollector`.
+  Capability follows exact current-generation coverage; restore/drain failure blocks
+  unload. Parameter capture and Pipe/Tauri push are not implemented, and no real UE Hook
+  fixture has run. Dump still has no generator worker and remains unavailable.
 - World mutation is a strict single-field reflected command for world/relative scale and
   world rotation. Location/relative rotation remain unavailable until `FHitResult` has a
   witnessed construction/destruction profile.

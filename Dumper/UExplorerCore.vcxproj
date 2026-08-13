@@ -163,6 +163,7 @@
 	<ClCompile Include="Services\HookCommandService.cpp" />
 	<ClCompile Include="Services\MemoryCommandService.cpp" />
 	<ClCompile Include="Services\ObjectPropertyCommandService.cpp" />
+	<ClCompile Include="Services\ProcessEventHookOwner.cpp" />
 	<ClCompile Include="Services\TypeCommandService.cpp" />
 	<ClCompile Include="Services\WatchCommandService.cpp" />
 	<ClCompile Include="Services\WorldCommandService.cpp" />
@@ -279,6 +280,7 @@
 	<ClInclude Include="Services\HookCommandService.h" />
 	<ClInclude Include="Services\MemoryCommandService.h" />
 	<ClInclude Include="Services\ObjectPropertyCommandService.h" />
+	<ClInclude Include="Services\ProcessEventHookOwner.h" />
 	<ClInclude Include="Services\TypeCommandService.h" />
 	<ClInclude Include="Services\WatchCommandService.h" />
 	<ClInclude Include="Services\WorldCommandService.h" />

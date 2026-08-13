@@ -33,6 +33,7 @@
 #include "Services/DumpCommandService.h"
 #include "Services/FunctionCallBatchCommandService.h"
 #include "Services/HookCommandService.h"
+#include "Services/ProcessEventHookOwner.h"
 #include "Services/WatchCommandService.h"
 #include "Settings.h"
 #include "OffsetFinder/Offsets.h"
@@ -63,6 +64,7 @@ static std::unique_ptr<UExplorer::Services::ObjectPropertyWatchSampleSource> g_W
 static std::unique_ptr<UExplorer::Runtime::WatchScheduler> g_WatchScheduler;
 static std::unique_ptr<UExplorer::Runtime::HookEventCollector> g_HookCollector;
 static std::unique_ptr<UExplorer::Services::HookCommandService> g_HookCommandService;
+static std::unique_ptr<UExplorer::Services::ProcessEventHookOwner> g_ProcessEventHook;
 static std::unique_ptr<UExplorer::Services::DumpCommandService> g_DumpCommandService;
 static std::unique_ptr<UExplorer::Runtime::PostRenderHook> g_PostRenderHook;
 static bool g_FrameSchedulerPumpAttached = false;
@@ -126,8 +128,17 @@ namespace
 			&& g_WatchFrameClientAttached;
 		probes.HookCommandServiceEnabled = g_HookCommandService
 			&& g_HookCommandService->IsConfigured();
-		// No ProcessEvent owner is installed in this checkpoint.
-		probes.HookProducerInstalled = false;
+		const UExplorer::Services::ProcessEventHookDiagnostics hook =
+			g_ProcessEventHook
+				? g_ProcessEventHook->Diagnostics()
+				: UExplorer::Services::ProcessEventHookDiagnostics{};
+		probes.HookProducerInstalled = hook.Configured
+			&& hook.Installed
+			&& hook.CoverageComplete
+			&& probes.Types
+			&& objectSnapshot
+			&& hook.CoveredObjectSnapshotGeneration == objectSnapshot->Generation
+			&& hook.CoveredTypeSnapshotGeneration == probes.Types->Generation();
 		probes.DumpCommandServiceEnabled = static_cast<bool>(g_DumpCommandService);
 		// The coordinator is intentionally absent until an owned generator worker exists.
 		probes.DumpWorkerEnabled = false;
@@ -629,6 +640,55 @@ namespace
 		return true;
 	}
 
+	void DriveProcessEventHook(
+		std::uint64_t& lastAttemptedTypeGeneration,
+		UExplorer::Services::ProcessEventHookError& lastReportedError,
+		std::chrono::steady_clock::time_point& nextRetry)
+	{
+		if (!g_ProcessEventHook || !g_EngineFacade)
+			return;
+		const std::shared_ptr<const UExplorer::Runtime::TypeSnapshot> types =
+			g_EngineFacade->Types().Current();
+		if (!types)
+			return;
+		const UExplorer::Services::ProcessEventHookDiagnostics diagnostics =
+			g_ProcessEventHook->Diagnostics();
+		if (diagnostics.Installed
+			&& diagnostics.CoverageComplete
+			&& diagnostics.CoveredTypeSnapshotGeneration == types->Generation())
+		{
+			lastReportedError = UExplorer::Services::ProcessEventHookError::None;
+			return;
+		}
+
+		const auto now = std::chrono::steady_clock::now();
+		if (lastAttemptedTypeGeneration == types->Generation() && now < nextRetry)
+			return;
+		lastAttemptedTypeGeneration = types->Generation();
+		nextRetry = now + std::chrono::seconds(1);
+		const UExplorer::Services::ProcessEventHookResult reconciled =
+			g_ProcessEventHook->Reconcile(std::chrono::milliseconds(5000));
+		if (reconciled.Ok())
+		{
+			if (reconciled.Changed)
+			{
+				std::cerr << "[UExplorer] ProcessEvent hook coverage published: type_snapshot_generation="
+					<< reconciled.TypeSnapshotGeneration
+					<< " patched_vtables=" << reconciled.TotalPatchCount << "\n";
+			}
+			lastReportedError = UExplorer::Services::ProcessEventHookError::None;
+			return;
+		}
+		if (lastReportedError != reconciled.Error)
+		{
+			std::cerr << "[UExplorer] ProcessEvent hook unavailable: "
+				<< UExplorer::Services::ToString(reconciled.Error)
+				<< " type_snapshot_generation=" << reconciled.TypeSnapshotGeneration
+				<< "\n";
+			lastReportedError = reconciled.Error;
+		}
+	}
+
 	void ReclaimSnapshotStorage()
 	{
 		if (!g_EngineFacade)
@@ -744,6 +804,19 @@ namespace
 			FreeConsole();
 			ExitThread(1);
 		}
+		if (g_ProcessEventHook
+			&& !g_ProcessEventHook->StopAndDrain(
+				std::chrono::milliseconds(5000)).Ok())
+		{
+			g_Runtime.RecordShutdownFailure(
+				"PROCESS_EVENT_HOOK_INITIALIZATION_STOP_FAILED",
+				"ProcessEvent patches or callbacks did not drain after initialization failed");
+			std::cerr << "[UExplorer] ProcessEvent hook did not restore; DLL remains loaded.\n";
+			if (consoleFile)
+				fclose(consoleFile);
+			FreeConsole();
+			ExitThread(1);
+		}
 		g_PipeServer.reset();
 		if (!DetachFrameScheduling(std::chrono::milliseconds(5000)))
 		{
@@ -775,6 +848,7 @@ namespace
 		g_CallBatchCoordinator.reset();
 		g_CallBatchWorker.reset();
 		g_CallBatchAdapter.reset();
+		g_ProcessEventHook.reset();
 		g_HookCommandService.reset();
 		if (g_HookCollector
 			&& !g_HookCollector->StopAndDrain(std::chrono::milliseconds(5000)).Ok())
@@ -969,11 +1043,23 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 			runtimeSnapshot.SessionId,
 			runtimeSnapshot.Context->Generation(),
 			*g_HookCollector,
-			UExplorer::Services::HookCommandLimits{},
+			UExplorer::Services::HookCommandLimits{
+				.AllowPreEncodedPayload = false
+			},
 			&g_Runtime,
-			g_EngineFacade.get());
+			g_EngineFacade.get(),
+			&UExplorer::Runtime::GetGameThreadExecutor());
 		if (!g_HookCommandService->IsConfigured())
 			throw std::runtime_error("Hook command service rejected the bounded collector");
+		g_ProcessEventHook = std::make_unique<
+			UExplorer::Services::ProcessEventHookOwner>(
+				runtimeSnapshot.Context,
+				*g_EngineFacade,
+				UExplorer::Runtime::GetGameThreadExecutor(),
+				*g_HookCollector,
+				*g_HookCommandService);
+		if (!g_ProcessEventHook->IsConfigured())
+			throw std::runtime_error("ProcessEvent hook owner rejected the validated context");
 		// Keep the strict service boundary present, but fail every operation until an owned worker exists.
 		g_DumpCommandService = std::make_unique<UExplorer::Services::DumpCommandService>(
 			nullptr);
@@ -1132,6 +1218,10 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 	std::uint64_t lastReportedTypeFailureFingerprint = 0;
 	std::uint64_t lastRequestedWorldTypeGeneration = 0;
 	std::uint64_t lastReportedWorldFailureGeneration = 0;
+	std::uint64_t lastHookAttemptedTypeGeneration = 0;
+	UExplorer::Services::ProcessEventHookError lastReportedHookError =
+		UExplorer::Services::ProcessEventHookError::None;
+	auto nextHookRetry = std::chrono::steady_clock::now();
 	while (startupReady && g_Running.load())
 	{
 		ReclaimSnapshotStorage();
@@ -1161,6 +1251,10 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 			g_Running.store(false, std::memory_order_release);
 			break;
 		}
+		DriveProcessEventHook(
+			lastHookAttemptedTypeGeneration,
+			lastReportedHookError,
+			nextHookRetry);
 		RefreshRuntimeCapabilities();
 		if (!EnsurePipeAdmissions())
 		{
@@ -1209,6 +1303,7 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 	bool pipeStopped = true;
 	bool callBatchStopped = true;
 	bool blueprintCaptureStopped = true;
+	bool processEventHookStopped = true;
 	bool hooksStopped = true;
 	bool worldFrameStopped = true;
 	bool watchFrameStopped = true;
@@ -1246,22 +1341,30 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 		requestsDrained = g_Runtime.WaitForRequests(std::chrono::milliseconds(5000));
 		return requestsDrained;
 	});
-	shutdown.AddStage("hook_collector", [&] {
+	shutdown.AddStage("process_event_hook", [&] {
 		if (!pipeStopped || !requestsDrained)
+			return false;
+		processEventHookStopped = !g_ProcessEventHook
+			|| g_ProcessEventHook->StopAndDrain(
+				std::chrono::milliseconds(5000)).Ok();
+		return processEventHookStopped;
+	});
+	shutdown.AddStage("hook_collector", [&] {
+		if (!pipeStopped || !requestsDrained || !processEventHookStopped)
 			return false;
 		hookCollectorStopped = !g_HookCollector
 			|| g_HookCollector->StopAndDrain(std::chrono::milliseconds(5000)).Ok();
 		return hookCollectorStopped;
 	});
 	shutdown.AddStage("world_frame_client", [&] {
-		if (!pipeStopped || !requestsDrained)
+		if (!pipeStopped || !requestsDrained || !processEventHookStopped)
 			return false;
 		worldFrameStopped = DetachWorldFrameClient(
 			std::chrono::milliseconds(5000));
 		return worldFrameStopped;
 	});
 	shutdown.AddStage("watch_frame_client", [&] {
-		if (!pipeStopped || !requestsDrained)
+		if (!pipeStopped || !requestsDrained || !processEventHookStopped)
 			return false;
 		if (g_WatchScheduler)
 		{
@@ -1275,21 +1378,21 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 		return watchFrameStopped;
 	});
 	shutdown.AddStage("type_frame_client", [&] {
-		if (!pipeStopped || !requestsDrained)
+		if (!pipeStopped || !requestsDrained || !processEventHookStopped)
 			return false;
 		typeFrameStopped = DetachTypeFrameClient(
 			std::chrono::milliseconds(5000));
 		return typeFrameStopped;
 	});
 	shutdown.AddStage("reflection_frame_client", [&] {
-		if (!pipeStopped || !requestsDrained)
+		if (!pipeStopped || !requestsDrained || !processEventHookStopped)
 			return false;
 		reflectionFrameStopped = DetachReflectionFrameClient(
 			std::chrono::milliseconds(5000));
 		return reflectionFrameStopped;
 	});
 	shutdown.AddStage("snapshot_frame_client", [&] {
-		if (!pipeStopped || !requestsDrained)
+		if (!pipeStopped || !requestsDrained || !processEventHookStopped)
 			return false;
 		if (!g_SnapshotFrameClientAttached)
 			return true;
@@ -1305,7 +1408,7 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 		return snapshotFrameStopped;
 	});
 	shutdown.AddStage("frame_scheduler", [&] {
-		if (!pipeStopped || !requestsDrained)
+		if (!pipeStopped || !requestsDrained || !processEventHookStopped)
 			return false;
 		if (g_FrameSchedulerPumpAttached)
 		{
@@ -1319,7 +1422,7 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 		return frameSchedulerStopped;
 	});
 	shutdown.AddStage("post_render_hook", [&] {
-		if (!pipeStopped || !requestsDrained)
+		if (!pipeStopped || !requestsDrained || !processEventHookStopped)
 			return false;
 		// The game-thread pump remains active until every frame client has drained.
 		hooksStopped = !g_PostRenderHook
@@ -1330,6 +1433,7 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 		return pipeStopped
 			&& callBatchStopped
 			&& blueprintCaptureStopped
+			&& processEventHookStopped
 			&& requestsDrained
 			&& worldFrameStopped
 			&& watchFrameStopped
@@ -1365,6 +1469,7 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 	g_CallBatchCoordinator.reset();
 	g_CallBatchWorker.reset();
 	g_CallBatchAdapter.reset();
+	g_ProcessEventHook.reset();
 	g_HookCommandService.reset();
 	g_HookCollector.reset();
 	g_DumpCommandService.reset();

@@ -1637,22 +1637,6 @@ CoreCommandResponse CoreCommandService::ExecuteHookCommand(
 	}
 
 	constexpr const char* capabilityName = "hook.monitor";
-	const Runtime::CapabilityStatus* capability = lease->Capabilities()
-		? lease->Capabilities()->Find(capabilityName)
-		: nullptr;
-	if (!capability || !capability->Available)
-	{
-		return Failure(
-			request,
-			capability && !capability->ReasonCode.empty()
-				? capability->ReasonCode
-				: "HOOK_CAPABILITY_UNAVAILABLE",
-			capability && !capability->Reason.empty()
-				? capability->Reason
-				: "No validated ProcessEvent producer is installed",
-			{{"capability", capabilityName}},
-			timing());
-	}
 	if (!m_HookCommandService || !m_HookCommandService->IsConfigured())
 	{
 		return Failure(
@@ -1662,7 +1646,28 @@ CoreCommandResponse CoreCommandService::ExecuteHookCommand(
 			{{"capability", capabilityName}},
 			timing());
 	}
-
+	const bool requestedEnabled = request.Data.is_object()
+		&& request.Data.contains("enabled")
+		&& request.Data.at("enabled").is_boolean()
+		&& request.Data.at("enabled").get<bool>();
+	const bool requiresProducer = requestedEnabled
+		&& (request.Operation == "hook.add" || request.Operation == "hook.enable");
+	const Runtime::CapabilityStatus* capability = lease->Capabilities()
+		? lease->Capabilities()->Find(capabilityName)
+		: nullptr;
+	if (requiresProducer && (!capability || !capability->Available))
+	{
+		return Failure(
+			request,
+			capability && !capability->ReasonCode.empty()
+				? capability->ReasonCode
+				: "HOOK_CAPABILITY_UNAVAILABLE",
+			capability && !capability->Reason.empty()
+				? capability->Reason
+				: "No ProcessEvent producer has complete current snapshot coverage",
+			{{"capability", capabilityName}},
+			timing());
+	}
 	HookCommandResult result = m_HookCommandService->Execute(
 		request.Operation,
 		request.Data);

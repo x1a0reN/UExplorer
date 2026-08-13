@@ -2,6 +2,7 @@
 
 #include "Runtime/CoreRuntime.h"
 #include "Runtime/EngineFacade.h"
+#include "Runtime/GameThreadExecutor.h"
 
 #include <algorithm>
 #include <charconv>
@@ -309,6 +310,51 @@ bool ValidLimits(const HookCommandLimits& limits) noexcept
 		&& limits.MaxDrainBatch <= HookCommandService::kHardMaxDrainBatch;
 }
 
+class HookFunctionValidationWork final : public Runtime::IGameThreadWork
+{
+public:
+	HookFunctionValidationWork(
+		Runtime::EngineFacade& engine,
+		std::shared_ptr<const Runtime::EngineSnapshot> objects,
+		std::shared_ptr<const Runtime::TypeSnapshot> types,
+		Runtime::FunctionHandle function)
+		: m_Engine(engine),
+		  m_Objects(std::move(objects)),
+		  m_Types(std::move(types)),
+		  m_Function(std::move(function))
+	{
+	}
+
+	bool Execute() override
+	{
+		if (m_Engine.Snapshots().Current() != m_Objects
+			|| m_Engine.Types().Current() != m_Types)
+		{
+			m_Result = HookSubscriptionError::SnapshotGenerationMismatch;
+			return true;
+		}
+		if (!m_Engine.ValidateFunctionHandle(m_Function).Ok())
+		{
+			m_Result = HookSubscriptionError::FunctionSnapshotMismatch;
+			return true;
+		}
+		m_Result = m_Engine.Snapshots().Current() == m_Objects
+			&& m_Engine.Types().Current() == m_Types
+			? HookSubscriptionError::None
+			: HookSubscriptionError::SnapshotGenerationMismatch;
+		return true;
+	}
+
+	HookSubscriptionError Result() const noexcept { return m_Result; }
+
+private:
+	Runtime::EngineFacade& m_Engine;
+	std::shared_ptr<const Runtime::EngineSnapshot> m_Objects;
+	std::shared_ptr<const Runtime::TypeSnapshot> m_Types;
+	Runtime::FunctionHandle m_Function;
+	HookSubscriptionError m_Result = HookSubscriptionError::CurrentSnapshotUnavailable;
+};
+
 HookCommandResult Failure(
 	std::string code,
 	std::string message,
@@ -365,6 +411,8 @@ const char* ErrorMessage(const HookSubscriptionError error) noexcept
 		return "The bounded hook operation could not allocate owned state";
 	case HookSubscriptionError::CollectorDrainFailed:
 		return "The hook event collector could not be drained by the worker";
+	case HookSubscriptionError::CaptureModeUnavailable:
+		return "The installed ProcessEvent producer does not implement the requested capture mode";
 	}
 	return "The hook operation failed";
 }
@@ -573,6 +621,8 @@ const char* ToString(const HookSubscriptionError error) noexcept
 	case HookSubscriptionError::InvalidLimit: return "HOOK_LIMIT_INVALID";
 	case HookSubscriptionError::AllocationFailed: return "HOOK_ALLOCATION_FAILED";
 	case HookSubscriptionError::CollectorDrainFailed: return "HOOK_COLLECTOR_DRAIN_FAILED";
+	case HookSubscriptionError::CaptureModeUnavailable:
+		return "HOOK_CAPTURE_MODE_UNAVAILABLE";
 	}
 	return "HOOK_UNKNOWN_ERROR";
 }
@@ -624,19 +674,41 @@ const HookProducerSubscription* HookEnabledSnapshot::Find(
 	return nullptr;
 }
 
+const HookProducerSubscription* HookEnabledSnapshot::FindByFunctionAddress(
+	const std::uintptr_t functionAddress) const noexcept
+{
+	if (functionAddress == 0 || m_AddressBuckets.empty())
+		return nullptr;
+	const std::size_t mask = m_AddressBuckets.size() - 1;
+	std::size_t bucket = static_cast<std::size_t>(functionAddress) & mask;
+	for (std::size_t probe = 0; probe < m_AddressBuckets.size(); ++probe)
+	{
+		const std::uint32_t stored = m_AddressBuckets[bucket];
+		if (stored == 0)
+			return nullptr;
+		const HookProducerSubscription& candidate = m_Entries[stored - 1];
+		if (candidate.Spec.Function.Function.Address == functionAddress)
+			return &candidate;
+		bucket = (bucket + 1) & mask;
+	}
+	return nullptr;
+}
+
 HookCommandService::HookCommandService(
 	std::string sessionId,
 	const std::uint64_t contextGeneration,
 	Runtime::HookEventCollector& collector,
 	HookCommandLimits limits,
 	Runtime::CoreRuntime* const runtime,
-	Runtime::EngineFacade* const engine)
+	Runtime::EngineFacade* const engine,
+	Runtime::GameThreadExecutor* const gameThread)
 	: m_SessionId(std::move(sessionId)),
 	  m_ContextGeneration(contextGeneration),
 	  m_Collector(collector),
 	  m_Limits(limits),
 	  m_Runtime(runtime),
 	  m_Engine(engine),
+	  m_GameThread(gameThread),
 	  m_EmptyEnabledSnapshot(std::make_shared<const HookEnabledSnapshot>()),
 	  m_EnabledSnapshot(m_EmptyEnabledSnapshot)
 {
@@ -714,6 +786,11 @@ HookSubscriptionError HookCommandService::ValidateSpec(
 	{
 		return HookSubscriptionError::CapturePolicyInvalid;
 	}
+	if (spec.Capture.Mode == HookCaptureMode::PreEncodedPayload
+		&& !m_Limits.AllowPreEncodedPayload)
+	{
+		return HookSubscriptionError::CaptureModeUnavailable;
+	}
 	const Runtime::HookCollectorSnapshot collector = m_Collector.Snapshot();
 	if (spec.Capture.Mode == HookCaptureMode::PreEncodedPayload
 		&& (!collector.ConfigurationSnapshotStable
@@ -727,7 +804,7 @@ HookSubscriptionError HookCommandService::ValidateSpec(
 HookSubscriptionError HookCommandService::ValidateCurrentSpec(
 	const HookSubscriptionSpec& spec) const noexcept
 {
-	if (!m_Runtime || !m_Engine || !m_Engine->IsConfigured())
+	if (!m_Runtime || !m_Engine || !m_GameThread || !m_Engine->IsConfigured())
 		return HookSubscriptionError::CurrentSnapshotUnavailable;
 
 	try
@@ -791,6 +868,19 @@ HookSubscriptionError HookCommandService::ValidateCurrentSpec(
 		{
 			return HookSubscriptionError::SnapshotGenerationMismatch;
 		}
+
+		auto validationWork = std::make_shared<HookFunctionValidationWork>(
+			*m_Engine,
+			objects,
+			types,
+			spec.Function);
+		const Runtime::GameThreadSubmitResult submitted =
+			m_GameThread->SubmitOwned(validationWork, 5000);
+		if (submitted != Runtime::GameThreadSubmitResult::Completed)
+			return HookSubscriptionError::CurrentSnapshotUnavailable;
+		const HookSubscriptionError liveError = validationWork->Result();
+		if (liveError != HookSubscriptionError::None)
+			return liveError;
 		return HookSubscriptionError::None;
 	}
 	catch (...)
@@ -848,6 +938,7 @@ HookCommandService::BuildEnabledSnapshotLocked(
 	while (bucketCount < snapshot->m_Entries.size() * 2)
 		bucketCount *= 2;
 	snapshot->m_Buckets.assign(bucketCount, 0);
+	snapshot->m_AddressBuckets.assign(bucketCount, 0);
 	const std::size_t mask = bucketCount - 1;
 	for (std::size_t index = 0; index < snapshot->m_Entries.size(); ++index)
 	{
@@ -859,6 +950,11 @@ HookCommandService::BuildEnabledSnapshotLocked(
 		while (snapshot->m_Buckets[bucket] != 0)
 			bucket = (bucket + 1) & mask;
 		snapshot->m_Buckets[bucket] = static_cast<std::uint32_t>(index + 1);
+
+		bucket = static_cast<std::size_t>(spec.Function.Function.Address) & mask;
+		while (snapshot->m_AddressBuckets[bucket] != 0)
+			bucket = (bucket + 1) & mask;
+		snapshot->m_AddressBuckets[bucket] = static_cast<std::uint32_t>(index + 1);
 	}
 	return snapshot;
 }
@@ -1088,6 +1184,8 @@ HookCommandResult HookCommandService::Add(const json& data) noexcept
 				return existing && (SameFunctionHandle(
 					existing->Spec.Function,
 					record->Spec.Function)
+					|| existing->Spec.Function.Function.Address
+						== record->Spec.Function.Function.Address
 					|| SameProducerKey(existing->Spec, record->Spec));
 			}))
 			{

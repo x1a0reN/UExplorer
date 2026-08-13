@@ -94,6 +94,7 @@
 	<ClCompile Include="..\..\Dumper\Services\HookCommandService.cpp" />
 	<ClCompile Include="..\..\Dumper\Services\MemoryCommandService.cpp" />
 	<ClCompile Include="..\..\Dumper\Services\ObjectPropertyCommandService.cpp" />
+	<ClCompile Include="..\..\Dumper\Services\ProcessEventHookOwner.cpp" />
 	<ClCompile Include="..\..\Dumper\Services\TypeCommandService.cpp" />
 	<ClCompile Include="..\..\Dumper\Services\WatchCommandService.cpp" />
 	<ClCompile Include="..\..\Dumper\Services\WorldCommandService.cpp" />
@@ -157,6 +158,7 @@
 	<ClInclude Include="..\..\Dumper\Services\HookCommandService.h" />
 	<ClInclude Include="..\..\Dumper\Services\MemoryCommandService.h" />
 	<ClInclude Include="..\..\Dumper\Services\ObjectPropertyCommandService.h" />
+	<ClInclude Include="..\..\Dumper\Services\ProcessEventHookOwner.h" />
 	<ClInclude Include="..\..\Dumper\Services\CoreStatusDiagnostics.h" />
 	<ClInclude Include="..\..\Dumper\Services\TypeCommandService.h" />
 	<ClInclude Include="..\..\Dumper\Services\WatchCommandService.h" />

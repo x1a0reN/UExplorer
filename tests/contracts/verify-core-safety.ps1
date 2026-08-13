@@ -26,6 +26,7 @@ $commandService = Read-ProjectFile 'Dumper\Services\CoreCommandService.cpp'
 $capabilities = Read-ProjectFile 'Dumper\Runtime\CoreCapabilities.h'
 $callApi = Read-ProjectFile 'Dumper\API\CallApi.cpp'
 $hookApi = Read-ProjectFile 'Dumper\API\HookApi.cpp'
+$processEventHook = Read-ProjectFile 'Dumper\Services\ProcessEventHookOwner.cpp'
 $postRenderHook = Read-ProjectFile 'Dumper\Runtime\PostRenderHook.cpp'
 $callbackBarrier = Read-ProjectFile 'Dumper\Runtime\CallbackBarrier.h'
 $vtableHook = Read-ProjectFile 'Dumper\Runtime\VTableHook.cpp'
@@ -122,9 +123,18 @@ Assert-NotContains $memoryPage "subscribeEventStream('/events/watches'" 'Polling
 Assert-Contains $functionsPage 'subscribeSessionEvents' 'Hook events must use the owned Tauri Channel bridge.'
 Assert-NotContains $functionsPage 'subscribeEventStream' 'Functions UI reintroduced the legacy event transport.'
 Assert-Contains $domainService '"hook.add" => DomainRoute::Core("hook.add")' 'Hook commands must use the Core capability boundary.'
-Assert-Contains $main 'probes.HookProducerInstalled = false' 'Main must not advertise Hook monitoring without a producer.'
+foreach ($token in @('ProcessEventHookOwner', 'g_ProcessEventHook->Reconcile',
+        'shutdown.AddStage("process_event_hook"', 'g_ProcessEventHook->StopAndDrain')) {
+    Assert-Contains $main $token 'Main lost production ProcessEvent hook ownership or ordered restoration.'
+}
+foreach ($token in @('VTableHookToken::Install', 'Callbacks.BeginStopping()',
+        'Callbacks.WaitForDrain', 'const std::shared_ptr<State> state = s_Active.load',
+        'TryReadObjectVTable', 'FindByFunctionAddress', 'enterPublished', 'TryPublish',
+        'Engine->ValidateObjectHandle', 'Engine->Types().Current() != operation.Types')) {
+    Assert-Contains $processEventHook $token 'Production ProcessEvent hook lost exact evidence, bounded callback, or drain behavior.'
+}
 Assert-Contains $capabilities 'probes.HookCommandServiceEnabled && probes.HookProducerInstalled' 'Unsafe Hook monitoring must remain producer-gated.'
-Assert-Contains $capabilities 'HOOK_PRODUCER_NOT_INSTALLED' 'Missing Hook producer must have a stable capability reason.'
+Assert-Contains $capabilities 'HOOK_PRODUCER_NOT_READY' 'Incomplete Hook producer coverage must have a stable capability reason.'
 
 foreach ($token in @('DUMP_EXECUTOR_BUSY', 'DUMP_OPTIONS_UNAVAILABLE', 'g_DumpThread',
         'g_DumpStoppedCV.wait_for')) {
@@ -134,4 +144,4 @@ Assert-NotContains $dumpApi 'g_DumpThreads' 'Dump jobs must have one explicit ex
 Assert-NotContains $dumpPage "'60%'" 'The UI must not report synthetic dump progress.'
 Assert-NotContains $dumpPage 'include_packages' 'Unsupported dump options must not remain interactive.'
 
-Write-Host 'Core safety contract verified: owned tasks, production PostRender drain, archived server safety, truthful unavailable features, and USMAP framing.'
+Write-Host 'Core safety contract verified: owned tasks, production PostRender/ProcessEvent drain, archived server safety, capability gates, and USMAP framing.'

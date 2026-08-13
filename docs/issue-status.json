@@ -404,6 +404,7 @@
       "verification": [
         "2026-08-09: restore checks, callback in-flight counters, drain barriers, and unload refusal added",
         "2026-08-09: PostRender and ProcessEvent patches are owned by retryable VTableHookToken instances; token allocation and owner-container reservation precede patching, and failed restore retains the token and blocks unload",
+        "2026-08-13: release ProcessEventHookOwner owns per-vtable originals/tokens, restores them in reverse order before collector/PostRender teardown, quiet-drains callbacks, and blocks destructive shutdown when maintenance, restore, or drain cannot be proved",
         "Core harness verifies RAII restore, enable/disable, external replacement preservation, restore-failure retry, post-stop callback suppression, and quiet drain",
         "Injected target unload fixture remains pending"
       ]
@@ -412,36 +413,40 @@
       "status": "in_progress",
       "verification": [
         "2026-08-09: ProcessEvent monitoring hook is no longer installed by route registration and is lazy on first add",
-        "2026-08-13: release code has bounded collector/command primitives but no ProcessEvent producer wired to them; capability remains false",
-        "First/last-subscription production patch ownership and target fixture remain pending"
+        "2026-08-13: release Main now reconciles a production ProcessEvent producer from current immutable TypeSnapshot Class/CDO evidence; hook.monitor is true only while installed coverage exactly matches the current Object/Type generations",
+        "The producer is generation-driven rather than first/last-subscription lazy, and the real target coverage/restore fixture remains pending"
       ]
     },
 	"HOOK-003": {
 	  "status": "in_progress",
 	  "verification": [
-		"2026-08-13: HookEventCollector exposes a bounded preallocated non-blocking publish path and moves drain/serialization work out of the hot-path API",
-		"No real ProcessEvent producer is connected and no target hot-path fixture has run"
+		"2026-08-13: HookEventCollector exposes a bounded preallocated publish path and moves drain/serialization work out of the hot-path API",
+		"2026-08-13: ProcessEventHookOwner now emits paired fixed-metadata enter/exit records using immutable address/slot lookup, SEH-bounded vtable reads, and an atomic strong owner lifetime with no JSON, Pipe I/O, parameter decoding, or service mutex in the callback",
+		"No target hot-path rate/contention fixture has run"
 	  ]
 	},
 	"HOOK-005": {
 	  "status": "in_progress",
 	  "verification": [
 		"2026-08-13: HookCommandService publishes immutable enabled-subscription snapshots rather than consulting disabled mutable records on the collector path",
-		"Production ProcessEvent hit filtering remains unverified because the producer is absent"
+		"2026-08-13: the production callback performs bounded raw UFunction-address lookup against that snapshot; duplicate retained raw addresses are rejected",
+		"Real target hit filtering and address-reuse/GC behavior remain unverified"
 	  ]
 	},
 	"HOOK-006": {
 	  "status": "in_progress",
 	  "verification": [
-		"2026-08-13: HookCommandService defines strict add/list/enable/remove/log state and explicit duplicate/not-found failures; add and re-enable now validate the current Object/Type snapshots plus complete Function/Owner handles, path, signature, and generations",
-		"The service is not a runtime support claim while hook.monitor remains unavailable"
+		"2026-08-13: HookCommandService defines strict add/list/enable/remove/log state and explicit duplicate/not-found failures; add and re-enable validate current Object/Type snapshots, complete Function/Owner handles, path, signature, and generations",
+		"2026-08-13: add and disabled-to-enabled now also perform a live complete FunctionHandle validation through GameThreadExecutor; list/log/disable/remove remain admitted when producer coverage is unavailable so retained hooks can be withdrawn",
+		"The code path is not a target runtime support claim until the real UE fixture passes"
 	  ]
 	},
 	"HOOK-008": {
 	  "status": "in_progress",
 	  "verification": [
 		"2026-08-13: HookEventCollector bounds payload/queue storage and exports drop/coalesce diagnostics",
-		"Slow-consumer and target-rate behavior remain unverified without a ProcessEvent producer fixture"
+		"2026-08-13: the production producer disables pair coalescing and emits only zero-payload fixed metadata; preencoded parameter capture is explicitly unavailable",
+		"Slow-consumer, nested-call pairing, and target-rate behavior remain unverified without a real ProcessEvent fixture"
 	  ]
 	},
 	"OBJ-001": {

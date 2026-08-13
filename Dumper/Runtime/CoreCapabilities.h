@@ -299,10 +299,10 @@ inline std::shared_ptr<const CapabilitySnapshot> BuildCoreCapabilities(
 		probes.HookCommandServiceEnabled && probes.HookProducerInstalled,
 		!probes.HookCommandServiceEnabled
 			? "HOOK_COMMAND_SERVICE_NOT_READY"
-			: "HOOK_PRODUCER_NOT_INSTALLED",
+			: "HOOK_PRODUCER_NOT_READY",
 		!probes.HookCommandServiceEnabled
 			? "The bounded hook registry and collector are not registered"
-			: "No validated ProcessEvent producer publishes into the bounded collector",
+			: "The ProcessEvent producer lacks complete current type-generation vtable coverage",
 		{"engine.process_event", "engine.type_snapshot", "functions.handles"});
 	builder.Define(
 		"blueprint.bytecode",

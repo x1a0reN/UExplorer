@@ -52,7 +52,8 @@ foreach ($token in @(
         'Services\WorldTransformCommandService.cpp', 'Services\WorldMutationCommandService.cpp',
         'Runtime\WatchScheduler.cpp',
         'Services\WatchCommandService.cpp', 'Runtime\HookEventCollector.cpp',
-        'Services\HookCommandService.cpp', 'Runtime\DumpJobCoordinator.cpp',
+        'Services\HookCommandService.cpp', 'Services\ProcessEventHookOwner.cpp',
+        'Runtime\DumpJobCoordinator.cpp',
         'Services\DumpCommandService.cpp',
         'advapi32.lib')) {
     Assert-Contains $coreProject $token 'Release Core project omitted a required Pipe/domain component.'
@@ -71,7 +72,7 @@ foreach ($token in @(
         'WorldInspectServiceEnabled', 'WORLD_COMMAND_NOT_READY',
         'WorldMutationServiceEnabled', '"world.mutate",',
         'FunctionCallBatchCommandServiceEnabled', '"call.batch.jobs",', '"call.batch",',
-        'HookProducerInstalled', 'HOOK_PRODUCER_NOT_INSTALLED',
+        'HookProducerInstalled', 'HOOK_PRODUCER_NOT_READY',
         'DumpWorkerEnabled', 'DUMP_WORKER_NOT_INJECTED', '"dump.jobs",')) {
     Assert-Contains $capabilities $token 'Core capability publication lost a required domain boundary.'
 }

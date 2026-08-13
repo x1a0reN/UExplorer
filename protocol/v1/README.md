@@ -201,6 +201,7 @@ The v1 command registry is explicit. Unknown operations return
 | `watch.events.drain` | `{"limit": 1..32}` | Explicit bounded pull; this is not a Pipe Event/Tauri Channel push contract |
 | `blueprint.bytecode` | exact FunctionHandle/path and context/Object/Type generations | Bounded Script capture; capability remains unavailable without a published capture witness |
 | `blueprint.decompile` | bytecode identity plus explicit `profile_id` | Fail-closed bounded disassembly; capability remains unavailable without a matching immutable profile |
+| `hook.add/list/enable/remove/log` | exact FunctionHandle/Object/Type generations, fixed capture policy, or bounded subscription ID query | Add/enable=true require current producer coverage; list/log/disable/remove remain available to shrink retained state while coverage is unavailable |
 | `world.inspect` | `{}` | Worker-safe immutable current-world identity and exact Level/Actor counts |
 | `world.levels` | `{"cursor": null \| world_cursor, "limit": 1..128}` | Worker-safe immutable Level page |
 | `world.actors.list` | `{"cursor": null \| world_cursor, "limit": 1..128, "search": string \| null, "class_search": string \| null, "level_path": exact_path \| null}` | Worker-safe immutable Actor page with exact total matching |
@@ -275,12 +276,17 @@ stable Script-array header and requires the copied stream to end in `EX_EndOfScr
 `blueprint.decompile` remains unavailable because no immutable exact UE opcode/operand
 profile is published; raw opcode values are never inferred from the parser semantic enum.
 
-Hook and Dump command layers exist only behind unavailable capabilities at this
-checkpoint. `call.batch.jobs` is independently advertised when its coordinator is owned,
+Hook commands use the dynamically published `hook.monitor` capability. The release
+producer installs only after current TypeSnapshot Class/CDO evidence has complete
+game-thread-validated vtable coverage, publishes bounded fixed-metadata enter/exit records,
+and restores every owned slot before collector teardown. `preencoded_payload` is rejected
+until a witnessed parameter encoder exists; there is no legacy Hook fallback or Pipe/Tauri
+push contract. Dump remains behind an unavailable worker capability at this checkpoint.
+`call.batch.jobs` is independently advertised when its coordinator is owned,
 while new `call.batch` submissions additionally depend on the dynamic `call.invoke`
 capability. Legacy `call.static` is retired; static invocation uses `call.invoke` with an
-explicit CDO handle. Hook still has no ProcessEvent producer and Dump still has no
-generator worker, so neither may select a legacy implementation.
+explicit CDO handle. Dump still has no generator worker and may not select a legacy
+implementation. Hook code availability is not a target UE validation claim.
 
 World commands read only a `WorldSnapshot` whose session, context, ObjectSnapshot, and
 TypeSnapshot generations still match the active immutable dependencies. A world cursor
