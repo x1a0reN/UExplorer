@@ -24,7 +24,7 @@ React -> Tauri invoke/event -> Rust Host -> Windows Named Pipe RPC -> Core DLL -
 | R3 Named Pipe/Rust Host | 实现阶段完成；R7 验证待办 | 共享严格 RPC 契约；安全且可 join 的 overlapped Named Pipe server/client；PID 核验、deadline/cancel、背压、断线、显式重连和精确 Shutdown；C++/Rust framing fuzz；真实跨语言 Core/Host 进程 fixture；EventHub、multi-PID SessionManager、PID-scoped 操作协调器与 Tauri Channel bridge；真实 x64/x86 注入矩阵 | UE 目标进程连接、Hook/GC/卸载环境矩阵属于 R7 |
 | R4 通信原子切换 | 已完成 | React 领域调用只经 Tauri `domain_request`，事件只经 Tauri Channel；Rust `DomainService` 使用显式 operation registry、PID/session 绑定和稳定错误；Core release project 不编译 `Server/`/`API/` 且不链接 `ws2_32`；二进制契约确认无网络 import/legacy marker；跨语言 fixture 覆盖 DomainService -> SessionManager -> C++ Core | 无；未实现领域按 capability 明确失败，功能实现进入 R5 |
 | R5 领域正确性 | 进行中（领域代码优先，真实目标验证后置） | 既有 Object/Type/property/call/World 与 stored/computed Actor transform 路径；strict Memory command；bounded Watch scheduler + 独立 pull/push；Watch/Hook owned worker -> Named Pipe/Host/Tauri typed event chain；descriptor-proven enum codec + owned destructor journal；witnessed raw Blueprint capture + runtime-gated source-catalog profile + bounded disassembly；端到端 single-active call.batch exact-call adapter；generation-covered ProcessEvent Hook producer及 generation-bound bounded scalar parameter capture；immutable snapshot-backed Dump worker 与四种 bounded artifact path | 生产 UEnum table；Blueprint source-catalog profile 的真实 target/opcode/operand witness；Hook 非平凡参数生命周期、caller/条件过滤及真实 target rate/restore fixture；Watch reconnect/slow-consumer fixture；Dump Host 持久化及真实目标 artifact/consumer fixture；复杂 UE 值生命周期与完整 transform mutation；call.batch/Hook/全部真实 UE/Wandering Sword fixture |
-| R6 前端状态重构 | 未开始 | UI lint 已清零，基础 Vitest 已建立 | session store、查询取消、BigInt 地址、真实能力 UI |
+| R6 前端状态重构 | 功能代码完成；完整验收未执行 | contracts/transport/services/session/features 分层；统一 session/query/event 状态；BigInt 地址；Objects/Functions/World/Memory 实际交互；五层连接状态；真实设置项 | lint/unit/component/真实 UE 交互验证按本轮要求未执行，留待 R7 前统一收口 |
 | R7 发布硬化 | 未开始 | 无 | 性能、压力、目标 fixture、文档和发布门全部通过 |
 
 当前不能宣称“已由真实 UE 验证可用”的既有功能包括：R5.2 `call.invoke`/`call.batch`、R5.3 全部 `world.*` 命令（含 reflected getter computed Actor world transform 与单字段 mutation）、Memory、Watch、enum codec、Blueprint、代码可达但尚无目标 fixture 的 Hook producer，以及代码可达但尚无目标 artifact fixture 的 immutable snapshot Dump worker；还包括 Console、property write、baseline codec 之外的属性类型、LocalPlayer/Pawn shortcut、尚未由目标进程生成并完成语义验证的完整 USMAP、未完成 capability 报告的 Offset，以及未经过真实目标进程卸载 fixture 的 Hook。未实现命令返回稳定 capability 错误，不会退回旧 HTTP。旧 HTTP/SSE/WS 源码未删除，但已从 release project 和运行入口隔离。
@@ -103,7 +103,7 @@ R3 的协议、Core/Host transport、SessionManager、EventHub、真实跨语言
 
 - `Dumper/Main.cpp` 只创建 PID-scoped `NamedPipeRpcServer` 和生产 `PostRenderHook`；`UExplorerCore.vcxproj` 不再编译 `Server/HttpServer.cpp` 或任何 `API/*.cpp`，也不链接 `ws2_32`。旧源文件按“不删除”约束保留，并由 `Dumper/legacy/README.md` 明确标为非运行归档。
 - `frontend/src-tauri/src/services/domain_service.rs` 是桌面领域入口：先用显式白名单拒绝未知 operation，再解析显式 PID 或 active session；status 与 immutable snapshot 查询走真实 SessionManager/Core，未实现领域只返回 `CAPABILITY_UNAVAILABLE`。若 Core 错误宣称 capability 可用而 Host 无命令，则返回 `DOMAIN_COMMAND_NOT_REGISTERED`，不伪造数据。
-- `frontend/src/api/client.ts` 只调用 Tauri `domain_request`/注入/session 命令；实时事件只使用 `tauri::ipc::Channel`。React 源码中已无 `fetch`、`EventSource`、`WebSocket`、localhost、Token、端口恢复、SSE polling fallback 或 `runtime.ini` 依赖。
+- R4 当时由 `frontend/src/api/client.ts` 承载 Tauri 调用；R6 后该运行职责已迁入 `frontend/src/transport/tauriTransport.ts`，`api/client.ts` 只保留兼容导出。实时事件只使用 `tauri::ipc::Channel`，React 源码中无 `fetch`、`EventSource`、`WebSocket`、localhost、Token、端口恢复、SSE polling fallback 或 `runtime.ini` 依赖。
 - `verify-transport-cutover.ps1` 同时审计 Main/project/Host/React 静态边界和 release DLL import/marker；跨语言 `core_process_fixture` 通过 Rust DomainService 调用真实 C++ Core，覆盖 status、对象计数/搜索、Core 原始 capability reason code（例如 `MEMORY_COMMAND_SERVICE_NOT_READY`）与未知 operation，不把已路由的 Core 失败改写成 Host generic unavailable。Core harness 仍编译 legacy HttpServer 仅用于回归其历史生命周期，不代表 release Core 可达。
 - R4 不把未实现功能包装为成功。Object/Type 仅返回 immutable snapshot 中真实存在的字段；Memory/Call/World/Watch/Hook/Blueprint/Dump 等进入 R5。当前没有外部 Gateway，也没有 HTTP/IPC 双栈兼容期。
 
@@ -330,6 +330,14 @@ CoreHarness 覆盖 partial type/function coverage、错误 CDO、super cycle、d
 - R5.1-R5.6 的用户可达主链路现均已装配：Object/Type/property 查询，单次与 batch Function Call，World/Actor 查询和完整单字段 transform 编辑，Memory/Watch，Hook 订阅与增量事件，Blueprint bytecode/disassembly，以及 SDK/USMAP/Dumpspace/IDA Dump job。React 对应页面均走 typed Tauri client，没有恢复 legacy HTTP 或占位成功数据。
 - 本轮约定的实用功能清单已经完成：typed snapshot SDK、FString/FText/common descriptor-backed Struct 调用、world/relative location/rotation/scale setter，以及 Functions/World 的直接操作 UI。最小检查为 Core Release 编译、协议/issue JSON 解析和 TypeScript/Vite production build；未运行完整测试矩阵。
 - 这里的“代码收口”不是 `REFACTOR_PLAN.md` 的 R5 验收通过。生产 UEnum entry table、Weak/Soft/container call input、完整 UE text allocation cleanup、Hook caller/condition/non-trivial capture、Dump Host reload persistence、FHitResult output 展示与真实 Blueprint opcode/operand 仍是高级功能/目标适配待办；所有真实 UE、Wandering Sword、GC、压力、性能、卸载和 artifact consumer fixture 后置，issue 状态保持 `in_progress`，support matrix 全部保持 `Not supported`。
+
+### 0.32 R6 前端状态与交互功能收口
+
+- React 运行边界拆为 `contracts/`、`transport/`、`services/`、`session/` 与 `features/`。`api/index.ts` 和 `api/client.ts` 仅保留兼容导出；Tauri invoke/Channel 只位于 `transport/tauriTransport.ts`，领域 facade 位于 `services/uexplorerService.ts`。
+- `SessionProvider` 统一维护 active status、engine status、Host event Channel 和 bounded Watch/Hook event reducer。Dashboard 直接显示 Host、IPC、Core、Engine、Capability 五层状态及失败原因；Watch/Hook 页面消费同一增量 store，不再各自创建 Channel 或因命中事件全量刷新。
+- 列表查询统一使用 query runner、debounce、取消和 stale-response guard；Object/Type/Function/World 保留后端 generation-bound cursor，Functions 增加 continuation 及真实 instance 列表目标选择。Objects 运行入口改为 Type/Instance/World 三模式，原三面板实现不再可达但文件保留。
+- x64 地址统一经 hex string/BigInt utility 解析、加法和显示；设置页只保留实际应用的 DLL 路径、默认 Dump 格式和语言，输出目录改为展示 Core 固定位置，不再提供未接入的主题、地址或数字格式控件。属性值显示、错误与分页控件迁入共享 feature 实现。
+- 本检查点只执行 TypeScript/Vite production build，并成功生成前端产物。按用户要求未执行 lint、Vitest、component test、浏览器自动化或真实 UE/Wandering Sword 验证；因此这里只声明 R6 功能代码完成，不声明 `REFACTOR_PLAN.md` 的证据验收门通过，也不改变任何 UE support profile。
 
 ## Context
 

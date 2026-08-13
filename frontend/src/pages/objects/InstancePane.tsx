@@ -2,7 +2,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { ArrowDown } from 'lucide-react';
 import { t } from '../../i18n';
-import api, { type SnapshotQueryCursor } from '../../api';
+import api from '../../services';
+import type { SnapshotQueryCursor } from '../../contracts';
+import { formatAddress } from '../../features/address/address';
+import { isAbortError, useQueryRunner } from '../../features/query/useQueryRunner';
+import { useDebouncedValue } from '../../features/query/useDebouncedValue';
 
 interface InstanceItem {
     index: number;
@@ -18,6 +22,7 @@ interface InstancePaneProps {
 }
 
 export default function InstancePane({ selectedClass, onSelectInstance }: InstancePaneProps) {
+    const { run } = useQueryRunner();
     const [search, setSearch] = useState('');
     const [items, setItems] = useState<InstanceItem[]>([]);
     const [total, setTotal] = useState(0);
@@ -25,6 +30,7 @@ export default function InstancePane({ selectedClass, onSelectInstance }: Instan
     const [hasMore, setHasMore] = useState(false);
     const [listLoading, setListLoading] = useState(false);
     const [selectedIndexState, setSelectedIndexState] = useState<number | null>(null);
+    const debouncedSearch = useDebouncedValue(search);
 
     const PAGE_SIZE = 128;
 
@@ -47,7 +53,7 @@ export default function InstancePane({ selectedClass, onSelectInstance }: Instan
         }
         setListLoading(true);
         try {
-            const res = await api.getClassInstances(selectedClass, cursor, PAGE_SIZE, search);
+            const res = await run('instance-pane:list', async () => api.getClassInstances(selectedClass, cursor, PAGE_SIZE, debouncedSearch));
             if (!res.success || !res.data) throw new Error(res.error || 'Class instance query failed');
             const mapped = res.data.items.map((i) => ({
                 index: i.index,
@@ -61,22 +67,20 @@ export default function InstancePane({ selectedClass, onSelectInstance }: Instan
             setNextCursor(res.data.next_cursor);
             setHasMore(res.data.has_more);
         } catch (error) {
+            if (isAbortError(error)) return;
             console.error("Failed to load instances", error);
             setNextCursor(null);
             setHasMore(false);
         } finally {
             setListLoading(false);
         }
-    }, [search, selectedClass]);
+    }, [debouncedSearch, run, selectedClass]);
 
     // Reload list when class selection or search changes
     useEffect(() => {
-        const timer = window.setTimeout(() => {
-            setNextCursor(null);
-            setHasMore(false);
-            void loadList(null, false);
-        }, 50); // slight debounce
-        return () => window.clearTimeout(timer);
+        setNextCursor(null);
+        setHasMore(false);
+        void loadList(null, false);
     }, [loadList, search]);
 
     // ─── Virtualization ─────────────────────────────────────────
@@ -190,7 +194,7 @@ export default function InstancePane({ selectedClass, onSelectInstance }: Instan
                                     }`}
                             >
                                 <div className={`col-span-3 truncate ${isSelected ? 'text-primary font-bold' : 'text-text-low group-hover:text-text-mid'}`}>
-                                    {item.address ? `0x${item.address}` : '0x0000000'}
+                                    {formatAddress(item.address)}
                                 </div>
                                 <div className={`col-span-1 truncate opacity-50 ${isSelected ? 'text-white' : 'text-text-low'}`}>
                                     {item.index}

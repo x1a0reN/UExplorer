@@ -2,7 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Box, Database, Layers, ChevronRight, Package } from 'lucide-react';
 import { t } from '../../i18n';
-import api, { type SnapshotQueryCursor } from '../../api';
+import api from '../../services';
+import type { SnapshotQueryCursor } from '../../contracts';
+import { isAbortError, useQueryRunner } from '../../features/query/useQueryRunner';
+import { useDebouncedValue } from '../../features/query/useDebouncedValue';
 
 type TypeSubTab = 'Class' | 'Struct' | 'Enum' | 'Package';
 
@@ -27,6 +30,7 @@ interface HierarchyPaneProps {
 }
 
 export default function HierarchyPane({ onSelectClass }: HierarchyPaneProps) {
+    const { run } = useQueryRunner();
     const [subTab, setSubTab] = useState<TypeSubTab>('Class');
     const [search, setSearch] = useState('');
     const [items, setItems] = useState<TypeItem[]>([]);
@@ -36,6 +40,7 @@ export default function HierarchyPane({ onSelectClass }: HierarchyPaneProps) {
     const [listLoading, setListLoading] = useState(false);
     const [selectedName, setSelectedName] = useState<string | null>(null);
     const [expandedItems, setExpandedItems] = useState<Record<string, { loading: boolean, data?: ExpandedChild[] }>>({});
+    const debouncedSearch = useDebouncedValue(search);
 
     const PAGE_SIZE = 128;
 
@@ -52,7 +57,7 @@ export default function HierarchyPane({ onSelectClass }: HierarchyPaneProps) {
         setListLoading(true);
         try {
             if (subTab === 'Class') {
-                const res = await api.getClasses(cursor, PAGE_SIZE, search);
+                const res = await run('hierarchy:list', async () => api.getClasses(cursor, PAGE_SIZE, debouncedSearch));
                 if (!res.success || !res.data) throw new Error(res.error || 'Class query failed');
                 const mapped = res.data.items.map((c) => ({ index: c.index, name: c.name, fullName: c.full_name, size: c.size, super: c.super }));
                 setItems((current) => append ? [...current, ...mapped] : mapped);
@@ -60,7 +65,7 @@ export default function HierarchyPane({ onSelectClass }: HierarchyPaneProps) {
                 setNextCursor(res.data.next_cursor);
                 setHasMore(res.data.has_more);
             } else if (subTab === 'Struct') {
-                const res = await api.getStructs(cursor, PAGE_SIZE, search);
+                const res = await run('hierarchy:list', async () => api.getStructs(cursor, PAGE_SIZE, debouncedSearch));
                 if (!res.success || !res.data) throw new Error(res.error || 'Struct query failed');
                 const mapped = res.data.items.map((s) => ({ index: s.index, name: s.name, fullName: s.full_name, size: s.size, super: s.super }));
                 setItems((current) => append ? [...current, ...mapped] : mapped);
@@ -68,7 +73,7 @@ export default function HierarchyPane({ onSelectClass }: HierarchyPaneProps) {
                 setNextCursor(res.data.next_cursor);
                 setHasMore(res.data.has_more);
             } else if (subTab === 'Enum') {
-                const res = await api.getEnums(cursor, PAGE_SIZE, search);
+                const res = await run('hierarchy:list', async () => api.getEnums(cursor, PAGE_SIZE, debouncedSearch));
                 if (!res.success || !res.data) throw new Error(res.error || 'Enum query failed');
                 const mapped = res.data.items.map((e) => ({ index: e.index, name: e.name, fullName: e.full_name }));
                 setItems((current) => append ? [...current, ...mapped] : mapped);
@@ -76,7 +81,7 @@ export default function HierarchyPane({ onSelectClass }: HierarchyPaneProps) {
                 setNextCursor(res.data.next_cursor);
                 setHasMore(res.data.has_more);
             } else if (subTab === 'Package') {
-                const res = await api.getPackages(cursor, PAGE_SIZE, search);
+                const res = await run('hierarchy:list', async () => api.getPackages(cursor, PAGE_SIZE, debouncedSearch));
                 if (!res.success || !res.data) throw new Error(res.error || 'Package query failed');
                 const mapped = res.data.items.map((p) => ({ index: p.index, name: p.name, fullName: p.full_name }));
                 setItems((current) => append ? [...current, ...mapped] : mapped);
@@ -85,23 +90,21 @@ export default function HierarchyPane({ onSelectClass }: HierarchyPaneProps) {
                 setHasMore(res.data.has_more);
             }
         } catch (error) {
+            if (isAbortError(error)) return;
             console.error("Failed to load list", error);
             setNextCursor(null);
             setHasMore(false);
         } finally {
             setListLoading(false);
         }
-    }, [search, subTab]);
+    }, [debouncedSearch, run, subTab]);
 
     // Reload when tab or search changes
     useEffect(() => {
-        const timer = window.setTimeout(() => {
-            setExpandedItems({});
-            setNextCursor(null);
-            setHasMore(false);
-            void loadList(null, false);
-        }, 150);
-        return () => window.clearTimeout(timer);
+        setExpandedItems({});
+        setNextCursor(null);
+        setHasMore(false);
+        void loadList(null, false);
     }, [loadList]);
 
     const toggleExpand = async (item: TypeItem) => {

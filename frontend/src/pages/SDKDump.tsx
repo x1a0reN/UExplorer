@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ComponentType } from 'react';
+import { useEffect, useState, type ComponentType } from 'react';
 import {
   AlertCircle,
   CheckCircle2,
@@ -10,14 +10,17 @@ import {
   Loader2,
   XCircle,
 } from 'lucide-react';
-import api, {
+import api from '../services';
+import {
   type DumpJobEvent,
   type DumpJobRecord,
   type DumpScope,
   type DumpType,
   type StatusData,
-} from '../api';
+} from '../contracts';
 import { t } from '../i18n';
+import { useSession } from '../session/SessionProvider';
+import { DomainError } from '../features/shared/DomainError';
 
 interface DumpFormat {
   id: DumpType;
@@ -68,36 +71,16 @@ function isTerminal(job: DumpJobRecord | null): boolean {
 }
 
 export default function SDKDump() {
+  const session = useSession();
   const formats = getFormats();
-  const [activeFormat, setActiveFormat] = useState<DumpType>('sdk');
-  const [status, setStatus] = useState<StatusData | null>(null);
-  const [statusLoading, setStatusLoading] = useState(true);
+  const [activeFormat, setActiveFormat] = useState<DumpType>(() => api.getSettings().defaultDumpFormat);
+  const status = session.status;
+  const statusLoading = session.checking;
   const [submitting, setSubmitting] = useState(false);
   const [activeJob, setActiveJob] = useState<ActiveJobBinding | null>(null);
   const [job, setJob] = useState<DumpJobRecord | null>(null);
   const [events, setEvents] = useState<DumpJobEvent[]>([]);
-  const [statusError, setStatusError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-
-  const refreshStatus = useCallback(async (): Promise<StatusData | null> => {
-    const response = await api.getStatus();
-    if (!response.success || !response.data) {
-      setStatus(null);
-      setStatusError(response.error || t('Failed to connect'));
-      setStatusLoading(false);
-      return null;
-    }
-    setStatus(response.data);
-    setStatusError(null);
-    setStatusLoading(false);
-    return response.data;
-  }, []);
-
-  useEffect(() => {
-    void refreshStatus();
-    const timer = window.setInterval(() => void refreshStatus(), 3000);
-    return () => window.clearInterval(timer);
-  }, [refreshStatus]);
 
   useEffect(() => {
     if (!activeJob) return;
@@ -156,7 +139,8 @@ export default function SDKDump() {
     setSubmitting(true);
     setActionError(null);
     try {
-      const freshStatus = await refreshStatus();
+      const statusResponse = await api.getStatus();
+      const freshStatus = statusResponse.success ? statusResponse.data : null;
       const freshScope = scopeFromStatus(freshStatus);
       const freshCapability = freshStatus?.capabilities?.[selected.capability];
       if (!freshScope || !freshCapability?.available) {
@@ -243,7 +227,7 @@ export default function SDKDump() {
           {!capability?.available && !statusLoading && (
             <div className="mt-3 flex gap-2 rounded-lg border border-accent-yellow/20 bg-accent-yellow/5 p-3 text-xs text-text-mid">
               <AlertCircle className="w-4 h-4 text-accent-yellow flex-none" />
-              <span>{capability?.reason || capability?.reason_code || statusError || t('Unavailable')}</span>
+              <span>{capability?.reason || capability?.reason_code || session.lastError || t('Unavailable')}</span>
             </div>
           )}
           <div className="mt-3 text-[11px] text-text-low">{t('Code path is available independently of release support; real target fixture verification is still pending.')}</div>
@@ -278,7 +262,7 @@ export default function SDKDump() {
           </div>
         )}
 
-        {actionError && <div className="mb-5 rounded-lg border border-accent-red/20 bg-accent-red/5 p-3 text-xs text-accent-red">{actionError}</div>}
+        {actionError && <div className="mb-5"><DomainError message={actionError} compact /></div>}
 
         <button
           disabled={!canStart}

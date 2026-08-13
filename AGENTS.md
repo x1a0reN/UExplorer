@@ -28,9 +28,9 @@ UExplorerCore.dll（目标进程内）
 9. 每个源码修改检查点必须更新 `DESIGN.md` 的当前进度，明确暂存本次文件，提交并推送当前分支；**推送成功后**运行第 9.1 节的精确 Core Release 构建命令。
 10. 当前桌面主链路没有 HTTP API。若未来显式实现 Host Gateway，API 手工验证默认只用 `curl.exe`；除非用户明确要求，不使用浏览器自动化。
 
-## 3. 当前运行事实（R5 代码检查点）
+## 3. 当前运行事实（R6 功能代码检查点）
 
-- React 领域调用只进入 `frontend/src/api/client.ts`，并调用 Tauri `domain_request`；事件只通过调用方持有的 Tauri Channel。
+- React 已拆为 `contracts/transport/services/session/features`；页面只调用 `services/uexplorerService.ts`，Tauri `domain_request`/Channel 只位于 `transport/tauriTransport.ts`。`SessionProvider` 持有单一 active-session event Channel，并向 Watch/Hook 提供 bounded 增量事件状态；`api/` 只保留兼容导出。
 - Rust `DomainService` 使用显式 operation 白名单，绑定明确 target PID 或 active session。未知 operation 在接触 session 前返回 `OPERATION_NOT_SUPPORTED`。
 - 当前 Host 已实现 status、immutable snapshot-backed Object/Type 集合查询、exact-path Class/Struct/Enum/Function 详情、exact stable-handle `objects.property.read`、R5.2 单目标 `call.invoke`、R5.3 World 查询与 `world.actor.transform.get/update`，以及严格的 Memory、Watch、Hook、Dump 和 Blueprint operation 转发。Core 会从一代稳定 Object Snapshot 采集 witnessed ReflectionLayout 和完整 TypeSnapshot，canonical FVector/FRotator 只接受 exact CoreUObject path、语义字段、float/double kind、offset、size 与 alignment，不按版本或 LWC 猜测。World transform read 在一个 owned game-thread work 中固定 exact generation，显式区分 RootComponent stored 值与 reflected getter computed 值；update 已开放 world/relative location、rotation、scale 的单字段 exact reflected setter。location/relative rotation 的 `FHitResult` out slot 由 exact reflected offset/size 在 owned frame 中零初始化并丢弃，不做 raw write 或多字段伪事务。
 - Memory 已有严格 canonical address/typed codec、最大 4096-byte raw access、64-step pointer chain、写前 preimage、写后验证、受限 rollback、保护状态竞态检测和 executable-page 拒绝。Watch 已有 session/generation-bound 有界 scheduler、逐帧预算、按条数与字节限制的 history、drop/coalesce 诊断和显式 `watch.events.drain` 拉取；每个订阅以 owned binding 固定 exact immutable Object/Type/Reflection snapshots，周期刷新无需冻结全局快照，disabled watch 也不静默 rebind。Watch/Hook 事件另复制到独立有界 push ring，由 owned `DomainEventPump` 在游戏线程/Hook callback 外序列化，经 Named Pipe Event -> Host EventHub -> 调用方持有的 Tauri Channel 增量送达 React；pull、push、collector、transport 与 Host loss 分别外显。上述路径只有代码与合成边界证据，没有目标 UE fixture。
@@ -42,7 +42,8 @@ UExplorerCore.dll（目标进程内）
 - Core 在 Pipe bind 后安装生产 `PostRenderHook`，发布事实 capability/Ready 后才开放 admissions。
 - 当前没有外部 HTTP/WebSocket Gateway，也没有 `connection.ini`、`runtime.ini`、port 或 Token 运行依赖。
 - 未有任何 UE 4.26、4.27 或 UE5 profile 达到发布支持门；本机 UE 4.21、4.24-4.27、5.0-5.4、5.6、5.7 源码只能作为候选布局/语义证据，Wandering Sword 也必须通过实际运行 fixture 后才能改变支持声明。准确范围见 `docs/SUPPORT_MATRIX.md`。
-- 已知仍未关闭的事实包括：默认 `AllocConsole` 与 F6 路径、Dump 之外的 Dumper 配置 current-directory/global-path 行为、剩余 `Off::*/Settings::*` 和 legacy domain monolith、Hook 非平凡参数生命周期/caller/条件过滤、Watch/Hook push 的断线重放/慢消费者/真实目标 rate fixture、Dump Host 重启/重载持久化及四格式真实目标 consumer/语义 fixture、生产 UEnum entry table 与 Blueprint 真实目标 opcode/operand witness、call.batch/Blueprint/Hook 真实 ProcessEvent/捕获/取消/超时/恢复 fixture、前端 session/query 状态重构以及真实 UE/GC/卸载/性能 fixture。
+- R6 功能代码已完成目录分层、统一 session/query/event 状态、BigInt 地址、generation cursor 页面、增量 Hook/Watch、真实设置项、五层连接状态和共享编辑/错误/分页组件；本轮只执行 frontend production build，未执行 lint/unit/component/真实桌面交互验收。
+- 已知仍未关闭的事实包括：默认 `AllocConsole` 与 F6 路径、Dump 之外的 Dumper 配置 current-directory/global-path 行为、剩余 `Off::*/Settings::*` 和 legacy domain monolith、Hook 非平凡参数生命周期/caller/条件过滤、Watch/Hook push 的断线重放/慢消费者/真实目标 rate fixture、Dump Host 重启/重载持久化及四格式真实目标 consumer/语义 fixture、生产 UEnum entry table 与 Blueprint 真实目标 opcode/operand witness、call.batch/Blueprint/Hook 真实 ProcessEvent/捕获/取消/超时/恢复 fixture，以及 R6 完整前端验收与真实 UE/GC/卸载/性能 fixture。
 
 ## 4. 事实优先级
 
@@ -89,10 +90,13 @@ UExplorerCore.dll（目标进程内）
 
 ### React
 
-- `frontend/src/api/index.ts`：共享 API/domain 类型和 client export。
-- `frontend/src/api/client.ts`：唯一 Tauri transport adapter。
-- `frontend/src/pages/`：页面；只能消费 typed client，不得直接创建网络连接或读取运行 endpoint。
-- `frontend/src/types/`：页面模型；x64 地址必须保持规范 hex string 或 BigInt，不得转成 JS `Number` 计算。
+- `frontend/src/contracts/`：纯 API/domain 类型和 runtime event guard。
+- `frontend/src/transport/tauriTransport.ts`：唯一 Tauri invoke/Channel adapter。
+- `frontend/src/services/`：页面消费的领域 facade 与实际设置 service。
+- `frontend/src/session/SessionProvider.tsx`：active session、Host/IPC/Core/Engine/Capability 分层状态和 bounded event reducer。
+- `frontend/src/features/`：统一 query lifecycle、BigInt 地址、值解析、错误、分页和属性值组件。
+- `frontend/src/api/`：兼容导出，不得新增运行职责。
+- `frontend/src/pages/`：页面；只能消费 typed service/session/features，不得直接创建 transport 或读取运行 endpoint。
 
 ## 6. 线程、身份与生命周期硬约束
 

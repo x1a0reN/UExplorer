@@ -1,15 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { t } from '../../i18n';
-import { Search, Box, RefreshCw, ExternalLink } from 'lucide-react';
-import api, {
+import { Search, Box, ExternalLink } from 'lucide-react';
+import api from '../../services';
+import {
     type ObjectDetail,
     type ObjectProperty,
     type OuterChainItem,
     type SnapshotQueryCursor,
-} from '../../api';
+} from '../../contracts';
 import { Panel, InfoRow, HeaderCard, type BrowserPageProps, type ModeNavContext } from './shared';
-import { toEditable } from './valueUtils';
+import { toEditable } from '../../features/value/valueParser';
+import { PropertyValueEditor } from '../../features/shared/PropertyValueEditor';
+import { isAbortError, useQueryRunner } from '../../features/query/useQueryRunner';
+import { useDebouncedValue } from '../../features/query/useDebouncedValue';
+import { DomainError } from '../../features/shared/DomainError';
+import { formatAddress } from '../../features/address/address';
 
 // ─── Types ─────────────────────────────────────────────────────
 
@@ -27,6 +33,8 @@ interface InstanceBrowserProps extends BrowserPageProps {
 // ─── Component ─────────────────────────────────────────────────
 
 export default function InstanceBrowser({ onNavigate, onSwitchMode, navContext }: InstanceBrowserProps) {
+    const { run } = useQueryRunner();
+    const detailRequestEpoch = useRef(0);
     // Left panel state
     const [search, setSearch] = useState('');
     const [classFilter, setClassFilter] = useState(navContext?.className || '');
@@ -37,6 +45,8 @@ export default function InstanceBrowser({ onNavigate, onSwitchMode, navContext }
     const [listLoading, setListLoading] = useState(false);
     const [listError, setListError] = useState<string | null>(null);
     const [selected, setSelected] = useState<InstanceItem | null>(null);
+    const debouncedSearch = useDebouncedValue(search);
+    const debouncedClassFilter = useDebouncedValue(classFilter);
 
     // Right panel state
     const [detail, setDetail] = useState<ObjectDetail | null>(null);
@@ -65,11 +75,11 @@ export default function InstanceBrowser({ onNavigate, onSwitchMode, navContext }
         setListLoading(true);
         setListError(null);
         try {
-            const res = await api.searchObjects(search, {
-                classPath: classFilter.trim() || undefined,
+            const res = await run('instance-browser:list', async () => api.searchObjects(debouncedSearch, {
+                classPath: debouncedClassFilter.trim() || undefined,
                 cursor,
                 limit: PAGE_SIZE,
-            });
+            }));
             if (!res.success || !res.data) throw new Error(res.error || 'Instance query failed');
             const mapped = res.data.items.map((o) => ({ index: o.index, name: o.name, className: o.class, address: o.address }));
             setItems((current) => append ? [...current, ...mapped] : mapped);
@@ -77,15 +87,17 @@ export default function InstanceBrowser({ onNavigate, onSwitchMode, navContext }
             setNextCursor(res.data.next_cursor);
             setHasMore(res.data.has_more);
         } catch (error) {
+            if (isAbortError(error)) return;
             setListError(error instanceof Error ? error.message : String(error));
             setNextCursor(null);
             setHasMore(false);
         } finally {
             setListLoading(false);
         }
-    }, [classFilter, search]);
+    }, [debouncedClassFilter, debouncedSearch, run]);
 
     const loadDetail = async (item: InstanceItem) => {
+        const requestEpoch = ++detailRequestEpoch.current;
         setDetailLoading(true);
         setDetailError(null);
         setProperties([]);
@@ -99,6 +111,7 @@ export default function InstanceBrowser({ onNavigate, onSwitchMode, navContext }
                 api.getObjectProperties(item.index),
                 api.getObjectOuterChain(item.index),
             ]);
+            if (requestEpoch !== detailRequestEpoch.current) return;
             if (detailRes.success && detailRes.data) setDetail(detailRes.data);
             if (propsRes.success && propsRes.data) {
                 setProperties(propsRes.data);
@@ -108,11 +121,21 @@ export default function InstanceBrowser({ onNavigate, onSwitchMode, navContext }
             }
             if (chainRes.success && chainRes.data) setOuterChain(chainRes.data.outer_chain);
         } catch (error) {
-            setDetailError(error instanceof Error ? error.message : String(error));
+            if (requestEpoch === detailRequestEpoch.current) {
+                setDetailError(error instanceof Error ? error.message : String(error));
+            }
         } finally {
-            setDetailLoading(false);
+            if (requestEpoch === detailRequestEpoch.current) setDetailLoading(false);
         }
     };
+
+    useEffect(() => {
+        if (selected || navContext?.objectIndex === undefined) return;
+        const target = items.find((item) => item.index === navContext.objectIndex);
+        if (!target) return;
+        setSelected(target);
+        void loadDetail(target);
+    }, [items, navContext?.objectIndex, selected]);
 
     const handlePropertyRefresh = async (property: ObjectProperty) => {
         if (!selected) return;
@@ -125,12 +148,9 @@ export default function InstanceBrowser({ onNavigate, onSwitchMode, navContext }
     };
 
     useEffect(() => {
-        const timer = window.setTimeout(() => {
-            setNextCursor(null);
-            setHasMore(false);
-            void loadList(null, false);
-        }, 150);
-        return () => window.clearTimeout(timer);
+        setNextCursor(null);
+        setHasMore(false);
+        void loadList(null, false);
     }, [loadList]);
 
     // ─── Virtualization ─────────────────────────────────────────
@@ -176,7 +196,7 @@ export default function InstanceBrowser({ onNavigate, onSwitchMode, navContext }
 
                 {/* List */}
                 <div ref={parentRef} className="flex-1 overflow-auto relative px-1 scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent">
-                    {listError && <div className="text-red-300 text-xs p-3">{listError}</div>}
+                    <DomainError message={listError} compact />
 
                     <div
                         style={{
@@ -272,13 +292,13 @@ export default function InstanceBrowser({ onNavigate, onSwitchMode, navContext }
                                 </span>
                                 <span className="px-3 py-1.5 rounded-md bg-purple-500/10 border border-purple-500/20 text-[11px] font-mono text-purple-300 cursor-pointer hover:bg-purple-500/20 transition-colors shadow-sm backdrop-blur-md flex items-center gap-1.5"
                                     onClick={() => onNavigate?.('memory')}>
-                                    <ExternalLink className="w-3.5 h-3.5 opacity-70" /> {selected.address}
+                                    <ExternalLink className="w-3.5 h-3.5 opacity-70" /> {formatAddress(selected.address)}
                                 </span>
                             </>}
                         />
 
                         {detailLoading && <div className="text-white/40 text-sm">{t('Loading...')}</div>}
-                        {detailError && <div className="text-red-300 text-sm">{detailError}</div>}
+                        <DomainError message={detailError} />
 
                         {/* Tab Bar */}
                         <div className="flex gap-1 border-b border-white/5 pb-2">
@@ -310,19 +330,12 @@ export default function InstanceBrowser({ onNavigate, onSwitchMode, navContext }
                                                     <td className="py-2.5 px-3 text-sm text-slate-500 font-mono">+0x{p.offset.toString(16).toUpperCase().padStart(4, '0')}</td>
                                                     <td className="py-2.5 px-3 text-[14px] text-slate-200 font-mono font-medium">{p.name}</td>
                                                     <td className="py-2.5 px-3 text-sm text-emerald-400/80 font-mono truncate max-w-[150px]">{p.type}</td>
-                                                    <td className="py-2.5 px-3">
-                                                        <input type="text"
+                                                    <td className="py-2.5 px-3" colSpan={2}>
+                                                        <PropertyValueEditor
                                                             value={propertyEditMap[p.name] ?? toEditable(p.value)}
-                                                            readOnly
-                                                            className="w-full bg-black/20 border border-white/10 rounded-md px-3 py-1 text-[13px] text-slate-300 font-mono cursor-default shadow-inner" />
-                                                    </td>
-                                                    <td className="py-2.5 px-3">
-                                                        <div className="flex gap-2 justify-end opacity-60 group-hover:opacity-100 transition-opacity">
-                                                            <button onClick={() => void handlePropertyRefresh(p)} title={t('Refresh')}
-                                                                className={`p-1.5 rounded-md hover:bg-blue-500/20 text-slate-400 hover:text-blue-400 transition-colors ${propertyRefreshing[p.name] ? 'animate-spin text-blue-400' : ''}`}>
-                                                                <RefreshCw className="w-3.5 h-3.5" />
-                                                            </button>
-                                                        </div>
+                                                            refreshing={propertyRefreshing[p.name] === true}
+                                                            onRefresh={() => void handlePropertyRefresh(p)}
+                                                        />
                                                     </td>
                                                 </tr>
                                             ))}
@@ -339,7 +352,7 @@ export default function InstanceBrowser({ onNavigate, onSwitchMode, navContext }
                                 <InfoRow label={t('Full Name')} value={detail?.full_name || ''} />
                                 <InfoRow label={t('Class')} value={selected.className} isLink onClick={() => onSwitchMode?.('types', { className: selected.className })} />
                                 <InfoRow label={t('Index')} value={String(selected.index)} />
-                                <InfoRow label={t('Address')} value={selected.address} isLink onClick={() => onNavigate?.('memory')} />
+                                <InfoRow label={t('Address')} value={formatAddress(selected.address)} isLink onClick={() => onNavigate?.('memory')} />
                                 <InfoRow label={t('Flags')} value={detail?.flags || ''} />
                                 {detail?.flags_raw != null && (
                                     <InfoRow label={t('Flags (Raw)')} value={`0x${detail.flags_raw.toString(16).toUpperCase()}`} />

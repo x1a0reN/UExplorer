@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
-import api, { type EngineStatusData, type ObjectCountData, type StatusData } from '../api';
+import api from '../services';
+import type { ObjectCountData } from '../contracts';
 import ProcessSelector from '../components/ProcessSelector';
+import { useSession } from '../session/SessionProvider';
+import { formatAddress } from '../features/address/address';
+import { isAbortError, useQueryRunner } from '../features/query/useQueryRunner';
 import { t } from '../i18n';
 import {
   Activity,
@@ -26,71 +30,36 @@ interface DashboardProps {
 }
 
 export default function Dashboard({ onNavigate }: DashboardProps) {
-  const [status, setStatus] = useState<StatusData | null>(null);
-  const [engineStatus, setEngineStatus] = useState<EngineStatusData | null>(null);
+  const session = useSession();
+  const { run } = useQueryRunner();
+  const { status, engineStatus } = session;
   const [counts, setCounts] = useState<ObjectCountData | null>(null);
   const [actorCount, setActorCount] = useState<number>(0);
-  const [eventChannelConnected, setEventChannelConnected] = useState(false);
-  const [eventCount, setEventCount] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [showProcessSelector, setShowProcessSelector] = useState(false);
 
-  const loadStatus = useCallback(async () => {
-    const [statusResponse, countsResponse, worldResponse, engineResponse] = await Promise.all([
-      api.getStatus(),
-      api.getObjectCounts(),
-      api.getWorld(),
-      api.getEngineStatus(),
-    ]);
-
-    if (statusResponse.success && statusResponse.data) {
-      setStatus(statusResponse.data);
-      setError(null);
-    } else {
-      setStatus(null);
-      setError(statusResponse.error || t('Failed to connect'));
+  const loadDashboard = useCallback(async () => {
+    try {
+      const [countsResponse, worldResponse] = await run('dashboard:stats', async () => Promise.all([
+        api.getObjectCounts(),
+        api.getWorld(),
+      ]), { cacheMs: 1_000 });
+      setCounts(countsResponse.success && countsResponse.data ? countsResponse.data : null);
+      setActorCount(worldResponse.success && worldResponse.data ? worldResponse.data.actor_count : 0);
+      setLoading(false);
+    } catch (error) {
+      if (!isAbortError(error)) setLoading(false);
     }
-
-    setCounts(countsResponse.success && countsResponse.data ? countsResponse.data : null);
-    setActorCount(worldResponse.success && worldResponse.data ? worldResponse.data.actor_count : 0);
-    setEngineStatus(engineResponse.success && engineResponse.data ? engineResponse.data : null);
-    setLoading(false);
-  }, []);
+  }, [run]);
 
   useEffect(() => {
-    const initialLoad = window.setTimeout(() => void loadStatus(), 0);
-    const interval = window.setInterval(() => void loadStatus(), 5000);
+    const initialLoad = window.setTimeout(() => void loadDashboard(), 0);
+    const interval = window.setInterval(() => void loadDashboard(), 5000);
     return () => {
       window.clearTimeout(initialLoad);
       window.clearInterval(interval);
     };
-  }, [loadStatus]);
-
-  useEffect(() => {
-    if (!status?.pid) {
-      return;
-    }
-    let disposed = false;
-    let unsubscribe: (() => Promise<boolean>) | null = null;
-    void api.subscribeSessionEvents(status.pid, {
-      onEvent: () => setEventCount((value) => value + 1),
-    }).then((subscription) => {
-      if (disposed) {
-        void subscription.unsubscribe();
-        return;
-      }
-      unsubscribe = subscription.unsubscribe;
-      setEventChannelConnected(true);
-    }).catch(() => {
-      if (!disposed) setEventChannelConnected(false);
-    });
-    return () => {
-      disposed = true;
-      setEventChannelConnected(false);
-      if (unsubscribe) void unsubscribe();
-    };
-  }, [status?.pid]);
+  }, [loadDashboard]);
 
   if (loading) {
     return (
@@ -103,7 +72,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
     );
   }
 
-  const isConnected = !error && !!status;
+  const isConnected = !!status?.runtime?.readiness;
 
   return (
     <div className="flex-1 overflow-y-auto overflow-x-hidden relative scroll-smooth bg-background-base">
@@ -124,7 +93,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
               {t('Inject DLL')}
             </button>
             <button
-              onClick={loadStatus}
+              onClick={() => void Promise.all([session.refresh(), loadDashboard()])}
               className="px-3 py-1.5 rounded-lg bg-surface-stripe hover:bg-surface-stripe/80 border border-border-subtle text-xs font-medium text-text-mid transition-all flex items-center gap-1.5 cursor-pointer active:scale-95 font-display"
             >
               <RefreshCw className="w-3.5 h-3.5 text-text-low" />
@@ -143,6 +112,18 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
         {/* Bento Grid layout */}
         <div className="grid grid-cols-1 md:grid-cols-12 gap-4 auto-rows-[minmax(110px,auto)]">
 
+          <div className="md:col-span-12 grid grid-cols-5 gap-2 bg-surface-dark border border-border-subtle rounded-xl p-3">
+            {session.layers.map((layer) => (
+              <div key={layer.id} className="rounded-lg border border-border-subtle bg-background-base px-3 py-2 min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className={`w-2 h-2 rounded-full ${layer.state === 'ready' ? 'bg-accent-green' : layer.state === 'checking' ? 'bg-accent-yellow animate-pulse' : 'bg-accent-red'}`} />
+                  <span className="text-[11px] font-semibold text-text-high font-display">{layer.label}</span>
+                </div>
+                <div className="mt-1 text-[10px] text-text-low truncate" title={layer.detail}>{layer.detail}</div>
+              </div>
+            ))}
+          </div>
+
           {/* Main Status Card - Spans 8 cols */}
           <div className="md:col-span-8 bg-surface-dark border border-border-subtle rounded-xl p-5 flex flex-col justify-between group relative overflow-hidden">
             {isConnected && <div className="absolute top-0 right-0 w-48 h-48 bg-primary/5 rounded-full blur-[60px] -mr-16 -mt-16 pointer-events-none"></div>}
@@ -154,7 +135,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
                 </div>
                 <div>
                   <h3 className="text-text-high font-semibold text-sm tracking-tight font-display">{isConnected ? t('Engine Connected') : t('Disconnected')}</h3>
-                  <p className="text-text-low text-xs font-medium mt-0.5">{isConnected ? t('Dumping service is active and listening.') : error || t('Waiting for game process...')}</p>
+                  <p className="text-text-low text-xs font-medium mt-0.5">{isConnected ? t('Dumping service is active and listening.') : session.lastError || t('Waiting for game process...')}</p>
                 </div>
               </div>
               <div className="px-2 py-0.5 rounded bg-surface-stripe border border-border-subtle text-[10px] font-mono font-medium text-text-low">
@@ -281,12 +262,12 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
             </div>
 
             <div className="space-y-3 flex-1 flex flex-col justify-end">
-              <OffsetRow label={t('GObjects')} value={status?.gobjects_address || '0x0000000'} />
+              <OffsetRow label={t('GObjects')} value={formatAddress(status?.gobjects_address)} />
               <OffsetRow label={t('PID')} value={status ? String(status.pid) : '-'} />
-              <OffsetRow label={t('UWorld')} value={engineStatus?.addresses?.gworld_ptr ? String(engineStatus.addresses.gworld_ptr) : t('Not Resolving')} dimmed={!engineStatus?.addresses?.gworld_ptr} />
+              <OffsetRow label={t('UWorld')} value={engineStatus?.addresses?.gworld_ptr ? formatAddress(engineStatus.addresses.gworld_ptr) : t('Not Resolving')} dimmed={!engineStatus?.addresses?.gworld_ptr} />
               <OffsetRow label={t('ScriptOff')} value={engineStatus?.script_offset_diagnostics ? `0x${engineStatus.script_offset_diagnostics.selected_offset.toString(16)}` : '-'} />
               <OffsetRow label={t('ScriptConf')} value={engineStatus?.script_offset_diagnostics?.confidence || '-'} />
-              <OffsetRow label="Host Events" value={eventChannelConnected ? `${t('CONNECTED')} (${eventCount})` : t('DISCONNECTED')} dimmed={!eventChannelConnected} />
+              <OffsetRow label="Host Events" value={session.eventChannel === 'ready' ? `${t('CONNECTED')} (${session.eventCount})` : t('DISCONNECTED')} dimmed={session.eventChannel !== 'ready'} />
             </div>
           </div>
 
@@ -300,7 +281,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
         onCoreReady={(pid) => {
           console.log('PID-scoped Pipe connected and Core Ready validated, PID:', pid);
           setShowProcessSelector(false);
-          void loadStatus();
+          void Promise.all([session.refresh(), loadDashboard()]);
         }}
       />
     </div>

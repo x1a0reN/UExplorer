@@ -25,7 +25,7 @@ UExplorer 是一个面向 Unreal Engine 的 **SDK Dump + 实时游戏内省工�
 └──────────────────────────────────────────────┘
 ```
 
-当前分支已完成 R4 原子通信切换并继续 R5 领域实现。唯一桌面主链路仍是 React -> Tauri `domain_request` -> Rust `DomainService` -> PID-scoped Named Pipe -> `CoreCommandService`。除既有 Object/Type/property/call/World 与 stored/computed transform 外，当前代码检查点已加入 strict Memory、owned-binding Watch、FString/FText/descriptor-backed Struct 调用、descriptor-proven enum/destructor journal、generation-bound Blueprint raw Script capture、runtime-gated source-catalog bounded disassembly、完整单字段 reflected World transform mutation、generation-covered ProcessEvent Hook producer、immutable snapshot Dump worker、端到端 call.batch，以及独立 Watch/Hook push ring -> owned DomainEventPump -> Named Pipe Event -> Host EventHub/Tauri Channel -> React 增量消费链。World mutation 覆盖 world/relative location、rotation、scale；FHitResult output 使用 owned frame 的零初始化 slot 并丢弃。call.batch 由单 active coordinator 串行复用 exact single-call adapter；Hook 可选择 fixed metadata 或 generation-bound scalar parameter plan，callback 只复制最多 512 bytes 的 descriptor-proven trivial scalars，worker 才解码，通用 preencoded/non-trivial 参数仍拒绝；Dump 已有四格式 bounded generator/consumer，但仍缺 Host reload persistence 和真实目标 artifact fixture；Blueprint source profile 只有本机 UE 源码与合成 parser 证据，缺真实目标 opcode/operand witness，生产 UEnum entry table 也未见证。`D:\Steam\steamapps\common\Wandering Sword` 仍没有可启动游戏 `.exe`，所有新增路径都只有代码/合成边界证据，所有 profile 保持 `Not supported`。
+当前分支已完成 R4 原子通信切换、R5 功能优先领域实现和 R6 前端功能代码收口。唯一桌面主链路仍是 React service -> Tauri transport -> Rust `DomainService` -> PID-scoped Named Pipe -> `CoreCommandService`。R6 将 React 拆为 contracts/transport/services/session/features，建立统一 session/query/event store、BigInt 地址工具、五层连接状态和共享交互组件，并把 Type/Instance/World 三个浏览器接入 Objects 的实际运行入口。R5/R6 均未经过真实 UE/Wandering Sword 验证，所有 profile 保持 `Not supported`。
 
 ---
 
@@ -213,9 +213,13 @@ UExplorer/
     │   ├── main.tsx                  #   React 入口
     │   ├── App.tsx                   #   主布局 (侧栏导航 + 6 页路由)
     │   ├── index.css                 #   全局样式
-    │   ├── api/index.ts              #   领域类型与公开 client export
-    │   ├── api/client.ts             #   仅 Tauri invoke/Channel 的 typed desktop client
-    │   ├── types/index.ts            #   TypeScript 类型定义 (~40 接口)
+    │   ├── contracts/index.ts        #   纯领域契约、响应模型与事件 guard
+    │   ├── transport/tauriTransport.ts # Tauri invoke/Channel 唯一边界
+    │   ├── services/                 #   领域 facade 与实际设置 service
+    │   ├── session/SessionProvider.tsx # active session、五层状态和增量 event reducer
+    │   ├── features/                 #   query/address/value/error/pagination/property editor
+    │   ├── api/                      #   兼容导出，不承载运行实现
+    │   ├── types/index.ts            #   页面导航类型
     │   ├── i18n/
     │   │   ├── index.ts              #   国际化入口
     │   │   └── translations.ts       #   翻译文本
@@ -223,11 +227,11 @@ UExplorer/
     │   │   └── ProcessSelector.tsx    #   UE 进程选择器 (扫描 + DLL 注入)
     │   └── pages/
     │       ├── Dashboard.tsx         #   仪表盘 (连接状态 + 统计卡片 + 快捷操作)
-    │       ├── Objects.tsx           #   对象浏览器 (三面板: 层级/实例/检查器)
+    │       ├── Objects.tsx           #   Type/Instance/World 三模式实际入口
     │       ├── Functions.tsx         #   函数浏览器 (搜索/调用/Hook/反编译 四合一)
     │       ├── Memory.tsx            #   内存工具 (Hex 视图 + Console + Watch)
     │       ├── SDKDump.tsx           #   SDK 生成中心 (4 种格式 + 任务管理)
-    │       ├── Settings.tsx          #   设置 (连接/DLL/显示/偏移覆盖)
+    │       ├── Settings.tsx          #   实际设置 (DLL/default dump/language)
     │       └── objects/              #   Objects 页子面板
     │           ├── HierarchyPane.tsx  #     类/结构体/枚举继承树
     │           ├── InstancePane.tsx   #     选中类的实例列表
@@ -264,7 +268,9 @@ UExplorer/
 ### 3.1 顶层模块依赖（宏观）
 
 ```
-React pages -> api/client.ts -> Tauri invoke / Channel
+React pages -> services/uexplorerService.ts -> transport/tauriTransport.ts
+                          |                         |
+                 SessionProvider/query       Tauri invoke / Channel
                                   |
                                   v
                         Rust DomainService
@@ -588,7 +594,7 @@ Dashboard.tsx
   ├─ getObjectCounts()        objects.count
   └─ session events           Tauri Channel
 
-Objects.tsx (三面板)
+Objects.tsx (Type / Instance / World 三模式)
   ├─ objects.list/search/get_*      immutable Host snapshot + full path identity
   ├─ types.{packages|classes|structs|enums}.list  generation/query-bound cursor
   ├─ types.packages.contents / types.classes.instances  exact path + cursor (1..128)
@@ -614,7 +620,7 @@ WorldBrowser.tsx
 
 Memory.tsx
   ├─ memory.raw/typed/pointer_chain strict bounded Core command
-  └─ Watch CRUD/snapshot/events.drain -> bounded scheduler + explicit pull
+  └─ Watch CRUD/snapshot/events.drain + SessionProvider incremental reducer
 
 SDKDump.tsx
   ├─ status.inspect -> exact current session/context/Object/Type scope + dump capability
@@ -622,9 +628,10 @@ SDKDump.tsx
   └─ dump.jobs.get/cancel -> retained admitted scope；不随当前 snapshot refresh 重绑
 
 Settings.tsx
-  ├─ updateSettings()         本地 UI preference
-  ├─ getEngineStatus()        status.engine
-  └─ 无端口/Token/连接文件设置
+  ├─ DLL path                 ProcessSelector 注入输入
+  ├─ default dump format      SDKDump 初始格式
+  ├─ language                 i18n 实际切换
+  └─ 无端口/Token/伪输出目录/未实现主题与数字格式设置
 ```
 
 ### 4.3 实时通道
@@ -634,11 +641,12 @@ Core bounded Event writer
   -> Named Pipe Event frame (seq/session/drop metadata)
   -> per-session Rust EventHub (bounded replay/filter/fan-out)
   -> caller-owned Tauri Channel
-  -> React page-local reconciliation
+  -> SessionProvider bounded event reducer
+    -> Watch/Hook UI incremental reconciliation
 ```
 
-Watch 当前只实现显式 pull drain；Hook producer 也只进入 Core collector/log，尚无
-Named Pipe/Tauri Channel push。因此“collector/通道存在”不等于 push 功能可用。
+Watch 保留显式 pull drain，同时 Watch/Hook push 由单一 SessionProvider Channel 消费；
+页面不再为每个事件全量请求列表或各自建立重复订阅。
 
 ---
 
@@ -921,7 +929,7 @@ Rust `DomainService` 的显式 operation registry 为准。
 | R3 Named Pipe/Rust Host | **实现阶段完成** | 严格 IPC、SessionManager、EventHub、注入与跨语言 fixture |
 | R4 通信原子切换 | **已完成** | React 只走 Tauri；Core release 只走 Named Pipe，无网络栈 |
 | R5 领域正确性 | **功能优先代码阶段完成；验收未通过** | Object/Type/property/call/World；FString/FText/descriptor-backed Struct 调用；strict Memory；bounded Watch pull/push；enum/destructor journal；runtime-gated source-catalog Blueprint；world/relative location/rotation/scale 单字段 reflected setter；call.batch 跨层 exact-call adapter；Hook producer/push + bounded scalar parameter plan/copy/decode；immutable snapshot Dump worker。生产 UEnum、容器/引用型 Struct、FText allocation cleanup、FHitResult output 展示、Hook 非平凡参数/caller/条件与真实 target witness、Dump Host persistence/目标 artifact fixture、Blueprint 目标 opcode/operand witness 和真实 UE fixture 待办；相关 issue 继续 `in_progress` |
-| R6 前端状态重构 | **未开始** | session store、query lifecycle、BigInt 地址、能力驱动 UI |
+| R6 前端状态重构 | **功能代码完成；完整验收未执行** | contracts/transport/services/session/features、统一 query/event 生命周期、BigInt 地址、三模式 Objects、真实 instance call target、五层连接状态和实际设置；仅完成 production build |
 | R7 发布硬化 | **未开始** | UE fixture、性能/压力、卸载、发布与文档门禁 |
 
 旧 Phase 1-5 的“功能已完成”结论已经废止；界面或 legacy handler 存在不代表能力

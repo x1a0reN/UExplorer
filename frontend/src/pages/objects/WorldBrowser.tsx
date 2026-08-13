@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { t } from '../../i18n';
 import { Search, MapPin, Globe, ChevronDown, ChevronRight, RefreshCw, Save } from 'lucide-react';
-import api, {
+import api from '../../services';
+import {
     type WorldLevelItem,
     type WorldActorDetail,
     type WorldActorComputedTransform,
@@ -12,8 +13,11 @@ import api, {
     type WorldQueryCursor,
     type WorldSnapshotObject,
     type WorldTransformSpace,
-} from '../../api';
+} from '../../contracts';
 import { Panel, HeaderCard, type BrowserPageProps } from './shared';
+import { isAbortError, useQueryRunner } from '../../features/query/useQueryRunner';
+import { useDebouncedValue } from '../../features/query/useDebouncedValue';
+import { DomainError } from '../../features/shared/DomainError';
 
 // ─── Types ─────────────────────────────────────────────────────
 
@@ -97,6 +101,7 @@ function createTransformEditor(
 // ─── Component ─────────────────────────────────────────────────
 
 export default function WorldBrowser({ onSwitchMode }: BrowserPageProps) {
+    const { run } = useQueryRunner();
     const detailRequestEpoch = useRef(0);
     // World state
     const [levels, setLevels] = useState<WorldLevelItem[]>([]);
@@ -108,6 +113,8 @@ export default function WorldBrowser({ onSwitchMode }: BrowserPageProps) {
     const [actorGeneration, setActorGeneration] = useState<number | null>(null);
     const [search, setSearch] = useState('');
     const [classFilter, setClassFilter] = useState('');
+    const debouncedSearch = useDebouncedValue(search);
+    const debouncedClassFilter = useDebouncedValue(classFilter);
     const [listLoading, setListLoading] = useState(false);
     const [actorListLoading, setActorListLoading] = useState(false);
     const [selected, setSelected] = useState<WorldActorItem | null>(null);
@@ -173,16 +180,23 @@ export default function WorldBrowser({ onSwitchMode }: BrowserPageProps) {
             setMutationFeedback(null);
         }
         try {
-            const res = await api.getWorldActors(cursor, 128, search, classFilter);
+            const res = await run('world:actors', async () => api.getWorldActors(
+                cursor,
+                128,
+                debouncedSearch,
+                debouncedClassFilter,
+            ));
             if (res.success && res.data) {
                 setActors((current) => append ? [...current, ...res.data!.items] : res.data!.items);
                 setNextActorCursor(res.data.next_cursor);
                 setActorMatched(res.data.matched);
                 setActorGeneration(res.data.generation);
             }
-        } catch { /* ignore */ }
+        } catch (error) {
+            if (!isAbortError(error)) setDetailError(error instanceof Error ? error.message : String(error));
+        }
         setActorListLoading(false);
-    }, [classFilter, search]);
+    }, [debouncedClassFilter, debouncedSearch, run]);
 
     const loadActorDetail = async (actor: WorldActorItem) => {
         const requestEpoch = ++detailRequestEpoch.current;
@@ -402,8 +416,7 @@ export default function WorldBrowser({ onSwitchMode }: BrowserPageProps) {
     }, [loadWorld]);
 
     useEffect(() => {
-        const timer = window.setTimeout(() => void loadActors(null, false), 150);
-        return () => window.clearTimeout(timer);
+        void loadActors(null, false);
     }, [loadActors]);
 
     // ─── Helpers ───────────────────────────────────────────────
@@ -515,7 +528,7 @@ export default function WorldBrowser({ onSwitchMode }: BrowserPageProps) {
                         />
 
                         {detailLoading && <div className="text-white/40 text-sm">{t('Loading...')}</div>}
-                        {detailError && <div className="text-red-300 text-sm">{detailError}</div>}
+                        <DomainError message={detailError} />
 
                         {/* Tab Bar */}
                         <div className="flex gap-1 border-b border-white/5 pb-2">
@@ -800,7 +813,7 @@ export default function WorldBrowser({ onSwitchMode }: BrowserPageProps) {
                                     {components.map((comp) => (
                                         <div key={comp.index}
                                             className="flex items-center gap-3 p-2 rounded-lg border border-white/5 bg-black/20 hover:bg-white/5 cursor-pointer"
-                                            onClick={() => onSwitchMode?.('instances', { objectIndex: comp.index })}>
+                                            onClick={() => onSwitchMode?.('instances', { className: comp.class, objectIndex: comp.index })}>
                                             <div className="w-2 h-2 rounded-full bg-cyan-400/60 flex-none" />
                                             <span className="text-[13px] text-white/90 font-mono flex-1 truncate">{comp.name}</span>
                                             <span className="text-[11px] text-blue-400/60 font-mono">{comp.class_path}</span>

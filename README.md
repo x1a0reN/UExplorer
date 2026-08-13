@@ -41,7 +41,8 @@ bounded request/event queues, deadlines, cancellation, disconnect completion,
 explicit reconnect, and joinable shutdown. EventHub, multi-PID SessionManager, strict
 injection-to-Core-Ready gating, cross-language Core/Host fixtures, and a live x64/x86
 injection matrix are implemented. React domain calls now use one Tauri
-`domain_request` command and event consumers use caller-owned Tauri channels. The Host
+`domain_request` command through a dedicated transport, while one `SessionProvider`
+owns the active Tauri event channel and bounded Watch/Hook reducer. The Host
 operation registry serves status, immutable-snapshot object/type queries, exact type
 details, stable-handle property reads, the bounded single-target `call.invoke`,
 immutable current-world/level/actor queries, exact-handle stored/computed Actor
@@ -258,6 +259,20 @@ work remain pending, issue statuses stay `in_progress`, and all engine profiles 
   reloads the live transform after apply; no real target round-trip or FHitResult output presentation has run.
 - No new target UE or Wandering Sword fixture was run. Every profile remains
   `Not supported`.
+
+### R6 frontend code checkpoint (2026-08-14)
+
+The frontend is split into `contracts`, `transport`, `services`, `session`, and
+`features`. Search/list requests share debounce, cancellation, cache, and stale-response
+handling; x64 addresses use canonical hex strings and BigInt helpers; Object browsing
+exposes Type, Instance, and World modes; Function calls select real snapshot instances;
+Dashboard reports Host/IPC/Core/Engine/Capability layers; and Settings only exposes
+values consumed by a real service. Shared property-value, error, value-parser, and
+pagination components replace the reachable duplicate implementations.
+
+This is a functionality-first code checkpoint. Only the TypeScript/Vite production
+build was run; lint, unit/component tests, browser automation, and real UE/Wandering
+Sword interaction were intentionally deferred. No runtime support profile is upgraded.
 
 ## Repository layout
 

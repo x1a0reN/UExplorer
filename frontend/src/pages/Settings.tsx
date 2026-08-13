@@ -1,42 +1,10 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { Settings, Shield, HardDrive, Monitor, TestTube2, Save, Info } from 'lucide-react';
-import api, { type ApiClientSettings, type DumpType } from '../api';
+import api from '../services';
+import type { ApiClientSettings, DumpType } from '../contracts';
 import { t, getLanguage, setLanguage, type Language } from '../i18n';
 
 type TabId = 'Injection' | 'Dump' | 'Display';
-
-type DisplaySettings = {
-  theme: 'Light' | 'Dark';
-  addressFormat: '0x Prefix' | 'No Prefix';
-  numberFormat: 'Hex' | 'Dec';
-};
-
-const DISPLAY_KEY = 'uexplorer.display.settings';
-
-function readDisplaySettings(): DisplaySettings {
-  try {
-    const raw = localStorage.getItem(DISPLAY_KEY);
-    if (!raw) {
-      return {
-        theme: 'Dark',
-        addressFormat: '0x Prefix',
-        numberFormat: 'Hex',
-      };
-    }
-    return {
-      theme: 'Dark',
-      addressFormat: '0x Prefix',
-      numberFormat: 'Hex',
-      ...(JSON.parse(raw) as Partial<DisplaySettings>),
-    };
-  } catch {
-    return {
-      theme: 'Dark',
-      addressFormat: '0x Prefix',
-      numberFormat: 'Hex',
-    };
-  }
-}
 
 const tabLabelMap: Record<TabId, string> = {
   Injection: 'Injection',
@@ -47,7 +15,6 @@ const tabLabelMap: Record<TabId, string> = {
 export default function SettingsView() {
   const [activeTab, setActiveTab] = useState<TabId>('Injection');
   const [settings, setSettings] = useState<ApiClientSettings>(api.getSettings());
-  const [display, setDisplay] = useState<DisplaySettings>(readDisplaySettings());
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [currentLang, setCurrentLang] = useState<Language>(getLanguage());
@@ -65,15 +32,10 @@ export default function SettingsView() {
     setSettings((prev) => ({ ...prev, [key]: value }));
   };
 
-  const setDisplayField = <K extends keyof DisplaySettings>(key: K, value: DisplaySettings[K]) => {
-    setDisplay((prev) => ({ ...prev, [key]: value }));
-  };
-
   const saveAll = async () => {
     setSaving(true);
     setMessage(null);
     api.updateSettings(settings);
-    localStorage.setItem(DISPLAY_KEY, JSON.stringify(display));
     setSaving(false);
     setMessage(t('Settings saved'));
   };
@@ -163,14 +125,9 @@ export default function SettingsView() {
                   <option value="ida-script">ida-script</option>
                 </select>
               </SettingLine>
-              <SettingLine label={t('Output Directory')} desc={t('Directory for generated SDK files')}>
-                <input
-                  type="text"
-                  value={settings.outputDir}
-                  onChange={(e) => setSettingsField('outputDir', e.target.value)}
-                  className="bg-background-base border border-border-subtle text-text-high text-xs font-mono placeholder:text-text-low/50 rounded-lg px-3 py-1.5 w-[420px] outline-none focus:border-primary"
-                />
-              </SettingLine>
+              <div className="px-5 py-4 text-[11px] text-text-low">
+                Dump output is managed by Core under %LOCALAPPDATA%\UExplorer\Dumps.
+              </div>
             </Card>
           )}
 
@@ -185,36 +142,6 @@ export default function SettingsView() {
                   >
                     <option value="zh">{t('Chinese')}</option>
                     <option value="en">{t('English')}</option>
-                  </select>
-                </SettingLine>
-                <SettingLine label={t('Theme')} desc={t('Application color theme')}>
-                  <select
-                    value={display.theme}
-                    onChange={(e) => setDisplayField('theme', e.target.value as DisplaySettings['theme'])}
-                    className="bg-background-base border border-border-subtle text-text-high text-xs rounded-lg px-3 py-1.5 outline-none focus:border-primary"
-                  >
-                    <option value="Dark">{t('Dark')}</option>
-                    <option value="Light">{t('Light')}</option>
-                  </select>
-                </SettingLine>
-                <SettingLine label={t('Address Format')} desc={t('How memory addresses are displayed')}>
-                  <select
-                    value={display.addressFormat}
-                    onChange={(e) => setDisplayField('addressFormat', e.target.value as DisplaySettings['addressFormat'])}
-                    className="bg-background-base border border-border-subtle text-text-high text-xs rounded-lg px-3 py-1.5 outline-none focus:border-primary"
-                  >
-                    <option value="0x Prefix">{t('0x Prefix')}</option>
-                    <option value="No Prefix">{t('No Prefix')}</option>
-                  </select>
-                </SettingLine>
-                <SettingLine label={t('Number Format')} desc={t('Default number display format')}>
-                  <select
-                    value={display.numberFormat}
-                    onChange={(e) => setDisplayField('numberFormat', e.target.value as DisplaySettings['numberFormat'])}
-                    className="bg-background-base border border-border-subtle text-text-high text-xs rounded-lg px-3 py-1.5 outline-none focus:border-primary"
-                  >
-                    <option value="Hex">{t('Hexadecimal')}</option>
-                    <option value="Dec">{t('Decimal')}</option>
                   </select>
                 </SettingLine>
               </Card>

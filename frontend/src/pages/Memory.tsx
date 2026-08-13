@@ -1,23 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Terminal, Binary, Bookmark, Search, ArrowRight, ArrowLeft, RefreshCw, Layers } from 'lucide-react';
 import { t } from '../i18n';
-import api from '../api';
-import { isWatchPushEventData } from '../api';
-import type { WatchDrainData, WatchEvent, WatchHistoryData, WatchItem, WatchValue } from '../api';
+import api from '../services';
+import type { WatchDrainData, WatchEvent, WatchHistoryData, WatchItem, WatchPushEventData, WatchValue } from '../contracts';
+import { useSession } from '../session/SessionProvider';
+import { addAddress, parseAddress } from '../features/address/address';
+import { DomainError } from '../features/shared/DomainError';
+import { isAbortError, useQueryRunner } from '../features/query/useQueryRunner';
 
 const READ_SIZE = 256;
-
-function parseAddress(value: string): string {
-  const v = value.trim();
-  if (!v) return '0x0';
-  try {
-    const parsed = BigInt(v);
-    if (parsed < 0n || parsed > 0xFFFF_FFFF_FFFF_FFFFn) return v;
-    return `0x${parsed.toString(16).toUpperCase()}`;
-  } catch {
-    return v;
-  }
-}
 
 function parseOffsets(raw: string): string[] {
   if (!raw.trim()) return [];
@@ -57,6 +48,9 @@ function apiError(code: string | null | undefined, message: string | null, fallb
 }
 
 export default function Memory() {
+  const session = useSession();
+  const { run } = useQueryRunner();
+  const lastWatchEventSeq = useRef(0);
   const [addressInput, setAddressInput] = useState('0x0');
   const [currentAddress, setCurrentAddress] = useState('0x0');
   const [history, setHistory] = useState<string[]>(['0x0']);
@@ -92,15 +86,14 @@ export default function Memory() {
 
   const rows = useMemo(() => {
     const result: Array<{ addr: string; chunk: string[]; ascii: string }> = [];
-    let base = 0n;
     try {
-      base = BigInt(currentAddress);
+      parseAddress(currentAddress);
     } catch {
       return result;
     }
     for (let i = 0; i < hexBytes.length; i += 16) {
       const chunk = hexBytes.slice(i, i + 16);
-      const addr = `0x${(base + BigInt(i)).toString(16).toUpperCase()}`;
+      const addr = addAddress(currentAddress, i);
       const ascii = chunk
         .map((b) => {
           const n = Number.parseInt(b, 16);
@@ -116,7 +109,7 @@ export default function Memory() {
   const consoleEndRef = useRef<HTMLDivElement>(null);
 
   function pushConsole(line: string) {
-    setConsoleLogs((prev) => [...prev, line]);
+    setConsoleLogs((prev) => [...prev, line].slice(-500));
   }
 
   useEffect(() => {
@@ -131,8 +124,23 @@ export default function Memory() {
   const loadMemory = useCallback(async (addr: string, pushHistory = true) => {
     setLoading(true);
     setReadError(null);
-    const normalized = parseAddress(addr);
-    const res = await api.readMemory(normalized, READ_SIZE);
+    let normalized: string;
+    try {
+      normalized = parseAddress(addr);
+    } catch (error) {
+      setReadError(error instanceof Error ? error.message : String(error));
+      setLoading(false);
+      return;
+    }
+    let res;
+    try {
+      res = await run('memory:read', async () => api.readMemory(normalized, READ_SIZE));
+    } catch (error) {
+      if (isAbortError(error)) return;
+      setReadError(error instanceof Error ? error.message : String(error));
+      setLoading(false);
+      return;
+    }
     setLoading(false);
 
     if (!res.success || !res.data) {
@@ -152,20 +160,26 @@ export default function Memory() {
         return next;
       });
     }
-  }, [updateHistoryIndex]);
+  }, [run, updateHistoryIndex]);
 
   const loadTypedValues = useCallback(async () => {
-    const base = BigInt(currentAddress);
-    const at = `0x${(base + BigInt(cursorOffset)).toString(16).toUpperCase()}`;
+    const at = addAddress(currentAddress, cursorOffset);
     const types = ['byte', 'int32', 'uint32', 'int64', 'uint64', 'float', 'double', 'pointer'];
 
-    const results = await Promise.all(types.map((t) => api.readTypedMemory(at, t)));
+    let results;
+    try {
+      results = await run('memory:typed', async () => Promise.all(types.map((type) => api.readTypedMemory(at, type))));
+    } catch (error) {
+      if (isAbortError(error)) return;
+      setReadError(error instanceof Error ? error.message : String(error));
+      return;
+    }
     const next: Record<string, string> = {};
     results.forEach((res, i) => {
       next[types[i]] = res.success && res.data ? String(res.data.value) : '-';
     });
     setTypedValues(next);
-  }, [currentAddress, cursorOffset]);
+  }, [currentAddress, cursorOffset, run]);
 
   useEffect(() => {
     if (!currentAddress || currentAddress === '0x0') return;
@@ -193,8 +207,7 @@ export default function Memory() {
 
   const writeTypedValue = async () => {
     try {
-      const base = BigInt(currentAddress);
-      const at = `0x${(base + BigInt(cursorOffset)).toString(16).toUpperCase()}`;
+      const at = addAddress(currentAddress, cursorOffset);
       const res = await api.writeTypedMemory(at, writeType, writeValue.trim());
       if (!res.success) {
         setReadError(res.error || 'Write failed');
@@ -238,22 +251,14 @@ export default function Memory() {
   }, []);
 
   useEffect(() => {
-    let disposed = false;
-    let unsubscribe: (() => Promise<boolean>) | null = null;
-    void api.getStatus().then(async (status) => {
-      if (disposed || !status.success || !status.data) return;
-      const subscription = await api.subscribeSessionEvents(status.data.pid, {
-        filter: {
-          kinds: [
-            'watch.value_changed',
-            'watch.sample_unavailable',
-            'watch.sample_failed',
-            'watch.terminal_stale',
-          ],
-        },
-        onEvent: ({ event, host_dropped_before: hostDroppedBefore }) => {
-          if (!isWatchPushEventData(event.data)) return;
-          const data = event.data;
+    lastWatchEventSeq.current = 0;
+  }, [session.status?.pid]);
+
+  useEffect(() => {
+    const pending = session.watchEvents.filter(({ event }) => event.seq > lastWatchEventSeq.current);
+    for (const { event, host_dropped_before: hostDroppedBefore } of pending) {
+      lastWatchEventSeq.current = Math.max(lastWatchEventSeq.current, event.seq);
+      const data = event.data as WatchPushEventData;
           const pushed: WatchEvent = {
             sequence: data.source_sequence,
             id: data.id,
@@ -351,19 +356,8 @@ export default function Memory() {
               };
             });
           }
-        },
-      });
-      if (disposed) {
-        void subscription.unsubscribe();
-        return;
-      }
-      unsubscribe = subscription.unsubscribe;
-    }).catch(() => undefined);
-    return () => {
-      disposed = true;
-      if (unsubscribe) void unsubscribe();
-    };
-  }, [expandedWatchId]);
+    }
+  }, [expandedWatchId, session.watchEvents]);
 
   const setWatchEnabled = async (watch: WatchItem) => {
     setWatchError(null);
@@ -518,10 +512,10 @@ export default function Memory() {
         </div>
 
         <div className="flex items-center gap-4 text-xs font-medium text-text-low font-display">
-          <button className="flex items-center gap-2 hover:text-text-high transition-colors">
+          <div className="flex items-center gap-2">
             <Bookmark className="w-3.5 h-3.5" />
             {t('Bookmarks')}
-          </button>
+          </div>
         </div>
       </div>
 
@@ -650,11 +644,7 @@ export default function Memory() {
             </button>
           </div>
           <div className="flex-1 p-4 overflow-auto space-y-2">
-            {watchError && (
-              <div className="rounded-lg border border-accent-red/20 bg-accent-red/5 p-3 text-xs text-accent-red font-display">
-                {watchError}
-              </div>
-            )}
+            <DomainError message={watchError} compact />
             {watchDrain && (
               <div className="rounded-lg border border-border-subtle bg-background-base p-3 space-y-2">
                 <div className="flex items-center justify-between text-[10px] text-text-low">

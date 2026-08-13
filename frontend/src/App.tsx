@@ -6,8 +6,6 @@ import {
   MemoryStick,
   Download,
   Settings,
-  Search,
-  Command,
   LayoutGrid,
   Power,
 } from 'lucide-react';
@@ -46,7 +44,7 @@ function App() {
           setCurrentPage(page);
         }} />;
       case 'objects':
-        return <Objects />;
+        return <Objects onNavigate={setCurrentPage} />;
       case 'functions':
         return <Functions viewMode={functionsViewMode} onViewModeChange={setFunctionsViewMode} />;
       case 'memory':
@@ -134,7 +132,7 @@ function App() {
 
         {/* User / Dev Profile Area at bottom */}
         <div className="p-3 border-t border-border-subtle">
-          <button className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-surface-stripe transition-colors cursor-pointer group">
+          <div className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg">
             <div className="w-7 h-7 rounded-full bg-gradient-to-tr from-primary to-indigo-500 flex items-center justify-center border border-border-subtle">
               <span className="text-[11px] font-bold text-white font-display">U</span>
             </div>
@@ -142,7 +140,7 @@ function App() {
               <span className="text-[12px] font-medium text-text-high truncate tracking-tight font-display">{t('DevUser')}</span>
               <span className="text-[10px] text-text-low truncate font-mono">{t('Local Agent')}</span>
             </div>
-          </button>
+          </div>
         </div>
       </aside>
 
@@ -158,21 +156,7 @@ function App() {
             </span>
           </div>
 
-          {/* Search Bar */}
-          <div className="relative group flex items-center">
-            <div className="absolute left-2.5 flex items-center justify-center pointer-events-none">
-              <Search className="w-3.5 h-3.5 text-text-low group-focus-within:text-text-mid transition-colors" />
-            </div>
-            <input
-              className="bg-background-base border border-border-subtle focus:border-primary text-text-high text-xs rounded px-8 py-1 w-[240px] outline-none transition-all placeholder:text-text-low font-mono"
-              placeholder={t('Search...')}
-              type="text"
-            />
-            <div className="absolute right-2 flex gap-0.5 items-center pointer-events-none">
-              <Command className="w-3 h-3 text-text-low" />
-              <span className="text-[10px] font-medium text-text-low font-mono">K</span>
-            </div>
-          </div>
+          <div className="text-[10px] text-text-low font-mono">PID-scoped Named Pipe</div>
         </header>
 
         {/* Scrollable Page Content */}

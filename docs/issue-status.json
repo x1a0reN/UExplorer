@@ -956,14 +956,15 @@
       "verification": [
         "2026-08-09: the former monolith is split into api/index.ts types/exports and api/client.ts Tauri-only transport; Rust DomainService owns the explicit domain registry",
 		"2026-08-10: strict shared Rust payload types and exact TypeScript models replace fabricated type metadata for ten type-detail operations; pages consume backend cursors and explicit unavailable states",
-        "Generated contracts and the R6 frontend session store remain pending"
+        "2026-08-14: React code is split into contracts/transport/services/session/features; api files are compatibility barrels and SessionProvider owns active status plus events",
+        "R6 lint/unit/component acceptance was intentionally not run in this functionality-first checkpoint"
       ]
     },
     "UI-002": {
       "status": "in_progress",
       "verification": [
         "2026-08-09: unbounded fetch/JSON handling was removed; DomainService and CoreRpcClient enforce total bounded deadlines and preserve stable transport/protocol/domain errors",
-        "React query cancellation and generation guards remain pending in R6"
+        "2026-08-14: shared query runner adds cancellation, cache and stale-response suppression; debounced Object/Type/Function/World/Memory queries use it"
       ]
     },
     "UI-003": {
@@ -994,12 +995,19 @@
         "2026-08-09: release Core has no WS console and UI no longer connects to one or bypasses its local disabled-state behavior"
       ]
     },
+    "UI-007": {
+      "status": "in_progress",
+      "verification": [
+        "2026-08-14: shared address feature parses, formats and adds unsigned 64-bit addresses with hex strings and BigInt; reachable pages no longer prefix or calculate address values ad hoc",
+        "The dedicated boundary unit test was not run in this functionality-first checkpoint"
+      ]
+    },
     "UI-008": {
       "status": "in_progress",
       "verification": [
         "2026-08-09: instance/static/batch execution buttons and console call command are disabled while stable handles are unavailable",
 		"2026-08-10: Functions now uses exact function detail, backend implementation/native-address metadata, stable owner handles, parameter direction, and canonical flag masks; name-based Native/Blueprint filters are disabled, UClass index is never an implicit instance target, and Blueprint failure does not fall back to a naked index",
-		"Actual Call commands and real instance selection remain pending"
+        "2026-08-14: call.invoke is wired to actual class-instance results through a target selector; function pagination consumes snapshot-bound continuation cursors"
       ]
     },
     "UI-009": {
@@ -1009,14 +1017,21 @@
         "2026-08-09: four list views no longer request the invalid legacy PAGE_SIZE=500; they use the protocol maximum 128 and consume next_cursor/has_more instead of offsets",
 		"2026-08-09: failed continuation pages clear has_more/cursor instead of retrying the same rejected page indefinitely; missing instance outer metadata is no longer fabricated as Package",
 		"2026-08-10: TypeBrowser and InspectorPane consume generation/query-bound detail pages with explicit load-more state instead of loading or fabricating unbounded metadata",
-        "React request cancellation and stale-response generation guards remain pending in R6"
+        "2026-08-14: debounced list queries use a shared cancellation/stale guard and all reachable Object/Type/Function/World continuation paths retain backend cursors"
+      ]
+    },
+    "UI-010": {
+      "status": "in_progress",
+      "verification": [
+        "2026-08-14: SessionProvider owns one Tauri Channel and a bounded Hook/Watch event reducer; Functions and Memory reconcile pushed events locally without per-hit full-list requests",
+        "High-rate target behavior was not run and remains part of R7"
       ]
     },
     "UI-011": {
       "status": "in_progress",
       "verification": [
         "2026-08-09: Settings removed port, token, auto reconnect, DLL proxy, manual offset, and other fake transport controls",
-        "Remaining DLL path, dump, output, theme, address, and numeric preferences require end-to-end behavior tests or removal in R6"
+        "2026-08-14: Settings now exposes only DLL path, default Dump format and language; SDKDump consumes the saved default and the fake output/theme/address/number controls were removed"
       ]
     },
     "UI-012": {
@@ -1030,7 +1045,13 @@
       "status": "in_progress",
       "verification": [
         "2026-08-09: synthetic 60 percent progress and unsupported dump controls removed; running state is explicitly indeterminate",
-        "Real phase progress and selected-detail event refresh remain pending"
+        "2026-08-14: SDKDump follows retained job detail, appends backend progress events and renders exact phase/completed/total or an indeterminate bar"
+      ]
+    },
+    "UI-014": {
+      "status": "in_progress",
+      "verification": [
+        "2026-08-14: query lifecycle owns cancellation on unmount/supersession, the session event store is bounded, and Memory console output is capped at 500 entries"
       ]
     },
     "UI-016": {
@@ -1045,6 +1066,18 @@
       "verification": [
         "2026-08-09: cd frontend; npm run lint",
         "2026-08-09: cd frontend; npm run build"
+      ]
+    },
+    "UI-017": {
+      "status": "in_progress",
+      "verification": [
+        "2026-08-14: reachable Object modes share PropertyValueEditor, valueParser, DomainError and pagination components; legacy three-pane files remain retained but are disconnected from Objects.tsx"
+      ]
+    },
+    "UI-018": {
+      "status": "in_progress",
+      "verification": [
+        "2026-08-14: Dashboard consumes SessionProvider and displays Host, IPC, Core, Engine and Capability layers with per-layer detail"
       ]
     }
   }

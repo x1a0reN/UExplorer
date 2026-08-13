@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import api, { type HostProcessInfo, type InjectionCommandResult } from '../api';
+import api from '../services';
+import type { HostProcessInfo, InjectionCommandResult } from '../contracts';
 import { t } from '../i18n';
 
 interface ProcessSelectorProps {

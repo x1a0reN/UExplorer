@@ -1,9 +1,13 @@
 import { useEffect, useState } from 'react';
-import { MoreHorizontal, RefreshCw } from 'lucide-react';
+import { MoreHorizontal } from 'lucide-react';
 import { t } from '../../i18n';
-import api from '../../api';
-import type { ClassCDOResponse, ClassFunction, ClassProperty, ClassHierarchy, EnumValue, ObjectDetail, ObjectProperty, TypeQueryCursor } from '../../api';
-import { toEditable } from './valueUtils';
+import api from '../../services';
+import type { ClassCDOResponse, ClassFunction, ClassProperty, ClassHierarchy, EnumValue, ObjectDetail, ObjectProperty, TypeQueryCursor } from '../../contracts';
+import { toEditable } from '../../features/value/valueParser';
+import { formatAddress } from '../../features/address/address';
+import { PropertyValueEditor } from '../../features/shared/PropertyValueEditor';
+import { DomainError } from '../../features/shared/DomainError';
+import { LoadMoreButton } from '../../features/shared/Pagination';
 
 interface InspectorPaneProps {
     selectedClass: string | null;
@@ -227,7 +231,7 @@ export default function InspectorPane({ selectedClass, selectedType, selectedInd
                                 {isInstanceMode ? instanceDetail?.class : classFullName || 'Type'}
                             </span>
                             {isInstanceMode && instanceDetail?.address && (
-                                <span className="text-2xs text-text-low font-mono">0x{instanceDetail.address}</span>
+                                <span className="text-2xs text-text-low font-mono">{formatAddress(instanceDetail.address)}</span>
                             )}
                             {!isInstanceMode && (
                                 <span className="text-2xs text-text-low font-mono">{t('Definition')}</span>
@@ -263,11 +267,7 @@ export default function InspectorPane({ selectedClass, selectedType, selectedInd
                         <span>{t('Loading structure...')}</span>
                     </div>
                 )}
-                {error && (
-                    <div className="p-4 bg-red-500/10 border border-red-500/20 text-red-400 text-xs m-4 rounded font-mono">
-                        {error}
-                    </div>
-                )}
+                <div className="m-4"><DomainError message={error} compact /></div>
 
                 {/* Tab: Properties (Instance Mode) */}
                 {activeTab === 'Properties' && isInstanceMode && (
@@ -276,7 +276,6 @@ export default function InspectorPane({ selectedClass, selectedType, selectedInd
                             <div className="p-4 text-center text-text-low text-xs">{t('No properties found.')}</div>
                         )}
                         {properties.map((p, index) => {
-                            const isBool = p.type === 'bool';
                             return (
                                 <div key={p.name} className={`flex items-center border-b border-border-subtle px-3 py-2 hover:bg-white/5 group/row relative ${index % 2 === 0 ? 'bg-transparent' : 'bg-surface-stripe'}`}>
                                     <div className="w-[45%] pr-2 flex items-center gap-2">
@@ -286,31 +285,11 @@ export default function InspectorPane({ selectedClass, selectedType, selectedInd
                                     <div className="w-[55%] relative flex items-center justify-between group/input">
                                         <div className="text-2xs text-text-low px-1 mr-2 border border-border-subtle rounded font-mono truncate max-w-[70px]" title={p.type}>{p.type}</div>
 
-                                        {isBool ? (
-                                            <div className="flex-1 flex items-center justify-start gap-2 h-7">
-                                                <input
-                                                    type="checkbox"
-                                                    checked={propertyEditMap[p.name] === 'true'}
-                                                    disabled
-                                                    className="form-checkbox h-3.5 w-3.5 text-primary bg-[#0a0a0a] border-border-subtle rounded opacity-70"
-                                                />
-                                                <span className="text-xs text-text-low font-mono">{propertyEditMap[p.name] === 'true' ? t('True') : t('False')}</span>
-                                            </div>
-                                        ) : (
-                                            <input
-                                                type="text"
-                                                value={propertyEditMap[p.name] ?? ''}
-                                                readOnly
-                                                className="flex-1 w-full bg-[#0a0a0a] border border-border-subtle rounded px-2 py-1 text-xs text-text-mid font-mono cursor-default shadow-inner"
-                                            />
-                                        )}
-
-                                        {/* Action Floaters */}
-                                        <div className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-1 opacity-0 group-hover/row:opacity-100 flex items-center gap-0.5 bg-surface-dark border border-border-subtle rounded shadow-lg p-0.5 z-20 transition-opacity">
-                                            <button onClick={() => void handlePropertyRefresh(p)} className={`p-1 hover:bg-blue-500/20 text-text-low hover:text-primary rounded ${propertyRefreshing[p.name] ? 'animate-spin text-primary' : ''}`} title={t('Refresh')}>
-                                                <RefreshCw className="w-3.5 h-3.5" />
-                                            </button>
-                                        </div>
+                                        <PropertyValueEditor
+                                            value={propertyEditMap[p.name] ?? ''}
+                                            refreshing={propertyRefreshing[p.name] === true}
+                                            onRefresh={() => void handlePropertyRefresh(p)}
+                                        />
                                     </div>
                                 </div>
                             );
@@ -344,11 +323,7 @@ export default function InspectorPane({ selectedClass, selectedType, selectedInd
                                 </div>
                             </div>
                         ))}
-                        {fieldHasMore && fieldCursor && (
-                            <button onClick={() => void loadMoreMetadata('fields')} className="m-3 py-1.5 border border-border-subtle rounded text-xs text-text-mid hover:text-white">
-                                {t('Load more')}
-                            </button>
-                        )}
+                        <LoadMoreButton visible={fieldHasMore && fieldCursor !== null} loading={loading} onClick={() => void loadMoreMetadata('fields')} label={t('Load more')} />
                     </div>
                 )}
 
@@ -368,11 +343,7 @@ export default function InspectorPane({ selectedClass, selectedType, selectedInd
                                 {f.reason && <div className="text-[10px] text-yellow-400 font-mono mt-1">{f.reason_code}: {f.reason}</div>}
                             </div>
                         ))}
-                        {functionHasMore && functionCursor && (
-                            <button onClick={() => void loadMoreMetadata('functions')} className="m-3 py-1.5 border border-border-subtle rounded text-xs text-text-mid hover:text-white">
-                                {t('Load more')}
-                            </button>
-                        )}
+                        <LoadMoreButton visible={functionHasMore && functionCursor !== null} loading={loading} onClick={() => void loadMoreMetadata('functions')} label={t('Load more')} />
                     </div>
                 )}
 
@@ -405,11 +376,7 @@ export default function InspectorPane({ selectedClass, selectedType, selectedInd
                                 <div className="text-xs text-primary font-mono font-medium">{v.value}</div>
                             </div>
                         ))}
-                        {enumHasMore && enumCursor && (
-                            <button onClick={() => void loadMoreMetadata('values')} className="m-3 py-1.5 border border-border-subtle rounded text-xs text-text-mid hover:text-white">
-                                {t('Load more')}
-                            </button>
-                        )}
+                        <LoadMoreButton visible={enumHasMore && enumCursor !== null} loading={loading} onClick={() => void loadMoreMetadata('values')} label={t('Load more')} />
                     </div>
                 )}
             </div>

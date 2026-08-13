@@ -1,17 +1,25 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Search, Filter, TerminalSquare, Play, Info, List, History, RefreshCw, Cpu } from 'lucide-react';
 import { t } from '../i18n';
-import api, {
-  isHookPushEventData,
+import api from '../services';
+import {
   type FunctionCallArgument,
   type FunctionDetail,
   type HookCapturePolicy,
   type HookItem,
   type HookLogEntry,
+  type HookPushEventData,
   type ObjectDetail,
   type ObjectItem,
+  type SnapshotQueryCursor,
   type StableObjectHandle,
-} from '../api';
+} from '../contracts';
+import { useSession } from '../session/SessionProvider';
+import { isAbortError, useQueryRunner } from '../features/query/useQueryRunner';
+import { useDebouncedValue } from '../features/query/useDebouncedValue';
+import { LoadMoreButton, PageControls } from '../features/shared/Pagination';
+import { DomainError } from '../features/shared/DomainError';
+import { formatAddress } from '../features/address/address';
 
 type FunctionTab = 'Info' | 'Parameters' | 'Call' | 'Hook' | 'Disassembly';
 type FlagTab = 'All' | 'Native' | 'Blueprint';
@@ -79,11 +87,16 @@ function HookParameterSummary({ entry }: { entry: HookLogEntry }) {
 }
 
 export default function Functions({ viewMode = 'function', onViewModeChange }: FunctionsProps) {
+  const session = useSession();
+  const { run } = useQueryRunner();
+  const lastHookEventSeq = useRef(0);
   const [activeTab, setActiveTab] = useState<FunctionTab>('Call');
   const [flagTab, setFlagTab] = useState<FlagTab>('All');
   const [search, setSearch] = useState('');
   const [packageFilter, setPackageFilter] = useState('');
   const [items, setItems] = useState<FunctionItem[]>([]);
+  const [nextFunctionCursor, setNextFunctionCursor] = useState<SnapshotQueryCursor | null>(null);
+  const [hasMoreFunctions, setHasMoreFunctions] = useState(false);
   const [selected, setSelected] = useState<FunctionItem | null>(null);
   const [listLoading, setListLoading] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
@@ -94,6 +107,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
   const [detailError, setDetailError] = useState<string | null>(null);
 
   const [targetIndex, setTargetIndex] = useState('');
+  const [targetInstances, setTargetInstances] = useState<Array<{ index: number; name: string; address: string }>>([]);
   const [paramInputs, setParamInputs] = useState<Record<string, string>>({});
   const [callMode, setCallMode] = useState<CallMode>('instance');
   const [staticClassName, setStaticClassName] = useState('');
@@ -116,12 +130,15 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
   const [blueprintProfileId, setBlueprintProfileId] = useState('');
   const [blueprintProfileStatus, setBlueprintProfileStatus] = useState<string | null>(null);
   const [decompileLoading, setDecompileLoading] = useState(false);
+  const debouncedSearch = useDebouncedValue(search);
+  const debouncedPackageFilter = useDebouncedValue(packageFilter);
 
   const functionTabs = useMemo(
     () => [
       { id: 'Info' as FunctionTab, icon: Info },
       { id: 'Parameters' as FunctionTab, icon: List },
       { id: 'Call' as FunctionTab, icon: Play },
+      { id: 'Hook' as FunctionTab, icon: Cpu },
       { id: 'Disassembly' as FunctionTab, icon: TerminalSquare },
     ],
     []
@@ -221,6 +238,10 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
   }, [activeHookId]);
 
   useEffect(() => {
+    lastHookEventSeq.current = 0;
+  }, [session.status?.pid]);
+
+  useEffect(() => {
     if (activeHookId > 0) {
       void refreshHookLog();
     } else {
@@ -229,75 +250,72 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
   }, [activeHookId, refreshHookLog]);
 
   useEffect(() => {
-    if (activeTab !== 'Hook' && viewMode !== 'hookManager') {
-      return;
+    if (activeTab === 'Hook' || viewMode === 'hookManager') {
+      void Promise.all([refreshHooks(), refreshHookLog()]);
     }
+  }, [activeTab, refreshHookLog, refreshHooks, viewMode]);
 
-    let disposed = false;
-    let unsubscribe: (() => Promise<boolean>) | null = null;
-    void Promise.all([api.getStatus(), refreshHooks(), refreshHookLog()]).then(async ([status]) => {
-      if (disposed || !status.success || !status.data) return;
-      const subscription = await api.subscribeSessionEvents(status.data.pid, {
-        onEvent: ({ event }) => {
-          if (!event.kind.startsWith('hook.') || !isHookPushEventData(event.data)) return;
-          const data = event.data;
+  useEffect(() => {
+    const pending = session.hookEvents.filter(({ event }) => event.seq > lastHookEventSeq.current);
+    for (const { event } of pending) {
+      lastHookEventSeq.current = Math.max(lastHookEventSeq.current, event.seq);
+      const data = event.data;
+      if (!data || typeof data !== 'object' || !('id' in data)) continue;
+      const hookData = data as HookPushEventData;
           setHooks((current) => current.map((hook) => {
-            if (hook.id !== data.id || data.source_sequence <= hook.last_event_sequence) return hook;
+            if (hook.id !== hookData.id || hookData.source_sequence <= hook.last_event_sequence) return hook;
             return {
               ...hook,
               hit_count: event.kind === 'hook.process_event_enter'
                 ? hook.hit_count + 1 : hook.hit_count,
-              last_event_sequence: data.source_sequence,
-              last_correlation: data.correlation,
+              last_event_sequence: hookData.source_sequence,
+              last_correlation: hookData.correlation,
               log_count: Math.min(hook.log_count + 1, 128),
-              log_drop_count: data.retained_log_dropped_before,
+              log_drop_count: hookData.retained_log_dropped_before,
             };
           }));
-          if (data.id === activeHookId) {
+          if (hookData.id === activeHookId) {
             const entry: HookLogEntry = {
-              sequence: data.source_sequence,
-              configuration_generation: data.configuration_generation,
+              sequence: hookData.source_sequence,
+              configuration_generation: hookData.configuration_generation,
               kind: event.kind.slice('hook.'.length) as HookLogEntry['kind'],
-              source: data.source,
-              subject: data.id,
-              correlation: data.correlation,
-              coalesced_before: data.coalesced_before,
-              drained_at_monotonic_us: data.drained_at_monotonic_us,
-              function_path: data.function_path,
-              payload: data.payload ?? { encoding: 'hex', size: 0, data: '' },
-              parameters: data.parameters,
-              push_payload_omitted: data.payload_omitted,
-              push_payload_omission_code: data.payload_omission_code,
+              source: hookData.source,
+              subject: hookData.id,
+              correlation: hookData.correlation,
+              coalesced_before: hookData.coalesced_before,
+              drained_at_monotonic_us: hookData.drained_at_monotonic_us,
+              function_path: hookData.function_path,
+              payload: hookData.payload ?? { encoding: 'hex', size: 0, data: '' },
+              parameters: hookData.parameters,
+              push_payload_omitted: hookData.payload_omitted,
+              push_payload_omission_code: hookData.payload_omission_code,
             };
             setHookLog((current) => [
               entry,
               ...current.filter((item) => item.sequence !== entry.sequence),
             ].slice(0, 1000));
           }
-        },
-      });
-      if (disposed) {
-        void subscription.unsubscribe();
-        return;
-      }
-      unsubscribe = subscription.unsubscribe;
-    }).catch(() => undefined);
-    return () => {
-      disposed = true;
-      if (unsubscribe) void unsubscribe();
-    };
-  }, [activeHookId, activeTab, refreshHookLog, refreshHooks, viewMode]);
+    }
+  }, [activeHookId, session.hookEvents]);
 
-  const loadFunctions = useCallback(async () => {
+  const loadFunctions = useCallback(async (
+    cursor: SnapshotQueryCursor | null = null,
+    append = false,
+  ) => {
     setListLoading(true);
     setListError(null);
+    if (!append) {
+      setItems([]);
+      setNextFunctionCursor(null);
+      setHasMoreFunctions(false);
+    }
     try {
-      const res = await api.searchObjects(search.trim(), {
+      const res = await run('functions:list', async () => api.searchObjects(debouncedSearch.trim(), {
         kind: 'function',
-        packagePath: packageFilter.trim() || undefined,
-        cursor: null,
+        packagePath: debouncedPackageFilter.trim() || undefined,
+        cursor,
         limit: 128,
-      });
+      }));
       if (!res.success || !res.data) throw new Error(res.error || t('Failed to load functions'));
 
       const next = res.data.items.map((it: ObjectItem) => ({
@@ -307,45 +325,60 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
         address: it.address,
       }));
 
-      setItems(next);
+      setItems((current) => append ? [...current, ...next] : next);
+      setNextFunctionCursor(res.data.next_cursor);
+      setHasMoreFunctions(res.data.has_more);
     } catch (error) {
+      if (isAbortError(error)) return;
       setListError(error instanceof Error ? error.message : String(error));
       setItems([]);
     } finally {
       setListLoading(false);
     }
-  }, [packageFilter, search]);
+  }, [debouncedPackageFilter, debouncedSearch, run]);
 
   const loadFunctionDetail = useCallback(async (index: number) => {
     setDetailLoading(true);
     setDetailError(null);
     setFunctionMeta(null);
+    setTargetInstances([]);
     setCallResult('');
     setBytecode('');
     setDecompiled('');
 
     try {
-      const detailRes = await api.getObjectByIndex(index);
-      if (!detailRes.success || !detailRes.data) {
-        throw new Error(detailRes.error || t('Failed to load function detail'));
-      }
-      setDetail(detailRes.data);
+      const loaded = await run('functions:detail', async () => {
+        const detailRes = await api.getObjectByIndex(index);
+        if (!detailRes.success || !detailRes.data) {
+          throw new Error(detailRes.error || t('Failed to load function detail'));
+        }
+        const parts = extractFunctionParts(detailRes.data);
+        if (!parts.classPath || !parts.functionPath) {
+          throw new Error('Function metadata does not contain an exact owner/function path');
+        }
+        const functionRes = await api.getFunctionByPath(parts.functionPath);
+        if (!functionRes.success || !functionRes.data) {
+          throw new Error(functionRes.error || t('Failed to load function metadata'));
+        }
+        const staticCall = hasFunctionFlag(functionRes.data.flags, 0x0000000000002000n);
+        const instances = staticCall
+          ? null
+          : await api.getClassInstances(functionRes.data.declaring_type.full_path, null, 100);
+        return { detail: detailRes.data, parts, found: functionRes.data, staticCall, instances };
+      });
 
-      const parts = extractFunctionParts(detailRes.data);
-      if (!parts.classPath || !parts.functionPath) {
-        throw new Error('Function metadata does not contain an exact owner/function path');
-      }
-      setBlueprintPath(parts.functionPath);
-
-      const functionRes = await api.getFunctionByPath(parts.functionPath);
-      if (!functionRes.success || !functionRes.data) {
-        throw new Error(functionRes.error || t('Failed to load function metadata'));
-      }
-      const found = functionRes.data;
+      setDetail(loaded.detail);
+      setBlueprintPath(loaded.parts.functionPath);
+      const found = loaded.found;
       setFunctionMeta(found);
       setStaticClassName(found.declaring_type.full_path);
 
-      setCallMode(hasFunctionFlag(found.flags, 0x0000000000002000n) ? 'static' : 'instance');
+      setCallMode(loaded.staticCall ? 'static' : 'instance');
+      if (!loaded.staticCall) {
+        if (loaded.instances?.success && loaded.instances.data) {
+          setTargetInstances(loaded.instances.data.items);
+        }
+      }
       const inputMap: Record<string, string> = {};
       found.parameters
         .filter((parameter) => parameter.direction === 'input' || parameter.direction === 'inout')
@@ -358,15 +391,15 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
       setTargetIndex('');
 
     } catch (error) {
+      if (isAbortError(error)) return;
       setDetailError(error instanceof Error ? error.message : String(error));
     } finally {
       setDetailLoading(false);
     }
-  }, []);
+  }, [run]);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => void loadFunctions(), 150);
-    return () => window.clearTimeout(timer);
+    void loadFunctions(null, false);
   }, [loadFunctions]);
 
   useEffect(() => {
@@ -684,7 +717,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
               ))}
             </div>
             <button
-              onClick={() => void loadFunctions()}
+              onClick={() => void loadFunctions(null, false)}
               className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-surface-stripe text-text-low hover:text-text-high transition-colors"
             >
               <RefreshCw className="w-3.5 h-3.5" />
@@ -694,7 +727,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
 
         <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
           {listLoading && <div className="text-text-low text-xs p-3 font-display">{t('Loading...')}</div>}
-          {listError && <div className="text-accent-red text-xs p-3 font-display">{listError}</div>}
+          <DomainError message={listError} compact />
           {!listLoading && !listError && items.length === 0 && <div className="text-text-low text-xs p-3 font-display">{t('No functions loaded')}</div>}
           {items.map((item) => {
             const active = selected?.index === item.index;
@@ -715,6 +748,12 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
               </div>
             );
           })}
+          <LoadMoreButton
+            visible={hasMoreFunctions && nextFunctionCursor !== null}
+            loading={listLoading}
+            onClick={() => void loadFunctions(nextFunctionCursor, true)}
+            label={t('Load more')}
+          />
         </div>
       </div>
 
@@ -727,9 +766,12 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
             >
               {t('Function Workbench')}
             </button>
-            <span className="px-3 py-1.5 text-xs text-text-low font-display" title={t('Bounded Hook collector is not active')}>
-              {t('Hook Monitoring Unavailable')}
-            </span>
+            <button
+              onClick={() => onViewModeChange?.('hookManager')}
+              className={`px-3 py-1.5 rounded-md text-xs font-semibold font-display transition-colors ${viewMode === 'hookManager' ? 'bg-surface-dark text-text-high shadow-sm border border-border-subtle' : 'text-text-low hover:text-text-high border border-transparent'}`}
+            >
+              {t('Hook Manager')}
+            </button>
           </div>
           {viewMode === 'function' && (
             <nav className="flex items-center gap-4">
@@ -845,22 +887,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
 
                 <div className="flex items-center justify-between text-xs text-text-low font-display">
                   <div>{t('Page')} {hookPage} {t('of')} {hookTotalPages} ({hookPageSize} {t('per page')})</div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => setHookPage((p) => Math.max(1, p - 1))}
-                      disabled={hookPage <= 1}
-                      className="px-3 py-1.5 rounded-lg bg-surface-stripe hover:bg-surface-stripe/80 border border-border-subtle transition-colors disabled:opacity-40"
-                    >
-                      {t('Prev Page')}
-                    </button>
-                    <button
-                      onClick={() => setHookPage((p) => Math.min(hookTotalPages, p + 1))}
-                      disabled={hookPage >= hookTotalPages}
-                      className="px-3 py-1.5 rounded-lg bg-surface-stripe hover:bg-surface-stripe/80 border border-border-subtle transition-colors disabled:opacity-40"
-                    >
-                      {t('Next Page')}
-                    </button>
-                  </div>
+                  <PageControls page={hookPage} totalPages={hookTotalPages} onPage={setHookPage} />
                 </div>
               </div>
 
@@ -889,22 +916,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
                 </div>
                 <div className="flex items-center justify-between text-xs text-text-low font-display">
                   <div>{t('Page')} {hookLogPage} {t('of')} {hookLogTotalPages} ({hookLogPageSize} {t('per page')})</div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => setHookLogPage((p) => Math.max(1, p - 1))}
-                      disabled={hookLogPage <= 1}
-                      className="px-3 py-1.5 rounded-lg bg-surface-stripe hover:bg-surface-stripe/80 border border-border-subtle transition-colors disabled:opacity-40"
-                    >
-                      {t('Prev Page')}
-                    </button>
-                    <button
-                      onClick={() => setHookLogPage((p) => Math.min(hookLogTotalPages, p + 1))}
-                      disabled={hookLogPage >= hookLogTotalPages}
-                      className="px-3 py-1.5 rounded-lg bg-surface-stripe hover:bg-surface-stripe/80 border border-border-subtle transition-colors disabled:opacity-40"
-                    >
-                      {t('Next Page')}
-                    </button>
-                  </div>
+                  <PageControls page={hookLogPage} totalPages={hookLogTotalPages} onPage={setHookLogPage} />
                 </div>
               </div>
             </div>
@@ -936,13 +948,13 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
                   </div>
 
                   {detailLoading && <div className="text-white/40 text-sm">Loading function detail...</div>}
-                  {detailError && <div className="text-red-300 text-sm">{detailError}</div>}
+                  <DomainError message={detailError} />
 
                   {activeTab === 'Info' && (
                     <div className="bg-surface-dark border border-border-subtle rounded-xl p-6 space-y-2 text-sm shadow-sm">
                       <InfoLine k="Name" v={detail?.name || selected.name} />
                       <InfoLine k="Class" v={currentParts.classPath || selected.className} />
-                      <InfoLine k="Native Address" v={functionMeta?.native_address || '-'} />
+                      <InfoLine k="Native Address" v={formatAddress(functionMeta?.native_address)} />
                       <InfoLine k="Param Size" v={String(functionMeta?.parameter_size ?? '-')} />
                       <InfoLine k="Flags" v={functionMeta?.flags || '-'} />
                       <InfoLine k="Implementation" v={functionMeta?.implementation || 'unavailable'} />
@@ -1006,13 +1018,18 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
                             {callMode === 'instance' && (
                               <div className="space-y-1.5">
                                 <label className="text-[10px] font-bold text-text-low uppercase tracking-widest font-display">Target Object Index</label>
-                                <input
-                                  type="text"
+                                <select
                                   value={targetIndex}
                                   onChange={(e) => setTargetIndex(e.target.value)}
-                                  placeholder={t('Object index')}
                                   className="w-full bg-background-base border border-border-subtle text-text-high font-mono text-[13px] rounded-lg px-3 py-2 outline-none focus:border-primary transition-colors placeholder:text-text-low/50"
-                                />
+                                >
+                                  <option value="">{targetInstances.length > 0 ? t('Select an instance') : t('No instances found')}</option>
+                                  {targetInstances.map((instance) => (
+                                    <option key={instance.index} value={instance.index}>
+                                      {instance.name} [{instance.index}] {formatAddress(instance.address)}
+                                    </option>
+                                  ))}
+                                </select>
                               </div>
                             )}
 

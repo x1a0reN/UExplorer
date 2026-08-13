@@ -2,15 +2,21 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { t } from '../../i18n';
 import { Search, Box, Database, Layers, Hash, ExternalLink } from 'lucide-react';
-import api, {
+import api from '../../services';
+import {
     type ClassFunction,
     type ClassProperty,
     type EnumDetail,
     type EnumValue,
     type SnapshotQueryCursor,
     type TypeQueryCursor,
-} from '../../api';
-import { Panel, HeaderCard, type BrowserPageProps } from './shared';
+} from '../../contracts';
+import { Panel, HeaderCard, type BrowserPageProps, type ModeNavContext } from './shared';
+import { isAbortError, useQueryRunner } from '../../features/query/useQueryRunner';
+import { useDebouncedValue } from '../../features/query/useDebouncedValue';
+import { DomainError } from '../../features/shared/DomainError';
+import { LoadMoreButton } from '../../features/shared/Pagination';
+import { formatAddress } from '../../features/address/address';
 
 // ─── Types ─────────────────────────────────────────────────────
 
@@ -28,10 +34,16 @@ interface TypeItem {
 
 // ─── Component ─────────────────────────────────────────────────
 
-export default function TypeBrowser({ onSwitchMode }: BrowserPageProps) {
+interface TypeBrowserProps extends BrowserPageProps {
+    navContext?: ModeNavContext;
+}
+
+export default function TypeBrowser({ onSwitchMode, navContext }: TypeBrowserProps) {
+    const { run } = useQueryRunner();
+    const detailRequestEpoch = useRef(0);
     // Left panel state
     const [subTab, setSubTab] = useState<TypeSubTab>('Class');
-    const [search, setSearch] = useState('');
+    const [search, setSearch] = useState(navContext?.className || '');
     const [items, setItems] = useState<TypeItem[]>([]);
     const [total, setTotal] = useState(0);
     const [nextCursor, setNextCursor] = useState<SnapshotQueryCursor | null>(null);
@@ -39,6 +51,7 @@ export default function TypeBrowser({ onSwitchMode }: BrowserPageProps) {
     const [listLoading, setListLoading] = useState(false);
     const [listError, setListError] = useState<string | null>(null);
     const [selected, setSelected] = useState<TypeItem | null>(null);
+    const debouncedSearch = useDebouncedValue(search);
 
     // Right detail state
     const [detailLoading, setDetailLoading] = useState(false);
@@ -85,7 +98,7 @@ export default function TypeBrowser({ onSwitchMode }: BrowserPageProps) {
         setListError(null);
         try {
             if (subTab === 'Class') {
-                const res = await api.getClasses(cursor, PAGE_SIZE, search);
+                const res = await run('type-browser:list', async () => api.getClasses(cursor, PAGE_SIZE, debouncedSearch));
                 if (!res.success || !res.data) throw new Error(res.error || 'Class query failed');
                 const mapped = res.data.items.map((c) => ({ index: c.index, name: c.name, fullName: c.full_name, size: c.size, super: c.super }));
                 setItems((current) => append ? [...current, ...mapped] : mapped);
@@ -93,7 +106,7 @@ export default function TypeBrowser({ onSwitchMode }: BrowserPageProps) {
                 setNextCursor(res.data.next_cursor);
                 setHasMore(res.data.has_more);
             } else if (subTab === 'Struct') {
-                const res = await api.getStructs(cursor, PAGE_SIZE, search);
+                const res = await run('type-browser:list', async () => api.getStructs(cursor, PAGE_SIZE, debouncedSearch));
                 if (!res.success || !res.data) throw new Error(res.error || 'Struct query failed');
                 const mapped = res.data.items.map((s) => ({ index: s.index, name: s.name, fullName: s.full_name, size: s.size, super: s.super }));
                 setItems((current) => append ? [...current, ...mapped] : mapped);
@@ -101,7 +114,7 @@ export default function TypeBrowser({ onSwitchMode }: BrowserPageProps) {
                 setNextCursor(res.data.next_cursor);
                 setHasMore(res.data.has_more);
             } else if (subTab === 'Enum') {
-                const res = await api.getEnums(cursor, PAGE_SIZE, search);
+                const res = await run('type-browser:list', async () => api.getEnums(cursor, PAGE_SIZE, debouncedSearch));
                 if (!res.success || !res.data) throw new Error(res.error || 'Enum query failed');
                 const mapped = res.data.items.map((e) => ({ index: e.index, name: e.name, fullName: e.full_name }));
                 setItems((current) => append ? [...current, ...mapped] : mapped);
@@ -110,15 +123,17 @@ export default function TypeBrowser({ onSwitchMode }: BrowserPageProps) {
                 setHasMore(res.data.has_more);
             }
         } catch (error) {
+            if (isAbortError(error)) return;
             setListError(error instanceof Error ? error.message : String(error));
             setNextCursor(null);
             setHasMore(false);
         } finally {
             setListLoading(false);
         }
-    }, [search, subTab]);
+    }, [debouncedSearch, run, subTab]);
 
     const loadDetail = async (item: TypeItem) => {
+        const requestEpoch = ++detailRequestEpoch.current;
         setDetailLoading(true);
         setDetailError(null);
         setFields([]);
@@ -149,6 +164,7 @@ export default function TypeBrowser({ onSwitchMode }: BrowserPageProps) {
                     api.getClassHierarchy(item.fullName),
                     api.getClassInstances(item.fullName, null, 100),
                 ]);
+                if (requestEpoch !== detailRequestEpoch.current) return;
                 const errors: string[] = [];
                 if (detailRes.success && detailRes.data) {
                     setFullName(detailRes.data.full_path);
@@ -178,6 +194,7 @@ export default function TypeBrowser({ onSwitchMode }: BrowserPageProps) {
                     api.getStructByPath(item.fullName),
                     api.getStructFields(item.fullName),
                 ]);
+                if (requestEpoch !== detailRequestEpoch.current) return;
                 if (!detailRes.success || !detailRes.data) throw new Error(detailRes.error || 'Struct detail failed');
                 if (!fieldRes.success || !fieldRes.data) throw new Error(fieldRes.error || 'Struct fields failed');
                 setFields(fieldRes.data.items);
@@ -192,6 +209,7 @@ export default function TypeBrowser({ onSwitchMode }: BrowserPageProps) {
                     api.getEnumByPath(item.fullName),
                     api.getEnumValues(item.fullName),
                 ]);
+                if (requestEpoch !== detailRequestEpoch.current) return;
                 if (!detailRes.success || !detailRes.data) throw new Error(detailRes.error || 'Enum detail failed');
                 if (!valuesRes.success || !valuesRes.data) throw new Error(valuesRes.error || 'Enum values failed');
                 setEnumDetail(detailRes.data);
@@ -201,14 +219,17 @@ export default function TypeBrowser({ onSwitchMode }: BrowserPageProps) {
                 setFullName(detailRes.data.full_path);
             }
         } catch (error) {
-            setDetailError(error instanceof Error ? error.message : String(error));
+            if (requestEpoch === detailRequestEpoch.current) {
+                setDetailError(error instanceof Error ? error.message : String(error));
+            }
         } finally {
-            setDetailLoading(false);
+            if (requestEpoch === detailRequestEpoch.current) setDetailLoading(false);
         }
     };
 
     const loadMoreDetail = async (kind: 'fields' | 'functions' | 'values') => {
         if (!selected || detailLoading) return;
+        const requestEpoch = ++detailRequestEpoch.current;
         setDetailLoading(true);
         setDetailError(null);
         try {
@@ -216,37 +237,39 @@ export default function TypeBrowser({ onSwitchMode }: BrowserPageProps) {
                 const res = subTab === 'Struct'
                     ? await api.getStructFields(selected.fullName, fieldCursor)
                     : await api.getClassFields(selected.fullName, fieldCursor);
+                if (requestEpoch !== detailRequestEpoch.current) return;
                 if (!res.success || !res.data) throw new Error(res.error || 'Field continuation failed');
                 setFields((current) => [...current, ...res.data!.items]);
                 setFieldCursor(res.data.next_cursor);
                 setFieldHasMore(res.data.has_more);
             } else if (kind === 'functions' && functionCursor) {
                 const res = await api.getClassFunctions(selected.fullName, functionCursor);
+                if (requestEpoch !== detailRequestEpoch.current) return;
                 if (!res.success || !res.data) throw new Error(res.error || 'Function continuation failed');
                 setFunctions((current) => [...current, ...res.data!.items]);
                 setFunctionCursor(res.data.next_cursor);
                 setFunctionHasMore(res.data.has_more);
             } else if (kind === 'values' && enumCursor) {
                 const res = await api.getEnumValues(selected.fullName, enumCursor);
+                if (requestEpoch !== detailRequestEpoch.current) return;
                 if (!res.success || !res.data) throw new Error(res.error || 'Enum continuation failed');
                 setEnumValues((current) => [...current, ...res.data!.items]);
                 setEnumCursor(res.data.next_cursor);
                 setEnumHasMore(res.data.has_more);
             }
         } catch (error) {
-            setDetailError(error instanceof Error ? error.message : String(error));
+            if (requestEpoch === detailRequestEpoch.current) {
+                setDetailError(error instanceof Error ? error.message : String(error));
+            }
         } finally {
-            setDetailLoading(false);
+            if (requestEpoch === detailRequestEpoch.current) setDetailLoading(false);
         }
     };
 
     useEffect(() => {
-        const timer = window.setTimeout(() => {
-            setNextCursor(null);
-            setHasMore(false);
-            void loadList(null, false);
-        }, 150);
-        return () => window.clearTimeout(timer);
+        setNextCursor(null);
+        setHasMore(false);
+        void loadList(null, false);
     }, [loadList]);
 
     // ─── Virtualization ─────────────────────────────────────────
@@ -318,7 +341,7 @@ export default function TypeBrowser({ onSwitchMode }: BrowserPageProps) {
 
                 {/* List */}
                 <div ref={parentRef} className="flex-1 overflow-auto relative px-1 scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent">
-                    {listError && <div className="text-red-300 text-xs p-3">{listError}</div>}
+                    <DomainError message={listError} compact />
 
                     <div
                         style={{
@@ -432,7 +455,7 @@ export default function TypeBrowser({ onSwitchMode }: BrowserPageProps) {
                         )}
 
                         {detailLoading && <div className="text-white/40 text-sm">{t('Loading...')}</div>}
-                        {detailError && <div className="text-red-300 text-[14px]">{detailError}</div>}
+                        <DomainError message={detailError} />
                         {classSchemaError && <div className="text-yellow-300 text-xs">{classSchemaError}</div>}
 
                         {/* Detail Tab Bar */}
@@ -479,11 +502,7 @@ export default function TypeBrowser({ onSwitchMode }: BrowserPageProps) {
                                         </tbody>
                                     </table>
                                     {fields.length === 0 && <div className="text-white/40 text-sm py-3">{t('No fields')}</div>}
-                                    {fieldHasMore && fieldCursor && (
-                                        <button onClick={() => void loadMoreDetail('fields')} className="mt-3 px-3 py-1.5 rounded border border-white/10 text-xs text-white/60 hover:text-white hover:bg-white/5">
-                                            {t('Load more')}
-                                        </button>
-                                    )}
+                                    <LoadMoreButton visible={fieldHasMore && fieldCursor !== null} loading={detailLoading} onClick={() => void loadMoreDetail('fields')} label={t('Load more')} />
                                 </div>
                             </Panel>
                         )}
@@ -509,11 +528,7 @@ export default function TypeBrowser({ onSwitchMode }: BrowserPageProps) {
                                         </div>
                                     ))}
                                     {functions.length === 0 && <div className="text-slate-500 text-sm py-4 text-center">{t('No functions')}</div>}
-                                    {functionHasMore && functionCursor && (
-                                        <button onClick={() => void loadMoreDetail('functions')} className="px-3 py-1.5 rounded border border-white/10 text-xs text-white/60 hover:text-white hover:bg-white/5">
-                                            {t('Load more')}
-                                        </button>
-                                    )}
+                                    <LoadMoreButton visible={functionHasMore && functionCursor !== null} loading={detailLoading} onClick={() => void loadMoreDetail('functions')} label={t('Load more')} />
                                 </div>
                             </Panel>
                         )}
@@ -526,12 +541,12 @@ export default function TypeBrowser({ onSwitchMode }: BrowserPageProps) {
                                         <div
                                             key={inst.index}
                                             className="flex items-center gap-3 px-4 py-2.5 rounded-lg border border-transparent bg-black/10 hover:bg-white/[0.03] hover:border-white/[0.05] cursor-pointer transition-all"
-                                            onClick={() => onSwitchMode?.('instances', { className: selected.name, objectIndex: inst.index })}
+                                            onClick={() => onSwitchMode?.('instances', { className: selected.fullName, objectIndex: inst.index })}
                                         >
                                             <div className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)] flex-none" />
                                             <span className="text-[14px] text-slate-200 font-mono flex-1 truncate">{inst.name}</span>
                                             <span className="text-sm text-slate-500 font-mono">#{inst.index}</span>
-                                            <span className="text-xs text-slate-400 font-mono">{inst.address}</span>
+                                            <span className="text-xs text-slate-400 font-mono">{formatAddress(inst.address)}</span>
                                             <ExternalLink className="w-4 h-4 text-slate-500 ml-2 hover:text-blue-400" />
                                         </div>
                                     ))}
@@ -566,11 +581,7 @@ export default function TypeBrowser({ onSwitchMode }: BrowserPageProps) {
                                         ))}
                                     </tbody>
                                 </table>
-                                {enumHasMore && enumCursor && (
-                                    <button onClick={() => void loadMoreDetail('values')} className="mt-3 px-3 py-1.5 rounded border border-white/10 text-xs text-white/60 hover:text-white hover:bg-white/5">
-                                        {t('Load more')}
-                                    </button>
-                                )}
+                                <LoadMoreButton visible={enumHasMore && enumCursor !== null} loading={detailLoading} onClick={() => void loadMoreDetail('values')} label={t('Load more')} />
                             </Panel>
                         )}
                     </div>
