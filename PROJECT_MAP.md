@@ -920,7 +920,7 @@ Rust `DomainService` 的显式 operation registry 为准。
 | R2 CoreRuntime/能力模型 | **实现阶段完成** | Runtime、Context、Capability、Handle、Snapshot、SafeMemory |
 | R3 Named Pipe/Rust Host | **实现阶段完成** | 严格 IPC、SessionManager、EventHub、注入与跨语言 fixture |
 | R4 通信原子切换 | **已完成** | React 只走 Tauri；Core release 只走 Named Pipe，无网络栈 |
-| R5 领域正确性 | **当前阶段** | Object/Type/property/call/World；FString/FText/descriptor-backed Struct 调用；strict Memory；bounded Watch pull/push；enum/destructor journal；runtime-gated source-catalog Blueprint；world/relative location/rotation/scale 单字段 reflected setter；call.batch 跨层 exact-call adapter；Hook producer/push + bounded scalar parameter plan/copy/decode；immutable snapshot Dump worker。生产 UEnum、容器/引用型 Struct、FText allocation cleanup、FHitResult output 展示、Hook 非平凡参数/caller/条件与真实 target witness、Dump Host persistence/目标 artifact fixture、Blueprint 目标 opcode/operand witness 和真实 UE fixture 待办 |
+| R5 领域正确性 | **功能优先代码阶段完成；验收未通过** | Object/Type/property/call/World；FString/FText/descriptor-backed Struct 调用；strict Memory；bounded Watch pull/push；enum/destructor journal；runtime-gated source-catalog Blueprint；world/relative location/rotation/scale 单字段 reflected setter；call.batch 跨层 exact-call adapter；Hook producer/push + bounded scalar parameter plan/copy/decode；immutable snapshot Dump worker。生产 UEnum、容器/引用型 Struct、FText allocation cleanup、FHitResult output 展示、Hook 非平凡参数/caller/条件与真实 target witness、Dump Host persistence/目标 artifact fixture、Blueprint 目标 opcode/operand witness 和真实 UE fixture 待办；相关 issue 继续 `in_progress` |
 | R6 前端状态重构 | **未开始** | session store、query lifecycle、BigInt 地址、能力驱动 UI |
 | R7 发布硬化 | **未开始** | UE fixture、性能/压力、卸载、发布与文档门禁 |
 

@@ -325,6 +325,12 @@ CoreHarness 覆盖 partial type/function coverage、错误 CDO、super cycle、d
 - Functions 调用页已增加 FString/FText 多行文本输入和通用 Struct JSON 输入；canonical FVector/FRotator 继续使用三分量快捷格式，其他 Struct 由用户提供 exact reflected field object 并直接交给 Core 校验。
 - 本轮只运行 Core Release 编译与 JSON schema 解析；未运行真实 UE/Wandering Sword function round-trip。FText 转换产物及 UE 返回 FString 的完整析构/释放尚未接入，相关 lifecycle、GC 和 allocator 行为全部后置，因此 CALL-003 保持 `in_progress`，所有 UE profile 保持 `Not supported`。
 
+### 0.31 R5 功能优先代码收口
+
+- R5.1-R5.6 的用户可达主链路现均已装配：Object/Type/property 查询，单次与 batch Function Call，World/Actor 查询和完整单字段 transform 编辑，Memory/Watch，Hook 订阅与增量事件，Blueprint bytecode/disassembly，以及 SDK/USMAP/Dumpspace/IDA Dump job。React 对应页面均走 typed Tauri client，没有恢复 legacy HTTP 或占位成功数据。
+- 本轮约定的实用功能清单已经完成：typed snapshot SDK、FString/FText/common descriptor-backed Struct 调用、world/relative location/rotation/scale setter，以及 Functions/World 的直接操作 UI。最小检查为 Core Release 编译、协议/issue JSON 解析和 TypeScript/Vite production build；未运行完整测试矩阵。
+- 这里的“代码收口”不是 `REFACTOR_PLAN.md` 的 R5 验收通过。生产 UEnum entry table、Weak/Soft/container call input、完整 UE text allocation cleanup、Hook caller/condition/non-trivial capture、Dump Host reload persistence、FHitResult output 展示与真实 Blueprint opcode/operand 仍是高级功能/目标适配待办；所有真实 UE、Wandering Sword、GC、压力、性能、卸载和 artifact consumer fixture 后置，issue 状态保持 `in_progress`，support matrix 全部保持 `Not supported`。
+
 ## Context
 
 基于 Dumper-7 的实现原理，设计一个桌面端 Unreal Engine SDK Dump + 实时探索工具。

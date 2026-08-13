@@ -197,6 +197,12 @@ added. A successful build or synthetic fixture does not establish target runtime
 
 ### R5 code checkpoint (2026-08-14)
 
+The agreed functionality-first R5 implementation scope is now wired end to end across
+Core, Named Pipe, Host, typed client, and React UI. This is a code-stage closeout, not the
+R5 acceptance gate: real UE fixtures and the explicitly listed advanced lifecycle/profile
+work remain pending, issue statuses stay `in_progress`, and all engine profiles remain
+`Not supported`.
+
 - Memory now has strict bounded commands, preimage-backed verified writes, bounded
   rollback, protection-race detection, and no executable-page fallback.
 - Watch is generation-bound and budgeted, with per-subscription pinned immutable
