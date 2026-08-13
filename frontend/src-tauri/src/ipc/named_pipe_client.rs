@@ -1,4 +1,6 @@
-use crate::ipc::rpc_session::{CoreRpcSession, RpcInbound, RpcSessionError, RpcSessionState};
+use crate::ipc::rpc_session::{
+    CoreRpcSession, RpcInbound, RpcSessionError, RpcSessionState, REQUEST_SETTLEMENT_GRACE_US,
+};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fmt;
@@ -34,7 +36,10 @@ const READ_CHUNK_BYTES: usize = 64 * 1024;
 const COMMAND_CAPACITY: usize = 256;
 const EVENT_CAPACITY: usize = 1_024;
 const COMMAND_ACCEPT_TIMEOUT: Duration = Duration::from_secs(5);
-const REQUEST_COMPLETION_GRACE: Duration = Duration::from_secs(1);
+// The caller must outlive the session's post-execution settlement window so
+// the worker, not a competing recv timeout, publishes the unique terminal.
+const REQUEST_COMPLETION_GRACE: Duration =
+    Duration::from_micros(REQUEST_SETTLEMENT_GRACE_US + 1_000_000);
 const WORKER_POLL_MS: u32 = 10;
 const CONTROL_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -1678,11 +1683,18 @@ mod tests {
             if close_on_request {
                 return Ok(());
             }
-            let hold_request = mode == ServerMode::HoldRequests && saw_request;
-            let outputs = if hold_request {
-                Vec::new()
+            let outputs = core.accept(input).map_err(|error| error.to_string())?;
+            let outputs = if mode == ServerMode::HoldRequests {
+                observed
+                    .iter()
+                    .zip(outputs)
+                    .filter_map(|(frame, output)| {
+                        (!matches!(frame.header.kind, FrameKind::Request | FrameKind::Cancel))
+                            .then_some(output)
+                    })
+                    .collect()
             } else {
-                core.accept(input).map_err(|error| error.to_string())?
+                outputs
             };
             let mut output: Vec<u8> = outputs.into_iter().flatten().collect();
             if saw_hello {
@@ -2013,10 +2025,10 @@ mod tests {
         let deadline_error = client
             .request("status.inspect", 25, json!({}))
             .expect_err("held request must expire");
-        assert!(matches!(
-            deadline_error,
-            CoreRpcClientError::DeadlineExpired { .. }
-        ));
+        assert!(
+            matches!(deadline_error, CoreRpcClientError::DeadlineExpired { .. }),
+            "unexpected deadline error: {deadline_error:?}"
+        );
         assert_eq!(client.ping(77, 5_000).unwrap().nonce, 77);
 
         client

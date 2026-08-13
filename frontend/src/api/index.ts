@@ -163,6 +163,7 @@ export interface SessionEventSubscription {
 export interface StatusData {
   game_name: string;
   game_version: string;
+  blueprint_profile_id?: string | null;
   gobjects_address: string;
   object_count: number;
   pid: number;
@@ -218,6 +219,7 @@ export interface ScriptOffsetDiagnosticsData {
 export interface EngineStatusData {
   game_name: string;
   game_version: string;
+  blueprint_profile_id?: string | null;
   architecture: string;
   pid: number;
   object_count: number;

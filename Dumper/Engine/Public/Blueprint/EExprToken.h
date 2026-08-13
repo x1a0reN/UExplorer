@@ -15,7 +15,9 @@ enum class EExprToken : uint8_t
 	EX_JumpIfNot,
 	EX_Assert,
 	EX_Nothing,
+	EX_NothingInt32,
 	EX_Let,
+	EX_BitFieldConst,
 	EX_ClassContext,
 	EX_MetaCast,
 	EX_LetBool,
@@ -54,6 +56,7 @@ enum class EExprToken : uint8_t
 	EX_Int64Const,
 	EX_UInt64Const,
 	EX_DoubleConst,
+	EX_Vector3fConst,
 	EX_SetSet,
 	EX_EndSet,
 	EX_SetMap,
@@ -100,6 +103,9 @@ enum class EExprToken : uint8_t
 	EX_ArrayGetByRef,
 	EX_ClassSparseDataVariable,
 	EX_FieldPathConst,
+	EX_AutoRtfmTransact,
+	EX_AutoRtfmStopTransact,
+	EX_AutoRtfmAbortIfNot,
 	EX_Max,
 };
 
@@ -116,7 +122,9 @@ inline const char* GetExprTokenName(EExprToken Token)
 	case EExprToken::EX_JumpIfNot:            return "JumpIfNot";
 	case EExprToken::EX_Assert:               return "Assert";
 	case EExprToken::EX_Nothing:              return "Nothing";
+	case EExprToken::EX_NothingInt32:         return "NothingInt32";
 	case EExprToken::EX_Let:                  return "Let";
+	case EExprToken::EX_BitFieldConst:        return "BitFieldConst";
 	case EExprToken::EX_ClassContext:         return "ClassContext";
 	case EExprToken::EX_MetaCast:             return "MetaCast";
 	case EExprToken::EX_LetBool:              return "LetBool";
@@ -155,6 +163,7 @@ inline const char* GetExprTokenName(EExprToken Token)
 	case EExprToken::EX_Int64Const:           return "Int64Const";
 	case EExprToken::EX_UInt64Const:          return "UInt64Const";
 	case EExprToken::EX_DoubleConst:          return "DoubleConst";
+	case EExprToken::EX_Vector3fConst:        return "Vector3fConst";
 	case EExprToken::EX_SetSet:               return "SetSet";
 	case EExprToken::EX_EndSet:               return "EndSet";
 	case EExprToken::EX_SetMap:               return "SetMap";
@@ -201,6 +210,9 @@ inline const char* GetExprTokenName(EExprToken Token)
 	case EExprToken::EX_ArrayGetByRef:        return "ArrayGetByRef";
 	case EExprToken::EX_ClassSparseDataVariable: return "ClassSparseDataVariable";
 	case EExprToken::EX_FieldPathConst:       return "FieldPathConst";
+	case EExprToken::EX_AutoRtfmTransact:     return "AutoRtfmTransact";
+	case EExprToken::EX_AutoRtfmStopTransact: return "AutoRtfmStopTransact";
+	case EExprToken::EX_AutoRtfmAbortIfNot:   return "AutoRtfmAbortIfNot";
 	case EExprToken::EX_Max:                  return "Invalid";
 	default:                                  return "Unknown";
 	}

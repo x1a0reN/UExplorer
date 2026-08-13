@@ -112,12 +112,22 @@ bool IsValidProfileDefinition(
 	const auto& name = profile.NameLayout;
 	if (name.ByteWidth == 0 || name.ByteWidth > 32
 		|| !IsOptionalIntegerWidth(name.ComparisonIndexWidth)
+		|| !IsOptionalIntegerWidth(name.DisplayIndexWidth)
 		|| !IsOptionalIntegerWidth(name.NumberWidth)
 		|| !FitsLayoutField(
 			name.ComparisonIndexOffset,
 			name.ComparisonIndexWidth,
 			name.ByteWidth)
+		|| !FitsLayoutField(
+			name.DisplayIndexOffset,
+			name.DisplayIndexWidth,
+			name.ByteWidth)
 		|| !FitsLayoutField(name.NumberOffset, name.NumberWidth, name.ByteWidth))
+	{
+		return false;
+	}
+	if (name.NumberEncodedInComparisonIndex
+		&& (name.ComparisonIndexWidth == 0 || name.NumberWidth == 0))
 	{
 		return false;
 	}
@@ -315,7 +325,7 @@ std::uint64_t ComputeBlueprintBytecodeProfileFingerprint(
 	const BlueprintBytecodeProfileRecord& profile) noexcept
 {
 	std::uint64_t hash = kFnvOffset;
-	AppendText(hash, "UExplorer.BlueprintBytecodeProfile.v2");
+	AppendText(hash, "UExplorer.BlueprintBytecodeProfile.v4");
 	AppendBinding(hash, profile.Binding);
 	AppendText(hash, profile.Source);
 	const auto& definition = profile.Definition;
@@ -328,8 +338,11 @@ std::uint64_t ComputeBlueprintBytecodeProfileFingerprint(
 	AppendByte(hash, definition.NameLayout.ByteWidth);
 	AppendByte(hash, definition.NameLayout.ComparisonIndexOffset);
 	AppendByte(hash, definition.NameLayout.ComparisonIndexWidth);
+	AppendByte(hash, definition.NameLayout.DisplayIndexOffset);
+	AppendByte(hash, definition.NameLayout.DisplayIndexWidth);
 	AppendByte(hash, definition.NameLayout.NumberOffset);
 	AppendByte(hash, definition.NameLayout.NumberWidth);
+	AppendByte(hash, definition.NameLayout.NumberEncodedInComparisonIndex ? 1 : 0);
 	AppendUnsigned(hash, static_cast<std::uint64_t>(definition.Limits.MaxInputBytes));
 	AppendUnsigned(hash, static_cast<std::uint64_t>(definition.Limits.MaxBytesConsumed));
 	AppendUnsigned(hash, static_cast<std::uint64_t>(definition.Limits.MaxInstructions));
@@ -509,6 +522,16 @@ BlueprintBytecodeCaptureResult BlueprintBytecodeEvidenceStore::Capture(
 	{
 		return {.Error = BlueprintEvidenceSourceError::InternalError};
 	}
+}
+
+std::string BlueprintBytecodeEvidenceStore::CurrentProfileId() const
+{
+	if (!IsConfigured() || IsStopped())
+		return {};
+	std::lock_guard lock(m_Mutex);
+	return m_Profiles.size() == 1
+		? m_Profiles.begin()->first
+		: std::string{};
 }
 
 BlueprintBytecodeProfileResult BlueprintBytecodeEvidenceStore::ResolveProfile(

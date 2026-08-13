@@ -342,10 +342,10 @@ inline std::shared_ptr<const CapabilitySnapshot> BuildCoreCapabilities(
 		probes.BlueprintBytecodeCaptureEnabled
 			&& probes.BlueprintBytecodeProfileEnabled,
 		probes.BlueprintBytecodeCaptureEnabled
-			? "BYTECODE_PROFILE_REQUIRED"
+			? "BYTECODE_PROFILE_UNAVAILABLE"
 			: "BYTECODE_CAPTURE_UNAVAILABLE",
 		probes.BlueprintBytecodeCaptureEnabled
-			? "No immutable witnessed bytecode profile is published"
+			? "No source-catalog bytecode profile passed the runtime marker, name, property, and canonical math dependency gates"
 			: "No exact generation-bound bounded Script capture source is published",
 		{"blueprint.bytecode"});
 	builder.Define(

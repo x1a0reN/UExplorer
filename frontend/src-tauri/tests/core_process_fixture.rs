@@ -292,7 +292,7 @@ fn session_manager_consumes_real_cpp_core_snapshot_event_and_shutdown() {
     assert!(!unavailable.success);
     assert_eq!(
         unavailable.error_code.as_deref(),
-        Some("CAPABILITY_UNAVAILABLE")
+        Some("MEMORY_COMMAND_SERVICE_NOT_READY")
     );
 
     let unknown = domain.execute(DomainRequest {

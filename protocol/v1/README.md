@@ -182,8 +182,8 @@ The v1 command registry is explicit. Unknown operations return
 
 | Operation | Data | Execution |
 |---|---|---|
-| `status.inspect` | `{}` | Worker-safe immutable runtime snapshot |
-| `status.engine` | `{}` | Worker-safe immutable engine/offset report |
+| `status.inspect` | `{}` | Worker-safe immutable runtime snapshot, including nullable active `blueprint_profile_id` |
+| `status.engine` | `{}` | Worker-safe immutable engine/offset report, including nullable active `blueprint_profile_id` |
 | `status.health` | `{}` | Worker-safe liveness/readiness snapshot |
 | `status.reconnect` | `{}` | Always `RECONNECT_DISABLED` until an exclusive generation transition exists |
 | `objects.snapshot.page` | `{"cursor": null \| {"generation": uint53, "after_index": int32}, "limit": 1..128}` | Worker-safe immutable snapshot page |
@@ -307,8 +307,15 @@ operation. Main publishes `blueprint.bytecode` dynamically
 only when a high-confidence `UFunction::Script` report, current Object/Type generations,
 and the game-thread executor all agree. Capture revalidates the exact FunctionHandle and
 stable Script-array header and requires the copied stream to end in `EX_EndOfScript`.
-`blueprint.decompile` remains unavailable because no immutable exact UE opcode/operand
-profile is published; raw opcode values are never inferred from the parser semantic enum.
+`blueprint.decompile` is published only when the executable release marker selects one
+explicit local-source catalog entry and the same immutable context/snapshots confirm the
+expected name storage, FProperty mode, FScriptName number mode, and canonical FVector/
+FRotator widths. The profile records all sampled raw opcode transitions plus pointer,
+code-skip, FScriptName, vector, rotation, and transform operand layouts; raw opcode values
+are never inferred from the parser semantic enum. Unknown opcodes, unsupported catalog
+families, dependency drift, invalid outline-name padding, and truncated operands stop at
+the last reliable byte and remain explicit incomplete/error results. This source-backed
+gate and synthetic parser coverage do not establish support for any real UE target.
 
 Hook commands use the dynamically published `hook.monitor` capability. The release
 producer installs only after current TypeSnapshot Class/CDO evidence has complete

@@ -21,7 +21,7 @@ const RETIRED_REQUEST_TTL_US: u64 = 30_000_000;
 // Core uses timeout_ms as its execution deadline. Keep the transport request
 // pending briefly afterward so an explicit unknown-mutation outcome is not
 // retired as a generic client deadline before Core can serialize it.
-const REQUEST_SETTLEMENT_GRACE_US: u64 = 1_000_000;
+pub(crate) const REQUEST_SETTLEMENT_GRACE_US: u64 = 1_000_000;
 const MAX_RECEIVE_CHUNK_BYTES: usize = 64 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

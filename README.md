@@ -207,8 +207,11 @@ added. A successful build or synthetic fixture does not establish target runtime
 - Blueprint raw bytecode capture is now wired through a generation-bound runtime source.
   It is advertised only when `UFunction::Script` passes the high-confidence multi-function
   witness gate and current Object/Type snapshots match; copied streams must retain a stable
-  TArray header and end in `EX_EndOfScript`. `blueprint.decompile` remains unavailable
-  because no exact UE opcode/operand profile is published.
+  TArray header and end in `EX_EndOfScript`. `blueprint.decompile` is published only when
+  the immutable runtime dependencies select an exact local-source profile for the active
+  version marker, name/property model, outline-number mode and canonical math layout. The
+  bounded parser fails closed at the first unreliable operand boundary; this remains
+  code/synthetic evidence rather than a real-target opcode/operand witness.
 - The call-batch coordinator is now wired through Main/Core/Host/schema/TypeScript. It owns
   one bounded serial job, total deadline, cancellation and retained per-item results; every
   item reuses the exact single-call preparation/game-thread/completion path. Snapshot drift

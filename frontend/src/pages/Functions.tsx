@@ -92,6 +92,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
   const [decompiled, setDecompiled] = useState('');
   const [blueprintPath, setBlueprintPath] = useState('');
   const [blueprintProfileId, setBlueprintProfileId] = useState('');
+  const [blueprintProfileStatus, setBlueprintProfileStatus] = useState<string | null>(null);
   const [decompileLoading, setDecompileLoading] = useState(false);
 
   const functionTabs = useMemo(
@@ -133,6 +134,26 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
     const start = (hookLogPage - 1) * hookLogPageSize;
     return hookLog.slice(start, start + hookLogPageSize);
   }, [hookLog, hookLogPage]);
+
+  useEffect(() => {
+    if (activeTab !== 'Disassembly') return;
+    let disposed = false;
+    void api.getStatus().then((response) => {
+      if (disposed) return;
+      if (!response.success || !response.data) {
+        setBlueprintProfileId('');
+        setBlueprintProfileStatus(response.error || 'Blueprint profile status is unavailable');
+        return;
+      }
+      const profileId = response.data.blueprint_profile_id?.trim() || '';
+      setBlueprintProfileId(profileId);
+      const capability = response.data.capabilities?.['blueprint.decompile'];
+      setBlueprintProfileStatus(profileId
+        ? null
+        : capability?.reason || 'No exact source-backed Blueprint profile is published');
+    });
+    return () => { disposed = true; };
+  }, [activeTab]);
 
   const hookTotalPages = Math.max(1, Math.ceil(filteredHooks.length / hookPageSize));
   const hookLogTotalPages = Math.max(1, Math.ceil(hookLog.length / hookLogPageSize));
@@ -541,9 +562,23 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
       setBytecode(byteRes.error || 'No bytecode');
     }
     if (!decompileRes) {
-      setDecompiled('BYTECODE_PROFILE_REQUIRED: enter an exact witnessed profile ID');
+      setDecompiled('BYTECODE_PROFILE_REQUIRED: enter the active immutable profile ID');
     } else if (decompileRes.success && decompileRes.data) {
-      setDecompiled(decompileRes.data.disassembly.pseudocode);
+      const disassembly = decompileRes.data.disassembly;
+      const summary = [
+        `status=${disassembly.status}`,
+        `profile=${disassembly.profile_id}`,
+        `coverage=${(disassembly.coverage * 100).toFixed(2)}%`,
+        `bytes=${disassembly.bytes_consumed}/${disassembly.input_size}`,
+        `unknown=${disassembly.unknown_count}`,
+        `end_of_script=${disassembly.saw_end_of_script}`,
+      ];
+      if (disassembly.first_error) {
+        summary.push(
+          `first_error=${disassembly.first_error.code}@${disassembly.first_error.offset}: ${disassembly.first_error.message}`
+        );
+      }
+      setDecompiled(`${summary.join('\n')}\n\n${disassembly.pseudocode}`);
     } else {
       setDecompiled(decompileRes.error || 'No pseudocode');
     }
@@ -1062,14 +1097,17 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
                         />
                       </div>
                       <div className="space-y-1.5">
-                        <div className="text-text-low text-[11px] font-bold uppercase tracking-widest font-display">{t('Witnessed Bytecode Profile ID')}</div>
+                        <div className="text-text-low text-[11px] font-bold uppercase tracking-widest font-display">{t('Active Bytecode Profile ID')}</div>
                         <input
                           type="text"
                           value={blueprintProfileId}
                           onChange={(e) => setBlueprintProfileId(e.target.value)}
-                          placeholder={t('Required only for strict disassembly')}
+                          placeholder={t('Auto-filled from the active Core; required for disassembly')}
                           className="w-full bg-background-base border border-border-subtle text-text-high text-[13px] font-mono rounded-lg px-3 py-2 outline-none focus:border-primary transition-colors placeholder:text-text-low/50"
                         />
+                        {blueprintProfileStatus && (
+                          <div className="text-[11px] text-accent-yellow font-mono">{blueprintProfileStatus}</div>
+                        )}
                       </div>
                       <button
                         onClick={() => void loadDecompile()}

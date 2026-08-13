@@ -130,6 +130,7 @@ class IBlueprintBytecodeProfileSource
 {
 public:
 	virtual ~IBlueprintBytecodeProfileSource() = default;
+	virtual std::string CurrentProfileId() const = 0;
 	virtual BlueprintBytecodeProfileResult ResolveProfile(
 		const BlueprintBytecodeProfileRequest& request) const = 0;
 };
@@ -184,6 +185,7 @@ public:
 
 	BlueprintBytecodeCaptureResult Capture(
 		const BlueprintBytecodeCaptureRequest& request) override;
+	std::string CurrentProfileId() const override;
 	BlueprintBytecodeProfileResult ResolveProfile(
 		const BlueprintBytecodeProfileRequest& request) const override;
 

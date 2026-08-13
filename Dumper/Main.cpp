@@ -124,9 +124,8 @@ namespace
 			&& g_CallBatchCommandService->IsConfigured();
 		probes.BlueprintBytecodeCaptureEnabled = g_BlueprintBytecodeSource
 			&& g_BlueprintBytecodeSource->IsCaptureConfigured();
-		// Raw Script capture is witnessed independently. No exact opcode/operand
-		// profile is published until its compile-time UE layout is also proved.
-		probes.BlueprintBytecodeProfileEnabled = false;
+		probes.BlueprintBytecodeProfileEnabled = g_BlueprintBytecodeSource
+			&& g_BlueprintBytecodeSource->IsProfileConfigured();
 		probes.MemoryReadCommandServiceEnabled = true;
 		probes.MemoryWriteCommandServiceEnabled = true;
 		probes.WatchCommandServiceEnabled = g_WatchScheduler
@@ -1165,7 +1164,7 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 			g_TypeSource.get(),
 			g_WatchScheduler.get(),
 			g_BlueprintBytecodeSource.get(),
-			nullptr,
+			g_BlueprintBytecodeSource.get(),
 			g_HookCommandService.get(),
 			g_DumpCommandService.get(),
 			g_CallBatchCommandService.get());

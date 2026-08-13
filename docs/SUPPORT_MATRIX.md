@@ -21,7 +21,8 @@ These assets are available for development, but none changes the support rows ab
   bounded push copy drained outside the game thread through Named Pipe/Host/Tauri,
   descriptor-proven
   enum codecs and an owned destructor journal, generation-bound raw Blueprint Script
-  capture plus explicit-profile bounded disassembly, generation-covered ProcessEvent Hook
+  capture plus a runtime-gated local-source profile catalog and bounded disassembly,
+  generation-covered ProcessEvent Hook
   production ownership, a single-active immutable-snapshot Dump worker, and
   an end-to-end bounded call-batch command path that reuses the exact single-call adapter.
   Dump start pins exact EngineContext/ObjectSnapshot/TypeSnapshot pointers, uses a Host-owned
@@ -29,7 +30,7 @@ These assets are available for development, but none changes the support rows ab
   Dumpspace/IDA artifacts through structural consumers, no-replace commit, size/SHA-256
   verification, and a final manifest. The SDK artifact is an opaque exact-layout header,
   not a complete typed Dumper-7 SDK. It has no target-process evidence for any of them. Production
-  UEnum entry-table and Blueprint opcode/operand profile witnesses, Hook parameter
+  UEnum entry-table and real-target Blueprint profile/opcode/operand witnesses, Hook parameter
   encoding, Watch/Hook reconnect/slow-consumer/target restore/rate fixtures, Host
   dump-job reload persistence, real target/external
   semantic consumers for all four artifact formats, and a real batch ProcessEvent fixture are still missing, so no
@@ -46,11 +47,14 @@ These assets are available for development, but none changes the support rows ab
   `LocalPlayers[0]`. The corresponding World/GameInstance/Player/Controller fields remain
   reflected across those versions. This supports the Windows x64 ScriptArray and local-player
   candidates implemented in R5; it does not prove a Shipping binary uses those candidates.
-- UE 4.21-4.27 and UE 5.0-5.7 `Script.h` source also proves that opcode assignments are
+- UE 4.21, 4.24-4.27, UE 5.0-5.4, 5.6, and 5.7 `Script.h` source also proves that opcode assignments are
   not one universal table: for example UE4 uses raw `0x38` for `EX_PrimitiveCast`, while
   UE5 uses `0x37` for `EX_DoubleConst`. The parser therefore keeps semantic token IDs
-  separate from caller-supplied raw mappings. This source inventory is insufficient to
-  select a target profile without a matching runtime/build witness.
+  separate from raw mappings. The production catalog selects only an inventoried marker
+  family and additionally requires matching runtime name storage, FProperty/name-number
+  mode, LWC flag, and canonical Vector/Rotator snapshot layouts; unsupported families fail
+  closed. Those gates select a source candidate but do not prove a customized Shipping
+  binary retained the catalogued `CodeSkipSizeType`, opcode table, or operand serializer.
 - UE 4.21/4.27 `Vector.h` and `Rotator.h` define `X/Y/Z` and `Pitch/Yaw/Roll`
   as three packed `float` fields. UE5 LWC math declarations use the same semantic field
   names, while 5.4/5.7 `MathFwd.h` aliases the default FVector/FRotator to the `double`

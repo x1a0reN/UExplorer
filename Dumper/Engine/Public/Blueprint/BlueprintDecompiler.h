@@ -32,8 +32,11 @@ public:
 		uint8_t ByteWidth = 0;
 		uint8_t ComparisonIndexOffset = 0;
 		uint8_t ComparisonIndexWidth = 0;
+		uint8_t DisplayIndexOffset = 0;
+		uint8_t DisplayIndexWidth = 0;
 		uint8_t NumberOffset = 0;
 		uint8_t NumberWidth = 0;
+		bool NumberEncodedInComparisonIndex = false;
 	};
 
 	struct DisassemblyLimits

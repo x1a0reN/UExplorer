@@ -398,7 +398,8 @@
         "2026-08-09: CoreCommandService exposes each accepted ticket through a worker-side callback and reports queue/execute timing",
         "2026-08-09: Host CoreRpcSession now owns a bounded request-ID map, monotonic deadlines, Cancel frames, and explicit late-terminal tombstones",
         "2026-08-09: real Named Pipe adapter measures deadlines from frame receipt, subtracts worker queue time, maps the same request ID to GameThreadTicket, returns one terminal cancellation response, and drains on shutdown",
-        "2026-08-09: Rust deadline starts at Host command admission, only remaining time is sent to Core, and the real Pipe fixture proves explicit cancellation/deadline each complete the caller once, consume late terminals, and leave heartbeat usable"
+        "2026-08-09: Rust deadline starts at Host command admission, only remaining time is sent to Core, and the real Pipe fixture proves explicit cancellation/deadline each complete the caller once, consume late terminals, and leave heartbeat usable",
+        "2026-08-13: caller completion grace is now strictly longer than the session settlement grace; the HoldRequests fixture consumes and validates Request/Cancel frames while withholding only their responses, deterministically proving worker-owned DeadlineExpired instead of a racing generic WaitTimeout"
       ]
     },
     "HOOK-001": {
@@ -836,22 +837,22 @@
 	"BP-001": {
 	  "status": "in_progress",
 	  "verification": [
-		"2026-08-13: BlueprintDecompiler returns structured parse status, coverage, instruction records, unknown count, and first error rather than treating incomplete parsing as complete pseudocode",
-		"2026-08-13: Main now owns a generation-bound raw Script capture source behind a high-confidence runtime layout witness; no exact opcode/operand profile or target Blueprint fixture exists"
+		"2026-08-13: BlueprintDecompiler returns structured parse status, coverage, instruction records, unknown count, first error, profile identity and complete FScriptName operands rather than treating incomplete parsing as complete pseudocode",
+		"2026-08-13: synthetic CoreHarness cases cover UE4/UE5 opcode transitions, inline/outline FScriptName, newer scalar/vector/AutoRTFM operands, multicast delegate framing and fail-closed malformed operands; no target Blueprint fixture has been run"
 	  ]
 	},
 	"BP-002": {
 	  "status": "in_progress",
 	  "verification": [
-		"2026-08-13: bytecode capture/decompile require an explicit immutable BytecodeProfile and exact FunctionHandle/context/Object/Type generations; no engine-version or pointer-size fallback is used",
-		"2026-08-13: Main dynamically publishes raw bytecode capture only from the high-confidence UFunction::Script report and current snapshots; UE4/UE5 raw opcode differences keep decompile unavailable until an exact immutable profile is witnessed"
+		"2026-08-13: bytecode capture/decompile require an explicit immutable BytecodeProfile and exact FunctionHandle/context/Object/Type generations; no adjacent release-family, pointer-size or operand-layout fallback is used",
+		"2026-08-13: Main publishes a versioned source-catalog profile only when current version marker, Name/FProperty model, outline-number mode and canonical math layout agree with one exact local UE source entry; this is source evidence, not a Shipping target opcode/operand witness"
 	  ]
 	},
 	"BP-003": {
 	  "status": "in_progress",
 	  "verification": [
 		"2026-08-13: bounded bytecode reader/capture records truncation and range errors, validates exact FunctionHandle plus stable Script header/content witnesses, requires EX_EndOfScript at the copied tail, and fails closed instead of returning zero bytes on overrun",
-		"Target Blueprint bytecode behavior remains unverified"
+		"2026-08-13: profile fingerprints now bind the complete Name operand layout and outline-number encoding; malformed outline padding stops at the first reliable boundary. Target Blueprint bytecode behavior remains unverified"
 	  ]
 	},
     "NET-001": {

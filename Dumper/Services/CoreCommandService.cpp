@@ -2188,6 +2188,12 @@ CoreCommandResponse CoreCommandService::ExecuteStatus(const CoreCommandRequest& 
 		json data;
 		data["game_name"] = context.GameName();
 		data["game_version"] = context.GameVersion();
+		const std::string blueprintProfileId = m_BlueprintProfileSource
+			? m_BlueprintProfileSource->CurrentProfileId()
+			: std::string{};
+		data["blueprint_profile_id"] = blueprintProfileId.empty()
+			? json(nullptr)
+			: json(blueprintProfileId);
 		data["object_count"] = context.ObjectCount();
 		data["gobjects_address"] = std::format("0x{:X}", context.ObjectArrayAddress());
 		data["pid"] = context.ProcessId();
@@ -2234,6 +2240,12 @@ CoreCommandResponse CoreCommandService::ExecuteStatus(const CoreCommandRequest& 
 	json data;
 	data["game_name"] = context.GameName();
 	data["game_version"] = context.GameVersion();
+	const std::string blueprintProfileId = m_BlueprintProfileSource
+		? m_BlueprintProfileSource->CurrentProfileId()
+		: std::string{};
+	data["blueprint_profile_id"] = blueprintProfileId.empty()
+		? json(nullptr)
+		: json(blueprintProfileId);
 	data["architecture"] = m_StatusDiagnostics.ProcessArchitecture();
 	data["pid"] = context.ProcessId();
 	data["object_count"] = context.ObjectCount();

@@ -7,10 +7,12 @@
 
 #include "IPC/Protocol.h"
 #include "IPC/NamedPipeRpcServer.h"
+#include "Blueprint/BlueprintDecompiler.h"
 #include "OffsetFinder/OffsetDiscovery.h"
 #include "Platform/Public/BytePattern.h"
 #include "Platform/Public/PeImage.h"
 #include "Runtime/BoundedQueue.h"
+#include "Runtime/BlueprintBytecodeRuntime.h"
 #include "Runtime/CallbackBarrier.h"
 #include "Runtime/CoreCapabilities.h"
 #include "Runtime/CoreRuntime.h"
@@ -5688,6 +5690,7 @@ namespace
 			status.Ok
 				&& status.Data.at("runtime").at("session_id") == "fixture-command-session"
 				&& status.Data.at("architecture") == "x64-fixture"
+				&& status.Data.at("blueprint_profile_id").is_null()
 				&& status.Data.at("name_profile").at("validated").get<bool>()
 				&& status.Data.at("name_profile").at("storage") == "name_pool"
 				&& !status.Data.at("object_snapshot").at("published").get<bool>()
@@ -6605,6 +6608,254 @@ namespace
 		Require(inaccessibleResult.Error == EngineVersionProbeError::MemoryReadFailed
 			&& inaccessibleResult.MemoryFailure == MemoryError::AccessDenied,
 			"Unreadable PE section did not return a typed probe error");
+	}
+
+	template <typename T>
+	void AppendBytecodeScalar(std::vector<std::uint8_t>& bytes, const T value)
+	{
+		static_assert(std::is_trivially_copyable_v<T>);
+		const std::size_t offset = bytes.size();
+		bytes.resize(offset + sizeof(T));
+		std::memcpy(bytes.data() + offset, &value, sizeof(T));
+	}
+
+	void TestBoundedBlueprintDisassembler()
+	{
+		using Error = BlueprintDecompiler::DisassemblyErrorCode;
+		using Semantic = BlueprintDecompiler::OpcodeSemantic;
+		using Status = BlueprintDecompiler::DisassemblyStatus;
+		using UExplorer::Runtime::BlueprintBytecodeRuntimeSource;
+
+		const auto ue421 =
+			BlueprintBytecodeRuntimeSource::SourceProfileDefinitionForVersion("4.21.2");
+		const auto ue424 =
+			BlueprintBytecodeRuntimeSource::SourceProfileDefinitionForVersion("4.24.3");
+		const auto ue425 =
+			BlueprintBytecodeRuntimeSource::SourceProfileDefinitionForVersion("4.25.4");
+		const auto ue426 =
+			BlueprintBytecodeRuntimeSource::SourceProfileDefinitionForVersion("4.26.2");
+		const auto ue50 =
+			BlueprintBytecodeRuntimeSource::SourceProfileDefinitionForVersion("5.0.3");
+		const auto ue52 =
+			BlueprintBytecodeRuntimeSource::SourceProfileDefinitionForVersion("5.2.1");
+		const auto ue53 =
+			BlueprintBytecodeRuntimeSource::SourceProfileDefinitionForVersion("5.3.2");
+		const auto ue57Outline =
+			BlueprintBytecodeRuntimeSource::SourceProfileDefinitionForVersion("5.7.4", true);
+		Require(
+			BlueprintBytecodeRuntimeSource::SourceProfileIdForVersion("4.27.2")
+				== "ue-marker-4.27-source-4.27.2-windows-x64-fscriptname-inline-v1"
+				&& BlueprintBytecodeRuntimeSource::SourceProfileIdForVersion("5.7.4")
+					== "ue-marker-5.7-source-5.7.4-windows-x64-fscriptname-inline-v1"
+				&& BlueprintBytecodeRuntimeSource::SourceProfileIdForVersion("5.7.4", true)
+					== "ue-marker-5.7-source-5.7.4-windows-x64-fscriptname-outline-v1"
+				&& BlueprintBytecodeRuntimeSource::SourceProfileIdForVersion("5.0.3", true).empty()
+				&& BlueprintBytecodeRuntimeSource::SourceProfileIdForVersion("5.5.0").empty()
+				&& BlueprintBytecodeRuntimeSource::SourceProfileIdForVersion("5.3.preview").empty()
+				&& BlueprintBytecodeRuntimeSource::SourceProfileIdForVersion("5.3.2.1.4").empty()
+				&& BlueprintBytecodeRuntimeSource::SourceProfileIdForVersion("5.3.").empty()
+				&& BlueprintBytecodeRuntimeSource::SourceProfileIdForVersion("6.0").empty(),
+			"Blueprint source catalog did not bind marker families and name modes fail closed");
+		Require(
+			ue421 && ue424 && ue425 && ue426 && ue50 && ue52 && ue53 && ue57Outline,
+			"Blueprint source catalog did not construct every sampled profile transition");
+		const auto isExpr = [](const BlueprintDecompiler::BytecodeProfile& candidate,
+			const std::uint8_t raw,
+			const EExprToken token) {
+			return candidate.Opcodes[raw].Semantic == Semantic::ExprToken
+				&& candidate.Opcodes[raw].Token == token;
+		};
+		Require(
+			ue421->Opcodes[0x45].Semantic == Semantic::Unknown
+				&& isExpr(*ue424, 0x45, EExprToken::EX_LocalVirtualFunction)
+				&& ue424->Opcodes[0x6D].Semantic == Semantic::Unknown
+				&& isExpr(*ue425, 0x6D, EExprToken::EX_FieldPathConst)
+				&& ue425->Opcodes[0x33].Semantic == Semantic::Unknown
+				&& isExpr(*ue426, 0x33, EExprToken::EX_PropertyConst)
+				&& ue421->Opcodes[0x37].Semantic == Semantic::Unknown
+				&& ue421->Opcodes[0x38].Semantic == Semantic::PrimitiveCast
+				&& isExpr(*ue50, 0x37, EExprToken::EX_DoubleConst)
+				&& ue50->Opcodes[0x38].Semantic == Semantic::PrimitiveCast
+				&& ue52->Opcodes[0x70].Semantic == Semantic::Unknown
+				&& isExpr(*ue53, 0x70, EExprToken::EX_AutoRtfmTransact)
+				&& ue57Outline->NameLayout.NumberEncodedInComparisonIndex,
+			"Blueprint source catalog did not preserve sampled opcode/layout transitions");
+
+		BlueprintDecompiler::BytecodeProfile profile = *ue53;
+		profile.Limits = {
+			.MaxInputBytes = 4096,
+			.MaxBytesConsumed = 4096,
+			.MaxInstructions = 128,
+			.MaxStringCodeUnits = 128,
+			.MaxRecursionDepth = 16
+		};
+		std::vector<std::uint8_t> script;
+		script.push_back(0x0C);
+		AppendBytecodeScalar<std::int32_t>(script, 42);
+		script.push_back(0x11);
+		AppendBytecodeScalar<std::uint64_t>(script, 0x00000123456789ABULL);
+		script.push_back(1);
+		script.push_back(0x41);
+		AppendBytecodeScalar<float>(script, 1.25F);
+		AppendBytecodeScalar<float>(script, -2.5F);
+		AppendBytecodeScalar<float>(script, 3.75F);
+		script.push_back(0x70);
+		AppendBytecodeScalar<std::int32_t>(script, 7);
+		AppendBytecodeScalar<std::uint32_t>(script, 0x1234);
+		script.push_back(0x72);
+		script.push_back(0x27);
+		script.push_back(0x71);
+		AppendBytecodeScalar<std::int32_t>(script, 7);
+		script.push_back(0);
+		script.push_back(0x53);
+
+		const BlueprintDecompiler::DisassemblyResult complete =
+			BlueprintDecompiler::Disassemble(script, profile);
+		Require(
+			complete.Status == Status::Complete
+				&& complete.SawEndOfScript
+				&& !complete.FirstError.Present
+				&& complete.BytesConsumed == script.size()
+				&& complete.Coverage == 1.0,
+			"Bounded Blueprint parser did not consume exact witnessed operands");
+		Require(
+			complete.Instructions.size() == 8
+				&& complete.Instructions[6].Token == EExprToken::EX_AutoRtfmStopTransact
+				&& complete.Instructions[6].Size == 6,
+			"AutoRTFM StopTransact operands were not consumed as one instruction");
+
+		std::vector<std::uint8_t> multicastCall{0x63};
+		AppendBytecodeScalar<std::uint64_t>(multicastCall, 0x0000012345678000ULL);
+		multicastCall.insert(multicastCall.end(), {0x27, 0x28, 0x16, 0x53});
+		const BlueprintDecompiler::DisassemblyResult multicast =
+			BlueprintDecompiler::Disassemble(multicastCall, profile);
+		const auto multicastInstruction = std::ranges::find(
+			multicast.Instructions,
+			EExprToken::EX_CallMulticastDelegate,
+			&BlueprintDecompiler::DisassembledInstruction::Token);
+		Require(
+			multicast.Status == Status::Complete
+				&& multicast.BytesConsumed == multicastCall.size()
+				&& multicastInstruction != multicast.Instructions.end()
+				&& multicastInstruction->Size == 12,
+			"Multicast call did not consume its delegate expression before arguments");
+
+		std::vector<std::uint8_t> inlineInstrumentation{0x6A, 4};
+		inlineInstrumentation.insert(inlineInstrumentation.end(), {
+			1, 0, 0, 0,
+			2, 0, 0, 0,
+			3, 0, 0, 0,
+			0x53
+		});
+		const BlueprintDecompiler::DisassemblyResult instrumentation =
+			BlueprintDecompiler::Disassemble(inlineInstrumentation, profile);
+		Require(
+			instrumentation.Status == Status::Complete
+				&& instrumentation.BytesConsumed == inlineInstrumentation.size()
+				&& instrumentation.Instructions.front().Size == 14,
+			"Inline instrumentation event did not consume its FScriptName operand");
+
+		std::vector<std::uint8_t> inlineScriptName{0x21};
+		AppendBytecodeScalar<std::uint32_t>(inlineScriptName, 7);
+		AppendBytecodeScalar<std::uint32_t>(inlineScriptName, 9);
+		AppendBytecodeScalar<std::uint32_t>(inlineScriptName, 3);
+		inlineScriptName.push_back(0x53);
+		const BlueprintDecompiler::DisassemblyResult inlineName =
+			BlueprintDecompiler::Disassemble(inlineScriptName, profile);
+		Require(
+			inlineName.Status == Status::Complete
+				&& inlineName.Instructions.front().Text.find("comparison_index=7")
+					!= std::string::npos
+				&& inlineName.Instructions.front().Text.find("display_index=9")
+					!= std::string::npos
+				&& inlineName.Instructions.front().Text.find("number=3")
+					!= std::string::npos,
+			"Inline-number FScriptName did not preserve all three source-backed fields");
+
+		std::vector<std::uint8_t> outlineScriptName{0x21};
+		AppendBytecodeScalar<std::uint32_t>(outlineScriptName, 11);
+		AppendBytecodeScalar<std::uint32_t>(outlineScriptName, 12);
+		AppendBytecodeScalar<std::uint32_t>(outlineScriptName, 0);
+		outlineScriptName.push_back(0x53);
+		const BlueprintDecompiler::DisassemblyResult outlineName =
+			BlueprintDecompiler::Disassemble(outlineScriptName, *ue57Outline);
+		Require(
+			outlineName.Status == Status::Complete
+				&& outlineName.Instructions.front().Text.find(
+					"number=encoded_in_comparison_index") != std::string::npos,
+			"Outline-number FScriptName did not expose its encoded-number mode");
+
+		std::vector<std::uint8_t> invalidOutlineName{0x21};
+		AppendBytecodeScalar<std::uint32_t>(invalidOutlineName, 11);
+		AppendBytecodeScalar<std::uint32_t>(invalidOutlineName, 12);
+		AppendBytecodeScalar<std::uint32_t>(invalidOutlineName, 1);
+		invalidOutlineName.push_back(0x53);
+		const BlueprintDecompiler::DisassemblyResult invalidOutline =
+			BlueprintDecompiler::Disassemble(invalidOutlineName, *ue57Outline);
+		Require(
+			invalidOutline.Status == Status::Incomplete
+				&& invalidOutline.FirstError.Code == Error::InvalidOperand
+				&& invalidOutline.BytesConsumed == 13,
+			"Non-zero outline-number FScriptName padding did not fail at the reliable boundary");
+
+		std::vector<std::uint8_t> mismatchedTransaction{
+			0x70, 7, 0, 0, 0, 0, 0, 0, 0,
+			0x71, 8, 0, 0, 0, 0,
+			0x53
+		};
+		const BlueprintDecompiler::DisassemblyResult mismatched =
+			BlueprintDecompiler::Disassemble(mismatchedTransaction, profile);
+		Require(
+			mismatched.Status == Status::Incomplete
+				&& mismatched.FirstError.Present
+				&& mismatched.FirstError.Code == Error::InvalidOperand
+				&& mismatched.BytesConsumed == 15,
+			"AutoRTFM transaction-id mismatch did not stop at the reliable boundary");
+
+		const std::array<std::uint8_t, 2> truncatedBitField{0x11, 0xAA};
+		const BlueprintDecompiler::DisassemblyResult truncated =
+			BlueprintDecompiler::Disassemble(truncatedBitField, profile);
+		Require(
+			truncated.Status == Status::Incomplete
+				&& truncated.FirstError.Present
+				&& truncated.FirstError.Code == Error::TruncatedOperand
+				&& truncated.BytesConsumed == 1,
+			"Truncated Blueprint operand was guessed past the reliable boundary");
+
+		const std::array<std::uint8_t, 2> unknownOpcode{0x73, 0x53};
+		const BlueprintDecompiler::DisassemblyResult unknown =
+			BlueprintDecompiler::Disassemble(unknownOpcode, profile);
+		Require(
+			unknown.Status == Status::Incomplete
+				&& unknown.UnknownCount == 1
+				&& unknown.FirstError.Code == Error::UnknownOpcode
+				&& unknown.BytesConsumed == 1,
+			"Unknown Blueprint opcode did not sticky-stop after one bounded byte");
+
+		const UExplorer::Runtime::BlueprintEvidenceBinding binding{
+			.SessionId = "fixture-blueprint-profile",
+			.ContextGeneration = 3,
+			.ObjectSnapshotGeneration = 5,
+			.TypeSnapshotGeneration = 7
+		};
+		UExplorer::Runtime::BlueprintBytecodeEvidenceStore evidence(binding);
+		UExplorer::Runtime::BlueprintBytecodeProfileRecord record{
+			.Binding = binding,
+			.Source = "fixture-source-catalog",
+			.Definition = profile
+		};
+		record.EvidenceFingerprint =
+			UExplorer::Runtime::ComputeBlueprintBytecodeProfileFingerprint(record);
+		Require(
+			evidence.PublishProfile(std::move(record))
+				== UExplorer::Runtime::BlueprintEvidencePublishError::None
+				&& evidence.CurrentProfileId() == profile.Id
+				&& evidence.ResolveProfile({binding, profile.Id}).Ok(),
+			"Generation-bound Blueprint profile store did not publish its unique current id");
+		evidence.Stop();
+		Require(
+			evidence.CurrentProfileId().empty(),
+			"Stopped Blueprint profile store continued advertising a current profile");
 	}
 
 	void TestGlobalPointerDiscovery()
@@ -7780,6 +8031,7 @@ int main(const int argc, char** argv)
 		TestFUObjectItemIdentityLayout();
 		TestBytePatternScanner();
 		TestPeImageInspectionAndEngineVersionProbe();
+		TestBoundedBlueprintDisassembler();
 		TestGlobalPointerDiscovery();
 		TestHookOwnershipAndCallbackDrain();
 		TestSafeMemory();

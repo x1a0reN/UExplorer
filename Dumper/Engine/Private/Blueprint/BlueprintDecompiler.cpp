@@ -119,11 +119,19 @@ bool ValidateProfile(const Profile& ProfileValue, std::string& Error)
 		return false;
 	}
 	if (!IsOptionalIntegerWidth(Name.ComparisonIndexWidth) ||
+		!IsOptionalIntegerWidth(Name.DisplayIndexWidth) ||
 		!IsOptionalIntegerWidth(Name.NumberWidth) ||
 		!FitsLayoutField(Name.ComparisonIndexOffset, Name.ComparisonIndexWidth, Name.ByteWidth) ||
+		!FitsLayoutField(Name.DisplayIndexOffset, Name.DisplayIndexWidth, Name.ByteWidth) ||
 		!FitsLayoutField(Name.NumberOffset, Name.NumberWidth, Name.ByteWidth))
 	{
 		Error = "name operand fields do not fit the declared layout";
+		return false;
+	}
+	if (Name.NumberEncodedInComparisonIndex
+		&& (Name.ComparisonIndexWidth == 0 || Name.NumberWidth == 0))
+	{
+		Error = "outline-number names require comparison-index and padding fields";
 		return false;
 	}
 	const auto& Limits = ProfileValue.Limits;
@@ -505,22 +513,42 @@ private:
 	bool ReadNameToken(std::string& Text)
 	{
 		std::span<const uint8_t> Bytes;
-		if (!Reader.TryReadBytes(ProfileData.NameLayout.ByteWidth, Bytes, "name operand"))
+		if (!Reader.TryReadBytes(ProfileData.NameLayout.ByteWidth, Bytes, "FScriptName operand"))
 			return false;
 
-		Text = std::format("NameToken(raw=0x{}", BytesToHex(Bytes));
 		const auto& Layout = ProfileData.NameLayout;
+		Text = std::format("ScriptNameToken(raw=0x{}", BytesToHex(Bytes));
 		if (Layout.ComparisonIndexWidth != 0)
 		{
 			const uint64_t Value = DecodeUnsignedLittleEndian(
 				Bytes, Layout.ComparisonIndexOffset, Layout.ComparisonIndexWidth);
 			Text += std::format(", comparison_index={}", Value);
 		}
+		if (Layout.DisplayIndexWidth != 0)
+		{
+			const uint64_t Value = DecodeUnsignedLittleEndian(
+				Bytes, Layout.DisplayIndexOffset, Layout.DisplayIndexWidth);
+			Text += std::format(", display_index={}", Value);
+		}
 		if (Layout.NumberWidth != 0)
 		{
 			const uint64_t Value = DecodeUnsignedLittleEndian(
 				Bytes, Layout.NumberOffset, Layout.NumberWidth);
-			Text += std::format(", number={}", Value);
+			if (Layout.NumberEncodedInComparisonIndex)
+			{
+				if (Value != 0)
+				{
+					return Reader.Fail(
+						ErrorCode::InvalidOperand,
+						Reader.Position() - Layout.NumberWidth,
+						"outline-number FScriptName padding must be zero");
+				}
+				Text += ", number=encoded_in_comparison_index";
+			}
+			else
+			{
+				Text += std::format(", number={}", Value);
+			}
 		}
 		Text += ")";
 		return true;
@@ -610,6 +638,87 @@ private:
 				Elements += ", ";
 			First = false;
 			Elements += Element;
+		}
+		return false;
+	}
+
+	bool ParseAutoRtfmBody(
+		const int32_t TransactionId,
+		const uint32_t Depth,
+		std::string& Body)
+	{
+		Body.clear();
+		bool First = true;
+		while (!Reader.Failed())
+		{
+			if (Reader.AtEnd())
+			{
+				return Reader.Fail(
+					ErrorCode::ExpectedTerminator,
+					Reader.Position(),
+					"AutoRTFM transaction ended without StopTransact");
+			}
+
+			EExprToken Token = EExprToken::EX_Max;
+			uint8_t RawOpcode = 0;
+			if (!PeekToken(Token, RawOpcode))
+				return false;
+			if (Token == EExprToken::EX_AutoRtfmStopTransact)
+			{
+				size_t InstructionIndex = 0;
+				OpcodeMapping Mapping;
+				if (!BeginInstruction(Depth + 1, InstructionIndex, Mapping))
+					return false;
+				if (Mapping.Semantic != OpcodeSemantic::ExprToken
+					|| Mapping.Token != EExprToken::EX_AutoRtfmStopTransact)
+				{
+					PreservePartialInstruction(InstructionIndex);
+					return Reader.Fail(
+						ErrorCode::ExpectedTerminator,
+						Reader.Position() - 1,
+						"opcode mapping changed while consuming StopTransact");
+				}
+
+				int32_t StopTransactionId = 0;
+				uint8_t Mode = 0;
+				if (!Reader.TryReadInt32(StopTransactionId)
+					|| !Reader.TryReadByte(Mode))
+				{
+					PreservePartialInstruction(InstructionIndex);
+					return false;
+				}
+				if (StopTransactionId != TransactionId || Mode > 2)
+				{
+					PreservePartialInstruction(InstructionIndex);
+					return Reader.Fail(
+						ErrorCode::InvalidOperand,
+						Output.Instructions[InstructionIndex].Offset,
+						StopTransactionId != TransactionId
+							? "StopTransact transaction id does not match its owner"
+							: "StopTransact mode is outside the witnessed enum range");
+				}
+
+				constexpr std::array<std::string_view, 3> ModeNames{
+					"graceful_exit",
+					"aborting_exit",
+					"aborting_exit_and_abort_parent"
+				};
+				CompleteInstruction(
+					InstructionIndex,
+					std::format(
+						"auto_rtfm_stop_transact({}, {})",
+						StopTransactionId,
+						ModeNames[Mode]));
+				return true;
+			}
+
+			std::string Expression;
+			if (!ParseExpression(Depth + 1, Expression))
+				return false;
+			if (!First)
+				Body += ", ";
+			First = false;
+			Body += Expression;
 		}
 		return false;
 	}
@@ -742,6 +851,13 @@ private:
 		case EExprToken::EX_NoInterface: Text = "nullptr"; return true;
 		case EExprToken::EX_Self: Text = "this"; return true;
 		case EExprToken::EX_Nothing: Text.clear(); return true;
+		case EExprToken::EX_NothingInt32:
+		{
+			int32_t Value = 0;
+			if (!Reader.TryReadInt32(Value)) return false;
+			Text = std::format("nothing_int32({})", Value);
+			return true;
+		}
 
 		case EExprToken::EX_LocalVariable:
 		case EExprToken::EX_LocalOutVariable:
@@ -779,17 +895,25 @@ private:
 		case EExprToken::EX_FinalFunction:
 		case EExprToken::EX_LocalFinalFunction:
 		case EExprToken::EX_CallMath:
-		case EExprToken::EX_CallMulticastDelegate:
 		{
 			std::string Function;
 			std::string Arguments;
 			if (!ReadPointerToken("Function", Function) || !ParseCallArguments(Depth, Arguments)) return false;
 			if (Token == EExprToken::EX_CallMath)
 				Text = std::format("Math::{}({})", Function, Arguments);
-			else if (Token == EExprToken::EX_CallMulticastDelegate)
-				Text = std::format("{}.Broadcast({})", Function, Arguments);
 			else
 				Text = std::format("{}({})", Function, Arguments);
+			return true;
+		}
+		case EExprToken::EX_CallMulticastDelegate:
+		{
+			std::string Function;
+			std::string Delegate;
+			std::string Arguments;
+			if (!ReadPointerToken("Function", Function)
+				|| !ParseExpression(Depth + 1, Delegate)
+				|| !ParseCallArguments(Depth, Arguments)) return false;
+			Text = std::format("{}.Broadcast({}) /* signature={} */", Delegate, Arguments, Function);
 			return true;
 		}
 		case EExprToken::EX_VirtualFunction:
@@ -922,6 +1046,36 @@ private:
 				Token == EExprToken::EX_VectorConst ? "FVector" : "FRotator", A, B, C);
 			return true;
 		}
+		case EExprToken::EX_Vector3fConst:
+		{
+			double X = 0.0;
+			double Y = 0.0;
+			double Z = 0.0;
+			if (!ReadReal(4, X, "Vector3f constant")
+				|| !ReadReal(4, Y, "Vector3f constant")
+				|| !ReadReal(4, Z, "Vector3f constant"))
+			{
+				return false;
+			}
+			Text = std::format("FVector3f({:.2f}, {:.2f}, {:.2f})", X, Y, Z);
+			return true;
+		}
+		case EExprToken::EX_BitFieldConst:
+		{
+			std::string Property;
+			uint8_t Value = 0;
+			if (!ReadPointerToken("BitProperty", Property) || !Reader.TryReadByte(Value))
+				return false;
+			if (Value > 1)
+			{
+				return Reader.Fail(
+					ErrorCode::InvalidOperand,
+					Reader.Position() - 1,
+					"bit-field constant must be 0 or 1");
+			}
+			Text = std::format("BitFieldConst({}, {})", Property, Value != 0 ? "true" : "false");
+			return true;
+		}
 		case EExprToken::EX_TransformConst:
 		{
 			std::span<const uint8_t> RawTransform;
@@ -1011,6 +1165,31 @@ private:
 			{
 				Text = std::format("instrumentation_event({})", EventType);
 			}
+			return true;
+		}
+		case EExprToken::EX_AutoRtfmTransact:
+		{
+			int32_t TransactionId = 0;
+			uint64_t CodeOffset = 0;
+			std::string Body;
+			if (!Reader.TryReadInt32(TransactionId)
+				|| !ReadCodeOffset(CodeOffset)
+				|| !ParseAutoRtfmBody(TransactionId, Depth, Body))
+			{
+				return false;
+			}
+			Text = std::format(
+				"auto_rtfm_transact({}, 0x{:X}) {{ {} }}",
+				TransactionId,
+				CodeOffset,
+				Body);
+			return true;
+		}
+		case EExprToken::EX_AutoRtfmAbortIfNot:
+		{
+			std::string Condition;
+			if (!ParseExpression(Depth + 1, Condition)) return false;
+			Text = std::format("auto_rtfm_abort_if_not({})", Condition);
 			return true;
 		}
 
@@ -1162,6 +1341,7 @@ private:
 		case EExprToken::EX_EndMap:
 		case EExprToken::EX_EndMapConst:
 		case EExprToken::EX_EndParmValue:
+		case EExprToken::EX_AutoRtfmStopTransact:
 			return Reader.Fail(ErrorCode::UnexpectedTerminator, Reader.Position() - 1,
 				std::format("unexpected {} terminator", GetExprTokenName(Token)));
 
