@@ -26,6 +26,7 @@ namespace UExplorer::Services
 using json = nlohmann::json;
 
 class DumpCommandService;
+class FunctionCallBatchCommandService;
 class HookCommandService;
 
 struct CoreCommandRequest
@@ -76,7 +77,8 @@ public:
 		Runtime::IBlueprintBytecodeCaptureSource* blueprintCaptureSource = nullptr,
 		const Runtime::IBlueprintBytecodeProfileSource* blueprintProfileSource = nullptr,
 		HookCommandService* hookCommandService = nullptr,
-		DumpCommandService* dumpCommandService = nullptr);
+		DumpCommandService* dumpCommandService = nullptr,
+		FunctionCallBatchCommandService* functionCallBatchCommandService = nullptr);
 
 	CoreCommandService(const CoreCommandService&) = delete;
 	CoreCommandService& operator=(const CoreCommandService&) = delete;
@@ -97,6 +99,7 @@ private:
 	CoreCommandResponse ExecuteFunctionCall(
 		const CoreCommandRequest& request,
 		const GameThreadQueuedCallback& onGameThreadQueued);
+	CoreCommandResponse ExecuteFunctionCallBatch(const CoreCommandRequest& request);
 	CoreCommandResponse ExecuteWorldTransformRead(
 		const CoreCommandRequest& request,
 		const GameThreadQueuedCallback& onGameThreadQueued);
@@ -135,6 +138,7 @@ private:
 	const Runtime::IBlueprintBytecodeProfileSource* m_BlueprintProfileSource = nullptr;
 	HookCommandService* m_HookCommandService = nullptr;
 	DumpCommandService* m_DumpCommandService = nullptr;
+	FunctionCallBatchCommandService* m_FunctionCallBatchCommandService = nullptr;
 	std::string m_SessionId;
 	std::uint64_t m_ContextGeneration = 0;
 };

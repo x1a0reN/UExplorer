@@ -70,6 +70,7 @@ foreach ($token in @(
         'MemoryWriteCommandServiceEnabled',
         'WorldInspectServiceEnabled', 'WORLD_COMMAND_NOT_READY',
         'WorldMutationServiceEnabled', '"world.mutate",',
+        'FunctionCallBatchCommandServiceEnabled', '"call.batch.jobs",', '"call.batch",',
         'HookProducerInstalled', 'HOOK_PRODUCER_NOT_INSTALLED',
         'DumpWorkerEnabled', 'DUMP_WORKER_NOT_INJECTED', '"dump.jobs",')) {
     Assert-Contains $capabilities $token 'Core capability publication lost a required domain boundary.'
@@ -85,7 +86,10 @@ foreach ($token in @(
         'DomainRoute::Core("memory.pointer_chain.resolve")',
         'DomainRoute::Core("call.invoke")',
         'DomainRoute::Unavailable("call.static")',
-        'DomainRoute::Unavailable("call.batch")',
+        'DomainRoute::Core("call.batch")',
+        'DomainRoute::Core("call.batch.get")',
+        'DomainRoute::Core("call.batch.cancel")',
+        'DomainRoute::Core("call.batch.list")',
         'DomainRoute::Core("world.inspect")',
         'DomainRoute::Core("world.levels")',
         'DomainRoute::Core("world.actors.list")',
@@ -130,7 +134,7 @@ foreach ($text in @($client, $payloadSchema)) {
 
 foreach ($token in @(
         "'domain_request'", "'status.inspect'", "'objects.list'",
-        "'types.classes.list'", "'memory.raw.read'", "'call.invoke'",
+        "'types.classes.list'", "'memory.raw.read'", "'call.invoke'", "'call.batch'",
         "'world.inspect'", "'watch.list'", "'hook.list'", "'dump.sdk.start'",
         'new Channel<HostSessionEvent>()')) {
     Assert-Contains $client $token 'React API lost a required Tauri domain/event command.'

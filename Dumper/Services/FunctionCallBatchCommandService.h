@@ -60,6 +60,29 @@ public:
 		Runtime::IFunctionCallBatchExecutionContext& context) noexcept = 0;
 };
 
+// Production bridge into the exact single-call path. The coordinator owns this
+// adapter indirectly through the worker and must drain before these references
+// are destroyed.
+class FunctionCallBatchExactInvokeAdapter final
+	: public IFunctionCallBatchInvokeAdapter
+{
+public:
+	FunctionCallBatchExactInvokeAdapter(
+		Runtime::CoreRuntime& runtime,
+		Runtime::EngineFacade& engine,
+		Runtime::GameThreadExecutor& gameThread) noexcept;
+
+	bool IsConfigured() const noexcept;
+	FunctionCallCommandResult InvokeExact(
+		const FunctionCallBatchInvokeRequest& request,
+		Runtime::IFunctionCallBatchExecutionContext& context) noexcept override;
+
+private:
+	Runtime::CoreRuntime& m_Runtime;
+	Runtime::EngineFacade& m_Engine;
+	Runtime::GameThreadExecutor& m_GameThread;
+};
+
 // Coordinator-owned worker bridge. The coordinator retains this object, which
 // in turn retains the adapter, until StopAndDrain/destruction joins its worker.
 class FunctionCallBatchCommandWorker final

@@ -191,6 +191,9 @@ The v1 command registry is explicit. Unknown operations return
 | `functions.handle.issue` | `{"index": int32}` | PostRender game-thread function/owner/path re-read |
 | `objects.property.read` | `{"object": object_handle, "type_snapshot_generation": uint53, "declaring_type_path": full_path, "property_name": exact_name, "array_index": 0..1023}` | Game-thread read from the exact object/type/reflection generation |
 | `call.invoke` | `{"target": object_handle, "function": function_handle, "type_snapshot_generation": uint53, "function_path": full_path, "arguments": {name: {kind, value}}}` | Single ProcessEvent call after exact game-thread identity/dependency revalidation |
+| `call.batch` | exact session/context/Object/Type scope + policy + total deadline + 1..64 exact call items | Submit one owned serial batch; every item reuses the single-call preparation/game-thread/completion path |
+| `call.batch.get` / `call.batch.cancel` | exact retained scope + canonical decimal `batch_id` | Read or cooperatively cancel one retained batch without rebinding it to newer snapshots |
+| `call.batch.list` | exact retained scope + `max_batches` 1..64 | List bounded retained metadata for that exact admitted scope |
 | `memory.raw.read` / `memory.raw.write` | canonical non-null hex address plus 1..4096 bytes | Checked worker memory access; data writes reject executable pages and verify/rollback from a preimage |
 | `memory.typed.read` / `memory.typed.write` | canonical address, strict scalar type, canonical string value for writes | Width/range checked scalar access without JavaScript-number narrowing |
 | `memory.pointer_chain.resolve` | canonical base plus at most 64 signed decimal offsets | Checked pointer dereference/addition with explicit failed step |
@@ -248,8 +251,19 @@ The codec accepts bool, signed/unsigned integers as canonical decimal strings, f
 float/double strings, null or stable UObject handles, exact canonical FVector/FRotator,
 and descriptor-proven enum name/raw selections. Core owns the exact reflected parameter
 frame and a reverse-order destructor journal. Production UEnum entry-table evidence is
-not yet available, and non-trivial UE value lifetimes and batch commands are not silently
-approximated.
+not yet available, and non-trivial UE value lifetimes are not silently approximated.
+
+`call.batch` is a single-active-job coordinator, not concurrent ProcessEvent execution.
+Submission binds the current session/context/ObjectSnapshot/TypeSnapshot generation and
+copies every normalized item into owned bounded storage. The worker reacquires a runtime
+lease for each item and invokes only `FunctionCallCommandService::PrepareInvoke`, the
+owned `GameThreadExecutor` path, and `CompleteInvoke`; it has no direct ProcessEvent or
+raw-memory fallback. A newer snapshot causes a stable stale-scope item failure rather than
+an implicit rebind. Cancellation and the one total deadline stop admission of subsequent
+items; an already-running ProcessEvent is allowed to settle, and timeout/guarded failure
+after invocation may have started is retained as `CALL_BATCH_ITEM_OUTCOME_UNKNOWN`.
+Completed item responses are retained even when cancellation or the total deadline wins
+the batch terminal state. Batch IDs remain canonical decimal strings across Rust/TypeScript.
 
 Memory writes retain a bounded preimage, verify the committed bytes, and report rollback
 and protection-race outcomes. There is no executable/code-write fallback. Watch events
@@ -259,12 +273,11 @@ publishes neither a Script layout witness nor a bytecode profile, so capability 
 fails before capture/decompile.
 
 Hook and Dump command layers exist only behind unavailable capabilities at this
-checkpoint. A transport-neutral batch command/worker boundary exists, but no configured
-Core exact-call adapter or cross-layer route does; `call.batch` therefore advertises the
-independent `CALL_BATCH_ADAPTER_NOT_READY` capability reason. Legacy `call.static` is retired;
-static invocation uses `call.invoke` with an explicit CDO handle. Core contains bounded
-collector/coordinator primitives, but no ProcessEvent producer, generator worker, or
-batch worker bridge, so none may select a legacy implementation.
+checkpoint. `call.batch.jobs` is independently advertised when its coordinator is owned,
+while new `call.batch` submissions additionally depend on the dynamic `call.invoke`
+capability. Legacy `call.static` is retired; static invocation uses `call.invoke` with an
+explicit CDO handle. Hook still has no ProcessEvent producer and Dump still has no
+generator worker, so neither may select a legacy implementation.
 
 World commands read only a `WorldSnapshot` whose session, context, ObjectSnapshot, and
 TypeSnapshot generations still match the active immutable dependencies. A world cursor

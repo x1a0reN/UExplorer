@@ -19,10 +19,11 @@ These assets are available for development, but none changes the support rows ab
 - The current R5 code checkpoint adds strict Memory commands, a bounded Watch scheduler
   with pinned immutable subscription bindings and explicit pull drain, descriptor-proven
   enum codecs and an owned destructor journal, explicit-profile bounded Blueprint
-  capture/disassembly, plus Hook/Dump/call-batch ownership and command-boundary primitives.
+  capture/disassembly, Hook/Dump ownership primitives, and an end-to-end bounded call-batch
+  command path that reuses the exact single-call adapter.
   It has no target-process evidence for any of them. Production
   UEnum and Blueprint layout/profile witnesses, the ProcessEvent Hook producer, generator
-  worker, and batch adapter are still missing, so no capability or profile support claim
+  worker, and real batch ProcessEvent fixture are still missing, so no profile support claim
   follows from these source changes.
 
 - `D:\Projects\UnrealEngine` contains source trees for UE 4.21.2, 4.24.3,

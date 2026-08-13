@@ -683,7 +683,305 @@ Runtime::FunctionCallBatchWorkerResult WorkerCancelled(
 	};
 }
 
+FunctionCallCommandResult InvokeFailure(
+	std::string code,
+	std::string message,
+	json details = json::object())
+{
+	return {.Error = FunctionCallCommandError{
+		.Code = std::move(code),
+		.Message = std::move(message),
+		.Details = std::move(details)}};
+}
+
+bool SameObjectHandle(
+	const Runtime::ObjectHandle& left,
+	const Runtime::ObjectHandle& right) noexcept
+{
+	return left.SessionId == right.SessionId
+		&& left.ContextGeneration == right.ContextGeneration
+		&& left.Index == right.Index
+		&& left.SerialNumber == right.SerialNumber
+		&& left.Address == right.Address
+		&& left.ClassFingerprint == right.ClassFingerprint;
+}
+
+bool SameExactFunctionHandle(
+	const Runtime::FunctionHandle& left,
+	const Runtime::FunctionHandle& right) noexcept
+{
+	return SameObjectHandle(left.Function, right.Function)
+		&& SameObjectHandle(left.Owner, right.Owner)
+		&& left.FullPath == right.FullPath
+		&& left.SignatureFingerprint == right.SignatureFingerprint;
+}
+
+bool IsCooperativeStopCode(const std::string_view code) noexcept
+{
+	return code == "CALL_BATCH_CANCELLED"
+		|| code == "CALL_BATCH_DEADLINE_EXCEEDED";
+}
+
 } // namespace
+
+FunctionCallBatchExactInvokeAdapter::FunctionCallBatchExactInvokeAdapter(
+	Runtime::CoreRuntime& runtime,
+	Runtime::EngineFacade& engine,
+	Runtime::GameThreadExecutor& gameThread) noexcept
+	: m_Runtime(runtime),
+	  m_Engine(engine),
+	  m_GameThread(gameThread)
+{
+}
+
+bool FunctionCallBatchExactInvokeAdapter::IsConfigured() const noexcept
+{
+	const Runtime::CoreRuntimeSnapshot runtime = m_Runtime.Snapshot();
+	return runtime.Context
+		&& !runtime.SessionId.empty()
+		&& m_Engine.IsConfigured()
+		&& m_Engine.SessionId() == runtime.SessionId
+		&& m_Engine.ContextGeneration() == runtime.Context->Generation();
+}
+
+FunctionCallCommandResult FunctionCallBatchExactInvokeAdapter::InvokeExact(
+	const FunctionCallBatchInvokeRequest& request,
+	Runtime::IFunctionCallBatchExecutionContext& context) noexcept
+{
+	try
+	{
+		if (!IsConfigured())
+		{
+			return InvokeFailure(
+				"CALL_BATCH_ADAPTER_NOT_READY",
+				"The exact-call adapter no longer matches the active Core runtime.");
+		}
+		if (m_GameThread.IsCurrentPumpThread())
+		{
+			return InvokeFailure(
+				"GAME_THREAD_REENTRANT_WAIT_DENIED",
+				"The batch worker cannot synchronously wait from the game-thread pump.");
+		}
+		if (context.IsDeadlineExceeded()
+			|| std::chrono::steady_clock::now() >= request.Deadline)
+		{
+			return InvokeFailure(
+				"CALL_BATCH_DEADLINE_EXCEEDED",
+				"The immutable total batch deadline elapsed before exact-call admission.");
+		}
+		if (context.IsCancellationRequested())
+		{
+			return InvokeFailure(
+				"CALL_BATCH_CANCELLED",
+				"Cancellation was requested before exact-call admission.");
+		}
+
+		std::string admissionError;
+		auto lease = m_Runtime.TryAcquireRequest(&admissionError);
+		if (!lease)
+		{
+			if (context.IsDeadlineExceeded())
+			{
+				return InvokeFailure(
+					"CALL_BATCH_DEADLINE_EXCEEDED",
+					"The immutable total batch deadline elapsed during exact-call admission.");
+			}
+			if (context.IsCancellationRequested())
+			{
+				return InvokeFailure(
+					"CALL_BATCH_CANCELLED",
+					"Cancellation was requested during exact-call admission.");
+			}
+			return InvokeFailure(
+				admissionError.empty() ? "CORE_NOT_READY" : std::move(admissionError),
+				"CoreRuntime is not accepting this batch item.");
+		}
+
+		const auto objects = m_Engine.Snapshots().Current();
+		const auto types = m_Engine.Types().Current();
+		if (!lease->Context()
+			|| request.Binding.SessionId != m_Engine.SessionId()
+			|| request.Binding.ContextGeneration != lease->Context()->Generation()
+			|| !objects
+			|| !types
+			|| objects->SessionId != request.Binding.SessionId
+			|| objects->ContextGeneration != request.Binding.ContextGeneration
+			|| objects->Generation != request.Binding.ObjectSnapshotGeneration
+			|| types->SessionId() != request.Binding.SessionId
+			|| types->ContextGeneration() != request.Binding.ContextGeneration
+			|| types->Generation() != request.Binding.TypeSnapshotGeneration
+			|| types->ObjectSnapshotGeneration() != objects->Generation)
+		{
+			return InvokeFailure(
+				"CALL_BATCH_SCOPE_STALE",
+				"The batch item no longer matches the current immutable object/type generation.",
+				{{"requested_object_snapshot_generation", request.Binding.ObjectSnapshotGeneration},
+				 {"requested_type_snapshot_generation", request.Binding.TypeSnapshotGeneration},
+				 {"current_object_snapshot_generation", objects ? json(objects->Generation) : json(nullptr)},
+				 {"current_type_snapshot_generation", types ? json(types->Generation()) : json(nullptr)}});
+		}
+
+		constexpr const char* capabilityName = "call.invoke";
+		const Runtime::CapabilityStatus* capability = lease->Capabilities()
+			? lease->Capabilities()->Find(capabilityName)
+			: nullptr;
+		if (!capability || !capability->Available)
+		{
+			return InvokeFailure(
+				capability && !capability->ReasonCode.empty()
+					? capability->ReasonCode
+					: "FUNCTION_CALL_CAPABILITY_UNAVAILABLE",
+				capability && !capability->Reason.empty()
+					? capability->Reason
+					: "Validated reflected function calls are unavailable.",
+				{{"capability", capabilityName}});
+		}
+
+		FunctionCallPreparation prepared = FunctionCallCommandService::PrepareInvoke(
+			request.CallData,
+			std::move(*lease),
+			m_Engine,
+			m_GameThread);
+		if (!prepared.Ok())
+		{
+			return {.Error = prepared.Error
+				? std::move(prepared.Error)
+				: std::optional<FunctionCallCommandError>(FunctionCallCommandError{
+					.Code = "CALL_PREPARATION_FAILED",
+					.Message = "Function call preparation failed."})};
+		}
+		if (prepared.Work->ObjectSnapshotGeneration()
+				!= request.Binding.ObjectSnapshotGeneration
+			|| prepared.Work->TypeSnapshotGeneration()
+				!= request.Binding.TypeSnapshotGeneration
+			|| !SameObjectHandle(prepared.Work->Target(), request.Target)
+			|| !SameExactFunctionHandle(prepared.Work->FunctionHandle(), request.Function)
+			|| prepared.Work->Function().FullPath != request.FunctionPath)
+		{
+			return InvokeFailure(
+				"CALL_BATCH_ITEM_BINDING_CHANGED",
+				"Prepared exact-call identity differs from the admitted batch item.");
+		}
+
+		if (context.IsDeadlineExceeded()
+			|| std::chrono::steady_clock::now() >= request.Deadline)
+		{
+			return InvokeFailure(
+				"CALL_BATCH_DEADLINE_EXCEEDED",
+				"The immutable total batch deadline elapsed before the item was queued.");
+		}
+		if (context.IsCancellationRequested())
+		{
+			return InvokeFailure(
+				"CALL_BATCH_CANCELLED",
+				"Cancellation was requested before the item was queued.");
+		}
+
+		const auto now = std::chrono::steady_clock::now();
+		const auto itemHorizon = now + std::chrono::milliseconds(
+			Runtime::GameThreadExecutor::kMaxTimeoutMs);
+		const auto itemDeadline = (std::min)(request.Deadline, itemHorizon);
+		Runtime::GameThreadTicket ticket;
+		const Runtime::GameThreadQueueResult queued = m_GameThread.Enqueue(
+			prepared.Work,
+			itemDeadline,
+			ticket);
+		if (queued != Runtime::GameThreadQueueResult::Accepted)
+		{
+			switch (queued)
+			{
+			case Runtime::GameThreadQueueResult::Disabled:
+				return InvokeFailure(
+					"GAME_THREAD_UNAVAILABLE",
+					"The game-thread executor is disabled.");
+			case Runtime::GameThreadQueueResult::QueueBusy:
+				return InvokeFailure(
+					"GAME_THREAD_QUEUE_BUSY",
+					"The game-thread queue capacity is exhausted.");
+			case Runtime::GameThreadQueueResult::Invalid:
+				return InvokeFailure(
+					"GAME_THREAD_TASK_INVALID",
+					"The exact-call item or its bounded deadline is invalid.");
+			case Runtime::GameThreadQueueResult::Accepted:
+				break;
+			}
+		}
+
+		if (context.IsDeadlineExceeded() || context.IsCancellationRequested())
+		{
+			const bool deadlineExceeded = context.IsDeadlineExceeded();
+			const Runtime::GameThreadCancelResult cancelled = m_GameThread.Cancel(ticket);
+			if (cancelled == Runtime::GameThreadCancelResult::Cancelled)
+			{
+				return InvokeFailure(
+					deadlineExceeded
+						? "CALL_BATCH_DEADLINE_EXCEEDED"
+						: "CALL_BATCH_CANCELLED",
+					deadlineExceeded
+						? "The total batch deadline elapsed before this queued item started."
+						: "The queued batch item was cancelled before it started.");
+			}
+		}
+
+		const Runtime::GameThreadSubmitResult submitted = m_GameThread.Wait(ticket);
+		switch (submitted)
+		{
+		case Runtime::GameThreadSubmitResult::Completed:
+			break;
+		case Runtime::GameThreadSubmitResult::Disabled:
+			return InvokeFailure(
+				"GAME_THREAD_UNAVAILABLE",
+				"The game-thread executor was disabled while this item was pending.");
+		case Runtime::GameThreadSubmitResult::Cancelled:
+			return InvokeFailure(
+				context.IsDeadlineExceeded()
+					? "CALL_BATCH_DEADLINE_EXCEEDED"
+					: "CALL_BATCH_CANCELLED",
+				context.IsDeadlineExceeded()
+					? "The total batch deadline elapsed before this item started."
+					: "The batch item was cancelled before it started.");
+		case Runtime::GameThreadSubmitResult::PumpThreadWaitDenied:
+		{
+			const Runtime::GameThreadCancelResult cancelled = m_GameThread.Cancel(ticket);
+			if (cancelled == Runtime::GameThreadCancelResult::Cancelled)
+			{
+				return InvokeFailure(
+					"GAME_THREAD_REENTRANT_WAIT_DENIED",
+					"The reentrant batch item was cancelled before invocation.");
+			}
+			return InvokeFailure(
+				"CALL_BATCH_ITEM_OUTCOME_UNKNOWN",
+				"A reentrant wait was denied after the item may have started; invocation outcome is unknown.");
+		}
+		case Runtime::GameThreadSubmitResult::QueueBusy:
+			return InvokeFailure(
+				"GAME_THREAD_QUEUE_BUSY",
+				"The game-thread queue capacity was exhausted.");
+		case Runtime::GameThreadSubmitResult::TimedOutBeforeStart:
+			return InvokeFailure(
+				std::chrono::steady_clock::now() >= request.Deadline
+					? "CALL_BATCH_DEADLINE_EXCEEDED"
+					: "CALL_BATCH_ITEM_GAME_THREAD_TIMEOUT_BEFORE_START",
+				"The batch item expired before ProcessEvent started.");
+		case Runtime::GameThreadSubmitResult::TimedOutWhileRunning:
+			return InvokeFailure(
+				"CALL_BATCH_ITEM_OUTCOME_UNKNOWN",
+				"The item deadline elapsed while ProcessEvent was running; invocation outcome is unknown.");
+		case Runtime::GameThreadSubmitResult::ExecutionFailed:
+			return InvokeFailure(
+				"CALL_BATCH_ITEM_OUTCOME_UNKNOWN",
+				"Guarded game-thread execution failed after invocation may have started; outcome is unknown.");
+		}
+
+		return FunctionCallCommandService::CompleteInvoke(*prepared.Work);
+	}
+	catch (...)
+	{
+		return InvokeFailure(
+			"CALL_BATCH_ADAPTER_INTERNAL_ERROR",
+			"The exact-call adapter could not complete bounded owned processing.");
+	}
+}
 
 FunctionCallBatchCommandWorker::FunctionCallBatchCommandWorker(
 	std::shared_ptr<IFunctionCallBatchInvokeAdapter> adapter) noexcept
@@ -750,6 +1048,12 @@ Runtime::FunctionCallBatchWorkerResult FunctionCallBatchCommandWorker::Execute(
 			return WorkerFailure(
 				"CALL_BATCH_ADAPTER_RESULT_INVALID",
 				"The exact-call adapter returned an invalid diagnostic.");
+		}
+		if (IsCooperativeStopCode(result.Error->Code))
+		{
+			return WorkerCancelled(
+				std::move(result.Error->Code),
+				std::move(result.Error->Message));
 		}
 		return WorkerFailure(
 			std::move(result.Error->Code),

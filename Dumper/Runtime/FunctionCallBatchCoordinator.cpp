@@ -584,23 +584,6 @@ bool FunctionCallBatchCoordinator::StoreWorkerResultLocked(
 	{
 		record.DeadlineExceeded.store(true, std::memory_order_release);
 		record.CancellationRequested.store(true, std::memory_order_release);
-		storeLiteral(
-			FunctionCallBatchItemState::DeadlineExceeded,
-			"CALL_BATCH_DEADLINE_EXCEEDED",
-			"The immutable total batch deadline elapsed during this item.");
-		return true;
-	}
-	if (record.CancellationRequested.load(std::memory_order_acquire))
-	{
-		storeLiteral(
-			FunctionCallBatchItemState::Cancelled,
-			record.ShutdownCancellationRequested
-				? "CALL_BATCH_SHUTDOWN_CANCELLED"
-				: "CALL_BATCH_CANCELLED",
-			record.ShutdownCancellationRequested
-				? "Shutdown cancelled the running owned batch."
-				: "Cancellation was requested for the running owned batch.");
-		return true;
 	}
 	if (workerThrew)
 	{
@@ -674,7 +657,9 @@ bool FunctionCallBatchCoordinator::StoreWorkerResultLocked(
 		record.AnyItemFailed = true;
 		break;
 	case FunctionCallBatchWorkerStatus::Cancelled:
-		item.State = FunctionCallBatchItemState::Cancelled;
+		item.State = deadlineExceeded
+			? FunctionCallBatchItemState::DeadlineExceeded
+			: FunctionCallBatchItemState::Cancelled;
 		break;
 	}
 	item.FinishedAtMonotonicUs = MonotonicMicroseconds();
@@ -863,8 +848,14 @@ void FunctionCallBatchCoordinator::WorkerLoop() noexcept
 				std::lock_guard<std::mutex> lock(m_Mutex);
 				StoreWorkerResultLocked(*record, itemIndex, std::move(workerResult), workerThrew);
 				const FunctionCallBatchItemState itemState = record->Items[itemIndex].State;
-				if (itemState == FunctionCallBatchItemState::DeadlineExceeded)
+				const bool deadlineExceeded =
+					record->DeadlineExceeded.load(std::memory_order_acquire)
+					|| std::chrono::steady_clock::now() >= record->Request->Deadline;
+				if (itemState == FunctionCallBatchItemState::DeadlineExceeded
+					|| deadlineExceeded)
 				{
+					record->DeadlineExceeded.store(true, std::memory_order_release);
+					record->CancellationRequested.store(true, std::memory_order_release);
 					FinalizePendingLocked(
 						*record,
 						FunctionCallBatchItemState::DeadlineExceeded,

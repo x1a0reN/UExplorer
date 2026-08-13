@@ -897,6 +897,116 @@ export interface FunctionCallResultData {
   }>;
 }
 
+export interface FunctionCallBatchScope {
+  session_id: string;
+  context_generation: number;
+  object_snapshot_generation: number;
+  type_snapshot_generation: number;
+}
+
+export type FunctionCallBatchPolicy = 'continue_on_error' | 'stop_on_first_failure';
+
+export interface FunctionCallBatchItemRequest {
+  target: StableObjectHandle;
+  function: StableFunctionHandle;
+  function_path: string;
+  arguments: Record<string, FunctionCallArgument>;
+}
+
+export interface FunctionCallBatchSubmitRequest extends FunctionCallBatchScope {
+  policy: FunctionCallBatchPolicy;
+  deadline_ms: number;
+  items: FunctionCallBatchItemRequest[];
+}
+
+export interface FunctionCallBatchLookupRequest extends FunctionCallBatchScope {
+  batch_id: string;
+}
+
+export interface FunctionCallBatchListRequest extends FunctionCallBatchScope {
+  max_batches: number;
+}
+
+export type FunctionCallBatchState =
+  | 'queued'
+  | 'running'
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled'
+  | 'deadline_exceeded';
+
+export type FunctionCallBatchItemState =
+  | 'pending'
+  | 'running'
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled'
+  | 'deadline_exceeded'
+  | 'skipped_fail_fast';
+
+export interface FunctionCallBatchMetadata {
+  batch_id: string;
+  scope: FunctionCallBatchScope;
+  policy: FunctionCallBatchPolicy;
+  state: FunctionCallBatchState;
+  submitted_at_monotonic_us: number;
+  deadline_at_monotonic_us: number;
+  started_at_monotonic_us: number;
+  finished_at_monotonic_us: number;
+  cancellation_requested: boolean;
+  deadline_exceeded: boolean;
+  shutdown_cancellation_requested: boolean;
+  retained_result_bytes: number;
+  item_count: number;
+  item_counts: {
+    succeeded: number;
+    failed: number;
+    cancelled_or_deadline: number;
+    pending_or_running: number;
+  };
+}
+
+export interface FunctionCallBatchItemResult {
+  index: number;
+  state: FunctionCallBatchItemState;
+  target: StableObjectHandle;
+  function: StableFunctionHandle;
+  function_path: string;
+  request_bytes: number;
+  request_fingerprint: string;
+  started_at_monotonic_us: number;
+  finished_at_monotonic_us: number;
+  response: FunctionCallResultData | null;
+  error: { code: string; message: string } | null;
+}
+
+export interface FunctionCallBatchRecord extends FunctionCallBatchMetadata {
+  items: FunctionCallBatchItemResult[];
+}
+
+export interface FunctionCallBatchSubmitResponse {
+  batch_id: string;
+  admission: 'accepted';
+  item_count: number;
+  policy: FunctionCallBatchPolicy;
+  scope: FunctionCallBatchScope;
+}
+
+export interface FunctionCallBatchGetResponse {
+  batch: FunctionCallBatchRecord;
+}
+
+export interface FunctionCallBatchCancelResponse {
+  batch_id: string;
+  disposition: 'cancelled_before_start' | 'cancellation_requested';
+}
+
+export interface FunctionCallBatchListResponse {
+  scope: FunctionCallBatchScope;
+  batches: FunctionCallBatchMetadata[];
+  more_batches_available: boolean;
+}
+
 export interface BlueprintCaptureData {
   function: StableFunctionHandle;
   function_path: string;

@@ -688,15 +688,27 @@ namespace
 				&& !withoutCallService->IsAvailable("call.invoke"),
 			"Handle capability falsely enabled an unregistered function-call command");
 		const CapabilityStatus* batchCall = withoutCallService->Find("call.batch");
+		const CapabilityStatus* batchJobs = withoutCallService->Find("call.batch.jobs");
 		const CapabilityStatus* staticCall = withoutCallService->Find("call.static");
 		Require(
 			batchCall
 				&& !batchCall->Available
 				&& batchCall->ReasonCode == "CALL_BATCH_ADAPTER_NOT_READY"
+				&& batchJobs
+				&& !batchJobs->Available
+				&& batchJobs->ReasonCode == "CALL_BATCH_ADAPTER_NOT_READY"
 				&& staticCall
 				&& !staticCall->Available
 				&& staticCall->ReasonCode == "CALL_STATIC_OPERATION_RETIRED",
 			"Unavailable call operations borrowed call.invoke capability diagnostics");
+		probes.FunctionCallBatchCommandServiceEnabled = true;
+		const auto withBatchService = BuildCoreCapabilities(*context, probes);
+		Require(
+			withBatchService->IsAvailable("call.batch.jobs")
+				&& !withBatchService->IsAvailable("call.batch")
+				&& withBatchService->Find("call.batch")->ReasonCode
+					== "DEPENDENCY_UNAVAILABLE",
+			"Batch retained-query capability did not remain independent from call.invoke readiness");
 		probes.ObjectSnapshotPublished = true;
 		probes.FunctionCallServiceEnabled = true;
 		const auto withoutPipe = BuildCoreCapabilities(*context, probes);

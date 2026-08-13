@@ -121,8 +121,7 @@ calls use an explicit CDO handle; the protocol has no caller-controlled thread s
 Descriptor-proven enum name/raw input and output decode plus an owned reverse-order
 destructor journal are implemented. Production UEnum entry-table evidence is still
 missing, so real enum descriptors remain unavailable; non-trivial FString/container/
-arbitrary-struct lifetimes, batch commands, and real UE round-trip evidence also remain
-unavailable.
+  arbitrary-struct lifetimes and real UE round-trip evidence also remain unavailable.
 `WorldSnapshotCapture` uses the exact immutable Object/Type generations to pre-index
 Actor, Level, and ActorComponent candidates off-thread. Under the shared PostRender budget it resolves
 the witnessed `GWorld` slot, follows the same typed-outer semantics used by
@@ -204,10 +203,13 @@ added. A successful build or synthetic fixture does not establish target runtime
   `watch.events.drain`; Named Pipe/Tauri push is not implemented.
 - Blueprint has explicit-profile bounded capture/disassembly code, but no published
   Script-layout/profile witness, so both capabilities remain unavailable.
-- Hook collector/commands, Dump coordinator/commands, and the call-batch coordinator plus
-  strict command/adapter boundary are ownership primitives only. No ProcessEvent producer,
-  generator worker, or configured exact-call batch adapter/route exists, so these domains
-  remain unavailable.
+- The call-batch coordinator is now wired through Main/Core/Host/schema/TypeScript. It owns
+  one bounded serial job, total deadline, cancellation and retained per-item results; every
+  item reuses the exact single-call preparation/game-thread/completion path. Snapshot drift
+  fails closed, and no real UE batch round-trip has been run.
+- Hook collector/commands and Dump coordinator/commands remain ownership primitives only.
+  No ProcessEvent producer or generator worker exists, so both capabilities remain
+  unavailable.
 - World mutation is a strict single-field reflected command for world/relative scale and
   world rotation. Location/relative rotation remain unavailable until `FHitResult` has a
   witnessed construction/destruction profile.

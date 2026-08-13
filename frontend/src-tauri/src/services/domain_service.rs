@@ -354,7 +354,10 @@ fn resolve_operation(operation: &str) -> Option<DomainRoute> {
         "memory.pointer_chain.resolve" => DomainRoute::Core("memory.pointer_chain.resolve"),
         "call.invoke" => DomainRoute::Core("call.invoke"),
         "call.static" => DomainRoute::Unavailable("call.static"),
-        "call.batch" => DomainRoute::Unavailable("call.batch"),
+        "call.batch" => DomainRoute::Core("call.batch"),
+        "call.batch.get" => DomainRoute::Core("call.batch.get"),
+        "call.batch.cancel" => DomainRoute::Core("call.batch.cancel"),
+        "call.batch.list" => DomainRoute::Core("call.batch.list"),
         "watch.add" => DomainRoute::Core("watch.add"),
         "watch.list" => DomainRoute::Core("watch.list"),
         "watch.enable" => DomainRoute::Core("watch.enable"),
@@ -890,7 +893,19 @@ mod tests {
         );
         assert_eq!(
             resolve_operation("call.batch"),
-            Some(DomainRoute::Unavailable("call.batch"))
+            Some(DomainRoute::Core("call.batch"))
+        );
+        assert_eq!(
+            resolve_operation("call.batch.get"),
+            Some(DomainRoute::Core("call.batch.get"))
+        );
+        assert_eq!(
+            resolve_operation("call.batch.cancel"),
+            Some(DomainRoute::Core("call.batch.cancel"))
+        );
+        assert_eq!(
+            resolve_operation("call.batch.list"),
+            Some(DomainRoute::Core("call.batch.list"))
         );
         assert_eq!(
             resolve_operation("world.inspect"),

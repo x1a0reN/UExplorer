@@ -22,6 +22,13 @@ import type {
   EventBridgeDiagnostics,
   FunctionCallResultData,
   FunctionCallArgument,
+  FunctionCallBatchCancelResponse,
+  FunctionCallBatchGetResponse,
+  FunctionCallBatchListRequest,
+  FunctionCallBatchListResponse,
+  FunctionCallBatchLookupRequest,
+  FunctionCallBatchSubmitRequest,
+  FunctionCallBatchSubmitResponse,
   FunctionDetail,
   HookListResponse,
   HookLogResponse,
@@ -601,6 +608,30 @@ class UExplorerApi {
       function_path: fn.full_path,
       arguments: argumentsByName,
     });
+  }
+
+  async submitFunctionCallBatch(
+    request: FunctionCallBatchSubmitRequest,
+  ): Promise<ApiResponse<FunctionCallBatchSubmitResponse>> {
+    return this.command('call.batch', { ...request });
+  }
+
+  async getFunctionCallBatch(
+    request: FunctionCallBatchLookupRequest,
+  ): Promise<ApiResponse<FunctionCallBatchGetResponse>> {
+    return this.command('call.batch.get', { ...request });
+  }
+
+  async cancelFunctionCallBatch(
+    request: FunctionCallBatchLookupRequest,
+  ): Promise<ApiResponse<FunctionCallBatchCancelResponse>> {
+    return this.command('call.batch.cancel', { ...request });
+  }
+
+  async listFunctionCallBatches(
+    request: FunctionCallBatchListRequest,
+  ): Promise<ApiResponse<FunctionCallBatchListResponse>> {
+    return this.command('call.batch.list', { ...request });
   }
 
   async addHook(

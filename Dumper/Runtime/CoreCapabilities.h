@@ -31,6 +31,7 @@ struct RuntimeProbes
 	std::shared_ptr<const TypeSnapshot> Types;
 	bool ObjectPropertyServiceEnabled = false;
 	bool FunctionCallServiceEnabled = false;
+	bool FunctionCallBatchCommandServiceEnabled = false;
 	bool MemoryReadCommandServiceEnabled = false;
 	bool MemoryWriteCommandServiceEnabled = false;
 	bool WatchCommandServiceEnabled = false;
@@ -240,11 +241,17 @@ inline std::shared_ptr<const CapabilitySnapshot> BuildCoreCapabilities(
 		{"engine.property_codec", "engine.type_snapshot", "objects.snapshot",
 			"game_thread.executor", "functions.handles"});
 	builder.Define(
-		"call.batch",
-		false,
+		"call.batch.jobs",
+		probes.FunctionCallBatchCommandServiceEnabled,
 		"CALL_BATCH_ADAPTER_NOT_READY",
-		"The bounded batch coordinator has no adapter to the exact single-call path",
-		{"call.invoke"});
+		"No bounded batch coordinator with an owned exact-call adapter is registered",
+		{"engine.core"});
+	builder.Define(
+		"call.batch",
+		probes.FunctionCallBatchCommandServiceEnabled,
+		"CALL_BATCH_ADAPTER_NOT_READY",
+		"The bounded batch coordinator has no owned adapter to the exact single-call path",
+		{"call.batch.jobs", "call.invoke"});
 	builder.Define(
 		"call.static",
 		false,

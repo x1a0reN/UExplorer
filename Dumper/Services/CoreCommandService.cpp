@@ -4,6 +4,7 @@
 #include "Runtime/ObjectSnapshotTypeCandidateSource.h"
 #include "BlueprintCommandService.h"
 #include "DumpCommandService.h"
+#include "FunctionCallBatchCommandService.h"
 #include "FunctionCallCommandService.h"
 #include "HookCommandService.h"
 #include "MemoryCommandService.h"
@@ -649,7 +650,8 @@ CoreCommandService::CoreCommandService(
 	Runtime::IBlueprintBytecodeCaptureSource* blueprintCaptureSource,
 	const Runtime::IBlueprintBytecodeProfileSource* blueprintProfileSource,
 	HookCommandService* hookCommandService,
-	DumpCommandService* dumpCommandService)
+	DumpCommandService* dumpCommandService,
+	FunctionCallBatchCommandService* functionCallBatchCommandService)
 	: m_Runtime(runtime),
 	  m_GameThread(gameThread),
 	  m_Engine(engine),
@@ -660,7 +662,8 @@ CoreCommandService::CoreCommandService(
 	  m_BlueprintCaptureSource(blueprintCaptureSource),
 	  m_BlueprintProfileSource(blueprintProfileSource),
 	  m_HookCommandService(hookCommandService),
-	  m_DumpCommandService(dumpCommandService)
+	  m_DumpCommandService(dumpCommandService),
+	  m_FunctionCallBatchCommandService(functionCallBatchCommandService)
 {
 	const Runtime::CoreRuntimeSnapshot snapshot = m_Runtime.Snapshot();
 	m_SessionId = snapshot.SessionId;
@@ -680,7 +683,9 @@ bool CoreCommandService::IsConfigured() const noexcept
 		&& (!m_TypeSource
 			|| m_TypeSource->ContextGeneration() == m_ContextGeneration)
 		&& (!m_WatchScheduler || m_WatchScheduler->IsConfigured())
-		&& (!m_HookCommandService || m_HookCommandService->IsConfigured());
+		&& (!m_HookCommandService || m_HookCommandService->IsConfigured())
+		&& (!m_FunctionCallBatchCommandService
+			|| m_FunctionCallBatchCommandService->IsConfigured());
 }
 
 CoreCommandResponse CoreCommandService::Execute(
@@ -747,6 +752,8 @@ CoreCommandResponse CoreCommandService::Execute(
 			return ExecuteObjectPropertyRead(request, onGameThreadQueued);
 		if (request.Operation == kFunctionCallInvoke)
 			return ExecuteFunctionCall(request, onGameThreadQueued);
+		if (FunctionCallBatchCommandService::Handles(request.Operation))
+			return ExecuteFunctionCallBatch(request);
 		if (request.Operation == kWorldActorTransformGet)
 			return ExecuteWorldTransformRead(request, onGameThreadQueued);
 		if (request.Operation == kWorldActorTransformUpdate)
@@ -1015,6 +1022,143 @@ CoreCommandResponse CoreCommandService::ExecuteFunctionCall(
 			timing);
 	}
 	return Success(request, std::move(result.Data), timing);
+}
+
+CoreCommandResponse CoreCommandService::ExecuteFunctionCallBatch(
+	const CoreCommandRequest& request)
+{
+	const auto started = std::chrono::steady_clock::now();
+	const auto timing = [&started]() noexcept {
+		return CoreCommandTiming{.ExecuteUs = ElapsedMicroseconds(started)};
+	};
+	std::string admissionError;
+	auto lease = m_Runtime.TryAcquireRequest(&admissionError);
+	if (!lease)
+	{
+		return Failure(
+			request,
+			admissionError.empty() ? "CORE_NOT_READY" : admissionError,
+			"CoreRuntime is not accepting call batch commands",
+			json::object(),
+			timing());
+	}
+
+	const char* capabilityName = request.Operation == "call.batch"
+		? "call.batch"
+		: "call.batch.jobs";
+	const Runtime::CapabilityStatus* capability = lease->Capabilities()
+		? lease->Capabilities()->Find(capabilityName)
+		: nullptr;
+	if (!capability || !capability->Available)
+	{
+		return Failure(
+			request,
+			capability && !capability->ReasonCode.empty()
+				? capability->ReasonCode
+				: "CALL_BATCH_CAPABILITY_UNAVAILABLE",
+			capability && !capability->Reason.empty()
+				? capability->Reason
+				: "The bounded exact-call batch coordinator is unavailable",
+			{{"capability", capabilityName}},
+			timing());
+	}
+	if (!m_FunctionCallBatchCommandService
+		|| !m_FunctionCallBatchCommandService->IsConfigured())
+	{
+		return Failure(
+			request,
+			"CALL_BATCH_ADAPTER_NOT_READY",
+			"No configured coordinator with an owned exact-call adapter is registered",
+			{{"capability", capabilityName}},
+			timing());
+	}
+
+	const auto unsignedField = [&request](const char* key)
+		-> std::optional<std::uint64_t> {
+		if (!request.Data.is_object() || !request.Data.contains(key))
+			return std::nullopt;
+		const json& value = request.Data.at(key);
+		if (value.is_number_unsigned())
+		{
+			const std::uint64_t parsed = value.get<std::uint64_t>();
+			return parsed > 0 && parsed <= 9'007'199'254'740'991ULL
+				? std::optional<std::uint64_t>(parsed)
+				: std::nullopt;
+		}
+		if (!value.is_number_integer())
+			return std::nullopt;
+		const std::int64_t parsed = value.get<std::int64_t>();
+		return parsed > 0
+			? std::optional<std::uint64_t>(static_cast<std::uint64_t>(parsed))
+			: std::nullopt;
+	};
+	const bool hasSession = request.Data.is_object()
+		&& request.Data.contains("session_id")
+		&& request.Data.at("session_id").is_string();
+	const auto contextGeneration = unsignedField("context_generation");
+	if (hasSession
+		&& request.Data.at("session_id").get_ref<const std::string&>() != m_SessionId)
+	{
+		return Failure(
+			request,
+			"CALL_BATCH_SESSION_MISMATCH",
+			"The requested batch scope does not match the active Core session",
+			{{"active_session_id", m_SessionId}},
+			timing());
+	}
+	if (contextGeneration
+		&& (!lease->Context()
+			|| *contextGeneration != lease->Context()->Generation()))
+	{
+		return Failure(
+			request,
+			"CALL_BATCH_CONTEXT_GENERATION_MISMATCH",
+			"The requested batch scope does not match the active Core context generation",
+			{{"active_context_generation", lease->Context()
+				? json(lease->Context()->Generation())
+				: json(nullptr)}},
+			timing());
+	}
+
+	if (request.Operation == "call.batch")
+	{
+		const auto objects = m_Engine.Snapshots().Current();
+		const auto types = m_Engine.Types().Current();
+		const auto objectGeneration = unsignedField("object_snapshot_generation");
+		const auto typeGeneration = unsignedField("type_snapshot_generation");
+		if (hasSession && contextGeneration && objectGeneration && typeGeneration
+			&& (!objects
+				|| !types
+				|| *objectGeneration != objects->Generation
+				|| *typeGeneration != types->Generation()
+				|| types->ObjectSnapshotGeneration() != objects->Generation))
+		{
+			return Failure(
+				request,
+				"CALL_BATCH_SCOPE_STALE",
+				"New batches must bind the current immutable object/type generation",
+				{{"active_object_snapshot_generation", objects
+					? json(objects->Generation)
+					: json(nullptr)},
+				 {"active_type_snapshot_generation", types
+					? json(types->Generation())
+					: json(nullptr)}},
+				timing());
+		}
+	}
+
+	FunctionCallBatchCommandResult result =
+		m_FunctionCallBatchCommandService->Execute(request.Operation, request.Data);
+	if (!result.Ok())
+	{
+		return Failure(
+			request,
+			result.Error ? std::move(result.Error->Code) : "CALL_BATCH_COMMAND_FAILED",
+			result.Error ? std::move(result.Error->Message) : "Call batch command failed",
+			result.Error ? std::move(result.Error->Details) : json::object(),
+			timing());
+	}
+	return Success(request, std::move(result.Data), timing());
 }
 
 CoreCommandResponse CoreCommandService::ExecuteWorldTransformRead(

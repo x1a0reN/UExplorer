@@ -15,6 +15,7 @@
 #include "Runtime/EngineContextCapture.h"
 #include "Runtime/EngineFacade.h"
 #include "Runtime/EngineVersionProbe.h"
+#include "Runtime/FunctionCallBatchCoordinator.h"
 #include "Runtime/GameThreadExecutor.h"
 #include "Runtime/GameThreadFrameScheduler.h"
 #include "Runtime/HookEventCollector.h"
@@ -29,6 +30,7 @@
 #include "Services/CoreCommandServiceAccess.h"
 #include "Services/CoreStatusDiagnostics.h"
 #include "Services/DumpCommandService.h"
+#include "Services/FunctionCallBatchCommandService.h"
 #include "Services/HookCommandService.h"
 #include "Services/WatchCommandService.h"
 #include "Settings.h"
@@ -46,6 +48,14 @@ static std::unique_ptr<UExplorer::Runtime::ObjectSnapshotReflectionCandidateSour
 static std::unique_ptr<UExplorer::Runtime::ObjectSnapshotTypeCandidateSource>
 	g_TypeSource;
 static std::unique_ptr<UExplorer::Services::CoreCommandService> g_CommandService;
+static std::shared_ptr<UExplorer::Services::FunctionCallBatchExactInvokeAdapter>
+	g_CallBatchAdapter;
+static std::shared_ptr<UExplorer::Services::FunctionCallBatchCommandWorker>
+	g_CallBatchWorker;
+static std::unique_ptr<UExplorer::Runtime::FunctionCallBatchCoordinator>
+	g_CallBatchCoordinator;
+static std::unique_ptr<UExplorer::Services::FunctionCallBatchCommandService>
+	g_CallBatchCommandService;
 static std::unique_ptr<UExplorer::Services::ObjectPropertyWatchSampleSource> g_WatchSource;
 static std::unique_ptr<UExplorer::Runtime::WatchScheduler> g_WatchScheduler;
 static std::unique_ptr<UExplorer::Runtime::HookEventCollector> g_HookCollector;
@@ -99,6 +109,8 @@ namespace
 			: nullptr;
 		probes.ObjectPropertyServiceEnabled = true;
 		probes.FunctionCallServiceEnabled = true;
+		probes.FunctionCallBatchCommandServiceEnabled = g_CallBatchCommandService
+			&& g_CallBatchCommandService->IsConfigured();
 		probes.MemoryReadCommandServiceEnabled = true;
 		probes.MemoryWriteCommandServiceEnabled = true;
 		probes.WatchCommandServiceEnabled = g_WatchScheduler
@@ -687,6 +699,19 @@ namespace
 			FreeConsole();
 			ExitThread(1);
 		}
+		if (g_CallBatchCoordinator
+			&& !g_CallBatchCoordinator->StopAndDrain(
+				std::chrono::milliseconds(5000)).Ok())
+		{
+			g_Runtime.RecordShutdownFailure(
+				"CALL_BATCH_INITIALIZATION_STOP_TIMEOUT",
+				"Call batch worker did not drain after initialization failed");
+			std::cerr << "[UExplorer] Call batch worker did not drain; DLL remains loaded.\n";
+			if (consoleFile)
+				fclose(consoleFile);
+			FreeConsole();
+			ExitThread(1);
+		}
 		if (!g_Runtime.WaitForRequests(std::chrono::milliseconds(5000)))
 		{
 			g_Runtime.RecordShutdownFailure(
@@ -724,6 +749,10 @@ namespace
 		}
 		g_PostRenderHook.reset();
 		g_CommandService.reset();
+		g_CallBatchCommandService.reset();
+		g_CallBatchCoordinator.reset();
+		g_CallBatchWorker.reset();
+		g_CallBatchAdapter.reset();
 		g_HookCommandService.reset();
 		if (g_HookCollector
 			&& !g_HookCollector->StopAndDrain(std::chrono::milliseconds(5000)).Ok())
@@ -926,6 +955,29 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 		// Keep the strict service boundary present, but fail every operation until an owned worker exists.
 		g_DumpCommandService = std::make_unique<UExplorer::Services::DumpCommandService>(
 			nullptr);
+		g_CallBatchAdapter = std::make_shared<
+			UExplorer::Services::FunctionCallBatchExactInvokeAdapter>(
+				g_Runtime,
+				*g_EngineFacade,
+				UExplorer::Runtime::GetGameThreadExecutor());
+		if (!g_CallBatchAdapter->IsConfigured())
+			throw std::runtime_error("Call batch exact-call adapter rejected the runtime generation");
+		g_CallBatchWorker = std::make_shared<
+			UExplorer::Services::FunctionCallBatchCommandWorker>(g_CallBatchAdapter);
+		if (!g_CallBatchWorker->IsConfigured())
+			throw std::runtime_error("Call batch worker did not retain its exact-call adapter");
+		g_CallBatchCoordinator = std::make_unique<
+			UExplorer::Runtime::FunctionCallBatchCoordinator>(
+				runtimeSnapshot.SessionId,
+				runtimeSnapshot.Context->Generation(),
+				g_CallBatchWorker);
+		if (!g_CallBatchCoordinator->IsConfigured())
+			throw std::runtime_error("Call batch coordinator rejected the bounded worker");
+		g_CallBatchCommandService = std::make_unique<
+			UExplorer::Services::FunctionCallBatchCommandService>(
+				g_CallBatchCoordinator.get());
+		if (!g_CallBatchCommandService->IsConfigured())
+			throw std::runtime_error("Call batch command service rejected the owned coordinator");
 		g_CommandService = std::make_unique<UExplorer::Services::CoreCommandService>(
 			g_Runtime,
 			UExplorer::Runtime::GetGameThreadExecutor(),
@@ -937,7 +989,8 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 			nullptr,
 			nullptr,
 			g_HookCommandService.get(),
-			g_DumpCommandService.get());
+			g_DumpCommandService.get(),
+			g_CallBatchCommandService.get());
 		if (!g_CommandService->IsConfigured())
 			throw std::runtime_error("Core command service rejected the runtime session/context");
 		UExplorer::Services::SetCoreCommandService(g_CommandService.get());
@@ -1118,6 +1171,7 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 	g_Runtime.BeginStopping();
 	UExplorer::Services::SetCoreCommandService(nullptr);
 	bool pipeStopped = true;
+	bool callBatchStopped = true;
 	bool hooksStopped = true;
 	bool worldFrameStopped = true;
 	bool watchFrameStopped = true;
@@ -1133,7 +1187,17 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 			|| g_PipeServer->Stop(std::chrono::milliseconds(5000));
 		return pipeStopped;
 	});
+	shutdown.AddStage("call_batch", [&] {
+		if (!pipeStopped)
+			return false;
+		callBatchStopped = !g_CallBatchCoordinator
+			|| g_CallBatchCoordinator->StopAndDrain(
+				std::chrono::milliseconds(5000)).Ok();
+		return callBatchStopped;
+	});
 	shutdown.AddStage("runtime_requests", [&] {
+		if (!pipeStopped || !callBatchStopped)
+			return false;
 		requestsDrained = g_Runtime.WaitForRequests(std::chrono::milliseconds(5000));
 		return requestsDrained;
 	});
@@ -1219,6 +1283,7 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 	});
 	shutdown.AddStage("engine_facade", [&] {
 		return pipeStopped
+			&& callBatchStopped
 			&& requestsDrained
 			&& worldFrameStopped
 			&& watchFrameStopped
@@ -1249,6 +1314,10 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 		return 1;
 	}
 	g_CommandService.reset();
+	g_CallBatchCommandService.reset();
+	g_CallBatchCoordinator.reset();
+	g_CallBatchWorker.reset();
+	g_CallBatchAdapter.reset();
 	g_HookCommandService.reset();
 	g_HookCollector.reset();
 	g_DumpCommandService.reset();
