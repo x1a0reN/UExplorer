@@ -35,6 +35,7 @@ struct RuntimeProbes
 	bool MemoryReadCommandServiceEnabled = false;
 	bool MemoryWriteCommandServiceEnabled = false;
 	bool WatchCommandServiceEnabled = false;
+	bool DomainEventPumpEnabled = false;
 	bool BlueprintBytecodeCaptureEnabled = false;
 	bool BlueprintBytecodeProfileEnabled = false;
 	bool HookCommandServiceEnabled = false;
@@ -230,6 +231,20 @@ inline std::shared_ptr<const CapabilitySnapshot> BuildCoreCapabilities(
 		"The bounded property-watch scheduler is not registered",
 		{"objects.properties", "objects.snapshot", "engine.type_snapshot", "game_thread.executor"});
 	builder.Define(
+		"watch.events.push",
+		probes.WatchCommandServiceEnabled && probes.DomainEventPumpEnabled,
+		!probes.WatchCommandServiceEnabled
+			? "WATCH_COMMAND_SERVICE_NOT_READY"
+			: (!probes.NamedPipeListening
+				? "PIPE_LISTENER_NOT_READY"
+				: "DOMAIN_EVENT_PUMP_NOT_READY"),
+		!probes.WatchCommandServiceEnabled
+			? "The bounded property-watch scheduler is not registered"
+			: (!probes.NamedPipeListening
+				? "The PID-scoped Named Pipe listener is not active"
+				: "The owned Watch event publisher is not running"),
+		{"watch.properties", "transport.named_pipe"});
+	builder.Define(
 		"call.invoke",
 		probes.FunctionCallServiceEnabled,
 		"FUNCTION_CALL_SERVICE_NOT_READY",
@@ -300,6 +315,22 @@ inline std::shared_ptr<const CapabilitySnapshot> BuildCoreCapabilities(
 			? "The bounded hook registry and collector are not registered"
 			: "The ProcessEvent producer lacks complete current type-generation vtable coverage",
 		{"engine.process_event", "engine.type_snapshot", "functions.handles"});
+	builder.Define(
+		"hook.events.push",
+		probes.HookCommandServiceEnabled
+			&& probes.HookProducerInstalled
+			&& probes.DomainEventPumpEnabled,
+		!probes.HookCommandServiceEnabled || !probes.HookProducerInstalled
+			? "HOOK_PRODUCER_NOT_READY"
+			: (!probes.NamedPipeListening
+				? "PIPE_LISTENER_NOT_READY"
+				: "DOMAIN_EVENT_PUMP_NOT_READY"),
+		!probes.HookCommandServiceEnabled || !probes.HookProducerInstalled
+			? "The ProcessEvent producer lacks complete current type-generation coverage"
+			: (!probes.NamedPipeListening
+				? "The PID-scoped Named Pipe listener is not active"
+				: "The owned Hook event publisher is not running"),
+		{"hook.monitor", "transport.named_pipe"});
 	builder.Define(
 		"blueprint.bytecode",
 		probes.BlueprintBytecodeCaptureEnabled,

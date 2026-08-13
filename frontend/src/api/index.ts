@@ -56,6 +56,77 @@ export interface HostSessionEvent {
   host_dropped_before: number;
 }
 
+export interface WatchPushEventData {
+  watch_id: string;
+  id: number;
+  source_sequence: number;
+  captured_at_monotonic_us: number;
+  value: WatchValue | null;
+  value_omitted: boolean;
+  value_omission_code?: string;
+  reason_code: string | null;
+  reason: string | null;
+  pull_dropped_before: number;
+  pull_coalesced_before: number;
+  push_dropped_before: number;
+  push_coalesced_before: number;
+  publisher_dropped_before: number;
+}
+
+export interface HookPushEventData {
+  hook_name: string;
+  hook_id: string;
+  id: number;
+  function_path: string;
+  source_sequence: number;
+  configuration_generation: number;
+  source: string;
+  correlation: number;
+  coalesced_before: number;
+  drained_at_monotonic_us: number;
+  capture: { mode: 'fixed_metadata' | 'preencoded_payload' };
+  payload: { encoding: 'hex'; size: number; data: string } | null;
+  payload_omitted: boolean;
+  payload_omission_code?: string;
+  retained_log_dropped_before: number;
+  collector_overflow_dropped_before: number;
+  collector_oversize_dropped_before: number;
+  collector_contention_dropped_before: number;
+  push_dropped_before: number;
+  publisher_dropped_before: number;
+}
+
+export function isWatchPushEventData(value: unknown): value is WatchPushEventData {
+  if (!value || typeof value !== 'object') return false;
+  const data = value as Record<string, unknown>;
+  return typeof data.watch_id === 'string'
+    && typeof data.id === 'number' && Number.isSafeInteger(data.id) && data.id > 0
+    && typeof data.source_sequence === 'number'
+    && Number.isSafeInteger(data.source_sequence) && data.source_sequence > 0
+    && typeof data.captured_at_monotonic_us === 'number'
+    && Number.isSafeInteger(data.captured_at_monotonic_us)
+    && typeof data.push_dropped_before === 'number'
+    && Number.isSafeInteger(data.push_dropped_before) && data.push_dropped_before >= 0
+    && (data.value === null || (typeof data.value === 'object' && data.value !== null))
+    && typeof data.value_omitted === 'boolean';
+}
+
+export function isHookPushEventData(value: unknown): value is HookPushEventData {
+  if (!value || typeof value !== 'object') return false;
+  const data = value as Record<string, unknown>;
+  return typeof data.hook_name === 'string'
+    && typeof data.hook_id === 'string'
+    && typeof data.id === 'number' && Number.isSafeInteger(data.id) && data.id > 0
+    && typeof data.source_sequence === 'number'
+    && Number.isSafeInteger(data.source_sequence) && data.source_sequence > 0
+    && typeof data.configuration_generation === 'number'
+    && Number.isSafeInteger(data.configuration_generation)
+    && typeof data.function_path === 'string'
+    && typeof data.source === 'string'
+    && typeof data.correlation === 'number' && Number.isSafeInteger(data.correlation)
+    && typeof data.payload_omitted === 'boolean';
+}
+
 export interface SessionEventFilter {
   kinds?: string[];
   watch_ids?: string[];
@@ -858,6 +929,9 @@ export interface HookListResponse {
     unmatched_event_total: number;
     policy_rejected_event_total: number;
     drain_failure_total: number;
+    pending_push_event_count: number;
+    pending_push_event_bytes: number;
+    push_dropped_total: number;
   };
 }
 
@@ -877,6 +951,8 @@ export interface HookLogEntry {
   drained_at_monotonic_us: number;
   function_path: string;
   payload: { encoding: 'hex'; size: number; data: string };
+  push_payload_omitted?: boolean;
+  push_payload_omission_code?: string;
 }
 
 export interface HookLogResponse {

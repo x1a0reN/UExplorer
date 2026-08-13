@@ -17,7 +17,9 @@ fails at compile time; there is no 32-bit runtime capability or fallback path.
 These assets are available for development, but none changes the support rows above:
 
 - The current R5 code checkpoint adds strict Memory commands, a bounded Watch scheduler
-  with pinned immutable subscription bindings and explicit pull drain, descriptor-proven
+  with pinned immutable subscription bindings, explicit pull drain, and an independent
+  bounded push copy drained outside the game thread through Named Pipe/Host/Tauri,
+  descriptor-proven
   enum codecs and an owned destructor journal, generation-bound raw Blueprint Script
   capture plus explicit-profile bounded disassembly, generation-covered ProcessEvent Hook
   production ownership, a single-active immutable-snapshot Dump worker, and
@@ -27,8 +29,9 @@ These assets are available for development, but none changes the support rows ab
   Dumpspace/IDA artifacts through structural consumers, no-replace commit, size/SHA-256
   verification, and a final manifest. The SDK artifact is an opaque exact-layout header,
   not a complete typed Dumper-7 SDK. It has no target-process evidence for any of them. Production
-  UEnum entry-table and Blueprint opcode/operand profile witnesses, Hook parameter/push and
-  target restore/rate fixtures, Host dump-job reload persistence, real target/external
+  UEnum entry-table and Blueprint opcode/operand profile witnesses, Hook parameter
+  encoding, Watch/Hook reconnect/slow-consumer/target restore/rate fixtures, Host
+  dump-job reload persistence, real target/external
   semantic consumers for all four artifact formats, and a real batch ProcessEvent fixture are still missing, so no
   profile support claim follows from these source changes.
 
@@ -187,5 +190,5 @@ The R4 desktop transport boundary is verified independently of an Unreal profile
   load, rejection, Pipe handshake, and Core Ready stages.
 
 These fixtures prove the process and transport boundary only. They do not validate UE
-object layouts, GC behavior, ProcessEvent, Watch push/Hook target behavior, generator semantics,
+object layouts, GC behavior, ProcessEvent, Watch/Hook push target behavior, generator semantics,
 or clean unload in a supported engine, so every engine row above remains `Not supported`.

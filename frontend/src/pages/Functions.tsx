@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Search, Filter, TerminalSquare, Play, Info, List, History, RefreshCw, Cpu } from 'lucide-react';
 import { t } from '../i18n';
 import api, {
+  isHookPushEventData,
   type FunctionCallArgument,
   type FunctionDetail,
   type HookItem,
@@ -195,9 +196,40 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
       if (disposed || !status.success || !status.data) return;
       const subscription = await api.subscribeSessionEvents(status.data.pid, {
         onEvent: ({ event }) => {
-          if (!event.kind.startsWith('hook.')) return;
-          void refreshHookLog();
-          void refreshHooks();
+          if (!event.kind.startsWith('hook.') || !isHookPushEventData(event.data)) return;
+          const data = event.data;
+          setHooks((current) => current.map((hook) => {
+            if (hook.id !== data.id || data.source_sequence <= hook.last_event_sequence) return hook;
+            return {
+              ...hook,
+              hit_count: event.kind === 'hook.process_event_enter'
+                ? hook.hit_count + 1 : hook.hit_count,
+              last_event_sequence: data.source_sequence,
+              last_correlation: data.correlation,
+              log_count: Math.min(hook.log_count + 1, 128),
+              log_drop_count: data.retained_log_dropped_before,
+            };
+          }));
+          if (data.id === activeHookId) {
+            const entry: HookLogEntry = {
+              sequence: data.source_sequence,
+              configuration_generation: data.configuration_generation,
+              kind: event.kind.slice('hook.'.length) as HookLogEntry['kind'],
+              source: data.source,
+              subject: data.id,
+              correlation: data.correlation,
+              coalesced_before: data.coalesced_before,
+              drained_at_monotonic_us: data.drained_at_monotonic_us,
+              function_path: data.function_path,
+              payload: data.payload ?? { encoding: 'hex', size: 0, data: '' },
+              push_payload_omitted: data.payload_omitted,
+              push_payload_omission_code: data.payload_omission_code,
+            };
+            setHookLog((current) => [
+              entry,
+              ...current.filter((item) => item.sequence !== entry.sequence),
+            ].slice(0, 1000));
+          }
         },
       });
       if (disposed) {
@@ -210,7 +242,7 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
       disposed = true;
       if (unsubscribe) void unsubscribe();
     };
-  }, [activeTab, refreshHookLog, refreshHooks, viewMode]);
+  }, [activeHookId, activeTab, refreshHookLog, refreshHooks, viewMode]);
 
   const loadFunctions = useCallback(async () => {
     setListLoading(true);
@@ -752,6 +784,11 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
                     <div key={entry.sequence} className="text-xs font-mono text-text-high border-b border-border-subtle pb-1.5 pt-1">
                       <div className="text-text-low/60">#{entry.sequence} · {entry.drained_at_monotonic_us} us</div>
                       <div className="text-primary mt-0.5">{entry.function_path}</div>
+                      {entry.push_payload_omitted && (
+                        <div className="text-accent-yellow mt-0.5">
+                          {entry.push_payload_omission_code ?? 'HOOK_PUSH_PAYLOAD_OMITTED'}
+                        </div>
+                      )}
                     </div>
                   ))}
                   {pagedHookLogs.length === 0 && <div className="text-text-low text-xs font-display text-center py-4">{t('No hook logs')}</div>}
@@ -1000,6 +1037,11 @@ export default function Functions({ viewMode = 'function', onViewModeChange }: F
                           <div key={entry.sequence} className="text-xs font-mono text-text-high border-b border-border-subtle pb-1.5 pt-1">
                             <div className="text-text-low/60">#{entry.sequence} · {entry.drained_at_monotonic_us} us</div>
                             <div className="text-primary mt-0.5">{entry.function_path}</div>
+                            {entry.push_payload_omitted && (
+                              <div className="text-accent-yellow mt-0.5">
+                                {entry.push_payload_omission_code ?? 'HOOK_PUSH_PAYLOAD_OMITTED'}
+                              </div>
+                            )}
                           </div>
                         ))}
                         {hookLog.length === 0 && <div className="text-text-low text-xs font-display text-center py-4">{t('No hook logs')}</div>}

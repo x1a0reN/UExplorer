@@ -25,7 +25,7 @@ UExplorer 是一个面向 Unreal Engine 的 **SDK Dump + 实时游戏内省工�
 └──────────────────────────────────────────────┘
 ```
 
-当前分支已完成 R4 原子通信切换并继续 R5 领域实现。唯一桌面主链路仍是 React -> Tauri `domain_request` -> Rust `DomainService` -> PID-scoped Named Pipe -> `CoreCommandService`。除既有 Object/Type/property/call/World 与 stored/computed transform 外，当前代码检查点已加入 strict Memory、owned-binding Watch pull、descriptor-proven enum/destructor journal、generation-bound Blueprint raw Script capture、explicit-profile bounded disassembly、单字段 reflected World transform mutation、generation-covered ProcessEvent Hook producer、immutable snapshot Dump worker 和端到端 call.batch。World mutation 只开放 world/relative scale 和 world rotation；其余字段稳定拒绝。call.batch 由单 active coordinator 串行复用 exact single-call adapter；Hook 目前只发布 fixed metadata，仍缺参数编码与 Pipe/Tauri push；Dump 已有四格式 bounded generator/consumer，但仍缺 Host reload persistence 和真实目标 artifact fixture；Blueprint decompile 缺 exact opcode/operand profile，生产 UEnum entry table 也未见证。`D:\Steam\steamapps\common\Wandering Sword` 仍没有可启动游戏 `.exe`，所有新增路径都只有代码/合成边界证据，所有 profile 保持 `Not supported`。
+当前分支已完成 R4 原子通信切换并继续 R5 领域实现。唯一桌面主链路仍是 React -> Tauri `domain_request` -> Rust `DomainService` -> PID-scoped Named Pipe -> `CoreCommandService`。除既有 Object/Type/property/call/World 与 stored/computed transform 外，当前代码检查点已加入 strict Memory、owned-binding Watch、descriptor-proven enum/destructor journal、generation-bound Blueprint raw Script capture、explicit-profile bounded disassembly、单字段 reflected World transform mutation、generation-covered ProcessEvent Hook producer、immutable snapshot Dump worker、端到端 call.batch，以及独立 Watch/Hook push ring -> owned DomainEventPump -> Named Pipe Event -> Host EventHub/Tauri Channel -> React 增量消费链。World mutation 只开放 world/relative scale 和 world rotation；其余字段稳定拒绝。call.batch 由单 active coordinator 串行复用 exact single-call adapter；Hook 目前只发布 fixed metadata，仍缺参数编码；Dump 已有四格式 bounded generator/consumer，但仍缺 Host reload persistence 和真实目标 artifact fixture；Blueprint decompile 缺 exact opcode/operand profile，生产 UEnum entry table 也未见证。`D:\Steam\steamapps\common\Wandering Sword` 仍没有可启动游戏 `.exe`，所有新增路径都只有代码/合成边界证据，所有 profile 保持 `Not supported`。
 
 ---
 
@@ -100,6 +100,7 @@ UExplorer/
 │   │   ├── BlueprintCommandService.* #   exact function/generation bytecode/decompile gate
 │   │   ├── HookCommandService.*      #   exact subscription/live admission/immutable enabled state/log
 │   │   ├── ProcessEventHookOwner.*   #   generation-covered CDO vtable patch、bounded callback、restore/drain
+│   │   ├── DomainEventPump.*         #   Watch/Hook 独立 push ring 的 worker-side JSON/Pipe publisher
 │   │   ├── DumpCommandService.*      #   strict start/list/get/cancel 与 retained-scope query
 │   │   ├── SnapshotDumpWorker.*      #   immutable snapshot 四格式 bounded generator/consumer + artifact commit
 │   │   ├── WorldCommandService.*     #   worker-only World inspect/detail/shortcut 与 Actor-bound cursor query
@@ -313,11 +314,12 @@ DllMain(DLL_PROCESS_ATTACH)
        └─ [Host Shutdown RPC 或当前 legacy F6 触发退出]
              ├─ Stop Named Pipe / settle requests
              ├─ Cancel and drain call-batch / immutable Dump workers
-             ├─ Restore ProcessEvent slots / drain callbacks / stop collector
-            ├─ Restore PostRender Hook
-            ├─ Detach reflection/snapshot clients / FrameScheduler / stop facade
-            ├─ Drain CoreRuntime request leases
-            └─ 安全性可证明时 FreeLibraryAndExitThread()
+             ├─ Restore ProcessEvent slots / drain callbacks / stop Watch + collector
+             ├─ Drain owned DomainEventPump (transport 已关闭时显式计入 publish drop)
+             ├─ Restore PostRender Hook
+             ├─ Detach reflection/snapshot clients / FrameScheduler / stop facade
+             ├─ Drain CoreRuntime request leases
+             └─ 安全性可证明时 FreeLibraryAndExitThread()
 ```
 
 `Off::InitReflection()`、GWorld/GEngine/FText/PropertySizes 探测和

@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Terminal, Binary, Bookmark, Search, ArrowRight, ArrowLeft, RefreshCw, Layers } from 'lucide-react';
 import { t } from '../i18n';
 import api from '../api';
-import type { WatchDrainData, WatchHistoryData, WatchItem, WatchValue } from '../api';
+import { isWatchPushEventData } from '../api';
+import type { WatchDrainData, WatchEvent, WatchHistoryData, WatchItem, WatchValue } from '../api';
 
 const READ_SIZE = 256;
 
@@ -235,6 +236,134 @@ export default function Memory() {
       setWatchListLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    let unsubscribe: (() => Promise<boolean>) | null = null;
+    void api.getStatus().then(async (status) => {
+      if (disposed || !status.success || !status.data) return;
+      const subscription = await api.subscribeSessionEvents(status.data.pid, {
+        filter: {
+          kinds: [
+            'watch.value_changed',
+            'watch.sample_unavailable',
+            'watch.sample_failed',
+            'watch.terminal_stale',
+          ],
+        },
+        onEvent: ({ event, host_dropped_before: hostDroppedBefore }) => {
+          if (!isWatchPushEventData(event.data)) return;
+          const data = event.data;
+          const pushed: WatchEvent = {
+            sequence: data.source_sequence,
+            id: data.id,
+            kind: event.kind.slice('watch.'.length) as WatchEvent['kind'],
+            captured_at_monotonic_us: data.captured_at_monotonic_us,
+            value: data.value,
+            reason_code: data.reason_code,
+            reason: data.reason,
+            drop_count: data.push_dropped_before,
+            coalesce_count: data.push_coalesced_before,
+          };
+          setWatchDrain((current) => ({
+            events: [...(current?.events ?? []), pushed].slice(-32),
+            count: Math.min((current?.events.length ?? 0) + 1, 32),
+            dropped_total: Math.min(
+              Number.MAX_SAFE_INTEGER,
+              data.push_dropped_before
+                + data.publisher_dropped_before
+                + event.dropped_before
+                + hostDroppedBefore,
+            ),
+            coalesced_total: data.push_coalesced_before,
+            more_available: false,
+          }));
+          setWatches((current) => current.map((watch) => {
+            if (watch.id !== data.id) return watch;
+            if (data.source_sequence <= watch.last_change_sequence) return watch;
+            return {
+              ...watch,
+              last_change_sequence: data.source_sequence,
+              last_sampled_at_monotonic_us: data.captured_at_monotonic_us,
+              sample_count: watch.sample_count + 1,
+              failure_count: event.kind === 'watch.sample_failed'
+                || event.kind === 'watch.sample_unavailable'
+                || event.kind === 'watch.terminal_stale'
+                ? watch.failure_count + 1 : watch.failure_count,
+              history_count: data.value ? Math.min(watch.history_count + 1, 128) : watch.history_count,
+              state: event.kind === 'watch.terminal_stale' ? 'terminal' : watch.state,
+              terminal_reason_code: event.kind === 'watch.terminal_stale'
+                ? data.reason_code : watch.terminal_reason_code,
+              terminal_reason: event.kind === 'watch.terminal_stale'
+                ? data.reason : watch.terminal_reason,
+            };
+          }));
+          if (expandedWatchId === data.id) {
+            setWatchSnapshot((current) => {
+              if (!current || current.subscription.id !== data.id) return current;
+              if (data.source_sequence <= current.subscription.last_change_sequence) return current;
+              const terminal = event.kind === 'watch.terminal_stale';
+              const subscription: WatchItem = {
+                ...current.subscription,
+                last_change_sequence: data.source_sequence,
+                last_sampled_at_monotonic_us: data.captured_at_monotonic_us,
+                sample_count: current.subscription.sample_count + 1,
+                failure_count: event.kind === 'watch.sample_failed'
+                  || event.kind === 'watch.sample_unavailable'
+                  || event.kind === 'watch.terminal_stale'
+                  ? current.subscription.failure_count + 1 : current.subscription.failure_count,
+                history_count: data.value
+                  ? current.subscription.history_count + 1 : current.subscription.history_count,
+                state: terminal ? 'terminal' : current.subscription.state,
+                terminal_reason_code: terminal
+                  ? data.reason_code : current.subscription.terminal_reason_code,
+                terminal_reason: terminal
+                  ? data.reason : current.subscription.terminal_reason,
+              };
+              if (!data.value) {
+                return { ...current, subscription };
+              }
+              const history = [
+                ...current.history,
+                {
+                  sequence: data.source_sequence,
+                  captured_at_monotonic_us: data.captured_at_monotonic_us,
+                  value: data.value,
+                },
+              ].slice(-32);
+              const retainedHistoryCount = Math.min(
+                current.subscription.history_count + 1,
+                128,
+              );
+              return {
+                ...current,
+                subscription: {
+                  ...subscription,
+                  history_count: retainedHistoryCount,
+                },
+                last_value: data.value,
+                history,
+                history_returned: history.length,
+                history_total: retainedHistoryCount,
+                history_truncated: current.history_truncated
+                  || retainedHistoryCount > 32
+                  || current.history.length >= 32,
+              };
+            });
+          }
+        },
+      });
+      if (disposed) {
+        void subscription.unsubscribe();
+        return;
+      }
+      unsubscribe = subscription.unsubscribe;
+    }).catch(() => undefined);
+    return () => {
+      disposed = true;
+      if (unsubscribe) void unsubscribe();
+    };
+  }, [expandedWatchId]);
 
   const setWatchEnabled = async (watch: WatchItem) => {
     setWatchError(null);

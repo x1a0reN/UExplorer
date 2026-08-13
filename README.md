@@ -201,7 +201,9 @@ added. A successful build or synthetic fixture does not establish target runtime
   rollback, protection-race detection, and no executable-page fallback.
 - Watch is generation-bound and budgeted, with per-subscription pinned immutable
   bindings, bounded history/events, a visible snapshot/history UI, and explicit
-  `watch.events.drain`; Named Pipe/Tauri push is not implemented.
+  `watch.events.drain`. Independent bounded Watch/Hook push copies are drained by an
+  owned worker outside the game thread/Hook callback and cross Named Pipe Event, Host
+  EventHub, and caller-owned Tauri Channels; React applies typed increments locally.
 - Blueprint raw bytecode capture is now wired through a generation-bound runtime source.
   It is advertised only when `UFunction::Script` passes the high-confidence multi-function
   witness gate and current Object/Type snapshots match; copied streams must retain a stable
@@ -215,8 +217,8 @@ added. A successful build or synthetic fixture does not establish target runtime
   evidence is live-validated on the game thread, unique vtable slots retain their own
   originals, and bounded fixed-metadata enter/exit events reach `HookEventCollector`.
   Capability follows exact current-generation coverage; restore/drain failure blocks
-  unload. Parameter capture and Pipe/Tauri push are not implemented, and no real UE Hook
-  fixture has run.
+  unload. Fixed-metadata enter/exit records now use the bounded push chain above, but
+  parameter capture is not implemented and no real UE Hook fixture has run.
 - Dump start pins the exact immutable EngineContext, ObjectSnapshot, and TypeSnapshot in
   one owned single-active job. Terminal records release those large inputs while retaining
   their admitted scope and bounded events/results, so polling is not coupled to the current

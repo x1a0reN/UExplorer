@@ -32,6 +32,7 @@
 #include "Services/CoreCommandServiceAccess.h"
 #include "Services/CoreStatusDiagnostics.h"
 #include "Services/DumpCommandService.h"
+#include "Services/DomainEventPump.h"
 #include "Services/FunctionCallBatchCommandService.h"
 #include "Services/HookCommandService.h"
 #include "Services/ProcessEventHookOwner.h"
@@ -66,6 +67,7 @@ static std::unique_ptr<UExplorer::Services::ObjectPropertyWatchSampleSource> g_W
 static std::unique_ptr<UExplorer::Runtime::WatchScheduler> g_WatchScheduler;
 static std::unique_ptr<UExplorer::Runtime::HookEventCollector> g_HookCollector;
 static std::unique_ptr<UExplorer::Services::HookCommandService> g_HookCommandService;
+static std::unique_ptr<UExplorer::Services::DomainEventPump> g_DomainEventPump;
 static std::unique_ptr<UExplorer::Services::ProcessEventHookOwner> g_ProcessEventHook;
 static std::shared_ptr<UExplorer::Services::SnapshotDumpWorker> g_DumpWorker;
 static std::unique_ptr<UExplorer::Runtime::DumpJobCoordinator> g_DumpCoordinator;
@@ -130,6 +132,14 @@ namespace
 		probes.WatchCommandServiceEnabled = g_WatchScheduler
 			&& g_WatchScheduler->IsConfigured()
 			&& g_WatchFrameClientAttached;
+		const UExplorer::Services::DomainEventPumpDiagnostics domainEvents =
+			g_DomainEventPump
+				? g_DomainEventPump->Diagnostics()
+				: UExplorer::Services::DomainEventPumpDiagnostics{};
+		probes.DomainEventPumpEnabled = domainEvents.Configured
+			&& domainEvents.Started
+			&& !domainEvents.StopRequested
+			&& !domainEvents.Stopped;
 		probes.HookCommandServiceEnabled = g_HookCommandService
 			&& g_HookCommandService->IsConfigured();
 		const UExplorer::Services::ProcessEventHookDiagnostics hook =
@@ -761,6 +771,18 @@ namespace
 		g_Runtime.MarkFailed(code, message);
 		g_Runtime.BeginStopping();
 		UExplorer::Services::SetCoreCommandService(nullptr);
+		if (g_DomainEventPump
+			&& !g_DomainEventPump->StopAndDrain(std::chrono::milliseconds(5000)).Ok())
+		{
+			g_Runtime.RecordShutdownFailure(
+				"DOMAIN_EVENT_PUMP_INITIALIZATION_STOP_TIMEOUT",
+				"Watch/Hook event publisher did not drain after initialization failed");
+			std::cerr << "[UExplorer] Domain event pump did not drain; DLL remains loaded.\n";
+			if (consoleFile)
+				fclose(consoleFile);
+			FreeConsole();
+			ExitThread(1);
+		}
 		if (g_PipeServer
 			&& !g_PipeServer->Stop(std::chrono::milliseconds(5000)))
 		{
@@ -823,6 +845,7 @@ namespace
 			FreeConsole();
 			ExitThread(1);
 		}
+		g_DomainEventPump.reset();
 		g_PipeServer.reset();
 		if (!DetachFrameScheduling(std::chrono::milliseconds(5000)))
 		{
@@ -855,6 +878,7 @@ namespace
 		g_CallBatchWorker.reset();
 		g_CallBatchAdapter.reset();
 		g_ProcessEventHook.reset();
+		g_DomainEventPump.reset();
 		g_HookCommandService.reset();
 		if (g_HookCollector
 			&& !g_HookCollector->StopAndDrain(std::chrono::milliseconds(5000)).Ok())
@@ -1171,6 +1195,12 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 				diagnostics.LastErrorCode + ": " + diagnostics.LastErrorMessage
 				+ " (native=" + std::to_string(diagnostics.LastNativeError) + ")");
 		}
+		g_DomainEventPump = std::make_unique<UExplorer::Services::DomainEventPump>(
+			*g_WatchScheduler,
+			*g_HookCommandService,
+			*g_PipeServer);
+		if (!g_DomainEventPump->IsConfigured() || !g_DomainEventPump->Start())
+			throw std::runtime_error("Domain event pump rejected the watch/hook/pipe envelope");
 		std::wcerr << L"[UExplorer] Named Pipe bound: " << g_PipeServer->PipeName() << L"\n";
 	}
 	catch (const std::exception& e)
@@ -1333,6 +1363,7 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 	g_Runtime.BeginStopping();
 	UExplorer::Services::SetCoreCommandService(nullptr);
 	bool pipeStopped = true;
+	bool domainEventPumpStopped = true;
 	bool callBatchStopped = true;
 	bool dumpStopped = true;
 	bool blueprintCaptureStopped = true;
@@ -1390,13 +1421,6 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 				std::chrono::milliseconds(5000)).Ok();
 		return processEventHookStopped;
 	});
-	shutdown.AddStage("hook_collector", [&] {
-		if (!pipeStopped || !requestsDrained || !processEventHookStopped)
-			return false;
-		hookCollectorStopped = !g_HookCollector
-			|| g_HookCollector->StopAndDrain(std::chrono::milliseconds(5000)).Ok();
-		return hookCollectorStopped;
-	});
 	shutdown.AddStage("world_frame_client", [&] {
 		if (!pipeStopped || !requestsDrained || !processEventHookStopped)
 			return false;
@@ -1417,6 +1441,26 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 		watchFrameStopped = DetachWatchFrameClient(
 			std::chrono::milliseconds(5000));
 		return watchFrameStopped;
+	});
+	shutdown.AddStage("hook_collector", [&] {
+		if (!pipeStopped || !requestsDrained || !processEventHookStopped || !watchFrameStopped)
+			return false;
+		hookCollectorStopped = !g_HookCollector
+			|| g_HookCollector->StopAndDrain(std::chrono::milliseconds(5000)).Ok();
+		return hookCollectorStopped;
+	});
+	shutdown.AddStage("domain_event_pump", [&] {
+		if (!pipeStopped
+			|| !requestsDrained
+			|| !processEventHookStopped
+			|| !watchFrameStopped
+			|| !hookCollectorStopped)
+		{
+			return false;
+		}
+		domainEventPumpStopped = !g_DomainEventPump
+			|| g_DomainEventPump->StopAndDrain(std::chrono::milliseconds(5000)).Ok();
+		return domainEventPumpStopped;
 	});
 	shutdown.AddStage("type_frame_client", [&] {
 		if (!pipeStopped || !requestsDrained || !processEventHookStopped)
@@ -1484,13 +1528,16 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 			&& snapshotFrameStopped
 			&& frameSchedulerStopped
 			&& hookCollectorStopped
+			&& domainEventPumpStopped
 			&& hooksStopped
 			&& (!g_EngineFacade
 				|| g_EngineFacade->Stop(std::chrono::milliseconds(5000)));
 	});
 	const UExplorer::Runtime::ShutdownReport shutdownReport = shutdown.Run();
 	unloadSafe = unloadSafe && shutdownReport.SafeToUnload;
-	if (pipeStopped)
+	if (domainEventPumpStopped)
+		g_DomainEventPump.reset();
+	if (pipeStopped && domainEventPumpStopped)
 		g_PipeServer.reset();
 	if (hooksStopped)
 		g_PostRenderHook.reset();
@@ -1512,6 +1559,7 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 	g_CallBatchWorker.reset();
 	g_CallBatchAdapter.reset();
 	g_ProcessEventHook.reset();
+	g_DomainEventPump.reset();
 	g_HookCommandService.reset();
 	g_HookCollector.reset();
 	g_DumpCommandService.reset();

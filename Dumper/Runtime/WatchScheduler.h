@@ -182,6 +182,8 @@ struct WatchEvent
 	std::string Reason;
 	std::uint64_t DropCount = 0;
 	std::uint64_t CoalesceCount = 0;
+	std::uint64_t PushDroppedBefore = 0;
+	std::uint64_t PushCoalescedBefore = 0;
 };
 
 struct WatchSchedulerLimits
@@ -247,6 +249,19 @@ struct WatchDrainResult
 	bool Ok() const noexcept { return Error == WatchError::None; }
 };
 
+// The transport queue is independent from the command-side pull queue; a
+// publisher cannot consume events intended for watch.events.drain callers.
+struct WatchPushDrainResult
+{
+	WatchError Error = WatchError::None;
+	std::vector<WatchEvent> Events;
+	std::uint64_t DroppedTotal = 0;
+	std::uint64_t CoalescedTotal = 0;
+	bool MoreAvailable = false;
+
+	bool Ok() const noexcept { return Error == WatchError::None; }
+};
+
 struct WatchSchedulerSnapshot
 {
 	bool Configured = false;
@@ -260,6 +275,10 @@ struct WatchSchedulerSnapshot
 	std::size_t PendingEventBytes = 0;
 	std::uint64_t DroppedEvents = 0;
 	std::uint64_t CoalescedEvents = 0;
+	std::size_t PendingPushEventCount = 0;
+	std::size_t PendingPushEventBytes = 0;
+	std::uint64_t DroppedPushEvents = 0;
+	std::uint64_t CoalescedPushEvents = 0;
 	std::uint64_t LastEventSequence = 0;
 	std::uint64_t PumpCount = 0;
 	std::uint64_t LastPumpDurationUs = 0;
@@ -298,12 +317,15 @@ public:
 	WatchScheduler& operator=(const WatchScheduler&) = delete;
 
 	bool IsConfigured() const noexcept { return m_Configured; }
+	const std::string& SessionId() const noexcept { return m_SessionId; }
+	std::uint64_t ContextGeneration() const noexcept { return m_ContextGeneration; }
 	WatchAddResult Add(WatchSubscriptionSpec spec, bool enabled = true) noexcept;
 	WatchListResult List() const noexcept;
 	WatchMutationResult Enable(WatchId id, bool enabled) noexcept;
 	WatchMutationResult Remove(WatchId id) noexcept;
 	WatchSnapshotResult Snapshot(WatchId id) const noexcept;
 	WatchDrainResult DrainEvents(std::size_t maxEvents) noexcept;
+	WatchPushDrainResult DrainPushEvents(std::size_t maxEvents) noexcept;
 	WatchSchedulerSnapshot Snapshot() const noexcept;
 	IGameThreadFrameClient::PumpResult PumpFrame(std::size_t workBudget) noexcept override;
 	WatchStopResult StopAndDrain(
@@ -333,6 +355,10 @@ private:
 		const std::shared_ptr<const WatchSamplePayload>& value,
 		std::size_t payloadBytes);
 	void AppendEventLocked(WatchEvent event, std::size_t eventBytes, bool coalescible);
+	void AppendPushEventLocked(
+		WatchEvent event,
+		std::size_t eventBytes,
+		bool coalescible);
 	std::uint64_t NextEventSequenceLocked() noexcept;
 	bool HasDueWork(
 		const std::shared_ptr<const EnabledSnapshot>& snapshot,
@@ -350,11 +376,15 @@ private:
 	std::vector<std::shared_ptr<SubscriptionRecord>> m_Subscriptions;
 	std::deque<WatchEvent> m_Events;
 	std::size_t m_PendingEventBytes = 0;
+	std::deque<WatchEvent> m_PushEvents;
+	std::size_t m_PendingPushEventBytes = 0;
 	WatchId m_NextId = 1;
 	std::uint64_t m_NextEventSequence = 1;
 	std::uint64_t m_EnabledSnapshotGeneration = 0;
 	std::uint64_t m_DroppedEvents = 0;
 	std::uint64_t m_CoalescedEvents = 0;
+	std::uint64_t m_DroppedPushEvents = 0;
+	std::uint64_t m_CoalescedPushEvents = 0;
 	std::atomic<bool> m_StopRequested{false};
 	std::atomic<bool> m_Stopped{false};
 	std::atomic_flag m_PumpOwned = ATOMIC_FLAG_INIT;

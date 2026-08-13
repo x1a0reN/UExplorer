@@ -198,7 +198,7 @@ The v1 command registry is explicit. Unknown operations return
 | `memory.typed.read` / `memory.typed.write` | canonical address, strict scalar type, canonical string value for writes | Width/range checked scalar access without JavaScript-number narrowing |
 | `memory.pointer_chain.resolve` | canonical base plus at most 64 signed decimal offsets | Checked pointer dereference/addition with explicit failed step |
 | `watch.add/list/enable/remove/snapshot` | exact object handle/generations/property identity or bounded watch ID query | Generation-bound scheduler state; sampling runs under the shared frame budget |
-| `watch.events.drain` | `{"limit": 1..32}` | Explicit bounded pull; this is not a Pipe Event/Tauri Channel push contract |
+| `watch.events.drain` | `{"limit": 1..32}` | Explicit bounded pull from a queue independent of the Watch Pipe/Tauri push copy |
 | `blueprint.bytecode` | exact FunctionHandle/path and context/Object/Type generations | Bounded Script capture; capability remains unavailable without a published capture witness |
 | `blueprint.decompile` | bytecode identity plus explicit `profile_id` | Fail-closed bounded disassembly; capability remains unavailable without a matching immutable profile |
 | `hook.add/list/enable/remove/log` | exact FunctionHandle/Object/Type generations, fixed capture policy, or bounded subscription ID query | Add/enable=true require current producer coverage; list/log/disable/remove remain available to shrink retained state while coverage is unavailable |
@@ -296,9 +296,14 @@ drain the worker or refuse unload. Host restart/reload persistence is not implem
 none of these contracts is evidence of a successful UE target artifact run.
 
 Memory writes retain a bounded preimage, verify the committed bytes, and report rollback
-and protection-race outcomes. There is no executable/code-write fallback. Watch events
-are currently consumed only through `watch.events.drain`; the existing transport Event
-frame does not imply a Watch producer. Main now publishes `blueprint.bytecode` dynamically
+and protection-race outcomes. There is no executable/code-write fallback. Watch sampling
+forks each bounded event into independent pull and push rings. The owned `DomainEventPump`
+serializes the push copy off the game thread and publishes `watch.value_changed`,
+`watch.sample_unavailable`, `watch.sample_failed`, or `watch.terminal_stale` through the
+Named Pipe Event -> Host EventHub -> caller-owned Tauri Channel chain; source, publisher,
+transport, and Host drop counters remain explicit, while push consumption never drains
+`watch.events.drain`. `watch.events.push` is a status capability key, not a request
+operation. Main publishes `blueprint.bytecode` dynamically
 only when a high-confidence `UFunction::Script` report, current Object/Type generations,
 and the game-thread executor all agree. Capture revalidates the exact FunctionHandle and
 stable Script-array header and requires the copied stream to end in `EX_EndOfScript`.
@@ -309,8 +314,12 @@ Hook commands use the dynamically published `hook.monitor` capability. The relea
 producer installs only after current TypeSnapshot Class/CDO evidence has complete
 game-thread-validated vtable coverage, publishes bounded fixed-metadata enter/exit records,
 and restores every owned slot before collector teardown. `preencoded_payload` is rejected
-until a witnessed parameter encoder exists; there is no legacy Hook fallback or Pipe/Tauri
-push contract. Dump format capabilities require the owned snapshot worker plus the current
+until a witnessed parameter encoder exists. The same owned event worker drains the
+independent Hook push ring and publishes typed `hook.process_event_enter/exit` Events outside
+the callback; collector, retained-log, push-ring, Pipe, and Host loss remain separately
+observable. This fixed-metadata push path is not parameter capture, target validation, or a
+legacy Hook fallback; `hook.events.push` is likewise a status capability key, not a request
+operation. Dump format capabilities require the owned snapshot worker plus the current
 immutable Object/Type inputs needed for a new start; `dump.jobs` independently exposes the
 owned retained-query coordinator.
 `call.batch.jobs` is independently advertised when its coordinator is owned,

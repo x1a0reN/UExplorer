@@ -307,7 +307,11 @@ bool ValidLimits(const HookCommandLimits& limits) noexcept
 		&& limits.MaxLogBytesPerSubscription > 0
 		&& limits.MaxLogBytesPerSubscription <= HookCommandService::kHardMaxLogBytes
 		&& limits.MaxDrainBatch > 0
-		&& limits.MaxDrainBatch <= HookCommandService::kHardMaxDrainBatch;
+		&& limits.MaxDrainBatch <= HookCommandService::kHardMaxDrainBatch
+		&& limits.MaxPendingPushEvents > 0
+		&& limits.MaxPendingPushEvents <= HookCommandService::kHardMaxLogEntries
+		&& limits.MaxPendingPushBytes > 0
+		&& limits.MaxPendingPushBytes <= HookCommandService::kHardMaxLogBytes;
 }
 
 class HookFunctionValidationWork final : public Runtime::IGameThreadWork
@@ -1069,6 +1073,26 @@ HookCommandService::CollectorDrainSummary HookCommandService::DrainCollectorWork
 			record->LastCorrelation = event.Correlation;
 			if (event.Kind == Runtime::HookEventKind::ProcessEventEnter)
 				++record->HitCount;
+			const LogRecord& retained = record->Logs.back();
+			const std::size_t pushBytes = record->Spec.FunctionPath.size()
+				+ retained.Payload.size() + 256;
+			AppendPushEventLocked({
+				.Sequence = retained.Sequence,
+				.ConfigurationGeneration = retained.ConfigurationGeneration,
+				.Kind = retained.Kind,
+				.Source = retained.Source,
+				.SubscriptionId = record->Id,
+				.Correlation = retained.Correlation,
+				.CoalescedBefore = retained.CoalescedBefore,
+				.DrainedAtMonotonicUs = retained.DrainedAtMonotonicUs,
+				.FunctionPath = record->Spec.FunctionPath,
+				.Capture = record->Spec.Capture,
+				.Payload = retained.Payload,
+				.RetainedLogDroppedBefore = record->LogDropCount,
+				.CollectorOverflowDroppedBefore = drained.DroppedOverflowTotal,
+				.CollectorOversizeDroppedBefore = drained.DroppedOversizeTotal,
+				.CollectorContentionDroppedBefore = drained.DroppedContentionTotal
+			}, pushBytes);
 		}
 		return {
 			.Error = HookSubscriptionError::None,
@@ -1089,6 +1113,80 @@ HookCommandService::CollectorDrainSummary HookCommandService::DrainCollectorWork
 	catch (...)
 	{
 		return {.Error = HookSubscriptionError::CollectorDrainFailed};
+	}
+}
+
+void HookCommandService::AppendPushEventLocked(
+	HookPushEvent event,
+	const std::size_t eventBytes) noexcept
+{
+	try
+	{
+		if (eventBytes > m_Limits.MaxPendingPushBytes)
+		{
+			++m_PushEventDropCount;
+			return;
+		}
+		while (!m_PushEvents.empty()
+			&& (m_PushEvents.size() >= m_Limits.MaxPendingPushEvents
+				|| m_PushEventBytes > m_Limits.MaxPendingPushBytes - eventBytes))
+		{
+			const HookPushEvent& oldest = m_PushEvents.front();
+			const std::size_t oldestBytes = oldest.FunctionPath.size()
+				+ oldest.Payload.size() + 256;
+			m_PushEventBytes = oldestBytes <= m_PushEventBytes
+				? m_PushEventBytes - oldestBytes
+				: 0;
+			m_PushEvents.pop_front();
+			++m_PushEventDropCount;
+		}
+		event.QueueDroppedBefore = m_PushEventDropCount;
+		m_PushEvents.push_back(std::move(event));
+		m_PushEventBytes += eventBytes;
+	}
+	catch (...)
+	{
+		++m_PushEventDropCount;
+	}
+}
+
+HookPushDrainResult HookCommandService::DrainPushEvents(const std::size_t maximum) noexcept
+{
+	if (maximum == 0 || maximum > m_Limits.MaxDrainBatch)
+		return {.Error = HookSubscriptionError::InvalidLimit};
+	const CollectorDrainSummary collector = DrainCollectorWorker(maximum);
+	if (collector.Error != HookSubscriptionError::None)
+	{
+		return {
+			.Error = collector.Error,
+			.CollectorError = collector.CollectorError
+		};
+	}
+	try
+	{
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		HookPushDrainResult result;
+		const std::size_t count = (std::min)(maximum, m_PushEvents.size());
+		result.Events.reserve(count);
+		for (std::size_t index = 0; index < count; ++index)
+			result.Events.push_back(m_PushEvents[index]);
+		for (std::size_t index = 0; index < count; ++index)
+		{
+			const HookPushEvent& oldest = m_PushEvents.front();
+			const std::size_t bytes = oldest.FunctionPath.size()
+				+ oldest.Payload.size() + 256;
+			m_PushEventBytes = bytes <= m_PushEventBytes
+				? m_PushEventBytes - bytes
+				: 0;
+			m_PushEvents.pop_front();
+		}
+		result.QueueDroppedTotal = m_PushEventDropCount;
+		result.MoreAvailable = !m_PushEvents.empty() || collector.MoreAvailable;
+		return result;
+	}
+	catch (...)
+	{
+		return {.Error = HookSubscriptionError::AllocationFailed};
 	}
 }
 
@@ -1245,6 +1343,9 @@ HookCommandResult HookCommandService::List(const json& data) noexcept
 		std::uint64_t unmatched = 0;
 		std::uint64_t policyRejected = 0;
 		std::uint64_t drainFailures = 0;
+		std::size_t pendingPushEvents = 0;
+		std::size_t pendingPushBytes = 0;
+		std::uint64_t pushDropped = 0;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			subscriptions.reserve(m_Subscriptions.size());
@@ -1257,6 +1358,9 @@ HookCommandResult HookCommandService::List(const json& data) noexcept
 			unmatched = m_UnmatchedEventCount;
 			policyRejected = m_PolicyRejectedEventCount;
 			drainFailures = m_DrainFailureCount;
+			pendingPushEvents = m_PushEvents.size();
+			pendingPushBytes = m_PushEventBytes;
+			pushDropped = m_PushEventDropCount;
 		}
 		json items = json::array();
 		items.get_ref<json::array_t&>().reserve(subscriptions.size());
@@ -1277,7 +1381,10 @@ HookCommandResult HookCommandService::List(const json& data) noexcept
 				{"coalesced_overflow_total", drain.CoalescedOverflowTotal},
 				{"unmatched_event_total", unmatched},
 				{"policy_rejected_event_total", policyRejected},
-				{"drain_failure_total", drainFailures}
+				{"drain_failure_total", drainFailures},
+				{"pending_push_event_count", pendingPushEvents},
+				{"pending_push_event_bytes", pendingPushBytes},
+				{"push_dropped_total", pushDropped}
 			}}
 		});
 	}

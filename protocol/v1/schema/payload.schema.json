@@ -1706,6 +1706,115 @@
         }
       ]
     },
+    "watchPushEventData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "watch_id", "id", "source_sequence", "captured_at_monotonic_us",
+        "value", "value_omitted", "reason_code", "reason",
+        "pull_dropped_before", "pull_coalesced_before",
+        "push_dropped_before", "push_coalesced_before",
+        "publisher_dropped_before"
+      ],
+      "properties": {
+        "watch_id": { "type": "string", "pattern": "^[1-9][0-9]{0,15}$" },
+        "id": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "source_sequence": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "captured_at_monotonic_us": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "value": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["encoding", "type_name", "canonical_value", "display_value"],
+              "properties": {
+                "encoding": { "const": "uexplorer.property-value.v1.base64" },
+                "type_name": { "type": "string", "maxLength": 4096 },
+                "canonical_value": { "type": "string", "maxLength": 65536 },
+                "display_value": { "type": "string", "maxLength": 16384 }
+              }
+            }
+          ]
+        },
+        "value_omitted": { "type": "boolean" },
+        "value_omission_code": { "const": "WATCH_PUSH_VALUE_TOO_LARGE" },
+        "reason_code": { "oneOf": [{ "type": "null" }, { "type": "string", "maxLength": 1024 }] },
+        "reason": { "oneOf": [{ "type": "null" }, { "type": "string", "maxLength": 4096 }] },
+        "pull_dropped_before": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "pull_coalesced_before": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "push_dropped_before": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "push_coalesced_before": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "publisher_dropped_before": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "value_omitted": { "const": true } }, "required": ["value_omitted"] },
+          "then": { "required": ["value_omission_code"], "properties": { "value": { "type": "null" } } },
+          "else": { "not": { "required": ["value_omission_code"] } }
+        }
+      ]
+    },
+    "hookPushEventData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "hook_name", "hook_id", "id", "function_path", "source_sequence",
+        "configuration_generation", "source", "correlation", "coalesced_before",
+        "drained_at_monotonic_us", "capture", "payload", "payload_omitted",
+        "retained_log_dropped_before", "collector_overflow_dropped_before",
+        "collector_oversize_dropped_before", "collector_contention_dropped_before",
+        "push_dropped_before", "publisher_dropped_before"
+      ],
+      "properties": {
+        "hook_name": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "hook_id": { "type": "string", "pattern": "^[1-9][0-9]{0,15}$" },
+        "id": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "function_path": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "source_sequence": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "configuration_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "source": { "type": "string", "pattern": "^0x[0-9A-F]{1,16}$" },
+        "correlation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "coalesced_before": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "drained_at_monotonic_us": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "capture": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode"],
+          "properties": { "mode": { "enum": ["fixed_metadata", "preencoded_payload"] } }
+        },
+        "payload": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["encoding", "size", "data"],
+              "properties": {
+                "encoding": { "const": "hex" },
+                "size": { "type": "integer", "minimum": 0, "maximum": 512 },
+                "data": { "type": "string", "pattern": "^(?:[0-9A-F]{2}){0,512}$" }
+              }
+            }
+          ]
+        },
+        "payload_omitted": { "type": "boolean" },
+        "payload_omission_code": { "const": "HOOK_PUSH_PAYLOAD_TOO_LARGE" },
+        "retained_log_dropped_before": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "collector_overflow_dropped_before": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "collector_oversize_dropped_before": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "collector_contention_dropped_before": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "push_dropped_before": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "publisher_dropped_before": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "payload_omitted": { "const": true } }, "required": ["payload_omitted"] },
+          "then": { "required": ["payload_omission_code"], "properties": { "payload": { "type": "null" } } },
+          "else": { "not": { "required": ["payload_omission_code"] } }
+        }
+      ]
+    },
     "event": {
       "type": "object",
       "additionalProperties": false,
@@ -1717,7 +1826,37 @@
         "session_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "dropped_before": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
         "data": {}
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "watch.value_changed", "watch.sample_unavailable",
+                  "watch.sample_failed", "watch.terminal_stale"
+                ]
+              }
+            },
+            "required": ["kind"]
+          },
+          "then": { "properties": { "data": { "$ref": "#/$defs/watchPushEventData" } } }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "hook.process_event_enter", "hook.process_event_exit",
+                  "hook.post_render", "hook.diagnostic"
+                ]
+              }
+            },
+            "required": ["kind"]
+          },
+          "then": { "properties": { "data": { "$ref": "#/$defs/hookPushEventData" } } }
+        }
+      ]
     },
     "cancel": {
       "type": "object",

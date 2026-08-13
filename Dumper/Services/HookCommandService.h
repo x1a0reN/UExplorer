@@ -166,12 +166,45 @@ struct HookMutationResult
 	bool Ok() const noexcept { return Error == HookSubscriptionError::None; }
 };
 
+struct HookPushEvent
+{
+	std::uint64_t Sequence = 0;
+	std::uint64_t ConfigurationGeneration = 0;
+	Runtime::HookEventKind Kind = Runtime::HookEventKind::Diagnostic;
+	std::uint64_t Source = 0;
+	HookSubscriptionId SubscriptionId = 0;
+	std::uint64_t Correlation = 0;
+	std::uint64_t CoalescedBefore = 0;
+	std::uint64_t DrainedAtMonotonicUs = 0;
+	std::string FunctionPath;
+	HookCapturePolicy Capture;
+	std::vector<std::byte> Payload;
+	std::uint64_t RetainedLogDroppedBefore = 0;
+	std::uint64_t CollectorOverflowDroppedBefore = 0;
+	std::uint64_t CollectorOversizeDroppedBefore = 0;
+	std::uint64_t CollectorContentionDroppedBefore = 0;
+	std::uint64_t QueueDroppedBefore = 0;
+};
+
+struct HookPushDrainResult
+{
+	HookSubscriptionError Error = HookSubscriptionError::None;
+	Runtime::HookCollectorError CollectorError = Runtime::HookCollectorError::None;
+	std::vector<HookPushEvent> Events;
+	std::uint64_t QueueDroppedTotal = 0;
+	bool MoreAvailable = false;
+
+	bool Ok() const noexcept { return Error == HookSubscriptionError::None; }
+};
+
 struct HookCommandLimits
 {
 	std::size_t MaxSubscriptions = 256;
 	std::size_t MaxLogEntriesPerSubscription = 128;
 	std::size_t MaxLogBytesPerSubscription = 256 * 1024;
 	std::size_t MaxDrainBatch = 256;
+	std::size_t MaxPendingPushEvents = 1024;
+	std::size_t MaxPendingPushBytes = 4 * 1024 * 1024;
 	bool AllowPreEncodedPayload = true;
 };
 
@@ -203,6 +236,8 @@ public:
 	HookCommandService& operator=(const HookCommandService&) = delete;
 
 	bool IsConfigured() const noexcept { return m_Configured; }
+	const std::string& SessionId() const noexcept { return m_SessionId; }
+	std::uint64_t ContextGeneration() const noexcept { return m_ContextGeneration; }
 	static bool Handles(std::string_view operation) noexcept;
 	HookCommandResult Execute(std::string_view operation, const json& data) noexcept;
 
@@ -211,6 +246,7 @@ public:
 		HookSubscriptionId id,
 		std::string reasonCode,
 		std::string reason) noexcept;
+	HookPushDrainResult DrainPushEvents(std::size_t maximum) noexcept;
 
 private:
 	struct SubscriptionRecord;
@@ -235,6 +271,7 @@ private:
 		std::shared_ptr<const HookEnabledSnapshot> snapshot) noexcept;
 	HookSubscription CopySubscriptionLocked(const SubscriptionRecord& record) const;
 	CollectorDrainSummary DrainCollectorWorker(std::size_t maximum) noexcept;
+	void AppendPushEventLocked(HookPushEvent event, std::size_t eventBytes) noexcept;
 
 	std::string m_SessionId;
 	std::uint64_t m_ContextGeneration = 0;
@@ -249,11 +286,14 @@ private:
 	mutable std::mutex m_Mutex;
 	std::mutex m_DrainMutex;
 	std::vector<std::unique_ptr<SubscriptionRecord>> m_Subscriptions;
+	std::deque<HookPushEvent> m_PushEvents;
+	std::size_t m_PushEventBytes = 0;
 	HookSubscriptionId m_NextId = 1;
 	std::uint64_t m_EnabledSnapshotGeneration = 0;
 	std::uint64_t m_UnmatchedEventCount = 0;
 	std::uint64_t m_PolicyRejectedEventCount = 0;
 	std::uint64_t m_DrainFailureCount = 0;
+	std::uint64_t m_PushEventDropCount = 0;
 };
 
 } // namespace UExplorer::Services

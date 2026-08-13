@@ -158,6 +158,7 @@
 	<ClCompile Include="Services\CoreCommandService.cpp" />
 	<ClCompile Include="Services\CoreStatusDiagnostics.cpp" />
 	<ClCompile Include="Services\DumpCommandService.cpp" />
+	<ClCompile Include="Services\DomainEventPump.cpp" />
 	<ClCompile Include="Services\FunctionCallBatchCommandService.cpp" />
 	<ClCompile Include="Services\FunctionCallCommandService.cpp" />
 	<ClCompile Include="Services\HookCommandService.cpp" />
@@ -276,6 +277,7 @@
 	<ClInclude Include="Services\CoreCommandServiceAccess.h" />
 	<ClInclude Include="Services\CoreStatusDiagnostics.h" />
 	<ClInclude Include="Services\DumpCommandService.h" />
+	<ClInclude Include="Services\DomainEventPump.h" />
 	<ClInclude Include="Services\FunctionCallBatchCommandService.h" />
 	<ClInclude Include="Services\FunctionCallCommandService.h" />
 	<ClInclude Include="Services\HookCommandService.h" />

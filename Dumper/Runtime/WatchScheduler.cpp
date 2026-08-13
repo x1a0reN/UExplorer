@@ -604,6 +604,59 @@ void WatchScheduler::AppendEventLocked(
 	event.CoalesceCount = m_CoalescedEvents;
 	m_Events.push_back(std::move(event));
 	m_PendingEventBytes += eventBytes;
+	try
+	{
+		WatchEvent pushEvent = m_Events.back();
+		AppendPushEventLocked(std::move(pushEvent), eventBytes, coalescible);
+	}
+	catch (...)
+	{
+		++m_DroppedPushEvents;
+	}
+}
+
+void WatchScheduler::AppendPushEventLocked(
+	WatchEvent event,
+	const std::size_t eventBytes,
+	const bool coalescible)
+{
+	if (event.Sequence == 0 || eventBytes > m_Limits.MaxPendingEventBytes)
+	{
+		++m_DroppedPushEvents;
+		return;
+	}
+	if (coalescible)
+	{
+		const auto existing = std::ranges::find_if(
+			m_PushEvents,
+			[&event](const WatchEvent& item) {
+				return item.Id == event.Id && item.Kind == event.Kind;
+			});
+		if (existing != m_PushEvents.end())
+		{
+			const std::size_t oldBytes = EventBytes(*existing);
+			m_PendingPushEventBytes = oldBytes <= m_PendingPushEventBytes
+				? m_PendingPushEventBytes - oldBytes
+				: 0;
+			m_PushEvents.erase(existing);
+			++m_CoalescedPushEvents;
+		}
+	}
+	while (!m_PushEvents.empty()
+		&& (m_PushEvents.size() >= m_Limits.MaxPendingEvents
+			|| m_PendingPushEventBytes > m_Limits.MaxPendingEventBytes - eventBytes))
+	{
+		const std::size_t oldestBytes = EventBytes(m_PushEvents.front());
+		m_PendingPushEventBytes = oldestBytes <= m_PendingPushEventBytes
+			? m_PendingPushEventBytes - oldestBytes
+			: 0;
+		m_PushEvents.pop_front();
+		++m_DroppedPushEvents;
+	}
+	event.PushDroppedBefore = m_DroppedPushEvents;
+	event.PushCoalescedBefore = m_CoalescedPushEvents;
+	m_PushEvents.push_back(std::move(event));
+	m_PendingPushEventBytes += eventBytes;
 }
 
 bool WatchScheduler::ApplySampleLocked(
@@ -927,6 +980,37 @@ WatchDrainResult WatchScheduler::DrainEvents(const std::size_t maxEvents) noexce
 	}
 }
 
+WatchPushDrainResult WatchScheduler::DrainPushEvents(const std::size_t maxEvents) noexcept
+{
+	if (maxEvents == 0 || maxEvents > m_Limits.MaxPendingEvents)
+		return {.Error = WatchError::InvalidLimit};
+	try
+	{
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		const std::size_t count = (std::min)(maxEvents, m_PushEvents.size());
+		WatchPushDrainResult result;
+		result.Events.reserve(count);
+		for (std::size_t index = 0; index < count; ++index)
+			result.Events.push_back(m_PushEvents[index]);
+		for (std::size_t index = 0; index < count; ++index)
+		{
+			const std::size_t bytes = EventBytes(m_PushEvents.front());
+			m_PendingPushEventBytes = bytes <= m_PendingPushEventBytes
+				? m_PendingPushEventBytes - bytes
+				: 0;
+			m_PushEvents.pop_front();
+		}
+		result.DroppedTotal = m_DroppedPushEvents;
+		result.CoalescedTotal = m_CoalescedPushEvents;
+		result.MoreAvailable = !m_PushEvents.empty();
+		return result;
+	}
+	catch (...)
+	{
+		return {.Error = WatchError::AllocationFailed};
+	}
+}
+
 WatchSchedulerSnapshot WatchScheduler::Snapshot() const noexcept
 {
 	WatchSchedulerSnapshot snapshot{
@@ -955,6 +1039,10 @@ WatchSchedulerSnapshot WatchScheduler::Snapshot() const noexcept
 	snapshot.PendingEventBytes = m_PendingEventBytes;
 	snapshot.DroppedEvents = m_DroppedEvents;
 	snapshot.CoalescedEvents = m_CoalescedEvents;
+	snapshot.PendingPushEventCount = m_PushEvents.size();
+	snapshot.PendingPushEventBytes = m_PendingPushEventBytes;
+	snapshot.DroppedPushEvents = m_DroppedPushEvents;
+	snapshot.CoalescedPushEvents = m_CoalescedPushEvents;
 	snapshot.LastEventSequence = m_NextEventSequence > 1 ? m_NextEventSequence - 1 : 0;
 	return snapshot;
 }

@@ -89,6 +89,7 @@
 	<ClCompile Include="..\..\Dumper\Services\BlueprintCommandService.cpp" />
 	<ClCompile Include="..\..\Dumper\Services\CoreCommandService.cpp" />
 	<ClCompile Include="..\..\Dumper\Services\DumpCommandService.cpp" />
+	<ClCompile Include="..\..\Dumper\Services\DomainEventPump.cpp" />
 	<ClCompile Include="..\..\Dumper\Services\FunctionCallBatchCommandService.cpp" />
 	<ClCompile Include="..\..\Dumper\Services\FunctionCallCommandService.cpp" />
 	<ClCompile Include="..\..\Dumper\Services\HookCommandService.cpp" />
@@ -154,6 +155,7 @@
 	<ClInclude Include="..\..\Dumper\Services\BlueprintCommandService.h" />
 	<ClInclude Include="..\..\Dumper\Services\CoreCommandService.h" />
 	<ClInclude Include="..\..\Dumper\Services\DumpCommandService.h" />
+	<ClInclude Include="..\..\Dumper\Services\DomainEventPump.h" />
 	<ClInclude Include="..\..\Dumper\Services\FunctionCallBatchCommandService.h" />
 	<ClInclude Include="..\..\Dumper\Services\FunctionCallCommandService.h" />
 	<ClInclude Include="..\..\Dumper\Services\HookCommandService.h" />
