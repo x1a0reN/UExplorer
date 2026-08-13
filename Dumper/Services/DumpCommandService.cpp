@@ -28,7 +28,7 @@ constexpr std::string_view kJobsCancel = "dump.jobs.cancel";
 constexpr std::string_view kOptionsEnvelopeSchema = "uexplorer.dump.start.v1";
 constexpr std::uint64_t kMaxProtocolInteger = 9'007'199'254'740'991ULL;
 constexpr std::size_t kMaxSessionBytes = 128;
-constexpr std::size_t kMaxOutputIdentityBytes = 32 * 1024;
+constexpr std::size_t kMaxOutputIdentityBytes = 128;
 
 struct RequestScope
 {
@@ -66,6 +66,32 @@ bool IsBoundedText(const std::string& value, const std::size_t maximum) noexcept
 		&& std::none_of(value.begin(), value.end(), [](const unsigned char character) {
 			return character < 0x20 || character == 0x7F;
 		});
+}
+
+bool IsOutputIdentity(const std::string& value) noexcept
+{
+	if (value.empty()
+		|| value.size() > kMaxOutputIdentityBytes
+		|| value == "."
+		|| value == "..")
+	{
+		return false;
+	}
+	const unsigned char first = static_cast<unsigned char>(value.front());
+	if (!((first >= 'a' && first <= 'z')
+		|| (first >= 'A' && first <= 'Z')
+		|| (first >= '0' && first <= '9')))
+	{
+		return false;
+	}
+	return std::all_of(value.begin(), value.end(), [](const unsigned char character) {
+		return (character >= 'a' && character <= 'z')
+			|| (character >= 'A' && character <= 'Z')
+			|| (character >= '0' && character <= '9')
+			|| character == '-'
+			|| character == '_'
+			|| character == '.';
+	});
 }
 
 bool HasExactKeys(
@@ -399,13 +425,14 @@ bool DumpCommandService::Handles(const std::string_view operation) noexcept
 
 DumpCommandResult DumpCommandService::Execute(
 	const std::string_view operation,
-	const json& data) noexcept
+	const json& data,
+	std::shared_ptr<const Runtime::IDumpJobInput> input) noexcept
 {
 	try
 	{
 		DumpCommandResult result;
 		if (!FormatForOperation(operation).empty())
-			result = Start(operation, data);
+			result = Start(operation, data, std::move(input));
 		else if (operation == kJobsList)
 			result = List(data);
 		else if (operation == kJobsGet)
@@ -437,13 +464,20 @@ DumpCommandResult DumpCommandService::Execute(
 
 DumpCommandResult DumpCommandService::Start(
 	const std::string_view operation,
-	const json& data)
+	const json& data,
+	std::shared_ptr<const Runtime::IDumpJobInput> input)
 {
 	if (!m_Coordinator || !m_Coordinator->IsConfigured())
 	{
 		return Failure(
 			"DUMP_WORKER_UNAVAILABLE",
 			"No owned dump worker is injected; starts are unavailable.");
+	}
+	if (!input)
+	{
+		return Failure(
+			"DUMP_INPUT_SNAPSHOT_UNAVAILABLE",
+			"Dump start requires a caller-pinned immutable execution input.");
 	}
 	if (!HasExactKeys(data, {
 		"session_id",
@@ -479,13 +513,12 @@ DumpCommandResult DumpCommandService::Start(
 			{{"expected_format", expectedFormat}});
 	}
 	if (!data.at("output_path_identity").is_string()
-		|| !IsBoundedText(
-			data.at("output_path_identity").get_ref<const std::string&>(),
-			kMaxOutputIdentityBytes))
+		|| !IsOutputIdentity(
+			data.at("output_path_identity").get_ref<const std::string&>()))
 	{
 		return Failure(
 			"DUMP_OUTPUT_IDENTITY_INVALID",
-			"output_path_identity must be a non-empty caller-canonicalized identity of at most 32 KiB.");
+			"output_path_identity must be a 1..128 byte ASCII token; path separators and traversal are forbidden.");
 	}
 	std::uint64_t deadlineMs = 0;
 	if (!TryUnsigned(
@@ -517,7 +550,9 @@ DumpCommandResult DumpCommandService::Start(
 	spec.ObjectSnapshotGeneration = scope.ObjectSnapshotGeneration;
 	spec.TypeSnapshotGeneration = scope.TypeSnapshotGeneration;
 	spec.OutputPathIdentity = data.at("output_path_identity").get<std::string>();
+	const std::string outputIdentity = spec.OutputPathIdentity;
 	spec.OpaqueOptions = EncodeOptionsEnvelope(format);
+	spec.Input = std::move(input);
 	const Runtime::DumpJobSubmitResult submitted = m_Coordinator->Submit(
 		std::move(spec),
 		std::chrono::milliseconds(deadlineMs));
@@ -526,6 +561,7 @@ DumpCommandResult DumpCommandService::Start(
 	return {.Data = {
 		{"job_id", std::to_string(submitted.Id)},
 		{"format", format},
+		{"output_path_identity", outputIdentity},
 		{"admission", "accepted"}
 	}};
 }

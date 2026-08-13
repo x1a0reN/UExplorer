@@ -25,7 +25,7 @@ UExplorer 是一个面向 Unreal Engine 的 **SDK Dump + 实时游戏内省工�
 └──────────────────────────────────────────────┘
 ```
 
-当前分支已完成 R4 原子通信切换并继续 R5 领域实现。唯一桌面主链路仍是 React -> Tauri `domain_request` -> Rust `DomainService` -> PID-scoped Named Pipe -> `CoreCommandService`。除既有 Object/Type/property/call/World 与 stored/computed transform 外，当前代码检查点已加入 strict Memory、owned-binding Watch pull、descriptor-proven enum/destructor journal、generation-bound Blueprint raw Script capture、explicit-profile bounded disassembly、单字段 reflected World transform mutation、generation-covered ProcessEvent Hook producer、Dump coordinator/command和端到端 call.batch。World mutation 只开放 world/relative scale 和 world rotation；其余字段稳定拒绝。call.batch 由单 active coordinator 串行复用 exact single-call adapter；Hook 目前只发布 fixed metadata，仍缺参数编码与 Pipe/Tauri push，Dump 缺 generator worker，Blueprint decompile 缺 exact opcode/operand profile，生产 UEnum entry table 也未见证。`D:\Steam\steamapps\common\Wandering Sword` 仍没有可启动游戏 `.exe`，所有新增路径都只有代码/合成边界证据，所有 profile 保持 `Not supported`。
+当前分支已完成 R4 原子通信切换并继续 R5 领域实现。唯一桌面主链路仍是 React -> Tauri `domain_request` -> Rust `DomainService` -> PID-scoped Named Pipe -> `CoreCommandService`。除既有 Object/Type/property/call/World 与 stored/computed transform 外，当前代码检查点已加入 strict Memory、owned-binding Watch pull、descriptor-proven enum/destructor journal、generation-bound Blueprint raw Script capture、explicit-profile bounded disassembly、单字段 reflected World transform mutation、generation-covered ProcessEvent Hook producer、immutable snapshot Dump worker 和端到端 call.batch。World mutation 只开放 world/relative scale 和 world rotation；其余字段稳定拒绝。call.batch 由单 active coordinator 串行复用 exact single-call adapter；Hook 目前只发布 fixed metadata，仍缺参数编码与 Pipe/Tauri push；Dump 已有四格式 bounded generator/consumer，但仍缺 Host reload persistence 和真实目标 artifact fixture；Blueprint decompile 缺 exact opcode/operand profile，生产 UEnum entry table 也未见证。`D:\Steam\steamapps\common\Wandering Sword` 仍没有可启动游戏 `.exe`，所有新增路径都只有代码/合成边界证据，所有 profile 保持 `Not supported`。
 
 ---
 
@@ -63,7 +63,7 @@ UExplorer/
 │   │   ├── ParamFrame.h/.cpp         #   ProcessEvent owned frame、enum/math codec 与逆序 destructor journal
 │   │   ├── WatchScheduler.*          #   generation-bound 有界逐帧采样、history/event/drop 状态
 │   │   ├── HookEventCollector.*      #   预分配有界 ProcessEvent event collector
-│   │   ├── DumpJobCoordinator.*      #   single-active owned job/deadline/cancel；尚无 generator worker
+│   │   ├── DumpJobCoordinator.*      #   single-active owned job/deadline/cancel；终态释放 pinned input 并保留 query scope
 │   │   ├── FunctionCallBatchCoordinator.* # single-active bounded batch/deadline/cancel/retained result owner
 │   │   ├── BlueprintBytecodeCapture.* # exact generation + explicit Script layout bounded capture
 │   │   ├── BlueprintBytecodeEvidence.* # immutable bytecode/profile publication boundaries
@@ -100,7 +100,8 @@ UExplorer/
 │   │   ├── BlueprintCommandService.* #   exact function/generation bytecode/decompile gate
 │   │   ├── HookCommandService.*      #   exact subscription/live admission/immutable enabled state/log
 │   │   ├── ProcessEventHookOwner.*   #   generation-covered CDO vtable patch、bounded callback、restore/drain
-│   │   ├── DumpCommandService.*      #   strict job command；无 worker 时 start fail closed
+│   │   ├── DumpCommandService.*      #   strict start/list/get/cancel 与 retained-scope query
+│   │   ├── SnapshotDumpWorker.*      #   immutable snapshot 四格式 bounded generator/consumer + artifact commit
 │   │   ├── WorldCommandService.*     #   worker-only World inspect/detail/shortcut 与 Actor-bound cursor query
 │   │   ├── WorldTransformCommandService.* # game-thread same-witness stored + reflected-getter computed transform read
 │   │   ├── WorldMutationCommandService.* # 单字段 exact reflected setter 与调用前后 identity revalidation
@@ -296,6 +297,7 @@ DllMain(DLL_PROCESS_ATTACH)
        │   └─ Off::InitPostRender_Windows() 定位 PostRender VTable
        │
        ├─ Publish EngineContext / EngineFacade / CoreCommandService
+       ├─ Resolve LocalAppData root / construct Dump worker + single-active coordinator
        ├─ Create ObjectSnapshotReflectionCandidateSource from immutable Context
        ├─ NamedPipeRpcServer::Start()      绑定 PID-scoped Pipe，尚未开放 admission
        ├─ PostRenderHook::Install()        安装生产 game-thread pump
@@ -309,8 +311,9 @@ DllMain(DLL_PROCESS_ATTACH)
 	           └─ ProcessEventHookOwner::Reconcile() 发布当前 Class CDO vtable coverage
        │
        └─ [Host Shutdown RPC 或当前 legacy F6 触发退出]
-            ├─ Stop Named Pipe / settle requests
-	        ├─ Restore ProcessEvent slots / drain callbacks / stop collector
+             ├─ Stop Named Pipe / settle requests
+             ├─ Cancel and drain call-batch / immutable Dump workers
+             ├─ Restore ProcessEvent slots / drain callbacks / stop collector
             ├─ Restore PostRender Hook
             ├─ Detach reflection/snapshot clients / FrameScheduler / stop facade
             ├─ Drain CoreRuntime request leases
@@ -398,6 +401,10 @@ UEObject                              所有 UE 对象基类
 ```
 
 ### 3.4 Generator 层内部依赖
+
+本节描述仓库中保留的 Dumper-7 legacy Generator 内部结构；当前
+`SnapshotDumpWorker` 不调用这些 live/global wrapper，只复用独立的 USMAP container
+writer。实际 release Dump 数据流见 5.0。
 
 ```
 ┌────────────────────────────────────────────────────────────┐
@@ -607,7 +614,9 @@ Memory.tsx
   └─ Watch CRUD/snapshot/events.drain -> bounded scheduler + explicit pull
 
 SDKDump.tsx
-  └─ Dump operation -> capability gate（command/coordinator 存在，无 generator worker）
+  ├─ status.inspect -> exact current session/context/Object/Type scope + dump capability
+  ├─ dump.{sdk|usmap|dumpspace|ida}.start -> Host UUID identity -> single-active snapshot worker
+  └─ dump.jobs.get/cancel -> retained admitted scope；不随当前 snapshot refresh 重绑
 
 Settings.tsx
   ├─ updateSettings()         本地 UI preference
@@ -632,8 +641,31 @@ Named Pipe/Tauri Channel push。因此“collector/通道存在”不等于 push
 
 ## 五、关键数据流
 
-本章保留 R4 前的领域实现数据流，用于定位 R5 需要替换的直接 live-memory、
-旧 API 和旧 Hook 路径；它不是当前可调用面的说明。
+5.0 记录当前 immutable snapshot Dump 路径。5.1-5.3 保留 R4 前的领域实现
+数据流，用于定位 R5 需要替换的直接 live-memory、旧 API 和旧 Hook 路径；
+这些历史小节不是当前可调用面的说明。
+
+### 5.0 当前 immutable snapshot Dump 流
+
+```
+React SDKDump.tsx
+  -> Tauri domain_request
+    -> Rust DomainService 拒绝 caller output identity，并注入 dump-<UUIDv4>
+      -> Named Pipe dump.<format>.start
+        -> CoreCommandService 复核 exact current scope 并 pin
+           EngineContext + EngineSnapshot + TypeSnapshot shared_ptr
+          -> single-active DumpJobCoordinator owned worker
+            -> SnapshotDumpWorker
+              -> 原子预留 %LOCALAPPDATA%\UExplorer\Dumps\<session>\<identity>
+              -> bounded SDK / USMAP / Dumpspace / IDA generator
+              -> bounded structural consumer
+              -> artifact.partial -> no-replace rename -> size/SHA-256 verification
+              -> 最后提交 manifest.json
+        -> dump.jobs.get/cancel 按 admitted scope 查询，不要求当前 snapshot 仍是同一代
+```
+
+SDK 产物是 pinned TypeSnapshot 的 opaque exact-layout header，不是完整 typed
+Dumper-7 SDK。当前没有 Host reload persistence 或真实 UE artifact/consumer fixture。
 
 ### 5.1 对象属性读取流
 
@@ -712,13 +744,16 @@ UE 游戏调用某个 UFunction
 │    ├─ 4 个有界 request worker                                        │
 │    └─ 1 个有界 Event writer                                          │
 │                                                                     │
-│  [Dump Worker 线程] (LaunchGeneratorJob)                             │
-│    └─ CppGenerator::Generate() / MappingGenerator::Generate() / ... │
+│  [DumpJobCoordinator owned worker]                                  │
+│    └─ SnapshotDumpWorker                                            │
+│        ├─ pinned immutable Engine/Object/Type snapshots              │
+│        └─ bounded generate/consume/commit/hash + cancel/deadline     │
 │                                                                     │
 │  同步机制:                                                            │
 │    bounded GameThread MPSC + ticket/cancel/deadline                  │
 │    VTableHookToken + CallbackBarrier                                │
 │    bounded Pipe request/Event queues                                │
+│    single-active Dump admission + retained scope + shutdown drain    │
 │    CoreRuntime request lease + ShutdownCoordinator                  │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -875,7 +910,7 @@ Rust `DomainService` 的显式 operation registry 为准。
 | R2 CoreRuntime/能力模型 | **实现阶段完成** | Runtime、Context、Capability、Handle、Snapshot、SafeMemory |
 | R3 Named Pipe/Rust Host | **实现阶段完成** | 严格 IPC、SessionManager、EventHub、注入与跨语言 fixture |
 | R4 通信原子切换 | **已完成** | React 只走 Tauri；Core release 只走 Named Pipe，无网络栈 |
-| R5 领域正确性 | **当前阶段** | Object/Type/property/call/World；strict Memory；bounded Watch pull；enum/destructor journal；explicit-profile Blueprint；单字段 reflected transform setter；call.batch 跨层 exact-call adapter；Hook/Dump ownership 原语。生产 witness/producer/worker、FHitResult-backed setter和真实 UE fixture待办 |
+| R5 领域正确性 | **当前阶段** | Object/Type/property/call/World；strict Memory；bounded Watch pull；enum/destructor journal；explicit-profile Blueprint；单字段 reflected transform setter；call.batch 跨层 exact-call adapter；Hook producer；immutable snapshot Dump worker。生产 witness/push、Dump Host persistence/目标 artifact fixture、FHitResult-backed setter 和真实 UE fixture 待办 |
 | R6 前端状态重构 | **未开始** | session store、query lifecycle、BigInt 地址、能力驱动 UI |
 | R7 发布硬化 | **未开始** | UE fixture、性能/压力、卸载、发布与文档门禁 |
 

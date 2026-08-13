@@ -92,8 +92,14 @@ struct DumpJobEvent
 	DumpJobDiagnostic Diagnostic;
 };
 
-// OutputPathIdentity is canonicalized by the caller. The coordinator treats it
-// as an opaque identity and never probes, creates, reads, or writes that path.
+class IDumpJobInput
+{
+public:
+	virtual ~IDumpJobInput() = default;
+};
+
+// OutputPathIdentity is an opaque logical identity at this boundary. The
+// injected worker is responsible for resolving it inside its configured root.
 struct DumpJobSpec
 {
 	std::string SessionId;
@@ -102,6 +108,7 @@ struct DumpJobSpec
 	std::uint64_t TypeSnapshotGeneration = 0;
 	std::string OutputPathIdentity;
 	std::vector<std::byte> OpaqueOptions;
+	std::shared_ptr<const IDumpJobInput> Input;
 };
 
 // A request is copied into coordinator-owned storage before Submit returns and
@@ -126,6 +133,9 @@ struct DumpJobWorkerResult
 	DumpJobWorkerStatus Status = DumpJobWorkerStatus::Failed;
 	std::string ErrorCode;
 	std::string ErrorMessage;
+	// Set only after the worker's externally visible success commit point. A
+	// cancellation racing after that point cannot rewrite success as cancelled.
+	bool SuccessCommitted = false;
 };
 
 class IDumpJobExecutionContext
@@ -159,7 +169,7 @@ struct DumpJobCoordinatorLimits
 	std::size_t MaxEventsPerJob = 256;
 	std::size_t MaxEventBytesPerJob = 256 * 1024;
 	std::size_t MaxOpaqueOptionsBytes = 64 * 1024;
-	std::size_t MaxOutputPathIdentityBytes = 32 * 1024;
+	std::size_t MaxOutputPathIdentityBytes = 128;
 	std::size_t MaxPhaseBytes = 256;
 	std::size_t MaxDiagnosticCodeBytes = 256;
 	std::size_t MaxMessageBytes = 4096;
@@ -253,7 +263,7 @@ public:
 	static constexpr std::size_t kHardMaxEventsPerJob = 4096;
 	static constexpr std::size_t kHardMaxEventBytesPerJob = 16 * 1024 * 1024;
 	static constexpr std::size_t kHardMaxOpaqueOptionsBytes = 1024 * 1024;
-	static constexpr std::size_t kHardMaxOutputPathIdentityBytes = 64 * 1024;
+	static constexpr std::size_t kHardMaxOutputPathIdentityBytes = 128;
 	static constexpr std::int64_t kMaxDeadlineMs = 86'400'000;
 
 	DumpJobCoordinator(

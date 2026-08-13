@@ -4,6 +4,7 @@
 #include "Runtime/ObjectSnapshotTypeCandidateSource.h"
 #include "BlueprintCommandService.h"
 #include "DumpCommandService.h"
+#include "SnapshotDumpWorker.h"
 #include "FunctionCallBatchCommandService.h"
 #include "FunctionCallCommandService.h"
 #include "HookCommandService.h"
@@ -1707,6 +1708,10 @@ CoreCommandResponse CoreCommandService::ExecuteDumpCommand(
 	else if (request.Operation == "dump.usmap.start") capabilityName = "dump.usmap";
 	else if (request.Operation == "dump.dumpspace.start") capabilityName = "dump.dumpspace";
 	else if (request.Operation == "dump.ida.start") capabilityName = "dump.ida";
+	const bool isStart = request.Operation == "dump.sdk.start"
+		|| request.Operation == "dump.usmap.start"
+		|| request.Operation == "dump.dumpspace.start"
+		|| request.Operation == "dump.ida.start";
 	const Runtime::CapabilityStatus* capability = lease->Capabilities()
 		? lease->Capabilities()->Find(capabilityName)
 		: nullptr;
@@ -1737,12 +1742,19 @@ CoreCommandResponse CoreCommandService::ExecuteDumpCommand(
 		m_Engine.Snapshots().Current();
 	const std::shared_ptr<const Runtime::TypeSnapshot> types =
 		m_Engine.Types().Current();
-	if (!objects || !types || !lease->Context())
+	if (isStart && (!objects
+		|| !types
+		|| !lease->Context()
+		|| objects->SessionId != m_SessionId
+		|| objects->ContextGeneration != lease->Context()->Generation()
+		|| types->SessionId() != m_SessionId
+		|| types->ContextGeneration() != lease->Context()->Generation()
+		|| types->ObjectSnapshotGeneration() != objects->Generation))
 	{
 		return Failure(
 			request,
 			"DUMP_SCOPE_UNAVAILABLE",
-			"No complete immutable object/type snapshot scope is published",
+			"No internally consistent immutable object/type snapshot scope is published",
 			{{"capability", capabilityName}},
 			timing());
 	}
@@ -1767,7 +1779,7 @@ CoreCommandResponse CoreCommandService::ExecuteDumpCommand(
 		&& unsignedField("context_generation")
 		&& unsignedField("object_snapshot_generation")
 		&& unsignedField("type_snapshot_generation");
-	if (scopeFieldsPresent
+	if (isStart && scopeFieldsPresent
 		&& (request.Data.at("session_id").get_ref<const std::string&>() != m_SessionId
 			|| *unsignedField("context_generation") != lease->Context()->Generation()
 			|| *unsignedField("object_snapshot_generation") != objects->Generation
@@ -1784,9 +1796,60 @@ CoreCommandResponse CoreCommandService::ExecuteDumpCommand(
 			timing());
 	}
 
+	std::shared_ptr<const Runtime::IDumpJobInput> dumpInput;
+	if (isStart)
+	{
+		const std::string_view format = request.Operation == "dump.sdk.start"
+			? "sdk"
+			: request.Operation == "dump.usmap.start"
+				? "usmap"
+				: request.Operation == "dump.dumpspace.start"
+					? "dumpspace"
+					: "ida-script";
+		const auto parsedFormat = ParseSnapshotDumpFormat(format);
+		if (!parsedFormat)
+		{
+			return Failure(
+				request,
+				"DUMP_FORMAT_INVALID",
+				"The registered dump operation has no immutable worker format",
+				json::object(),
+				timing());
+		}
+		try
+		{
+			auto typedInput = std::make_shared<SnapshotDumpInput>();
+			typedInput->Format = *parsedFormat;
+			typedInput->Context = lease->Context();
+			typedInput->Objects = objects;
+			typedInput->Types = types;
+			dumpInput = std::move(typedInput);
+		}
+		catch (...)
+		{
+			return Failure(
+				request,
+				"DUMP_INPUT_ALLOCATION_FAILED",
+				"The immutable dump input binding could not be allocated",
+				json::object(),
+				timing());
+		}
+		if (m_Engine.Snapshots().Current() != objects
+			|| m_Engine.Types().Current() != types)
+		{
+			return Failure(
+				request,
+				"DUMP_SCOPE_CHANGED",
+				"The active snapshots changed while the dump input was being pinned",
+				json::object(),
+				timing());
+		}
+	}
+
 	DumpCommandResult result = m_DumpCommandService->Execute(
 		request.Operation,
-		request.Data);
+		request.Data,
+		std::move(dumpInput));
 	if (!result.Ok())
 	{
 		return Failure(

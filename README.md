@@ -46,7 +46,8 @@ operation registry serves status, immutable-snapshot object/type queries, exact 
 details, stable-handle property reads, the bounded single-target `call.invoke`,
 immutable current-world/level/actor queries, exact-handle stored/computed Actor
 transform reads, strict Memory commands, bounded Watch commands, and capability-gated
-Blueprint commands. Domains without a published runtime producer, worker, or witness
+Blueprint commands. The Dump domain now has a single-active immutable-snapshot worker
+for bounded SDK/USMAP/Dumpspace/IDA artifacts. Domains without a published runtime producer, worker, or witness
 return a stable capability error instead of reaching legacy code.
 Baseline Core initialization is also separated from optional reflection/generator
 activation: unknown property, FText, GWorld, or generator layouts cannot make the pipe
@@ -215,7 +216,19 @@ added. A successful build or synthetic fixture does not establish target runtime
   originals, and bounded fixed-metadata enter/exit events reach `HookEventCollector`.
   Capability follows exact current-generation coverage; restore/drain failure blocks
   unload. Parameter capture and Pipe/Tauri push are not implemented, and no real UE Hook
-  fixture has run. Dump still has no generator worker and remains unavailable.
+  fixture has run.
+- Dump start pins the exact immutable EngineContext, ObjectSnapshot, and TypeSnapshot in
+  one owned single-active job. Terminal records release those large inputs while retaining
+  their admitted scope and bounded events/results, so polling is not coupled to the current
+  snapshot generation. The Host rejects caller output identities and injects a bounded
+  UUID token; Core reserves only `%LOCALAPPDATA%\UExplorer\Dumps\<session>\<identity>`.
+- `SnapshotDumpWorker` emits a bounded opaque exact-layout C++ header (not a complete typed
+  Dumper-7 SDK), an uncompressed USMAP v4 container, five Dumpspace JSON documents, or an
+  IDA Python name script. Each path has a bounded structural consumer. Artifacts are written
+  as `.partial`, checked by size plus SHA-256, then committed without replacement before
+  `manifest.json` is validated and committed last with the pinned scope and artifact metadata. Cooperative
+  cancellation/deadline and shutdown drain are wired, but Host restart persistence and
+  real target artifact/consumer fixtures are not implemented.
 - World mutation is a strict single-field reflected command for world/relative scale and
   world rotation. Location/relative rotation remain unavailable until `FHitResult` has a
   witnessed construction/destruction profile.

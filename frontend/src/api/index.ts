@@ -97,6 +97,33 @@ export interface StatusData {
   pid: number;
   architecture: string;
   script_offset_diagnostics?: ScriptOffsetDiagnosticsData;
+  runtime?: {
+    state: string;
+    session_id: string | null;
+    liveness: boolean;
+    readiness: boolean;
+    active_requests: number;
+    context_generation: number | null;
+  };
+  capabilities?: Record<string, {
+    available: boolean;
+    reason_code: string | null;
+    reason: string | null;
+    dependencies: string[];
+  }>;
+  object_snapshot?: {
+    published: boolean;
+    generation: number | null;
+    context_generation?: number;
+    object_count?: number;
+  };
+  type_snapshot?: {
+    published: boolean;
+    generation: number | null;
+    context_generation?: number;
+    object_snapshot_generation?: number;
+    type_count?: number;
+  };
 }
 
 export interface ScriptOffsetDiagnosticsData {
@@ -1115,7 +1142,6 @@ export interface DumpScope {
 
 export interface DumpStartRequest extends DumpScope {
   format: DumpType;
-  output_path_identity: string;
   deadline_ms: number;
   options: Record<string, never>;
 }

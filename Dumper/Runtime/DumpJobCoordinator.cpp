@@ -79,12 +79,17 @@ struct DumpJobCoordinator::StoredEvent
 
 struct DumpJobCoordinator::JobRecord
 {
-	explicit JobRecord(std::shared_ptr<const DumpJobRequest> request)
-		: Request(std::move(request))
+	JobRecord(
+		std::shared_ptr<const DumpJobRequest> request,
+		std::shared_ptr<const DumpJobRequest> retainedRequest)
+		: Request(std::move(request)),
+		  RetainedRequest(std::move(retainedRequest))
 	{
 	}
 
 	std::shared_ptr<const DumpJobRequest> Request;
+	// The terminal summary never pins the potentially large execution input.
+	std::shared_ptr<const DumpJobRequest> RetainedRequest;
 	DumpJobState State = DumpJobState::Queued;
 	std::atomic<bool> CancellationRequested{false};
 	std::atomic<bool> DeadlineExceeded{false};
@@ -274,7 +279,8 @@ DumpJobError DumpJobCoordinator::ValidateSpec(
 	if (spec.OutputPathIdentity.empty()
 		|| spec.OutputPathIdentity.size() > m_Limits.MaxOutputPathIdentityBytes
 		|| ContainsNul(spec.OutputPathIdentity)
-		|| spec.OpaqueOptions.size() > m_Limits.MaxOpaqueOptionsBytes)
+		|| spec.OpaqueOptions.size() > m_Limits.MaxOpaqueOptionsBytes
+		|| !spec.Input)
 	{
 		return DumpJobError::InvalidRequest;
 	}
@@ -320,13 +326,24 @@ DumpJobSubmitResult DumpJobCoordinator::Submit(
 		}
 
 		const DumpJobId id = m_NextJobId;
+		DumpJobSpec retainedSpec = spec;
+		retainedSpec.Input.reset();
+		auto retainedRequest = std::make_shared<DumpJobRequest>(DumpJobRequest{
+			id,
+			std::move(retainedSpec),
+			submittedAt,
+			deadline});
 		auto request = std::make_shared<DumpJobRequest>(DumpJobRequest{
 			id,
 			std::move(spec),
 			submittedAt,
 			deadline});
 		std::shared_ptr<const DumpJobRequest> immutableRequest = std::move(request);
-		auto record = std::make_shared<JobRecord>(std::move(immutableRequest));
+		std::shared_ptr<const DumpJobRequest> immutableRetainedRequest =
+			std::move(retainedRequest);
+		auto record = std::make_shared<JobRecord>(
+			std::move(immutableRequest),
+			std::move(immutableRetainedRequest));
 		m_Jobs.push_back(record);
 		m_ActiveJob = record;
 		m_LastIssuedJobId = id;
@@ -661,6 +678,8 @@ void DumpJobCoordinator::CancelQueuedLocked(
 		m_DroppedEventCount = SaturatingIncrement(m_DroppedEventCount);
 	}
 	m_CompletedJobCount = SaturatingIncrement(m_CompletedJobCount);
+	if (record->RetainedRequest)
+		record->Request = record->RetainedRequest;
 }
 
 void DumpJobCoordinator::FinalizeLocked(
@@ -671,8 +690,11 @@ void DumpJobCoordinator::FinalizeLocked(
 	if (!record || record->State != DumpJobState::Running)
 		return;
 
-	const bool deadlineExceeded = record->DeadlineExceeded.load(std::memory_order_acquire)
-		|| std::chrono::steady_clock::now() >= record->Request->Deadline;
+	const bool committedSuccess = result.Status == DumpJobWorkerStatus::Succeeded
+		&& result.SuccessCommitted;
+	const bool deadlineExceeded = !committedSuccess
+		&& (record->DeadlineExceeded.load(std::memory_order_acquire)
+			|| std::chrono::steady_clock::now() >= record->Request->Deadline);
 	if (deadlineExceeded)
 	{
 		record->DeadlineExceeded.store(true, std::memory_order_release);
@@ -683,7 +705,14 @@ void DumpJobCoordinator::FinalizeLocked(
 	const char* fallbackCode = nullptr;
 	const char* fallbackMessage = nullptr;
 	DumpJobDiagnosticSeverity severity = DumpJobDiagnosticSeverity::Error;
-	if (deadlineExceeded)
+	if (committedSuccess)
+	{
+		record->State = DumpJobState::Succeeded;
+		fallbackCode = "DUMP_JOB_SUCCEEDED";
+		fallbackMessage = "The owned dump job completed successfully.";
+		severity = DumpJobDiagnosticSeverity::Info;
+	}
+	else if (deadlineExceeded)
 	{
 		record->State = DumpJobState::Cancelled;
 		fallbackCode = "DUMP_DEADLINE_EXCEEDED";
@@ -790,6 +819,8 @@ void DumpJobCoordinator::FinalizeLocked(
 		m_DroppedEventCount = SaturatingIncrement(m_DroppedEventCount);
 	}
 	m_CompletedJobCount = SaturatingIncrement(m_CompletedJobCount);
+	if (record->RetainedRequest)
+		record->Request = record->RetainedRequest;
 }
 
 void DumpJobCoordinator::RequestStopLocked() noexcept

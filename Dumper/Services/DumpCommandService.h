@@ -4,6 +4,7 @@
 #include "Utils/Json/json.hpp"
 
 #include <cstddef>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -29,9 +30,8 @@ struct DumpCommandResult
 };
 
 // Transport-neutral boundary for owned dump jobs. A null coordinator means
-// that no worker has been injected: starts fail closed while job queries remain
-// available and deterministically report an empty/not-found job store. A
-// non-null coordinator must outlive this service.
+// every operation fails closed. A non-null coordinator must outlive this
+// service; start requests also require a caller-pinned immutable input.
 class DumpCommandService final
 {
 public:
@@ -44,12 +44,14 @@ public:
 	static bool Handles(std::string_view operation) noexcept;
 	DumpCommandResult Execute(
 		std::string_view operation,
-		const json& data) noexcept;
+		const json& data,
+		std::shared_ptr<const Runtime::IDumpJobInput> input = nullptr) noexcept;
 
 private:
 	DumpCommandResult Start(
 		std::string_view operation,
-		const json& data);
+		const json& data,
+		std::shared_ptr<const Runtime::IDumpJobInput> input);
 	DumpCommandResult List(const json& data);
 	DumpCommandResult Get(const json& data);
 	DumpCommandResult Cancel(const json& data);

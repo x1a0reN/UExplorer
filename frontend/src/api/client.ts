@@ -740,6 +740,7 @@ class UExplorerApi {
   async startScopedDump(request: DumpStartRequest): Promise<ApiResponse<{
     job_id: string;
     format: DumpType;
+    output_path_identity: string;
     admission: 'accepted';
   }>> {
     const operations: Record<DumpType, string> = {

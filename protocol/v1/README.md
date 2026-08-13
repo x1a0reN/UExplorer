@@ -202,6 +202,10 @@ The v1 command registry is explicit. Unknown operations return
 | `blueprint.bytecode` | exact FunctionHandle/path and context/Object/Type generations | Bounded Script capture; capability remains unavailable without a published capture witness |
 | `blueprint.decompile` | bytecode identity plus explicit `profile_id` | Fail-closed bounded disassembly; capability remains unavailable without a matching immutable profile |
 | `hook.add/list/enable/remove/log` | exact FunctionHandle/Object/Type generations, fixed capture policy, or bounded subscription ID query | Add/enable=true require current producer coverage; list/log/disable/remove remain available to shrink retained state while coverage is unavailable |
+| `dump.sdk.start` / `dump.usmap.start` / `dump.dumpspace.start` / `dump.ida.start` | exact session/context/Object/Type scope, matching format, Host-owned bounded `output_path_identity`, total `deadline_ms`, and closed empty options | Submit one single-active job that pins the exact immutable input pointers before returning |
+| `dump.jobs.list` | exact retained scope plus `max_jobs` 1..64 | List bounded job metadata for the admitted scope; does not bind to the current snapshot generation |
+| `dump.jobs.get` | exact retained scope, canonical decimal `job_id`, event sequence, and `max_events` 1..512 | Read retained state/progress/diagnostics after snapshot refresh or terminal input release |
+| `dump.jobs.cancel` | exact retained scope plus canonical decimal `job_id` | Cooperatively cancel queued/running work without changing its admitted identity |
 | `world.inspect` | `{}` | Worker-safe immutable current-world identity and exact Level/Actor counts |
 | `world.levels` | `{"cursor": null \| world_cursor, "limit": 1..128}` | Worker-safe immutable Level page |
 | `world.actors.list` | `{"cursor": null \| world_cursor, "limit": 1..128, "search": string \| null, "class_search": string \| null, "level_path": exact_path \| null}` | Worker-safe immutable Actor page with exact total matching |
@@ -266,6 +270,31 @@ after invocation may have started is retained as `CALL_BATCH_ITEM_OUTCOME_UNKNOW
 Completed item responses are retained even when cancellation or the total deadline wins
 the batch terminal state. Batch IDs remain canonical decimal strings across Rust/TypeScript.
 
+Dump start requests from React do not contain `output_path_identity`. Before forwarding a
+start, the Rust Host rejects any caller-supplied identity and inserts a bounded
+`dump-<UUIDv4>` token; the Core schema requires that Host-to-Core field but never interprets
+it as a path. Core admits a start only when its explicit session/context/ObjectSnapshot/
+TypeSnapshot scope is current, then retains the exact immutable EngineContext,
+EngineSnapshot, and TypeSnapshot pointers in the owned request. Terminal records release
+those large inputs while keeping the admitted scope, events, and result queryable. Job
+list/get/cancel compare against that retained scope and therefore remain usable when the
+currently published snapshots have advanced; there is no implicit generation rebind.
+
+`SnapshotDumpWorker` resolves its only output root through the Windows LocalAppData known
+folder and atomically reserves
+`%LOCALAPPDATA%\UExplorer\Dumps\<core-session>\<host-output-id>`. It rejects traversal,
+root escape, reparse points, existing identities, and replacement. SDK emits one opaque
+exact-layout C++ header rather than a complete typed Dumper-7 SDK. USMAP v4 uncompressed,
+five Dumpspace JSON documents, and the IDA Python name script use bounded generators and
+structural consumers; unsupported snapshot metadata fails the job instead of selecting a
+legacy generator. Each artifact is written through `.partial`, verified there by size and
+SHA-256, then renamed without replacement. `manifest.json` is generated, verified, and
+committed last; it records the pinned
+scope/input fingerprint plus artifact size/hash/validation. Generation, chunked writes, and
+disk hashing poll the same cooperative cancellation/total deadline; Core shutdown must
+drain the worker or refuse unload. Host restart/reload persistence is not implemented, and
+none of these contracts is evidence of a successful UE target artifact run.
+
 Memory writes retain a bounded preimage, verify the committed bytes, and report rollback
 and protection-race outcomes. There is no executable/code-write fallback. Watch events
 are currently consumed only through `watch.events.drain`; the existing transport Event
@@ -281,12 +310,14 @@ producer installs only after current TypeSnapshot Class/CDO evidence has complet
 game-thread-validated vtable coverage, publishes bounded fixed-metadata enter/exit records,
 and restores every owned slot before collector teardown. `preencoded_payload` is rejected
 until a witnessed parameter encoder exists; there is no legacy Hook fallback or Pipe/Tauri
-push contract. Dump remains behind an unavailable worker capability at this checkpoint.
+push contract. Dump format capabilities require the owned snapshot worker plus the current
+immutable Object/Type inputs needed for a new start; `dump.jobs` independently exposes the
+owned retained-query coordinator.
 `call.batch.jobs` is independently advertised when its coordinator is owned,
 while new `call.batch` submissions additionally depend on the dynamic `call.invoke`
 capability. Legacy `call.static` is retired; static invocation uses `call.invoke` with an
-explicit CDO handle. Dump still has no generator worker and may not select a legacy
-implementation. Hook code availability is not a target UE validation claim.
+explicit CDO handle. Neither Hook nor Dump code availability is a target UE validation
+claim, and neither may select a legacy implementation.
 
 World commands read only a `WorldSnapshot` whose session, context, ObjectSnapshot, and
 TypeSnapshot generations still match the active immutable dependencies. A world cursor

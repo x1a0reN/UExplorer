@@ -57,7 +57,8 @@
 		"2026-08-09: DESIGN, README, PROJECT_MAP, and AGENTS now describe the completed R4 Tauri/Named-Pipe-only desktop boundary and label retained HTTP/API material as non-release history",
 		"2026-08-10: DESIGN, README, PROJECT_MAP, AGENTS, and SUPPORT_MATRIX now distinguish attached production reflection/type structural sources and immutable type-detail commands from still-missing target-profile, PropertyCodec, descriptor/enum/bytecode, and real-target evidence",
 		"2026-08-10: documentation records the production flat-descriptor/baseline-codec/property-read path and separately inventories local UE source trees plus Wandering Sword without upgrading any support row",
-		"2026-08-13: documentation records Memory/Watch/enum/Blueprint, the wired exact-call batch path, and the still-missing Hook producer/Dump worker separately while keeping every runtime profile Not supported",
+		"2026-08-13: an earlier documentation checkpoint recorded Memory/Watch/enum/Blueprint, the wired exact-call batch path, and the then-missing Hook producer/Dump worker while keeping every runtime profile Not supported",
+		"2026-08-13: current documentation records the generation-covered Hook producer and immutable snapshot Dump worker, and separately retains their missing push/persistence/real-target gates without upgrading any support row",
 		"Remaining R5 domains and final R7 target evidence still require documentation reconciliation"
 	  ]
 	},
@@ -725,14 +726,19 @@
       "verification": [
         "2026-08-09: shutdown has a five-second bounded wait and refuses DLL unload if the generator remains active",
 		"2026-08-13: coordinator/command code defines one total deadline, cooperative cancellation state, job events, and bounded StopAndDrain ownership",
-		"No generator worker polls this state yet; real phase progress, cancellation, and target shutdown remain pending"
+		"2026-08-13: SnapshotDumpWorker polls the same cancellation/deadline state during bounded generation, chunked writes, and disk hashing, and publishes bounded phase progress/diagnostics",
+		"2026-08-13: Main drains the owned dump worker for five seconds after Pipe settlement and refuses later teardown/unload when drain cannot be proven",
+		"No real UE target cancellation, deadline, snapshot-churn, or shutdown fixture has run; target behavior remains pending"
       ]
     },
 	"DUMP-006": {
 	  "status": "in_progress",
 	  "verification": [
 		"2026-08-13: the Core coordinator binds monotonic uint53 job IDs to one session/context generation and retains a bounded deterministic history",
-		"Host-owned UUID identity, artifact manifest/hash/size validation, and reload persistence remain pending"
+		"2026-08-13: dump submission pins exact immutable EngineContext/ObjectSnapshot/TypeSnapshot pointers; terminal records release the large input while retaining admitted scope/events/results for queries independent of the current snapshot generation",
+		"2026-08-13: the Host rejects caller output identities and injects a bounded UUIDv4 token; Core reserves only a canonical non-reparse session/job directory under %LOCALAPPDATA%\\UExplorer\\Dumps",
+		"2026-08-13: each bounded artifact passes its structural consumer and .partial size plus memory/disk SHA-256 comparison before no-replace commit; manifest.json is generated, verified, and committed last",
+		"Host restart/reload persistence and a real UE four-format artifact/consumer fixture remain pending"
 	  ]
 	},
     "WORLD-001": {

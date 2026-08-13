@@ -530,7 +530,7 @@
         "object_snapshot_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
         "type_snapshot_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
         "format": { "enum": ["sdk", "usmap", "dumpspace", "ida-script"] },
-        "output_path_identity": { "type": "string", "minLength": 1, "maxLength": 32768, "pattern": "^[^\\u0000-\\u001F\\u007F]+$" },
+        "output_path_identity": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
         "deadline_ms": { "type": "integer", "minimum": 1, "maximum": 86400000 },
         "options": { "type": "object", "additionalProperties": false, "maxProperties": 0 }
       }

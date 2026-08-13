@@ -57,7 +57,7 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>bcrypt.lib;advapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>bcrypt.lib;advapi32.lib;shell32.lib;ole32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -80,7 +80,7 @@
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>bcrypt.lib;advapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>bcrypt.lib;advapi32.lib;shell32.lib;ole32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <!-- Source Files -->
@@ -164,6 +164,7 @@
 	<ClCompile Include="Services\MemoryCommandService.cpp" />
 	<ClCompile Include="Services\ObjectPropertyCommandService.cpp" />
 	<ClCompile Include="Services\ProcessEventHookOwner.cpp" />
+	<ClCompile Include="Services\SnapshotDumpWorker.cpp" />
 	<ClCompile Include="Services\TypeCommandService.cpp" />
 	<ClCompile Include="Services\WatchCommandService.cpp" />
 	<ClCompile Include="Services\WorldCommandService.cpp" />
@@ -281,6 +282,7 @@
 	<ClInclude Include="Services\MemoryCommandService.h" />
 	<ClInclude Include="Services\ObjectPropertyCommandService.h" />
 	<ClInclude Include="Services\ProcessEventHookOwner.h" />
+	<ClInclude Include="Services\SnapshotDumpWorker.h" />
 	<ClInclude Include="Services\TypeCommandService.h" />
 	<ClInclude Include="Services\WatchCommandService.h" />
 	<ClInclude Include="Services\WorldCommandService.h" />

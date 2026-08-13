@@ -87,6 +87,7 @@ dependencies = [
  "tauri-plugin-log",
  "uexplorer-fake-core",
  "uexplorer-protocol",
+ "uuid",
  "windows 0.58.0",
 ]
 

@@ -41,10 +41,6 @@ struct RuntimeProbes
 	bool HookProducerInstalled = false;
 	bool DumpCommandServiceEnabled = false;
 	bool DumpWorkerEnabled = false;
-	bool DumpCppTargetValidated = false;
-	bool DumpUsmapTargetValidated = false;
-	bool DumpDumpspaceTargetValidated = false;
-	bool DumpIdaTargetValidated = false;
 	std::shared_ptr<const WorldSnapshot> World;
 	bool WorldInspectServiceEnabled = false;
 	bool WorldMutationServiceEnabled = false;
@@ -330,57 +326,49 @@ inline std::shared_ptr<const CapabilitySnapshot> BuildCoreCapabilities(
 		probes.DumpCommandServiceEnabled
 			? "No owned dump coordinator/worker is injected; an empty job store is not fabricated"
 			: "The generation-bound dump job query boundary is not registered",
-		{"objects.snapshot", "engine.type_snapshot"});
-	const auto dumpReasonCode = [&probes](const bool targetValidated) {
+		{});
+	const auto dumpReasonCode = [&probes] {
 		if (!probes.DumpCommandServiceEnabled)
 			return std::string("DUMP_COMMAND_SERVICE_NOT_READY");
 		if (!probes.DumpWorkerEnabled)
 			return std::string("DUMP_WORKER_NOT_INJECTED");
-		return targetValidated
-			? std::string()
-			: std::string("TARGET_FIXTURE_REQUIRED");
+		return std::string();
 	};
-	const auto dumpReason = [&probes](const bool targetValidated, const char* artifact) {
+	const auto dumpReason = [&probes] {
 		if (!probes.DumpCommandServiceEnabled)
 			return std::string("The owned dump command boundary is not registered");
 		if (!probes.DumpWorkerEnabled)
 			return std::string("No owned generator worker is injected; legacy generators are not a fallback");
-		return targetValidated
-			? std::string()
-			: std::string(artifact) + " has not passed a target fixture";
+		return std::string();
 	};
 	builder.Define(
 		"dump.cpp",
 		probes.DumpCommandServiceEnabled
-			&& probes.DumpWorkerEnabled
-			&& probes.DumpCppTargetValidated,
-		dumpReasonCode(probes.DumpCppTargetValidated),
-		dumpReason(probes.DumpCppTargetValidated, "Generated SDK output"),
-		{"dump.jobs"});
+			&& probes.DumpWorkerEnabled,
+		dumpReasonCode(),
+		dumpReason(),
+		{"dump.jobs", "objects.snapshot", "engine.type_snapshot"});
 	builder.Define(
 		"dump.usmap",
 		probes.DumpCommandServiceEnabled
-			&& probes.DumpWorkerEnabled
-			&& probes.DumpUsmapTargetValidated,
-		dumpReasonCode(probes.DumpUsmapTargetValidated),
-		dumpReason(probes.DumpUsmapTargetValidated, "Generated usmap output"),
-		{"dump.jobs"});
+			&& probes.DumpWorkerEnabled,
+		dumpReasonCode(),
+		dumpReason(),
+		{"dump.jobs", "objects.snapshot", "engine.type_snapshot"});
 	builder.Define(
 		"dump.dumpspace",
 		probes.DumpCommandServiceEnabled
-			&& probes.DumpWorkerEnabled
-			&& probes.DumpDumpspaceTargetValidated,
-		dumpReasonCode(probes.DumpDumpspaceTargetValidated),
-		dumpReason(probes.DumpDumpspaceTargetValidated, "Generated Dumpspace output"),
-		{"dump.jobs"});
+			&& probes.DumpWorkerEnabled,
+		dumpReasonCode(),
+		dumpReason(),
+		{"dump.jobs", "objects.snapshot", "engine.type_snapshot"});
 	builder.Define(
 		"dump.ida",
 		probes.DumpCommandServiceEnabled
-			&& probes.DumpWorkerEnabled
-			&& probes.DumpIdaTargetValidated,
-		dumpReasonCode(probes.DumpIdaTargetValidated),
-		dumpReason(probes.DumpIdaTargetValidated, "Generated IDA output"),
-		{"dump.jobs"});
+			&& probes.DumpWorkerEnabled,
+		dumpReasonCode(),
+		dumpReason(),
+		{"dump.jobs", "objects.snapshot", "engine.type_snapshot"});
 
 	return builder.Build(context.Generation());
 }

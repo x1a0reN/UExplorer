@@ -37,6 +37,7 @@ windows = { version = "0.58", features = [
     "Win32_System_Threading",
 ] }
 uexplorer-protocol = { path = "../../protocol/rust" }
+uuid = { version = "1.21", features = ["v4"] }
 
 [dev-dependencies]
 uexplorer-fake-core = { path = "../../tests/fake-core" }

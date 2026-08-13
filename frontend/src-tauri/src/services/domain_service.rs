@@ -127,7 +127,15 @@ impl DomainService {
 
         match route {
             DomainRoute::Core(core_operation) => {
-                self.execute_core(&session, core_operation, request.timeout_ms, request.data)
+                let data = if is_dump_start_operation(core_operation) {
+                    match bind_host_dump_identity(request.data) {
+                        Ok(data) => data,
+                        Err(error) => return error.into_response(),
+                    }
+                } else {
+                    request.data
+                };
+                self.execute_core(&session, core_operation, request.timeout_ms, data)
             }
             DomainRoute::SnapshotRefresh => {
                 match session.refresh_snapshot(Duration::from_millis(u64::from(request.timeout_ms)))
@@ -281,6 +289,37 @@ impl DomainService {
             Err(error) => error.into_response(),
         }
     }
+}
+
+#[cfg(windows)]
+fn is_dump_start_operation(operation: &str) -> bool {
+    matches!(
+        operation,
+        "dump.sdk.start" | "dump.usmap.start" | "dump.dumpspace.start" | "dump.ida.start"
+    )
+}
+
+#[cfg(windows)]
+fn bind_host_dump_identity(data: Value) -> Result<Value, DomainFailure> {
+    let Value::Object(mut object) = data else {
+        return Err(DomainFailure::new(
+            "DUMP_REQUEST_SCHEMA_INVALID",
+            "Dump start data must be an object",
+            Value::Null,
+        ));
+    };
+    if object.contains_key("output_path_identity") {
+        return Err(DomainFailure::new(
+            "DUMP_OUTPUT_IDENTITY_HOST_OWNED",
+            "output_path_identity is allocated by the Host and must not be supplied by React",
+            Value::Null,
+        ));
+    }
+    object.insert(
+        "output_path_identity".to_string(),
+        Value::String(format!("dump-{}", uuid::Uuid::new_v4().simple())),
+    );
+    Ok(Value::Object(object))
 }
 
 #[cfg(windows)]
@@ -955,6 +994,23 @@ mod tests {
             resolve_operation("dump.jobs.cancel"),
             Some(DomainRoute::Core("dump.jobs.cancel"))
         );
+    }
+
+    #[test]
+    fn dump_output_identity_is_host_owned_and_bounded() {
+        let bound = bind_host_dump_identity(json!({"format": "sdk"})).unwrap();
+        let identity = bound
+            .get("output_path_identity")
+            .and_then(Value::as_str)
+            .unwrap();
+        assert!(identity.starts_with("dump-"));
+        assert_eq!(identity.len(), 37);
+        assert!(identity
+            .bytes()
+            .all(|value| value.is_ascii_alphanumeric() || value == b'-'));
+
+        let error = bind_host_dump_identity(json!({"output_path_identity": "caller"})).unwrap_err();
+        assert_eq!(error.code, "DUMP_OUTPUT_IDENTITY_HOST_OWNED");
     }
 
     #[test]

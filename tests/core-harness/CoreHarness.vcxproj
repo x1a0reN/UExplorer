@@ -47,7 +47,7 @@
       <AdditionalIncludeDirectories>$(ProjectDir)..\..\Dumper;$(ProjectDir)..\..\Dumper\Engine\Public;$(ProjectDir)..\..\Dumper\Generator\Public;$(ProjectDir)..\..\Dumper\Utils;$(ProjectDir)..\..\Dumper\Platform\Public;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>bcrypt.lib;advapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>bcrypt.lib;advapi32.lib;shell32.lib;ole32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -95,6 +95,7 @@
 	<ClCompile Include="..\..\Dumper\Services\MemoryCommandService.cpp" />
 	<ClCompile Include="..\..\Dumper\Services\ObjectPropertyCommandService.cpp" />
 	<ClCompile Include="..\..\Dumper\Services\ProcessEventHookOwner.cpp" />
+	<ClCompile Include="..\..\Dumper\Services\SnapshotDumpWorker.cpp" />
 	<ClCompile Include="..\..\Dumper\Services\TypeCommandService.cpp" />
 	<ClCompile Include="..\..\Dumper\Services\WatchCommandService.cpp" />
 	<ClCompile Include="..\..\Dumper\Services\WorldCommandService.cpp" />
@@ -159,6 +160,7 @@
 	<ClInclude Include="..\..\Dumper\Services\MemoryCommandService.h" />
 	<ClInclude Include="..\..\Dumper\Services\ObjectPropertyCommandService.h" />
 	<ClInclude Include="..\..\Dumper\Services\ProcessEventHookOwner.h" />
+	<ClInclude Include="..\..\Dumper\Services\SnapshotDumpWorker.h" />
 	<ClInclude Include="..\..\Dumper\Services\CoreStatusDiagnostics.h" />
 	<ClInclude Include="..\..\Dumper\Services\TypeCommandService.h" />
 	<ClInclude Include="..\..\Dumper\Services\WatchCommandService.h" />

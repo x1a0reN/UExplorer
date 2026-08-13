@@ -13,6 +13,7 @@
 #include "Runtime/CoreCapabilities.h"
 #include "Runtime/CoreRuntimeAccess.h"
 #include "Runtime/CoreSession.h"
+#include "Runtime/DumpJobCoordinator.h"
 #include "Runtime/EngineContextCapture.h"
 #include "Runtime/EngineFacade.h"
 #include "Runtime/EngineVersionProbe.h"
@@ -34,6 +35,7 @@
 #include "Services/FunctionCallBatchCommandService.h"
 #include "Services/HookCommandService.h"
 #include "Services/ProcessEventHookOwner.h"
+#include "Services/SnapshotDumpWorker.h"
 #include "Services/WatchCommandService.h"
 #include "Settings.h"
 #include "OffsetFinder/Offsets.h"
@@ -65,6 +67,8 @@ static std::unique_ptr<UExplorer::Runtime::WatchScheduler> g_WatchScheduler;
 static std::unique_ptr<UExplorer::Runtime::HookEventCollector> g_HookCollector;
 static std::unique_ptr<UExplorer::Services::HookCommandService> g_HookCommandService;
 static std::unique_ptr<UExplorer::Services::ProcessEventHookOwner> g_ProcessEventHook;
+static std::shared_ptr<UExplorer::Services::SnapshotDumpWorker> g_DumpWorker;
+static std::unique_ptr<UExplorer::Runtime::DumpJobCoordinator> g_DumpCoordinator;
 static std::unique_ptr<UExplorer::Services::DumpCommandService> g_DumpCommandService;
 static std::unique_ptr<UExplorer::Runtime::PostRenderHook> g_PostRenderHook;
 static bool g_FrameSchedulerPumpAttached = false;
@@ -140,8 +144,10 @@ namespace
 			&& hook.CoveredObjectSnapshotGeneration == objectSnapshot->Generation
 			&& hook.CoveredTypeSnapshotGeneration == probes.Types->Generation();
 		probes.DumpCommandServiceEnabled = static_cast<bool>(g_DumpCommandService);
-		// The coordinator is intentionally absent until an owned generator worker exists.
-		probes.DumpWorkerEnabled = false;
+		probes.DumpWorkerEnabled = g_DumpWorker
+			&& g_DumpWorker->IsConfigured()
+			&& g_DumpCoordinator
+			&& g_DumpCoordinator->IsConfigured();
 		probes.World = g_EngineFacade
 			? g_EngineFacade->Worlds().Current()
 			: nullptr;
@@ -864,6 +870,20 @@ namespace
 		}
 		g_HookCollector.reset();
 		g_DumpCommandService.reset();
+		if (g_DumpCoordinator
+			&& !g_DumpCoordinator->StopAndDrain(std::chrono::milliseconds(5000)).Ok())
+		{
+			g_Runtime.RecordShutdownFailure(
+				"DUMP_INITIALIZATION_STOP_TIMEOUT",
+				"Owned dump worker did not drain after initialization failed");
+			std::cerr << "[UExplorer] Dump worker did not drain; DLL remains loaded.\n";
+			if (consoleFile)
+				fclose(consoleFile);
+			FreeConsole();
+			ExitThread(1);
+		}
+		g_DumpCoordinator.reset();
+		g_DumpWorker.reset();
 		g_WatchScheduler.reset();
 		g_WatchSource.reset();
 		if (g_EngineFacade
@@ -1060,9 +1080,21 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 				*g_HookCommandService);
 		if (!g_ProcessEventHook->IsConfigured())
 			throw std::runtime_error("ProcessEvent hook owner rejected the validated context");
-		// Keep the strict service boundary present, but fail every operation until an owned worker exists.
+		const auto dumpRoot = UExplorer::Services::ResolveDefaultSnapshotDumpRoot();
+		if (!dumpRoot)
+			throw std::runtime_error("LocalAppData dump root could not be resolved");
+		g_DumpWorker = std::make_shared<UExplorer::Services::SnapshotDumpWorker>(
+			*dumpRoot);
+		if (!g_DumpWorker->IsConfigured())
+			throw std::runtime_error("Snapshot dump worker rejected its bounded output root");
+		g_DumpCoordinator = std::make_unique<UExplorer::Runtime::DumpJobCoordinator>(
+			runtimeSnapshot.SessionId,
+			runtimeSnapshot.Context->Generation(),
+			g_DumpWorker);
+		if (!g_DumpCoordinator->IsConfigured())
+			throw std::runtime_error("Dump coordinator rejected the snapshot worker");
 		g_DumpCommandService = std::make_unique<UExplorer::Services::DumpCommandService>(
-			nullptr);
+			g_DumpCoordinator.get());
 		g_CallBatchAdapter = std::make_shared<
 			UExplorer::Services::FunctionCallBatchExactInvokeAdapter>(
 				g_Runtime,
@@ -1302,6 +1334,7 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 	UExplorer::Services::SetCoreCommandService(nullptr);
 	bool pipeStopped = true;
 	bool callBatchStopped = true;
+	bool dumpStopped = true;
 	bool blueprintCaptureStopped = true;
 	bool processEventHookStopped = true;
 	bool hooksStopped = true;
@@ -1327,8 +1360,16 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 				std::chrono::milliseconds(5000)).Ok();
 		return callBatchStopped;
 	});
-	shutdown.AddStage("blueprint_capture", [&] {
+	shutdown.AddStage("dump_jobs", [&] {
 		if (!pipeStopped || !callBatchStopped)
+			return false;
+		dumpStopped = !g_DumpCoordinator
+			|| g_DumpCoordinator->StopAndDrain(
+				std::chrono::milliseconds(5000)).Ok();
+		return dumpStopped;
+	});
+	shutdown.AddStage("blueprint_capture", [&] {
+		if (!pipeStopped || !callBatchStopped || !dumpStopped)
 			return false;
 		blueprintCaptureStopped = !g_BlueprintBytecodeSource
 			|| g_BlueprintBytecodeSource->StopAndDrain(
@@ -1336,7 +1377,7 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 		return blueprintCaptureStopped;
 	});
 	shutdown.AddStage("runtime_requests", [&] {
-		if (!pipeStopped || !callBatchStopped || !blueprintCaptureStopped)
+		if (!pipeStopped || !callBatchStopped || !dumpStopped || !blueprintCaptureStopped)
 			return false;
 		requestsDrained = g_Runtime.WaitForRequests(std::chrono::milliseconds(5000));
 		return requestsDrained;
@@ -1432,6 +1473,7 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 	shutdown.AddStage("engine_facade", [&] {
 		return pipeStopped
 			&& callBatchStopped
+			&& dumpStopped
 			&& blueprintCaptureStopped
 			&& processEventHookStopped
 			&& requestsDrained
@@ -1473,6 +1515,8 @@ static DWORD WINAPI MainThread(LPVOID lpParam)
 	g_HookCommandService.reset();
 	g_HookCollector.reset();
 	g_DumpCommandService.reset();
+	g_DumpCoordinator.reset();
+	g_DumpWorker.reset();
 	g_WatchScheduler.reset();
 	g_WatchSource.reset();
 	g_TypeSource.reset();
